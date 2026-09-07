@@ -10,6 +10,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/bmc/compat"
 	"github.com/3th1nk/mammoth/internal/inventory/inbandssh"
 	"github.com/3th1nk/mammoth/internal/obs"
+	"github.com/3th1nk/mammoth/internal/render"
 	"github.com/3th1nk/mammoth/internal/store"
 )
 
@@ -26,6 +27,9 @@ type Executor struct {
 	BMC         *bmc.Registry
 	Compat      *compat.Registry
 	Inband      *inbandssh.Collector
+	Render      *render.Registry
+	// ExternalURL is the base address machines reach for answer files.
+	ExternalURL string
 
 	// LayoutKeep is the per-machine snapshot retention (docs/08-data-model.md).
 	LayoutKeep int
@@ -44,8 +48,7 @@ func (e *Executor) ExecuteStage(ctx context.Context, task *store.Task, job *stor
 	case FlowDiscover:
 		return e.runDiscover(ctx, task, job)
 	case FlowInstall:
-		return classifiedErr("INSTALL_NOT_IMPLEMENTED", false,
-			"the install pipeline ships with M3; submit power/discover jobs meanwhile")
+		return e.runInstallStage(ctx, task, job, seq)
 	default:
 		return classifiedErr("JOB_UNKNOWN_FLOW", false, "unknown flow %s", task.FlowName)
 	}
@@ -66,8 +69,9 @@ func (e *Executor) Compensate(ctx context.Context, task *store.Task, job *store.
 	if !ok {
 		return
 	}
+	img := bmc.MediaImage{URL: a.ImageURL, Kind: bmc.MediaBoot}
 	if _, err := e.BMC.Do(mctx, addr, cred, proto, "eject_media", func(ctx context.Context, d bmc.Driver) (any, error) {
-		return nil, d.EjectMedia(ctx, addr, cred)
+		return nil, d.EjectMedia(ctx, addr, cred, img)
 	}); err != nil {
 		obs.FromContext(mctx).WarnContext(mctx, "compensation eject failed", "err", err.Error())
 	}

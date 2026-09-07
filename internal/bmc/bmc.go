@@ -52,10 +52,20 @@ type Credentials struct {
 	Password string
 }
 
+// MediaKind distinguishes the dual-media roles (docs/06-install-pipeline.md §2.1):
+// the distro original (read-only reference) and the task boot media.
+type MediaKind string
+
+const (
+	MediaDistro MediaKind = "distro"
+	MediaBoot   MediaKind = "boot"
+)
+
 // MediaImage references an image for virtual media mount. Remote-URI mounts
 // and local-staging mounts are normalized behind MountMedia (docs/07-bmc.md §2).
 type MediaImage struct {
-	URL string
+	URL  string
+	Kind MediaKind
 }
 
 // BMCInfo is what Probe reports: identity and capability of the management

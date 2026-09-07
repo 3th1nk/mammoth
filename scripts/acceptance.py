@@ -46,7 +46,12 @@ class Client:
         try:
             with urllib.request.urlopen(r, timeout=120) as resp:
                 payload = resp.read()
-                return resp.status, json.loads(payload) if payload else {}
+                if not payload:
+                    return resp.status, {}
+                try:
+                    return resp.status, json.loads(payload)
+                except Exception:
+                    return resp.status, payload.decode(errors="replace")
         except urllib.error.HTTPError as e:
             payload = e.read()
             try:
@@ -278,6 +283,146 @@ def main():
     _, j2 = c.post("/api/v1/jobs", {"type": "power", "targets": {"machine_ids": [machines[1]]},
                                     "action": {"type": "power_off"}}, headers={"Idempotency-Key": key})
     ok &= check("replay returns the original job", j1["id"] == j2["id"], f"{j1['id']} vs {j2['id']}")
+
+    # 4.5 install flow (M3): batch Rocky install on fake machines. The
+    # acceptance script plays the machine: fetch the rendered kickstart via
+    # the task-token URL, then report completion like the %post hook does.
+    print("· install flow (five stages)")
+    status, ijob = c.post("/api/v1/jobs", {
+        "type": "install",
+        "targets": {"machine_ids": [machines[0], machines[1]]},
+        "spec": {
+            "image": {"source": "https://mirror.example/rocky9.iso", "distro": "rocky9"},
+            "storage": {"disks": [{
+                "select": {"match": {"type": "nvme", "size": "largest"}},
+                "wipe": True,
+                "partitions": [
+                    {"size": "512M", "fs": "vfat", "mount": "/boot/efi", "flags": ["esp"]},
+                    {"size": "rest", "fs": "xfs", "mount": "/"}]}]},
+            "network": [{
+                "bond": {"interfaces": [
+                    {"match": {"mac": "aa:bb:cc:dd:ee:01"}},
+                    {"match": {"mac": "aa:bb:cc:dd:ee:02"}}],
+                    "mode": "802.3ad", "params": {"miimon": 100}},
+                "addresses": ["172.16.1.11/24"],
+                "routes": [{"to": "default", "via": "172.16.1.1"}],
+                "nameservers": {"addresses": ["10.0.0.53"]}}],
+            "identity": {"hostname_pattern": "node-{index}"},
+            "access": {"root_password": "generate",
+                       "ssh_keys": ["ssh-ed25519 AAA acceptance@mammoth"]},
+            "scripts": [{"stage": "post_install",
+                         "content_base64": "ZWNobyBtYW1tb3RoLXNldHVwLWRvbmUK"}]},
+        "policy": {"concurrency": 2, "on_task_failure": "continue"}})
+    ok &= check("install job accepted", status == 202, f"{status}")
+    ijob_id = ijob["id"]
+
+    def play_machine(task):
+        """Act as the target machine: fetch ks, report completion."""
+        url = task.get("answer_url")
+        if not url:
+            return False
+        base = url.rsplit("/render/", 1)
+        if len(base) != 2:
+            return False
+        token = base[1].split("/", 1)[0]
+        status, body = c.req("GET", f"/render/{token}/ks.cfg")
+        if status != 200 or "rootpw --plaintext" not in body:
+            return False
+        status, _ = c.req("POST", f"/render/{token}/complete",
+                          {"status": "ok", "detail": "acceptance machine"})
+        return status == 204
+
+    deadline = time.time() + 180
+    played = set()
+    final = {}
+    while time.time() < deadline:
+        _, tl = c.get(f"/api/v1/jobs/{ijob_id}/tasks?page_size=200")
+        items = tl.get("items", [])
+        for t in items:
+            if t["id"] not in played and t.get("answer_url"):
+                # fetch once when answers exist (machine can fetch any time
+                # after prepare_media); report completion immediately — the
+                # install stage polls the record.
+                if play_machine(t):
+                    played.add(t["id"])
+        if items and all(t["state"] in ("succeeded", "failed", "canceled") for t in items):
+            final = {"tasks": items}
+            break
+        time.sleep(1)
+    _, ijob_final = c.get(f"/api/v1/jobs/{ijob_id}")
+    ok &= check("both install tasks succeeded",
+                all(t["state"] == "succeeded" for t in final.get("tasks", [])),
+                str([t["state"] for t in final.get("tasks", [])]))
+    ok &= check("five stages all green",
+                all(s["state"] == "succeeded" for t in final.get("tasks", [])
+                    for s in t.get("stages", [])) and
+                len(final.get("tasks", [{}])[0].get("stages", [])) == 5,
+                str([s["name"] + ":" + s["state"] for s in
+                     (final.get("tasks") or [{}])[0].get("stages", [])]))
+
+    # kickstart content assertions via one played machine's answer URL
+    if played:
+        t0 = next(t for t in final.get("tasks", []) if t.get("answer_url"))
+        token = t0["answer_url"].rsplit("/render/", 1)[1].split("/", 1)[0]
+        _, ks = c.req("GET", f"/render/{token}/ks.cfg")
+        ok &= check("kickstart: random root password (not literal 'generate')",
+                    "rootpw --plaintext " in ks and "generate" not in ks)
+        ok &= check("kickstart: bond resolved by MAC in pre hook",
+                    "iface_by_mac aa:bb:cc:dd:ee:01" in ks and "--bondslaves=$bond_slaves" in ks)
+        import re as _re
+        ok &= check("kickstart: ssh key + hostname expanded",
+                    "ssh-ed25519 AAA acceptance@mammoth" in ks
+                    and "{index}" not in ks
+                    and _re.search(r"hostnamectl set-hostname node-\d+", ks) is not None)
+        ok &= check("kickstart: wipe path on resolved nvme",
+                    "clearpart --drives=nvme0 --initlabel --all" in ks,
+                    "clearpart" in ks)
+
+    # abort_batch: one impossible target (per-machine override) fails
+    # verify_layout → the sibling is canceled while waiting in install_os
+    status, ajob = c.post("/api/v1/jobs", {
+        "type": "install",
+        "targets": {
+            "machine_ids": [machines[1], machines[2]],
+            "overrides": {
+                # impossible selector for machine[1] only
+                machines[1]: {"storage": {"disks": [{
+                    "select": {"match": {"serial": "DOES-NOT-EXIST"}},
+                    "wipe": True,
+                    "partitions": [{"size": "rest", "fs": "xfs", "mount": "/"}]}]}},
+            }},
+        "spec": {
+            "image": {"source": "https://mirror.example/rocky9.iso", "distro": "rocky9"},
+            "storage": {"disks": [{
+                "select": {"match": {"type": "nvme", "size": "largest"}},
+                "wipe": True,
+                "partitions": [{"size": "rest", "fs": "xfs", "mount": "/"}]}]}},
+        "policy": {"on_task_failure": "abort_batch"}})
+    ok &= check("abort_batch job accepted", status == 202, f"{status}")
+    deadline = time.time() + 120
+    astate = {}
+    while time.time() < deadline:
+        _, tl = c.get(f"/api/v1/jobs/{ajob['id']}/tasks?page_size=200")
+        items = tl.get("items", [])
+        if items and all(t["state"] in ("failed", "canceled", "succeeded") for t in items):
+            astate = {"tasks": items}
+            break
+        time.sleep(1)
+    _, ajob_final = c.get(f"/api/v1/jobs/{ajob['id']}")
+    ok &= check("failed selector → task failed LAYOUT_DISK_NOT_FOUND",
+                any(t["state"] == "failed" and (t.get("error") or {}).get("code") == "LAYOUT_DISK_NOT_FOUND"
+                    for t in astate.get("tasks", [])),
+                str([(t["state"], (t.get("error") or {}).get("code")) for t in astate.get("tasks", [])]))
+    ok &= check("abort_batch: sibling task canceled",
+                any(t["state"] == "canceled" for t in astate.get("tasks", [])) and
+                ajob_final.get("state") in ("partial", "canceled", "failed"),
+                f"job={ajob_final.get('state')}")
+
+    # retry a failed install task (re-enters at verify_layout)
+    failed_tid = next((t["id"] for t in astate.get("tasks", []) if t["state"] == "failed"), None)
+    if failed_tid:
+        status, _ = c.post(f"/api/v1/jobs/{ajob['id']}/tasks/{failed_tid}/retry")
+        ok &= check("failed install task retry accepted", status == 202, str(status))
 
     # 5. crash path: requires the outer environment to run this instance with
     # MAMMOTH_FAKE_BMC_DELAY set (tasks slow enough to kill mid-flight) and

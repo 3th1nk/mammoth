@@ -29,8 +29,8 @@ type Driver interface {
 	// remote-URI vs staged upload are driver-internal concerns).
 	MountMedia(ctx context.Context, addr string, cred Credentials, img MediaImage) error
 
-	// EjectMedia detaches virtual media from all slots that support it.
-	EjectMedia(ctx context.Context, addr string, cred Credentials) error
+	// EjectMedia detaches the given image (slot-matching is driver-internal).
+	EjectMedia(ctx context.Context, addr string, cred Credentials, img MediaImage) error
 
 	// ConsoleURL returns a one-time virtual console URL. OEM-specific;
 	// drivers return BMC_UNSUPPORTED where no known OEM mapping exists.

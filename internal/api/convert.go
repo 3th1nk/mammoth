@@ -131,6 +131,17 @@ func specOut(raw json.RawMessage) *gen.InstallSpec {
 }
 
 func taskOut(t *store.Task, stages []*store.Stage) gen.Task {
+	var answerURL *string
+	if len(t.Context) > 0 {
+		var ictx struct {
+			Boot struct {
+				AnswerURL string `json:"answer_url"`
+			} `json:"boot"`
+		}
+		if json.Unmarshal(t.Context, &ictx) == nil && ictx.Boot.AnswerURL != "" {
+			answerURL = str(ictx.Boot.AnswerURL)
+		}
+	}
 	out := gen.Task{
 		Id:        gen.TaskId(t.ID),
 		JobId:     gen.JobId(t.JobID),
@@ -141,6 +152,7 @@ func taskOut(t *store.Task, stages []*store.Stage) gen.Task {
 		Stages:    []gen.Stage{},
 		CreatedAt: t.CreatedAt,
 		UpdatedAt: timePtr(t.UpdatedAt),
+		AnswerUrl: answerURL,
 	}
 	if t.Error != nil {
 		out.Error = errorInfoOut(*t.Error)

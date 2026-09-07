@@ -204,7 +204,7 @@ func (d *Driver) MountMedia(_ context.Context, _ string, _ bmc.Credentials, _ bm
 		Detail: "virtual media over IPMI is a vendor OEM command; not available on this driver"}
 }
 
-func (d *Driver) EjectMedia(_ context.Context, _ string, _ bmc.Credentials) error {
+func (d *Driver) EjectMedia(_ context.Context, _ string, _ bmc.Credentials, _ bmc.MediaImage) error {
 	return &bmc.Error{Kind: bmc.KindUnsupported, Op: "eject_media",
 		Detail: "virtual media over IPMI is a vendor OEM command; not available on this driver"}
 }

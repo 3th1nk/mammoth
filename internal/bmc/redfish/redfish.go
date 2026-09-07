@@ -213,7 +213,7 @@ func (d *Driver) MountMedia(ctx context.Context, addr string, cred bmc.Credentia
 	return nil
 }
 
-func (d *Driver) EjectMedia(ctx context.Context, addr string, cred bmc.Credentials) error {
+func (d *Driver) EjectMedia(ctx context.Context, addr string, cred bmc.Credentials, img bmc.MediaImage) error {
 	c, err := d.connect(ctx, addr, cred)
 	if err != nil {
 		return err
@@ -230,6 +230,10 @@ func (d *Driver) EjectMedia(ctx context.Context, addr string, cred bmc.Credentia
 	var firstErr error
 	for _, vm := range vms {
 		if !vm.Inserted {
+			continue
+		}
+		// Slot-matching: eject only the slot carrying the target image.
+		if img.URL != "" && vm.Image != "" && vm.Image != img.URL {
 			continue
 		}
 		if err := vm.EjectMedia(); err != nil && firstErr == nil {

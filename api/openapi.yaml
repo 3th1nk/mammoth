@@ -424,6 +424,76 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /render/{token}/{file}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+          maxLength: 128
+      - name: file
+        in: path
+        required: true
+        schema:
+          type: string
+          maxLength: 128
+    get:
+      operationId: fetchAnswerFile
+      tags: [jobs]
+      security: []
+      summary: Fetch a rendered answer file by task token
+      description: |
+        Machine-facing endpoint (the installer runs inside the target machine
+        and cannot hold a bearer token). The unguessable task token in the
+        path is the credential. Fetches are counted in task context.
+      responses:
+        '200':
+          description: Answer file content
+          content:
+            text/plain:
+              schema:
+                type: string
+        '404':
+          description: Unknown token or file
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /render/{token}/complete:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+          maxLength: 128
+    post:
+      operationId: reportInstallComplete
+      tags: [jobs]
+      security: []
+      summary: Report install completion from the target machine
+      description: |
+        Called by the %post hook with the task token; unblocks the install
+        stage. A non-zero exit report marks the install failed.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [ok, failed]
+                detail:
+                  type: string
+      responses:
+        '204':
+          description: Recorded
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /api/v1/jobs/{id}/tasks/{taskId}/retry:
     parameters:
       - $ref: '#/components/parameters/jobId'
@@ -1188,7 +1258,13 @@ components:
             interfaces:
               type: array
               items:
-                $ref: '#/components/schemas/InterfaceMatch'
+                type: object
+                required: [match]
+                properties:
+                  match:
+                    $ref: '#/components/schemas/InterfaceMatch'
+                  set_name:
+                    type: string
             mode:
               type: string
               description: e.g. active-backup, 802.3ad, balance-tlb.
@@ -1440,6 +1516,13 @@ components:
           type: integer
         flow_name:
           type: string
+        answer_url:
+          type: string
+          nullable: true
+          description: |
+            Machine-facing URL of the rendered answer file (install flows).
+            Exposed for audit and debugging; the task token in the path is
+            the machine credential (docs/06-install-pipeline.md §2.2).
         stages:
           type: array
           items:

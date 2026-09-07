@@ -1,0 +1,22 @@
+# Build artifacts
+/bin/
+/dist/
+*.exe
+
+# Test & coverage
+*.out
+*.test
+coverage.html
+
+# Local runtime state
+/data/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.local
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store

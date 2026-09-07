@@ -1,0 +1,67 @@
+# Topology 2: faceted — 1×api(+reaper) + N×runner + 1×builder + PostgreSQL.
+# The facets share the single image's contract and configuration; only the
+# builder uses its own image because of xorriso/loop-mount dependencies
+# (docs/02-architecture.md §1, §5.3).
+name: mammoth-faceted
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mammoth
+      POSTGRES_PASSWORD: mammoth
+      POSTGRES_DB: mammoth
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mammoth -d mammoth"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment: &env
+      MAMMOTH_DATABASE_URL: postgres://mammoth:mammoth@postgres:5432/mammoth?sslmode=disable
+      MAMMOTH_HTTP_ADDR: ":8080"
+      MAMMOTH_API_TOKEN: ${MAMMOTH_API_TOKEN:?set MAMMOTH_API_TOKEN}
+      MAMMOTH_MASTER_KEY: ${MAMMOTH_MASTER_KEY:?set MAMMOTH_MASTER_KEY (base64 32B)}
+      MAMMOTH_LOG_FORMAT: json
+    command: ["serve", "--mode=api"]
+    ports:
+      - "8080:8080"
+
+  runner:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *env
+      MAMMOTH_RUNNER_CONCURRENCY: "10"
+    command: ["serve", "--mode=runner"]
+    deploy:
+      replicas: 2
+
+  builder:
+    build:
+      context: ..
+      dockerfile: Dockerfile.builder
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *env
+    # Media assembly (M3) needs loop-mount capability; declared now so the
+    # privileged facet boundary is explicit.
+    command: ["serve", "--mode=builder"]
+    privileged: true
+
+volumes:
+  pgdata:

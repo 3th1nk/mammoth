@@ -50,7 +50,11 @@ func New(d Deps, apiToken string) *gin.Engine {
 	router.Use(gin.Recovery(), RequestID(), OTelSpan(), MetricsMiddleware(d.Metrics))
 
 	srv := &Server{Deps: d}
-	strict := gen.NewStrictHandler(srv, nil)
+	strict := gen.NewStrictHandlerWithOptions(srv, nil, gen.StrictGinServerOptions{
+		// Handler-returned errors map onto the RFC 9457 problem space here —
+		// the single choke point for NotFound/Conflict/validation/BMC codes.
+		HandlerErrorFunc: writeError,
+	})
 	router.Use(BearerAuth(apiToken))
 
 	if d.Metrics != nil {

@@ -18,6 +18,7 @@ import (
 	ipmidrv "github.com/3th1nk/mammoth/internal/bmc/ipmi"
 	"github.com/3th1nk/mammoth/internal/bmc/redfish"
 	"github.com/3th1nk/mammoth/internal/config"
+	"github.com/3th1nk/mammoth/internal/inventory/inbandssh"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/provision"
 	"github.com/3th1nk/mammoth/internal/store"
@@ -101,6 +102,11 @@ func serve(args []string) error {
 	registry.Register(redfish.New(cfg.BMCTLSInsecure, cfg.BMCTimeout))
 	registry.Register(ipmidrv.New(cfg.IPMIInterface, cfg.BMCTimeout))
 
+	// In-band probe: agent-less, read-only, one connection; the whole
+	// collection is bounded by the in-band timeout (docs/05-inventory.md §3).
+	inbandRunner := &inbandssh.SSHRunner{DialTimeout: cfg.InbandTimeout / 3}
+	inband := &inbandssh.Collector{Runner: inbandRunner}
+
 	// Vendor compatibility matrix: embedded defaults, optionally extended
 	// from a mounted directory (docs/compat/README.md).
 	compatReg, err := bmccompat.LoadDir(getenv("MAMMOTH_COMPAT_DIR", ""))
@@ -171,6 +177,8 @@ func serve(args []string) error {
 			Crypto:      crypto,
 			BMC:         registry,
 			Compat:      compatReg,
+			Inband:      inband,
+			LayoutKeep:  cfg.LayoutRetention,
 		}
 		runner := provision.NewRunner(tq, jobRepo, exec, metrics, provision.RunnerOptions{
 			Concurrency:     cfg.RunnerConcurrency,

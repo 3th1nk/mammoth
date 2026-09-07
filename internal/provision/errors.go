@@ -3,6 +3,7 @@ package provision
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/3th1nk/mammoth/internal/bmc"
 	"github.com/3th1nk/mammoth/internal/store"
@@ -38,8 +39,10 @@ func Classified(err error) store.ErrorInfo {
 	return store.ErrorInfo{Code: "INSTALL_INTERNAL", Message: err.Error(), Retryable: true}
 }
 
-func classifiedErr(code string, retryable bool, msg string) error {
-	return &errInfo{ErrorInfo: store.ErrorInfo{Code: code, Message: msg, Retryable: retryable}}
+func classifiedErr(code string, retryable bool, format string, args ...any) error {
+	return &errInfo{ErrorInfo: store.ErrorInfo{
+		Code: code, Message: fmt.Sprintf(format, args...), Retryable: retryable,
+	}}
 }
 
 // IsCanceled reports whether err is the cooperative cancel signal.
@@ -61,7 +64,7 @@ func decodeAction(raw json.RawMessage) (action, error) {
 		return a, classifiedErr("SCHEMA_ACTION_REQUIRED", false, "power job requires an action")
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return a, classifiedErr("SCHEMA_INVALID_ACTION", false, "invalid action payload: "+err.Error())
+		return a, classifiedErr("SCHEMA_INVALID_ACTION", false, "invalid action payload: %s", err.Error())
 	}
 	return a, nil
 }

@@ -71,6 +71,8 @@ type Config struct {
 	IPMIInterface      string // lanplus (default) | lan
 	IdempotencyTTL     time.Duration
 	TaskStatusInterval time.Duration // terminal-transition sweep for job summary
+	LayoutRetention    int           // snapshots kept per machine (docs/08: default 10)
+	InbandTimeout      time.Duration // whole inband_ssh collection bound
 
 	// OTELExporterEndpoint enables OTLP trace export when non-empty.
 	// Without it, tracing stays at the API boundary instrumentation level
@@ -105,6 +107,8 @@ func FromEnv() (Config, error) {
 		IPMIInterface:         getenv("MAMMOTH_IPMI_INTERFACE", "lanplus"),
 		IdempotencyTTL:        getenvDuration("MAMMOTH_IDEMPOTENCY_TTL", 24*time.Hour),
 		TaskStatusInterval:    getenvDuration("MAMMOTH_TASK_STATUS_INTERVAL", 2*time.Second),
+		LayoutRetention:       getenvInt("MAMMOTH_LAYOUT_RETENTION", 10),
+		InbandTimeout:         getenvDuration("MAMMOTH_INBAND_TIMEOUT", 20*time.Second),
 		OTELExporterEndpoint:  os.Getenv("MAMMOTH_OTEL_EXPORTER_ENDPOINT"),
 		MetricsAddr:           os.Getenv("MAMMOTH_METRICS_ADDR"),
 	}

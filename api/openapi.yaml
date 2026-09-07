@@ -769,6 +769,13 @@ components:
           items:
             type: string
 
+    MachineSSH:
+      type: object
+      properties:
+        address:
+          type: string
+          description: The machine's own (in-band) address, used by the inband_ssh probe.
+
     MachineCreate:
       type: object
       required: [bmc]
@@ -783,6 +790,9 @@ components:
           allOf:
             - $ref: '#/components/schemas/CredentialId'
           description: Credential for in-band (SSH) probes; optional.
+        ssh:
+          $ref: '#/components/schemas/MachineSSH'
+          description: In-band addressing; required for partition-level discovery.
 
     MachineUpdate:
       type: object
@@ -803,6 +813,8 @@ components:
         ssh_credential_id:
           type: string
           nullable: true
+        ssh:
+          $ref: '#/components/schemas/MachineSSH'
 
     Machine:
       type: object
@@ -818,6 +830,10 @@ components:
           $ref: '#/components/schemas/BMC'
         ssh_credential_id:
           type: string
+          nullable: true
+        ssh:
+          allOf:
+            - $ref: '#/components/schemas/MachineSSH'
           nullable: true
         hardware:
           $ref: '#/components/schemas/HardwareView'

@@ -220,6 +220,39 @@ def main():
                 machine["state"] == "ready" and machine["bmc"].get("vendor") == "acme",
                 f"state={machine['state']} vendor={machine['bmc'].get('vendor')}")
 
+    # 3.4 partition-level discovery (M2): a machine WITH ssh access configured
+    # but unreachable in-band must yield an explicit classified error — never
+    # a hanging task — while keeping its ready spec view. A machine without
+    # ssh config simply has no snapshot.
+    print("· in-band layout (explicit failure, no hang)")
+    status, sshcred = c.post("/api/v1/credentials", {
+        "type": "ssh", "name": f"acc-ssh-{time.time()}",
+        "secret": {"username": "root", "password": "whatever"}})
+    ok &= check("ssh credential created", status == 201, str(status))
+    status, sshm = c.post("/api/v1/machines", {
+        "labels": {"env": "acceptance"},
+        "bmc": {"address": "fake://acc-ssh-node", "protocol": "fake",
+                "credential_id": cred_id},
+        "ssh_credential_id": sshcred["id"],
+        "ssh": {"address": "127.0.0.1:1"}})   # connection refused instantly
+    if status == 201:
+        mid = sshm["id"]
+        t0 = time.time()
+        done = wait_machine(c, mid, "ready", timeout=60)
+        elapsed = time.time() - t0
+        code = (done.get("last_error") or {}).get("code", "")
+        ok &= check("in-band failure surfaces as NETWORK_UNREACHABLE",
+                    done.get("state") == "ready" and code == "NETWORK_UNREACHABLE",
+                    f"state={done.get('state')} code={code} in {elapsed:.0f}s")
+        ok &= check("no snapshot when in-band failed", True, "layout endpoint below")
+        status, _ = c.get(f"/api/v1/machines/{mid}/layout")
+        ok &= check("GET layout → 404 without snapshot", status == 404, str(status))
+    else:
+        ok &= check("in-band test machine registered", False, str(status))
+
+    status, body = c.get(f"/api/v1/machines/{machines[0]}/layout")
+    ok &= check("machine without ssh config: layout 404", status == 404, str(status))
+
     # 3.5 classified BMC error on unreachable target (M1 acceptance:
     # "BMC credential errors get classified error codes" — same classified
     # path carries unreachable).

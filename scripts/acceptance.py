@@ -375,7 +375,7 @@ def main():
                     and "{index}" not in ks
                     and _re.search(r"hostnamectl set-hostname node-\d+", ks) is not None)
         ok &= check("kickstart: wipe path on resolved nvme",
-                    "clearpart --drives=nvme0 --initlabel --all" in ks,
+                    "clearpart --drives=nvme0n1 --initlabel --all" in ks,
                     "clearpart" in ks)
 
     # abort_batch: one impossible target (per-machine override) fails
@@ -423,6 +423,120 @@ def main():
     if failed_tid:
         status, _ = c.post(f"/api/v1/jobs/{ajob['id']}/tasks/{failed_tid}/retry")
         ok &= check("failed install task retry accepted", status == 202, str(status))
+
+    # 4.7 M4: keep:partitions install — partition-level reuse with the %pre
+    # drift guard. The fake in-band probe supplies the snapshot; the script
+    # plays the machine (fetch ks + report completion / drift report).
+    print("· keep:partitions install + drift guard")
+    status, keepm = c.post("/api/v1/machines", {
+        "labels": {"env": "acceptance"},
+        "bmc": {"address": "fake://acc-keep-node", "protocol": "fake",
+                "credential_id": cred_id},
+        "ssh_credential_id": sshcred["id"],
+        "ssh": {"address": "fake://inband"}})
+    if status == 201:
+        keepm_id = keepm["id"]
+        wait_machine(c, keepm_id, "ready", timeout=60)
+        # the snapshot lands ~1 beat after ready (in-band collection runs
+        # after the spec view is persisted) — poll it
+        status, layout = 0, {}
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            status, layout = c.get(f"/api/v1/machines/{keepm_id}/layout")
+            if status == 200:
+                break
+            time.sleep(0.5)
+        ok &= check("layout snapshot captured via fake in-band",
+                    status == 200 and any(
+                        d.get("match", {}).get("serial") == "GIM256_0001"
+                        for d in layout.get("disks", [])),
+                    str(status))
+        status, kjob = c.post("/api/v1/jobs", {
+            "type": "install",
+            "targets": {"machine_ids": [keepm_id]},
+            "spec": {
+                "image": {"source": "https://mirror.example/rocky9.iso", "distro": "rocky9"},
+                "storage": {"disks": [
+                    {"select": {"match": {"serial": "S6XPN0001"}}, "wipe": True,
+                     "partitions": [
+                         {"size": "512M", "fs": "vfat", "mount": "/boot/efi", "flags": ["esp"]},
+                         {"size": "rest", "fs": "xfs", "mount": "/"}]},
+                    {"select": {"match": {"serial": "GIM256_0001"}}, "keep": "partitions",
+                     "preserve": [{"number": 1, "mount": "/data"}],
+                     "partitions": [{"size": "rest", "fs": "xfs", "mount": "/extra"}]}]}},
+            "access": {"ssh_keys": ["ssh-ed25519 AAA keep@mammoth"]},
+            "policy": {"on_task_failure": "continue"}})
+        ok &= check("keep install accepted", status == 202, f"{status}")
+        ktid, kurl = None, None
+        deadline = time.time() + 120
+        while time.time() < deadline and kurl is None:
+            _, tl = c.get(f"/api/v1/jobs/{kjob['id']}/tasks")
+            for t in tl.get("items", []):
+                if t.get("answer_url"):
+                    ktid, kurl = t["id"], t["answer_url"]
+                    break
+            time.sleep(0.5)
+        ok &= check("answers rendered (task reached prepare_media)", kurl is not None)
+        if kurl:
+            token = kurl.rsplit("/render/", 1)[1].split("/", 1)[0]
+            _, kks = c.req("GET", f"/render/{token}/ks.cfg")
+            ok &= check("preserve: unformatted reuse by original partition",
+                        "part /data --onpart=sda1 --noformat" in kks, "onpart line")
+            ok &= check("wipe disk only on the system drive",
+                        "clearpart --drives=nvme0n1 --initlabel --all" in kks
+                        and "--drives=nvme0n1,sda" not in kks)
+            ok &= check("drift guard bound to the snapshot baseline",
+                        "_d=/sys/block/sda/sda1" in kks
+                        and 'LAYOUT_DRIFT: ' in kks
+                        and '"$(blkid -s UUID -o value /dev/sda1)" = "b2a1c3d4-0000-1111-2222-333344445555"' in kks)
+            # complete ok like the %post hook
+            c.req("POST", f"/render/{token}/complete", {"status": "ok"})
+            kjob_f, ktasks = wait_job(c, kjob["id"], {"succeeded", "failed", "partial"}, timeout=180)
+            ok &= check("keep install five stages green",
+                        ktasks and ktasks[0]["state"] == "succeeded"
+                        and all(st["state"] == "succeeded" for st in ktasks[0].get("stages", [])),
+                        str([st["state"] for st in (ktasks[0].get("stages") if ktasks else [])]))
+
+            # drift: the %pre guard reports LAYOUT_DRIFT when the live table
+            # deviates from the baseline; simulate exactly that report path.
+            status, djob = c.post("/api/v1/jobs", {
+                "type": "install",
+                "targets": {"machine_ids": [keepm_id]},
+                "spec": {
+                    "image": {"source": "https://mirror.example/rocky9.iso", "distro": "rocky9"},
+                    "storage": {"disks": [
+                        {"select": {"match": {"serial": "S6XPN0001"}}, "wipe": True,
+                         "partitions": [{"size": "rest", "fs": "xfs", "mount": "/"}]},
+                        {"select": {"match": {"serial": "GIM256_0001"}}, "keep": "partitions",
+                         "preserve": [{"number": 1, "mount": "/data"}]}]}},
+                "policy": {"on_task_failure": "continue"}})
+            dtid, durl = None, None
+            deadline = time.time() + 120
+            while time.time() < deadline and durl is None:
+                _, tl = c.get(f"/api/v1/jobs/{djob['id']}/tasks")
+                for t in tl.get("items", []):
+                    if t.get("answer_url"):
+                        dtid, durl = t["id"], t["answer_url"]
+                        break
+                time.sleep(0.5)
+            if durl:
+                dtok = durl.rsplit("/render/", 1)[1].split("/", 1)[0]
+                # the machine's %pre guard fires: report drift, exit 1
+                c.req("POST", f"/render/{dtok}/complete",
+                      {"status": "failed", "detail": "LAYOUT_DRIFT: sda1 start drifted"})
+                djob_f, dtasks = wait_job(c, djob["id"], {"failed", "partial"}, timeout=120)
+                err = (dtasks[0].get("error") or {}) if dtasks else {}
+                ok &= check("drifted baseline → task fails with LAYOUT_DRIFT",
+                            dtasks and dtasks[0]["state"] == "failed"
+                            and "LAYOUT_DRIFT" in err.get("message", ""),
+                            f"{err.get('code')}: {err.get('message', '')[:60]}")
+                status, _ = c.post(f"/api/v1/jobs/{djob['id']}/tasks/{dtid}/retry")
+                ok &= check("drift-failed task retry accepted (re-binds current snapshot)",
+                            status == 202, str(status))
+            else:
+                ok &= check("drift job rendered", False)
+    else:
+        ok &= check("keep test machine registered", False, str(status))
 
     # 5. crash path: requires the outer environment to run this instance with
     # MAMMOTH_FAKE_BMC_DELAY set (tasks slow enough to kill mid-flight) and

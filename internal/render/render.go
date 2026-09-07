@@ -49,21 +49,45 @@ type BootParams struct {
 
 // ResolvedDisk is a selector-resolved install target.
 type ResolvedDisk struct {
-	Device     string              `json:"device"` // kernel name, e.g. nvme0n1
-	Serial     string              `json:"serial,omitempty"`
-	Wipe       bool                `json:"wipe"`
-	KeepDisk   bool                `json:"keep_disk,omitempty"`
+	Device   string `json:"device"` // kernel name, e.g. nvme0n1
+	Serial   string `json:"serial,omitempty"`
+	Wipe     bool   `json:"wipe"`
+	KeepDisk bool   `json:"keep_disk,omitempty"` // keep: disk — untouched
+	// KeepParts (keep: partitions): existing partitions to remove (all
+	// snapshot partitions not preserved); freed space hosts new partitions.
+	Remove []string `json:"remove,omitempty"`
+	// Baseline carries the bound snapshot facts for the %pre drift guard.
+	Baseline   []BaselinePartition `json:"baseline,omitempty"`
 	Partitions []ResolvedPartition `json:"partitions,omitempty"`
+}
+
+// BaselinePartition is one snapshot partition bound at verify_layout; the
+// %pre guard compares the live table against exactly these numbers
+// (docs/06-install-pipeline.md §4).
+type BaselinePartition struct {
+	Device     string `json:"device"` // full name, e.g. sda1
+	Number     int    `json:"number"`
+	StartBytes int64  `json:"start_bytes"`
+	EndBytes   int64  `json:"end_bytes"`
+	SizeBytes  int64  `json:"size_bytes"`
+	UUID       string `json:"uuid,omitempty"`
+	FSType     string `json:"fstype,omitempty"`
+	Mountpoint string `json:"mountpoint,omitempty"`
 }
 
 // ResolvedPartition is one declared partition on a resolved disk.
 type ResolvedPartition struct {
-	Mount    string   `json:"mount"`
-	FS       string   `json:"fs"`
-	SizeMB   int      `json:"size_mb,omitempty"` // 0 + Grow for "rest"
-	Grow     bool     `json:"grow"`
-	Flags    []string `json:"flags,omitempty"` // e.g. esp
-	Preserve bool     `json:"preserve,omitempty"`
+	Mount  string   `json:"mount"`
+	FS     string   `json:"fs"`
+	SizeMB int      `json:"size_mb,omitempty"` // 0 + Grow for "rest"
+	Grow   bool     `json:"grow"`
+	Flags  []string `json:"flags,omitempty"` // e.g. esp
+	// Preserve: reuse the existing partition unformatted, mounted by its
+	// original UUID (docs/04-install-spec.md §5.1).
+	Preserve bool   `json:"preserve,omitempty"`
+	Number   int    `json:"number,omitempty"`
+	UUID     string `json:"uuid,omitempty"`
+	OnPart   string `json:"on_part,omitempty"` // full kernel name, e.g. sda1
 }
 
 // NetworkEntry is one network declaration (docs/04-install-spec.md §5.2).
@@ -129,6 +153,10 @@ type InstallInputs struct {
 
 	AnswerURL   string // inst.ks target (task-token URL)
 	CompleteURL string // %post callback
+
+	// DriftCheck enables the %pre layout drift guard (policy.verify_layout,
+	// default true; docs/09-roadmap.md M4).
+	DriftCheck bool
 }
 
 // MachineView is the machine context a renderer may consult (hardware facts

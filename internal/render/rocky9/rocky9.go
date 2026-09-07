@@ -76,6 +76,9 @@ bootloader --location=mbr{{if .BootDrive}} --boot-drive={{.BootDrive}}{{end}}
 zerombr
 clearpart --drives={{.WipeDrives}} --initlabel --all
 {{- end}}
+{{- if .RemoveParts}}
+clearpart --list={{.RemoveParts}}
+{{- end}}
 {{- range .PartLines}}
 {{.}}
 {{- end}}
@@ -92,6 +95,13 @@ set -e
 {{.}}
 {{- end}}
 %end
+{{- if .DriftScript}}
+
+%pre --erroronfail
+set -e
+{{.DriftScript}}
+%end
+{{- end}}
 
 %post --erroronfail
 set -e
@@ -241,36 +251,52 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	}
 
 	var wipe []string
+	var removeList []string
 	var partLines []string
+	var drift string
 	for _, disk := range in.Disks {
-		if disk.KeepDisk {
-			continue // untouched (M4 handles preserve semantics end to end)
-		}
-		if !disk.Wipe {
-			return nil, render.BootParams{}, fmt.Errorf("rocky9: disk %s without wipe or keep is unsupported until M4", disk.Device)
-		}
-		wipe = append(wipe, disk.Device)
-		for _, p := range disk.Partitions {
-			if p.Preserve {
-				return nil, render.BootParams{}, fmt.Errorf("rocky9: preserve partitions arrive with M4")
+		switch {
+		case disk.KeepDisk:
+			// keep: disk — never touched: no clearpart, no part lines.
+			continue
+		case len(disk.Baseline) > 0 || len(disk.Remove) > 0 || hasPreserve(disk.Partitions):
+			// keep: partitions — preserved partitions are reused
+			// unformatted (--onpart + --noformat, original UUID); the
+			// snapshot's non-preserved partitions are removed precisely
+			// (clearpart --list), leaving the rest of the disk alone.
+			removeList = append(removeList, disk.Remove...)
+			if in.DriftCheck && len(disk.Baseline) > 0 {
+				drift += driftGuardScript(disk.Device, disk.Baseline, in.CompleteURL)
 			}
-			fs := p.FS
-			if hasFlag(p.Flags, "esp") {
-				fs = "efi"
+			for _, p := range disk.Partitions {
+				if p.Preserve {
+					if p.OnPart == "" {
+						return nil, render.BootParams{}, fmt.Errorf(
+							"rocky9: preserved partition %s has no onpart binding", p.Mount)
+					}
+					partLines = append(partLines,
+						fmt.Sprintf("part %s --onpart=%s --noformat", p.Mount, p.OnPart))
+					continue
+				}
+				line, err := newPartLine(p, disk.Device)
+				if err != nil {
+					return nil, render.BootParams{}, err
+				}
+				partLines = append(partLines, line)
 			}
-			line := fmt.Sprintf("part %s --fstype=%s --ondisk=%s", p.Mount, fs, disk.Device)
-			switch {
-			case p.Grow:
-				line += " --grow"
-			case p.SizeMB > 0:
-				line += fmt.Sprintf(" --size=%d", p.SizeMB)
-			default:
-				return nil, render.BootParams{}, fmt.Errorf("rocky9: partition %s on %s needs a size or rest", p.Mount, disk.Device)
+		default:
+			if !disk.Wipe {
+				return nil, render.BootParams{}, fmt.Errorf(
+					"rocky9: disk %s must declare wipe or keep", disk.Device)
 			}
-			if p.Mount == "swap" {
-				line = strings.Replace(line, "part swap", "part swap", 1)
+			wipe = append(wipe, disk.Device)
+			for _, p := range disk.Partitions {
+				line, err := newPartLine(p, disk.Device)
+				if err != nil {
+					return nil, render.BootParams{}, err
+				}
+				partLines = append(partLines, line)
 			}
-			partLines = append(partLines, line)
 		}
 	}
 
@@ -304,7 +330,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		"ImageSource":   in.ImageSource,
 		"BootDrive":     in.BootDrive,
 		"WipeDrives":    strings.Join(wipe, ","),
+		"RemoveParts":   strings.Join(removeList, ","),
 		"PartLines":     partLines,
+		"DriftScript":   drift,
 		"NetworkPre":    netPre != "",
 		"NetworkShell":  netPre,
 		"PreScripts":    preScripts,
@@ -350,4 +378,66 @@ func hasFlag(flags []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func hasPreserve(parts []render.ResolvedPartition) bool {
+	for _, p := range parts {
+		if p.Preserve {
+			return true
+		}
+	}
+	return false
+}
+
+// newPartLine renders a fresh (non-preserved) partition line.
+func newPartLine(p render.ResolvedPartition, device string) (string, error) {
+	fs := p.FS
+	if hasFlag(p.Flags, "esp") {
+		fs = "efi"
+	}
+	line := fmt.Sprintf("part %s --fstype=%s --ondisk=%s", p.Mount, fs, device)
+	switch {
+	case p.Grow:
+		line += " --grow"
+	case p.SizeMB > 0:
+		line += fmt.Sprintf(" --size=%d", p.SizeMB)
+	default:
+		return "", fmt.Errorf("rocky9: partition %s on %s needs a size or rest", p.Mount, device)
+	}
+	return line, nil
+}
+
+// driftGuardScript emits the %pre layout drift guard: per preserved
+// partition, compare the live table (sysfs start/size sectors + blkid UUID)
+// against the verify_layout-bound snapshot baseline; any drift reports
+// LAYOUT_DRIFT to the completion endpoint and aborts the install
+// (docs/06-install-pipeline.md §4 — "装错盘在机制上不可能发生").
+func driftGuardScript(device string, baseline []render.BaselinePartition, completeURL string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# mammoth layout drift guard — %s, baseline bound at verify_layout\n", device)
+	b.WriteString("report() { curl -fsS -m 10 -X POST -H 'Content-Type: application/json' ")
+	b.WriteString(`--data-binary '{"status":"failed","detail":"LAYOUT_DRIFT: '`)
+	b.WriteString(`"$1"`)
+	b.WriteString(`'"}' `)
+	b.WriteString(completeURL)
+	b.WriteString(" >/dev/null 2>&1 || true; echo \"LAYOUT_DRIFT: $1\" >&2; exit 1; }\n")
+	const sector = int64(512)
+	for _, bp := range baseline {
+		fmt.Fprintf(&b, "\n# preserve %s (number %d)\n", bp.Device, bp.Number)
+		fmt.Fprintf(&b, "_d=/sys/block/%s/%s\n", device, bp.Device)
+		fmt.Fprintf(&b, "[ -e \"$_d/start\" ] || report \"%s missing\"\n", bp.Device)
+		if bp.StartBytes > 0 {
+			fmt.Fprintf(&b, "[ \"$(cat $_d/start)\" = \"%d\" ] || report \"%s start drifted\"\n",
+				bp.StartBytes/sector, bp.Device)
+		}
+		if bp.SizeBytes > 0 {
+			fmt.Fprintf(&b, "[ \"$(cat $_d/size)\" = \"%d\" ] || report \"%s size drifted\"\n",
+				bp.SizeBytes/sector, bp.Device)
+		}
+		if bp.UUID != "" {
+			fmt.Fprintf(&b, "[ \"$(blkid -s UUID -o value /dev/%s)\" = \"%s\" ] || report \"%s uuid drifted\"\n",
+				bp.Device, bp.UUID, bp.Device)
+		}
+	}
+	return b.String()
 }

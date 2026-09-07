@@ -78,8 +78,8 @@ func defaultHardware(serial string) *bmc.HardwareView {
 		CPU:          bmc.CPUView{Model: "Fake Xeon 6542Y", Cores: 32},
 		MemoryBytes:  128 * 1024 * 1024 * 1024,
 		Disks: []bmc.DiskView{
-			{Name: "nvme0", Serial: "S6XPN0001", SizeBytes: 1920383410176, Medium: "ssd", Protocol: "nvme"},
-			{Name: "nvme1", Serial: "S6XPN0002", SizeBytes: 1920383410176, Medium: "ssd", Protocol: "nvme"},
+			{Name: "nvme0n1", Serial: "S6XPN0001", SizeBytes: 1920383410176, Medium: "ssd", Protocol: "nvme"},
+			{Name: "nvme1n1", Serial: "S6XPN0002", SizeBytes: 1920383410176, Medium: "ssd", Protocol: "nvme"},
 			{Name: "sda", Serial: "GIM256_0001", SizeBytes: 4000787030016, Medium: "hdd", Protocol: "sata"},
 		},
 		NICs: []bmc.NICView{

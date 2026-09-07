@@ -159,14 +159,23 @@ type storageDiskView struct {
 	} `json:"select"`
 	Wipe       bool            `json:"wipe"`
 	Keep       string          `json:"keep"`
+	Preserve   []preserveView  `json:"preserve"`
 	Partitions []partitionView `json:"partitions"`
 }
 
+type preserveView struct {
+	Number int    `json:"number"`
+	Mount  string `json:"mount"`
+	FS     string `json:"fs"`
+}
+
 type partitionView struct {
-	Size  string   `json:"size"`
-	FS    string   `json:"fs"`
-	Mount string   `json:"mount"`
-	Flags []string `json:"flags"`
+	Size     string   `json:"size"`
+	FS       string   `json:"fs"`
+	Mount    string   `json:"mount"`
+	Flags    []string `json:"flags"`
+	Number   int      `json:"number"`
+	Preserve bool     `json:"preserve"`
 }
 
 type scriptView struct {
@@ -225,13 +234,8 @@ func (e *Executor) verifyLayout(ctx context.Context, task *store.Task, job *stor
 	}
 
 	resolved := make([]render.ResolvedDisk, 0, len(spec.Storage.Disks))
+	used := map[string]int{} // device → spec disk index (overlap detection)
 	for i, d := range spec.Storage.Disks {
-		if d.Keep != "" {
-			// keep semantics arrive with M4 (%pre drift machinery); rejected
-			// explicitly rather than half-supported.
-			return classifiedErr("SCHEMA_INVALID_STORAGE", false,
-				"keep semantics arrive with M4; M3 supports the wipe path only")
-		}
 		match := d.Select.Match
 		// Selector fields combine (docs/04-install-spec.md §5.1): exact
 		// fields filter first; `size` then picks the largest/smallest
@@ -268,24 +272,108 @@ func (e *Executor) verifyLayout(ctx context.Context, task *store.Task, job *stor
 			return classifiedErr("SELECT_AMBIGUOUS", false,
 				"storage.disks[%d]: selector matches %d disks; refine the match", i, len(candidates))
 		}
-		rd := render.ResolvedDisk{Device: candidates[0].Name, Serial: candidates[0].Serial, Wipe: d.Wipe}
-		if !d.Wipe {
+		device := candidates[0].Name
+		if prev, dup := used[device]; dup {
 			return classifiedErr("SCHEMA_INVALID_STORAGE", false,
-				"storage.disks[%d]: declare wipe (keep arrives with M4)", i)
+				"storage.disks[%d] resolves to %s, already claimed by disks[%d] (wipe/keep overlap)", i, device, prev)
 		}
-		for _, p := range d.Partitions {
-			rp := render.ResolvedPartition{Mount: p.Mount, FS: p.FS, Flags: p.Flags}
-			if p.Size == "rest" {
-				rp.Grow = true
-			} else {
-				mb, err := sizeToMB(p.Size)
-				if err != nil {
-					return classifiedErr("SCHEMA_INVALID_STORAGE", false,
-						"storage.disks[%d].partitions[%d]: %s", i, len(rp.Mount), err.Error())
-				}
-				rp.SizeMB = mb
+		used[device] = i
+		rd := render.ResolvedDisk{Device: device, Serial: candidates[0].Serial}
+
+		switch {
+		case d.Keep == "disk":
+			// keep: disk — the disk is never touched (docs/04-install-spec.md §5.1).
+			rd.KeepDisk = true
+		case d.Keep == "partitions":
+			// Bind the latest snapshot: preserved partitions must exist; the
+			// snapshot facts become the %pre drift baseline (docs/06 §4).
+			snap, err := e.layoutSnapshot(ctx, task.MachineID)
+			if err != nil {
+				return classifiedErr("LAYOUT_SNAPSHOT_REQUIRED", false,
+					"storage.disks[%d]: keep:partitions requires a layout snapshot (%s)", i, err.Error())
 			}
-			rd.Partitions = append(rd.Partitions, rp)
+			var snapDisk *snapPartition
+			for di := range snap {
+				if snap[di].Match["serial"] == candidates[0].Serial || snap[di].Device == device {
+					snapDisk = &snap[di]
+					break
+				}
+			}
+			if snapDisk == nil {
+				return classifiedErr("LAYOUT_SNAPSHOT_REQUIRED", false,
+					"storage.disks[%d]: disk %s absent from the machine's snapshot", i, device)
+			}
+			preserveNums := map[int]bool{}
+			for _, p := range d.Preserve {
+				preserveNums[p.Number] = true
+			}
+			for _, sp := range snapDisk.Partitions {
+				onPart := onPartName(device, sp.Number)
+				rd.Baseline = append(rd.Baseline, render.BaselinePartition{
+					Device: onPart, Number: sp.Number,
+					StartBytes: sp.StartBytes, EndBytes: sp.EndBytes, SizeBytes: sp.SizeBytes,
+					UUID: sp.UUID, FSType: sp.FSType, Mountpoint: sp.Mountpoint,
+				})
+				if !preserveNums[sp.Number] {
+					rd.Remove = append(rd.Remove, onPart)
+				}
+			}
+			for _, p := range d.Partitions {
+				rp := render.ResolvedPartition{Mount: p.Mount, FS: p.FS, Flags: p.Flags}
+				if p.Size == "rest" {
+					rp.Grow = true
+				} else {
+					mb, err := sizeToMB(p.Size)
+					if err != nil {
+						return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+							"storage.disks[%d].partitions: %s", i, err.Error())
+					}
+					rp.SizeMB = mb
+				}
+				rd.Partitions = append(rd.Partitions, rp)
+			}
+			// preserve[] entries are the kept mounts: each becomes a reused
+			// partition (unformatted, original UUID — docs/04 §5.1 ③).
+			for _, pv := range d.Preserve {
+				var base *render.BaselinePartition
+				for bi := range rd.Baseline {
+					if rd.Baseline[bi].Number == pv.Number {
+						base = &rd.Baseline[bi]
+					}
+				}
+				if base == nil {
+					return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+						"storage.disks[%d]: preserve %d not in snapshot", i, pv.Number)
+				}
+				rd.Partitions = append(rd.Partitions, render.ResolvedPartition{
+					Mount:    firstNonEmptyStr(pv.Mount, base.Mountpoint),
+					FS:       firstNonEmptyStr(pv.FS, base.FSType),
+					Preserve: true,
+					Number:   pv.Number,
+					OnPart:   onPartName(device, pv.Number),
+					UUID:     base.UUID,
+				})
+			}
+		default:
+			if !d.Wipe {
+				return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+					"storage.disks[%d]: declare wipe or keep", i)
+			}
+			rd.Wipe = true
+			for _, p := range d.Partitions {
+				rp := render.ResolvedPartition{Mount: p.Mount, FS: p.FS, Flags: p.Flags}
+				if p.Size == "rest" {
+					rp.Grow = true
+				} else {
+					mb, err := sizeToMB(p.Size)
+					if err != nil {
+						return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+							"storage.disks[%d].partitions: %s", i, err.Error())
+					}
+					rp.SizeMB = mb
+				}
+				rd.Partitions = append(rd.Partitions, rp)
+			}
 		}
 		resolved = append(resolved, rd)
 	}
@@ -409,6 +497,7 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 
 	in := render.InstallInputs{
 		TaskToken:     ictx.Token,
+		DriftCheck:    job.Policy.VerifyLayout == nil || *job.Policy.VerifyLayout,
 		MachineID:     m.ID,
 		Hostname:      ictx.Hostname,
 		ImageSource:   spec.Image.Source,
@@ -649,4 +738,59 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 	}
 	obs.FromContext(ctx).InfoContext(ctx, "install verified ready")
 	return nil
+}
+
+// ── snapshot binding helpers (M4) ───────────────────────────────────────────
+
+type snapPartition struct {
+	Device     string            `json:"device"`
+	Match      map[string]string `json:"match"`
+	Partitions []snapPartitionEx `json:"partitions"`
+}
+
+type snapPartitionEx struct {
+	Number     int    `json:"number"`
+	StartBytes int64  `json:"start_bytes"`
+	EndBytes   int64  `json:"end_bytes"`
+	SizeBytes  int64  `json:"size_bytes"`
+	FSType     string `json:"fstype"`
+	UUID       string `json:"uuid"`
+	Mountpoint string `json:"mountpoint"`
+}
+
+// layoutSnapshot loads and parses the machine's latest layout snapshot.
+func (e *Executor) layoutSnapshot(ctx context.Context, machineID string) ([]snapPartition, error) {
+	content, _, err := e.Machines.LatestLayout(ctx, machineID)
+	if err != nil {
+		return nil, err
+	}
+	var wrapped struct {
+		Disks []snapPartition `json:"disks"`
+	}
+	if err := json.Unmarshal(content, &wrapped); err != nil {
+		return nil, fmt.Errorf("snapshot unreadable: %w", err)
+	}
+	snap := wrapped.Disks
+	if len(snap) == 0 {
+		return nil, fmt.Errorf("snapshot has no disks")
+	}
+	return snap, nil
+}
+
+// onPartName derives the full kernel partition name: nvme0n1 → nvme0n1p2,
+// sda → sda2 (digit-suffixed parents take the 'p' separator).
+func onPartName(parent string, number int) string {
+	if len(parent) > 0 && parent[len(parent)-1] >= '0' && parent[len(parent)-1] <= '9' {
+		return fmt.Sprintf("%sp%d", parent, number)
+	}
+	return fmt.Sprintf("%s%d", parent, number)
+}
+
+func firstNonEmptyStr(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

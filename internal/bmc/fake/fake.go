@@ -202,14 +202,20 @@ func (d *Driver) MountMedia(_ context.Context, addr string, _ bmc.Credentials, i
 	return nil
 }
 
-func (d *Driver) EjectMedia(_ context.Context, addr string, _ bmc.Credentials) error {
+func (d *Driver) EjectMedia(_ context.Context, addr string, _ bmc.Credentials, img bmc.MediaImage) error {
 	b, err := d.get(addr, "eject_media")
 	if err != nil {
 		return err
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.Media = nil
+	var kept []bmc.MediaImage
+	for _, m := range b.Media {
+		if m.URL != img.URL {
+			kept = append(kept, m)
+		}
+	}
+	b.Media = kept
 	return nil
 }
 

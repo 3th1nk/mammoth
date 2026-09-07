@@ -81,6 +81,10 @@ type Config struct {
 
 	// MetricsAddr serves /metrics; empty = serve on HTTPAddr alongside the API.
 	MetricsAddr string
+
+	// ExternalURL is the base address machines reach for answer files
+	// (docs/06-install-pipeline.md §2.1: inst.ks target).
+	ExternalURL string
 }
 
 // FromEnv builds a Config from the process environment with the MAMMOTH_ prefix.
@@ -111,6 +115,7 @@ func FromEnv() (Config, error) {
 		InbandTimeout:         getenvDuration("MAMMOTH_INBAND_TIMEOUT", 20*time.Second),
 		OTELExporterEndpoint:  os.Getenv("MAMMOTH_OTEL_EXPORTER_ENDPOINT"),
 		MetricsAddr:           os.Getenv("MAMMOTH_METRICS_ADDR"),
+		ExternalURL:           getenv("MAMMOTH_EXTERNAL_URL", "http://127.0.0.1:8080"),
 	}
 	if !c.Mode.Valid() {
 		return c, fmt.Errorf("config: invalid MAMMOTH_MODE %q (want all|api|runner|builder|prober)", c.Mode)

@@ -2,7 +2,12 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/obs"
@@ -126,16 +131,22 @@ func (s *Server) CreateJob(ctx context.Context, request gen.CreateJobRequestObje
 		}
 	}
 
+	var hostnamePattern *string
+	if body.Type == "install" && body.Spec != nil && body.Spec.Identity != nil {
+		hostnamePattern = body.Spec.Identity.HostnamePattern
+	}
 	job, err := s.createJobRecord(ctx, createJobRecord{
-		jobType:        string(body.Type),
-		flow:           flow,
-		machineIDs:     machineIDs,
-		actionRaw:      actionRaw,
-		specRaw:        specRaw,
-		policy:         policy,
-		requestRaw:     mustJSON(body),
-		idempotencyKey: derefOr(request.Params.IdempotencyKey, ""),
-		createdBy:      s.subject(ctx),
+		jobType:         string(body.Type),
+		flow:            flow,
+		machineIDs:      machineIDs,
+		actionRaw:       actionRaw,
+		specRaw:         specRaw,
+		policy:          policy,
+		requestRaw:      mustJSON(body),
+		idempotencyKey:  derefOr(request.Params.IdempotencyKey, ""),
+		createdBy:       s.subject(ctx),
+		hostnamePattern: hostnamePattern,
+		overrides:       derefOr(body.Targets.Overrides, nil),
 	})
 	if err != nil {
 		return nil, err
@@ -172,14 +183,42 @@ func (s *Server) createJobRecord(ctx context.Context, in createJobRecord) (*gen.
 	}
 
 	taskIDs := make([]string, 0, len(in.machineIDs))
-	for range in.machineIDs {
+	var taskContexts []json.RawMessage
+	if in.jobType == "install" {
+		// Install tasks get their machine-facing credential (token), the
+		// expanded hostname, and the per-machine spec (base shallow-merged
+		// with the machine's override) at creation; context grows afterwards.
+		pattern := ""
+		if in.hostnamePattern != nil {
+			pattern = *in.hostnamePattern
+		}
+		for i, mid := range in.machineIDs {
+			taskIDs = append(taskIDs, store.NewID("tsk"))
+			token, terr := newToken()
+			if terr != nil {
+				return nil, terr
+			}
+			tctx := map[string]any{"token": token}
+			if pattern != "" {
+				tctx["hostname"] = strings.ReplaceAll(pattern, "{index}", itoa(i+1))
+			}
+			if merged := mergeSpecOverride(in.specRaw, in.overrides, mid); merged != nil {
+				tctx["spec"] = json.RawMessage(merged)
+			}
+
+			b, _ := json.Marshal(tctx)
+			taskContexts = append(taskContexts, b)
+		}
+	}
+	for len(taskIDs) < len(in.machineIDs) {
 		taskIDs = append(taskIDs, store.NewID("tsk"))
 	}
 	input := store.CreateJobInput{
-		Job:        job,
-		TaskIDs:    taskIDs,
-		MachineIDs: in.machineIDs,
-		Stages:     provision.StageNames(in.flow),
+		Job:          job,
+		TaskIDs:      taskIDs,
+		MachineIDs:   in.machineIDs,
+		Stages:       provision.StageNames(in.flow),
+		TaskContexts: taskContexts,
 	}
 	if err := s.Jobs.CreateJobWithTasks(ctx, input); err != nil {
 		return nil, err
@@ -215,15 +254,17 @@ func (s *Server) createJobRecord(ctx context.Context, in createJobRecord) (*gen.
 }
 
 type createJobRecord struct {
-	jobType        string
-	flow           string
-	machineIDs     []string
-	actionRaw      json.RawMessage
-	specRaw        json.RawMessage
-	policy         store.Policy
-	requestRaw     json.RawMessage
-	idempotencyKey string
-	createdBy      string
+	jobType         string
+	flow            string
+	machineIDs      []string
+	actionRaw       json.RawMessage
+	specRaw         json.RawMessage
+	policy          store.Policy
+	requestRaw      json.RawMessage
+	idempotencyKey  string
+	createdBy       string
+	hostnamePattern *string
+	overrides       map[string]gen.InstallSpec
 }
 
 func ptrJob(j gen.Job) *gen.Job { return &j }
@@ -267,6 +308,13 @@ func encodeAction(body *gen.ActionRequest) (json.RawMessage, string, error) {
 func validateInstallSpec(spec *gen.InstallSpec) error {
 	if spec.Image.Distro == "" {
 		return verr("SCHEMA_INVALID_SPEC", "image.distro must be declared explicitly")
+	}
+	if spec.Storage != nil && len(spec.Storage.Disks) > 0 {
+		for i, disk := range spec.Storage.Disks {
+			if disk.Keep != nil && *disk.Keep != "" {
+				return verr("SCHEMA_INVALID_STORAGE", "disks[%d]: keep semantics arrive with M4; M3 supports the wipe path only", i)
+			}
+		}
 	}
 	if spec.Image.Source == nil && spec.Image.ImageId == nil {
 		return verr("SCHEMA_INVALID_SPEC", "image.source or image.image_id is required")
@@ -454,3 +502,55 @@ func (s *Server) RetryJobTask(ctx context.Context, request gen.RetryJobTaskReque
 	_ = s.Jobs.RecomputeJob(ctx, task.JobID)
 	return gen.RetryJobTask202JSONResponse(taskOut(fresh, stages)), nil
 }
+
+// newToken generates the machine-facing task credential.
+func newToken() (string, error) {
+	var b [24]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("token entropy: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
+func itoa(v int) string { return strconv.Itoa(v) }
+
+// mergeSpecOverride merges a per-machine Install Spec fragment over the base
+// spec (docs/04-install-spec.md §5: shallow, per-machine). Merging happens on
+// the contract structs with zero-value detection: a fragment that did not set
+// a top-level field (e.g. image) must not wipe the base value — decoding the
+// fragment into the contract struct yields zero values for required fields.
+func mergeSpecOverride(base json.RawMessage, overrides map[string]gen.InstallSpec, machineID string) json.RawMessage {
+	ov, ok := overrides[machineID]
+	if !ok || len(base) == 0 {
+		return nil
+	}
+	var b gen.InstallSpec
+	if err := json.Unmarshal(base, &b); err != nil {
+		return nil
+	}
+	if ov.Image.Distro != "" || ov.Image.Source != nil || ov.Image.ImageId != nil || ov.Image.Checksum != nil {
+		b.Image = ov.Image
+	}
+	if ov.Storage != nil {
+		b.Storage = ov.Storage
+	}
+	if ov.Network != nil {
+		b.Network = ov.Network
+	}
+	if ov.Identity != nil {
+		b.Identity = ov.Identity
+	}
+	if ov.Access != nil {
+		b.Access = ov.Access
+	}
+	if ov.Scripts != nil {
+		b.Scripts = ov.Scripts
+	}
+	merged, err := json.Marshal(b)
+	if err != nil {
+		return nil
+	}
+	return merged
+}
+
+func isZeroImage(i gen.InstallSpec) bool { return false } // placeholder

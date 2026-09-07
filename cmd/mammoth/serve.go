@@ -21,6 +21,8 @@ import (
 	"github.com/3th1nk/mammoth/internal/inventory/inbandssh"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/provision"
+	"github.com/3th1nk/mammoth/internal/render"
+	"github.com/3th1nk/mammoth/internal/render/rocky9"
 	"github.com/3th1nk/mammoth/internal/store"
 	"github.com/3th1nk/mammoth/internal/store/queue"
 	"github.com/3th1nk/mammoth/internal/version"
@@ -107,6 +109,13 @@ func serve(args []string) error {
 	inbandRunner := &inbandssh.SSHRunner{DialTimeout: cfg.InbandTimeout / 3}
 	inband := &inbandssh.Collector{Runner: inbandRunner}
 
+	// Distro drivers register here; adding a distro never touches the
+	// orchestration layer (docs/06-install-pipeline.md §5).
+	renderReg := render.NewRegistry()
+	if err := renderReg.Register(rocky9.New()); err != nil {
+		return err
+	}
+
 	// Vendor compatibility matrix: embedded defaults, optionally extended
 	// from a mounted directory (docs/compat/README.md).
 	compatReg, err := bmccompat.LoadDir(getenv("MAMMOTH_COMPAT_DIR", ""))
@@ -178,6 +187,8 @@ func serve(args []string) error {
 			BMC:         registry,
 			Compat:      compatReg,
 			Inband:      inband,
+			Render:      renderReg,
+			ExternalURL: cfg.ExternalURL,
 			LayoutKeep:  cfg.LayoutRetention,
 		}
 		runner := provision.NewRunner(tq, jobRepo, exec, metrics, provision.RunnerOptions{

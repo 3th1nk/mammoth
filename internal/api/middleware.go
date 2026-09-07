@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -35,8 +36,13 @@ func RequestID() gin.HandlerFunc {
 // Liveness/readiness stay public so orchestrators can probe unauthenticated.
 func BearerAuth(token string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		switch c.FullPath() {
-		case "/healthz", "/readyz":
+		switch {
+		case c.FullPath() == "/healthz", c.FullPath() == "/readyz":
+			c.Next()
+			return
+		case strings.HasPrefix(c.FullPath(), "/render/"):
+			// Machine-facing surface: the task token in the path is the
+			// credential (docs/06-install-pipeline.md §2.1).
 			c.Next()
 			return
 		}

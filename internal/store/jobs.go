@@ -26,6 +26,9 @@ type CreateJobInput struct {
 	TaskIDs    []string // parallel to MachineIDs; task i belongs to machine i
 	MachineIDs []string
 	Stages     []string // flow stage names, persisted per task (docs/02-architecture.md §2.1)
+	// TaskContexts carries per-task initial context (install jobs: task
+	// token); nil entries initialize to {}.
+	TaskContexts []json.RawMessage
 }
 
 func (r *JobRepo) CreateJobWithTasks(ctx context.Context, in CreateJobInput) error {
@@ -56,9 +59,13 @@ func (r *JobRepo) CreateJobWithTasks(ctx context.Context, in CreateJobInput) err
 
 	for i, mid := range in.MachineIDs {
 		tid := in.TaskIDs[i]
+		tctx := []byte(`{}`)
+		if i < len(in.TaskContexts) && len(in.TaskContexts[i]) > 0 {
+			tctx = in.TaskContexts[i]
+		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO tasks (id, job_id, machine_id, state, flow_name)
-			VALUES ($1,$2,$3,'pending',$4)`, tid, in.Job.ID, mid, in.Job.FlowName()); err != nil {
+			INSERT INTO tasks (id, job_id, machine_id, state, flow_name, context)
+			VALUES ($1,$2,$3,'pending',$4,$5)`, tid, in.Job.ID, mid, in.Job.FlowName(), tctx); err != nil {
 			return err
 		}
 		for seq, name := range in.Stages {
@@ -318,12 +325,14 @@ func (r *JobRepo) BumpAttempt(ctx context.Context, taskID string, errInfo ErrorI
 	return err
 }
 
-// MarkCanceled is the one write the control plane may perform directly
-// (docs/08-data-model.md iron rule 1).
+// MarkCanceled cancels a non-terminal task. The control plane uses it for
+// pending/interrupted tasks (its one sanctioned write, docs/08-data-model.md
+// iron rule 1); the runner uses it for running tasks it owns when it observes
+// the cooperative cancel flag — same single-writer discipline, owner-driven.
 func (r *JobRepo) MarkCanceled(ctx context.Context, taskID string) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE tasks SET state='canceled', finished_at = now(), updated_at = now()
-		WHERE id = $1 AND state IN ('pending', 'interrupted')`, taskID)
+		WHERE id = $1 AND state IN ('pending', 'running', 'interrupted')`, taskID)
 	return err
 }
 
@@ -672,4 +681,112 @@ func (r *JobRepo) ResetForRetry(ctx context.Context, taskID string) error {
 		return ErrConflict
 	}
 	return nil
+}
+
+// PatchTaskContext merges keys into a task's context with the optimistic-lock
+// discipline (docs/08-data-model.md: single UPDATE with WHERE stage_index=?;
+// no read-modify-write full overwrite). Conflict → ErrConflict, the caller
+// retries or treats the task as progressed.
+func (r *JobRepo) PatchTaskContext(ctx context.Context, taskID string, expectStageIndex int, patch map[string]any) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var raw []byte
+	if err := tx.QueryRowContext(ctx,
+		`SELECT context FROM tasks WHERE id = $1 FOR UPDATE`, taskID).Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	var current map[string]any
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &current); err != nil {
+			return fmt.Errorf("context corrupt: %w", err)
+		}
+	}
+	if current == nil {
+		current = map[string]any{}
+	}
+	for k, v := range patch {
+		current[k] = v
+	}
+	merged, err := json.Marshal(current)
+	if err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE tasks SET context = $2, updated_at = now()
+		WHERE id = $1 AND stage_index = $3`, taskID, merged, expectStageIndex)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrConflict
+	}
+	return tx.Commit()
+}
+
+// GetTaskByToken resolves a machine-facing task token to its task (the
+// unguessable token is the credential for the render endpoints).
+func (r *JobRepo) GetTaskByToken(ctx context.Context, token string) (*Task, error) {
+	row := r.db.QueryRowContext(ctx, taskSelect+`
+		WHERE context->>'token' = $1`, token)
+	return scanTask(row)
+}
+
+// AppendInstallRecord merges an install progress record into context.
+func (r *JobRepo) AppendInstallRecord(ctx context.Context, taskID string, stageIndex int, rec map[string]any) error {
+	return r.PatchTaskContext(ctx, taskID, stageIndex, map[string]any{"install": rec})
+}
+
+// RecordInstallProgress merges installer progress into the task context
+// (boot timestamps, completion report) under a row lock — terminal facts are
+// monotonic, so no stage CAS here (docs/06-install-pipeline.md §3, §4).
+func (r *JobRepo) RecordInstallProgress(ctx context.Context, taskID string, rec map[string]any) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var raw []byte
+	if err := tx.QueryRowContext(ctx,
+		`SELECT context FROM tasks WHERE id = $1 FOR UPDATE`, taskID).Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	var current map[string]any
+	_ = json.Unmarshal(raw, &current)
+	install, _ := current["install"].(map[string]any)
+	if install == nil {
+		install = map[string]any{}
+	}
+	for k, v := range rec {
+		install[k] = v
+	}
+	current["install"] = install
+	merged, err := json.Marshal(current)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE tasks SET context = $2, updated_at = now() WHERE id = $1`, taskID, merged); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RecordInstallComplete records the installer's completion report
+// (status ok|failed) under a row lock: monotonic terminal facts, no stage CAS.
+func (r *JobRepo) RecordInstallComplete(ctx context.Context, taskID, status, detail string) error {
+	now := time.Now().UTC()
+	return r.RecordInstallProgress(ctx, taskID, map[string]any{
+		"completed_at": now, "status": status, "detail": detail,
+	})
 }

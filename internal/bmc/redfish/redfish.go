@@ -274,12 +274,6 @@ func (d *Driver) ConsoleURL(_ context.Context, _ string, _ bmc.Credentials) (str
 		Detail: "no OEM KVM mapping for this vendor yet"}
 }
 
-// CollectInventory ships with the M1 Redfish inventory probe.
-func (d *Driver) CollectInventory(_ context.Context, _ string, _ bmc.Credentials) (bmc.HardwareView, error) {
-	return bmc.HardwareView{}, &bmc.Error{Kind: bmc.KindUnsupported, Op: "collect_inventory",
-		Detail: "redfish inventory probe lands in M1"}
-}
-
 // normalizeHost accepts bare hosts, host:port and URL forms.
 func normalizeHost(addr string) string {
 	if strings.Contains(addr, "://") {

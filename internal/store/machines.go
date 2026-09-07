@@ -276,3 +276,11 @@ func nullStrPtr(s sql.NullString) *string {
 	v := s.String
 	return &v
 }
+
+// SetState moves the machine lifecycle state (registering → discovering →
+// ready | error); the discover flow writes through here.
+func (r *MachineRepo) SetState(ctx context.Context, id, state string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE machines SET state = $2, updated_at = now() WHERE id = $1`, id, state)
+	return err
+}

@@ -1,0 +1,13 @@
+# Example entry — copy to <vendor>.yaml and edit. Format: docs/compat/README.md
+vendor: example
+models:
+  - "X12DP.*"
+partial_inventory:
+  - "older BIOS: drives behind HBA not enumerated in Storage collection"
+single_virtual_media: false
+remote_uri_mount: true
+one_shot_boot: true
+known_defects:
+  - firmware: ">=1.0 <1.23"
+    issue: "InsertMedia ignores the write-protected flag"
+    workaround: "retry after power cycle"

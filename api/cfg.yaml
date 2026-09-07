@@ -1,0 +1,10 @@
+# oapi-codegen configuration — the OpenAPI contract is the single source of truth.
+# Generated layer (internal/api/gen) is physically isolated from handwritten
+# handlers (internal/api); regeneration never touches the handwritten layer.
+package: gen
+output: internal/api/gen/api.go
+generate:
+  models: true
+  gin-server: true
+  strict-server: true
+  embedded-spec: true

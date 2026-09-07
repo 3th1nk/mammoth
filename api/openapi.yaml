@@ -1,0 +1,1441 @@
+openapi: 3.1.0
+info:
+  title: Mammoth API
+  version: 0.1.0
+  description: |
+    Mammoth is a self-contained bare-metal provisioning engine.
+    Send in an out-of-band address and a credential, get back a machine that runs.
+
+    Conventions:
+    - Errors follow RFC 9457 (`application/problem+json`) with machine-readable `code` and `retryable` extensions.
+    - All creating POSTs accept an `Idempotency-Key` header; replays within the window return the original result.
+    - List endpoints use cursor pagination (`page_size` + `cursor`, response `next_cursor`).
+    - Every response carries `X-Request-Id`; the server contract version is returned in `X-Mammoth-API-Version`.
+  license:
+    name: Apache-2.0
+
+servers:
+  - url: /
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: meta
+  - name: credentials
+  - name: machines
+  - name: jobs
+
+paths:
+  /healthz:
+    get:
+      operationId: healthz
+      tags: [meta]
+      security: []
+      summary: Liveness probe (no dependency checks)
+      responses:
+        '204':
+          description: Alive
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+
+  /readyz:
+    get:
+      operationId: readyz
+      tags: [meta]
+      security: []
+      summary: Readiness probe (database and queue reachable)
+      responses:
+        '204':
+          description: Ready
+        '503':
+          description: Not ready
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /api/v1:
+    get:
+      operationId: getCapabilities
+      tags: [meta]
+      summary: Capability self-description
+      responses:
+        '200':
+          description: API capabilities
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Capabilities'
+
+  /api/v1/credentials:
+    post:
+      operationId: createCredential
+      tags: [credentials]
+      summary: Register a credential
+      description: |
+        Credentials are write-only: the secret is stored encrypted and never
+        returned by any endpoint. The response only carries metadata.
+      parameters:
+        - $ref: '#/components/parameters/idempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialCreate'
+      responses:
+        '201':
+          description: Credential created (secret not echoed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Credential'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/v1/credentials/{id}:
+    parameters:
+      - $ref: '#/components/parameters/credentialId'
+    get:
+      operationId: getCredential
+      tags: [credentials]
+      summary: Get credential metadata (never the secret)
+      responses:
+        '200':
+          description: Credential metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Credential'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: deleteCredential
+      tags: [credentials]
+      summary: Delete a credential
+      responses:
+        '204':
+          description: Deleted
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/machines:
+    post:
+      operationId: createMachine
+      tags: [machines]
+      summary: Register a machine by its out-of-band address and credential
+      parameters:
+        - $ref: '#/components/parameters/idempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MachineCreate'
+      responses:
+        '201':
+          description: Machine registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Machine'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    get:
+      operationId: listMachines
+      tags: [machines]
+      summary: List machines
+      parameters:
+        - $ref: '#/components/parameters/pageSize'
+        - $ref: '#/components/parameters/cursor'
+        - $ref: '#/components/parameters/orderBy'
+        - $ref: '#/components/parameters/order'
+        - name: state
+          in: query
+          schema:
+            $ref: '#/components/schemas/MachineState'
+        - name: labels
+          in: query
+          description: Label equality filters, repeatable (`labels=env=prod&labels=rack=A3`).
+          schema:
+            type: array
+            items:
+              type: string
+              pattern: '^[^=]+=[^=]*$'
+      responses:
+        '200':
+          description: Machine page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MachineList'
+
+  /api/v1/machines/{id}:
+    parameters:
+      - $ref: '#/components/parameters/machineId'
+    get:
+      operationId: getMachine
+      tags: [machines]
+      summary: Get a machine
+      responses:
+        '200':
+          description: Machine
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Machine'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      operationId: updateMachine
+      tags: [machines]
+      summary: Update mutable machine fields
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MachineUpdate'
+      responses:
+        '200':
+          description: Updated machine
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Machine'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: deleteMachine
+      tags: [machines]
+      summary: Deregister a machine
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/machines/{id}/layout:
+    parameters:
+      - $ref: '#/components/parameters/machineId'
+    get:
+      operationId: getMachineLayout
+      tags: [machines]
+      summary: Get the latest disk layout snapshot
+      responses:
+        '200':
+          description: Latest layout snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Layout'
+        '404':
+          description: Machine unknown or no snapshot captured yet
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /api/v1/machines/{id}/console:
+    parameters:
+      - $ref: '#/components/parameters/machineId'
+    get:
+      operationId: getMachineConsole
+      tags: [machines]
+      summary: Get a one-time KVM / virtual console URL
+      responses:
+        '200':
+          description: One-time console URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsoleURL'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          description: BMC error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /api/v1/machines/{id}/actions:
+    parameters:
+      - $ref: '#/components/parameters/machineId'
+    post:
+      operationId: performMachineAction
+      tags: [machines]
+      summary: Dispatch a single-machine out-of-band action
+      description: |
+        Unified entry point for power / boot-device / virtual-media / discover
+        actions. Always returns 202 with the created job; there is no
+        synchronous BMC call endpoint. Use the job/task endpoints for status.
+      parameters:
+        - $ref: '#/components/parameters/idempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActionRequest'
+      responses:
+        '202':
+          description: Action accepted, job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /api/v1/jobs:
+    post:
+      operationId: createJob
+      tags: [jobs]
+      summary: Submit a job (batch install / power / discover)
+      parameters:
+        - $ref: '#/components/parameters/idempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobCreate'
+      responses:
+        '202':
+          description: Job accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+    get:
+      operationId: listJobs
+      tags: [jobs]
+      summary: List jobs
+      parameters:
+        - $ref: '#/components/parameters/pageSize'
+        - $ref: '#/components/parameters/cursor'
+        - $ref: '#/components/parameters/orderBy'
+        - $ref: '#/components/parameters/order'
+        - name: type
+          in: query
+          schema:
+            $ref: '#/components/schemas/JobType'
+        - name: state
+          in: query
+          schema:
+            $ref: '#/components/schemas/JobState'
+      responses:
+        '200':
+          description: Job page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobList'
+
+  /api/v1/jobs/{id}:
+    parameters:
+      - $ref: '#/components/parameters/jobId'
+    get:
+      operationId: getJob
+      tags: [jobs]
+      summary: Get a job with its summary
+      responses:
+        '200':
+          description: Job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/jobs/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/jobId'
+    post:
+      operationId: cancelJob
+      tags: [jobs]
+      summary: Cancel a job
+      description: Stops scheduling and compensates running tasks (e.g. eject media, restore boot order).
+      responses:
+        '202':
+          description: Cancel accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/jobs/{id}/tasks:
+    parameters:
+      - $ref: '#/components/parameters/jobId'
+    get:
+      operationId: listJobTasks
+      tags: [jobs]
+      summary: List tasks of a job
+      parameters:
+        - $ref: '#/components/parameters/pageSize'
+        - $ref: '#/components/parameters/cursor'
+        - name: state
+          in: query
+          schema:
+            $ref: '#/components/schemas/TaskState'
+      responses:
+        '200':
+          description: Task page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskList'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/jobs/{id}/tasks/{taskId}:
+    parameters:
+      - $ref: '#/components/parameters/jobId'
+      - $ref: '#/components/parameters/taskId'
+    get:
+      operationId: getJobTask
+      tags: [jobs]
+      summary: Get a task with its stage details
+      responses:
+        '200':
+          description: Task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/jobs/{id}/tasks/{taskId}/retry:
+    parameters:
+      - $ref: '#/components/parameters/jobId'
+      - $ref: '#/components/parameters/taskId'
+    post:
+      operationId: retryJobTask
+      tags: [jobs]
+      summary: Retry a failed or interrupted task
+      description: Re-enqueues the task from its last stage index. Only failed/interrupted tasks can be retried.
+      responses:
+        '202':
+          description: Retry accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Static API token managed by the deployment (first version); an external IdP adapter point is reserved.
+
+  headers:
+    XRequestId:
+      description: Server-generated request identifier, echoed in logs and errors.
+      schema:
+        type: string
+    XApiVersion:
+      description: Server contract version.
+      schema:
+        type: string
+
+  parameters:
+    idempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: Replay safety for creating POSTs; within the window a replay returns the original result.
+      schema:
+        type: string
+        maxLength: 255
+    pageSize:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    cursor:
+      name: cursor
+      in: query
+      description: Opaque continuation token from a previous page (`next_cursor`).
+      schema:
+        type: string
+    orderBy:
+      name: order_by
+      in: query
+      schema:
+        type: string
+        enum: [created_at, updated_at]
+        default: created_at
+    order:
+      name: order
+      in: query
+      schema:
+        type: string
+        enum: [asc, desc]
+        default: desc
+    credentialId:
+      name: id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/CredentialId'
+    machineId:
+      name: id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/MachineId'
+    jobId:
+      name: id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/JobId'
+    taskId:
+      name: taskId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/TaskId'
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: Conflict with current state (duplicate, invalid transition, …)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unprocessable:
+      description: Semantic validation failure (schema valid, constraints violated)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+  schemas:
+    # ── identifiers ────────────────────────────────────────────────────────
+    CredentialId:
+      type: string
+      pattern: '^cred_[0-9a-z]+$'
+    MachineId:
+      type: string
+      pattern: '^mch_[0-9a-z]+$'
+    JobId:
+      type: string
+      pattern: '^job_[0-9a-z]+$'
+    TaskId:
+      type: string
+      pattern: '^tsk_[0-9a-z]+$'
+
+    # ── meta ───────────────────────────────────────────────────────────────
+    Capabilities:
+      type: object
+      required: [version, resources]
+      properties:
+        version:
+          type: string
+          description: Contract version served by this instance.
+        resources:
+          type: array
+          items:
+            type: string
+
+    Problem:
+      type: object
+      description: RFC 9457 problem details with Mammoth extensions.
+      required: [title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri-reference
+        code:
+          type: string
+          description: Machine-readable error code (`<DOMAIN>_<PHENOMENON>`).
+          example: BMC_UNREACHABLE
+        retryable:
+          type: boolean
+          description: Whether the same request may succeed on retry.
+
+    ErrorInfo:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        retryable:
+          type: boolean
+
+    Timestamp:
+      type: string
+      format: date-time
+      description: RFC 3339 UTC.
+
+    # ── credentials ────────────────────────────────────────────────────────
+    CredentialType:
+      type: string
+      enum: [bmc, ssh]
+
+    CredentialSecret:
+      type: object
+      description: Secret payload, stored encrypted; never returned by the API.
+      required: [username]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+
+    CredentialCreate:
+      type: object
+      required: [type, name, secret]
+      properties:
+        type:
+          $ref: '#/components/schemas/CredentialType'
+        name:
+          type: string
+          maxLength: 255
+        secret:
+          $ref: '#/components/schemas/CredentialSecret'
+
+    Credential:
+      type: object
+      required: [id, type, name, created_at, updated_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/CredentialId'
+        type:
+          $ref: '#/components/schemas/CredentialType'
+        name:
+          type: string
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+        updated_at:
+          $ref: '#/components/schemas/Timestamp'
+
+    # ── machines ───────────────────────────────────────────────────────────
+    BMCProtocol:
+      type: string
+      enum: [redfish, ipmi, auto, fake]
+      description: |
+        `auto` probes Redfish first and falls back to IPMI.
+        `fake` selects the in-process simulator for development and testing.
+    BootDevice:
+      type: string
+      enum: [pxe, disk, cdrom, bios]
+    PowerState:
+      type: string
+      enum: [on, off, unknown]
+    MachineState:
+      type: string
+      enum: [registering, discovering, ready, error]
+
+    BMC:
+      type: object
+      required: [address, credential_id]
+      properties:
+        address:
+          type: string
+          description: Out-of-band management address (host or host:port).
+        protocol:
+          $ref: '#/components/schemas/BMCProtocol'
+        credential_id:
+          $ref: '#/components/schemas/CredentialId'
+        vendor:
+          type: string
+          nullable: true
+          description: Discovered values, filled by inventory probes.
+        model:
+          type: string
+          nullable: true
+        firmware_version:
+          type: string
+          nullable: true
+
+    CPU:
+      type: object
+      properties:
+        model:
+          type: string
+        cores:
+          type: integer
+
+    Disk:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        serial:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        medium:
+          type: string
+          enum: [ssd, hdd, unknown]
+        protocol:
+          type: string
+          description: e.g. nvme, sas, sata.
+        removable:
+          type: boolean
+
+    NIC:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        mac:
+          type: string
+        speed_mbps:
+          type: integer
+        link_up:
+          type: boolean
+        pci_address:
+          type: string
+
+    HardwareView:
+      type: object
+      description: Hardware inventory as reported by probes; null until first discovery.
+      properties:
+        serial_number:
+          type: string
+        cpu:
+          $ref: '#/components/schemas/CPU'
+        memory_bytes:
+          type: integer
+          format: int64
+        disks:
+          type: array
+          items:
+            $ref: '#/components/schemas/Disk'
+        nics:
+          type: array
+          items:
+            $ref: '#/components/schemas/NIC'
+
+    MachineCreate:
+      type: object
+      required: [bmc]
+      properties:
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        bmc:
+          $ref: '#/components/schemas/BMC'
+        ssh_credential_id:
+          allOf:
+            - $ref: '#/components/schemas/CredentialId'
+          description: Credential for in-band (SSH) probes; optional.
+
+    MachineUpdate:
+      type: object
+      properties:
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        bmc:
+          type: object
+          properties:
+            address:
+              type: string
+            protocol:
+              $ref: '#/components/schemas/BMCProtocol'
+            credential_id:
+              $ref: '#/components/schemas/CredentialId'
+        ssh_credential_id:
+          type: string
+          nullable: true
+
+    Machine:
+      type: object
+      required: [id, bmc, power_state, state, labels, created_at, updated_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/MachineId'
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        bmc:
+          $ref: '#/components/schemas/BMC'
+        ssh_credential_id:
+          type: string
+          nullable: true
+        hardware:
+          $ref: '#/components/schemas/HardwareView'
+        power_state:
+          $ref: '#/components/schemas/PowerState'
+        state:
+          $ref: '#/components/schemas/MachineState'
+        last_error:
+          allOf:
+            - $ref: '#/components/schemas/ErrorInfo'
+          nullable: true
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+        updated_at:
+          $ref: '#/components/schemas/Timestamp'
+
+    MachineList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Machine'
+        next_cursor:
+          type: string
+          nullable: true
+
+    # ── layout snapshot ────────────────────────────────────────────────────
+    Layout:
+      type: object
+      required: [captured_at, source, disks]
+      properties:
+        captured_at:
+          $ref: '#/components/schemas/Timestamp'
+        source:
+          type: string
+          enum: [inband_ssh, ramdisk]
+        disks:
+          type: array
+          items:
+            type: object
+            required: [device, table, partitions]
+            properties:
+              device:
+                type: string
+              match:
+                type: object
+                properties:
+                  serial:
+                    type: string
+              table:
+                type: string
+                enum: [gpt, mbr]
+              partitions:
+                type: array
+                items:
+                  type: object
+                  required: [number]
+                  properties:
+                    number:
+                      type: integer
+                    start_bytes:
+                      type: integer
+                      format: int64
+                    end_bytes:
+                      type: integer
+                      format: int64
+                    size_bytes:
+                      type: integer
+                      format: int64
+                    fstype:
+                      type: string
+                    label:
+                      type: string
+                    mountpoint:
+                      type: string
+                    uuid:
+                      type: string
+
+    ConsoleURL:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: One-time virtual console URL.
+
+    # ── actions ────────────────────────────────────────────────────────────
+    ProbeKind:
+      type: string
+      enum: [auto, redfish, inband_ssh]
+
+    ActionRequest:
+      oneOf:
+        - $ref: '#/components/schemas/ActionDiscover'
+        - $ref: '#/components/schemas/ActionPowerOn'
+        - $ref: '#/components/schemas/ActionPowerOff'
+        - $ref: '#/components/schemas/ActionSoftOff'
+        - $ref: '#/components/schemas/ActionReboot'
+        - $ref: '#/components/schemas/ActionHardReboot'
+        - $ref: '#/components/schemas/ActionCycle'
+        - $ref: '#/components/schemas/ActionSetBootDevice'
+        - $ref: '#/components/schemas/ActionMountMedia'
+      discriminator:
+        propertyName: type
+        mapping:
+          discover: '#/components/schemas/ActionDiscover'
+          power_on: '#/components/schemas/ActionPowerOn'
+          power_off: '#/components/schemas/ActionPowerOff'
+          soft_off: '#/components/schemas/ActionSoftOff'
+          reboot: '#/components/schemas/ActionReboot'
+          hard_reboot: '#/components/schemas/ActionHardReboot'
+          cycle: '#/components/schemas/ActionCycle'
+          set_boot_device: '#/components/schemas/ActionSetBootDevice'
+          mount_media: '#/components/schemas/ActionMountMedia'
+
+    ActionDiscover:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [discover]
+        probe:
+          $ref: '#/components/schemas/ProbeKind'
+
+    ActionPowerOn:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [power_on]
+    ActionPowerOff:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [power_off]
+    ActionSoftOff:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [soft_off]
+    ActionReboot:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [reboot]
+    ActionHardReboot:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [hard_reboot]
+    ActionCycle:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [cycle]
+
+    ActionSetBootDevice:
+      type: object
+      required: [type, device]
+      properties:
+        type:
+          type: string
+          enum: [set_boot_device]
+        device:
+          $ref: '#/components/schemas/BootDevice'
+        once:
+          type: boolean
+          default: true
+
+    ActionMountMedia:
+      type: object
+      required: [type, image_url]
+      properties:
+        type:
+          type: string
+          enum: [mount_media]
+        image_url:
+          type: string
+          format: uri
+        eject_after:
+          type: boolean
+          default: false
+
+    # ── install spec (04 §5) ───────────────────────────────────────────────
+    DiskSelectorMatch:
+      type: object
+      description: Selector fields are combinable (e.g. type=nvme + size=largest).
+      properties:
+        serial:
+          type: string
+          description: Exact serial number match.
+        type:
+          type: string
+          enum: [ssd, hdd, nvme]
+        size:
+          type: string
+          enum: [largest, smallest]
+        protocol:
+          type: string
+        removable:
+          type: boolean
+
+    SizeSpec:
+      type: string
+      description: Byte size string (`512M`, `100G`) or `rest` (at most one per disk, enforced at validation).
+      pattern: '^(\d+(\.\d+)?[KMGT]?)$|^rest$'
+
+    PartitionSpec:
+      type: object
+      required: [size, fs]
+      properties:
+        size:
+          $ref: '#/components/schemas/SizeSpec'
+        fs:
+          type: string
+          enum: [vfat, xfs, ext4, swap]
+        mount:
+          type: string
+        flags:
+          type: array
+          items:
+            type: string
+            example: esp
+
+    PreserveSpec:
+      type: object
+      required: [number]
+      properties:
+        number:
+          type: integer
+          description: Partition number that must exist in the machine's layout snapshot.
+        mount:
+          type: string
+        fs:
+          type: string
+          enum: [vfat, xfs, ext4, swap]
+
+    DiskSpec:
+      type: object
+      required: [select]
+      properties:
+        select:
+          type: object
+          required: [match]
+          properties:
+            match:
+              $ref: '#/components/schemas/DiskSelectorMatch'
+        wipe:
+          type: boolean
+        keep:
+          type: string
+          enum: [disk, partitions]
+        preserve:
+          type: array
+          items:
+            $ref: '#/components/schemas/PreserveSpec'
+        partitions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PartitionSpec'
+
+    StorageSpec:
+      type: object
+      required: [disks]
+      properties:
+        disks:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiskSpec'
+        root_device_hints:
+          type: object
+          properties:
+            min_size_gb:
+              type: integer
+        alignment:
+          type: string
+          enum: [4k, 512e]
+          default: 4k
+
+    Route:
+      type: object
+      required: [to, via]
+      properties:
+        to:
+          type: string
+          description: Destination prefix or `default`.
+        via:
+          type: string
+
+    Nameservers:
+      type: object
+      properties:
+        addresses:
+          type: array
+          items:
+            type: string
+        search:
+          type: array
+          items:
+            type: string
+
+    InterfaceMatch:
+      type: object
+      description: Selection stability order is mac > pci_address > name.
+      properties:
+        mac:
+          type: string
+        pci_address:
+          type: string
+        name:
+          type: string
+
+    NetworkInterface:
+      type: object
+      description: cloud-init network-config v2 shaped. Mammoth never allocates addresses; all `addresses` are caller-provided.
+      properties:
+        match:
+          $ref: '#/components/schemas/InterfaceMatch'
+        set_name:
+          type: string
+        addresses:
+          type: array
+          items:
+            type: string
+        routes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Route'
+        nameservers:
+          $ref: '#/components/schemas/Nameservers'
+        mtu:
+          type: integer
+        bond:
+          type: object
+          required: [interfaces, mode]
+          properties:
+            interfaces:
+              type: array
+              items:
+                $ref: '#/components/schemas/InterfaceMatch'
+            mode:
+              type: string
+              description: e.g. active-backup, 802.3ad, balance-tlb.
+            params:
+              type: object
+              additionalProperties: true
+        vlan:
+          type: object
+          required: [id, link]
+          properties:
+            id:
+              type: integer
+            link:
+              type: string
+
+    AccessSpec:
+      type: object
+      properties:
+        root_password:
+          type: string
+          description: "`generate` for a per-task random password, an explicit value, or absent to disable password login."
+        ssh_keys:
+          type: array
+          items:
+            type: string
+
+    IdentitySpec:
+      type: object
+      properties:
+        hostname_pattern:
+          type: string
+          example: node-{index}
+
+    ScriptSpec:
+      type: object
+      required: [stage]
+      properties:
+        stage:
+          type: string
+          enum: [pre_install, post_install]
+        content_base64:
+          type: string
+          description: Script body, base64 encoded. Mutually exclusive with `url`.
+        url:
+          type: string
+          format: uri
+        expected_exit_codes:
+          type: array
+          items:
+            type: integer
+
+    InstallSpec:
+      type: object
+      required: [image]
+      properties:
+        image:
+          type: object
+          required: [distro]
+          properties:
+            source:
+              type: string
+              format: uri
+              description: Installer image URL. Required unless `image_id` references a registered image.
+            image_id:
+              type: string
+            checksum:
+              type: string
+              description: e.g. `sha256:9f86d0...`.
+            distro:
+              type: string
+              description: Explicitly declared (no implicit detection), e.g. rocky9.
+        storage:
+          $ref: '#/components/schemas/StorageSpec'
+        network:
+          type: array
+          items:
+            $ref: '#/components/schemas/NetworkInterface'
+        identity:
+          $ref: '#/components/schemas/IdentitySpec'
+        access:
+          $ref: '#/components/schemas/AccessSpec'
+        scripts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScriptSpec'
+
+    Policy:
+      type: object
+      properties:
+        concurrency:
+          type: integer
+          minimum: 1
+          default: 10
+        on_task_failure:
+          type: string
+          enum: [continue, abort_batch]
+          default: continue
+        verify_layout:
+          type: boolean
+          default: true
+        task_timeout_seconds:
+          type: integer
+          minimum: 1
+          default: 3600
+
+    # ── jobs & tasks ───────────────────────────────────────────────────────
+    JobType:
+      type: string
+      enum: [install, power, discover]
+    JobState:
+      type: string
+      enum: [pending, running, succeeded, partial, failed, canceled]
+    TaskState:
+      type: string
+      enum: [pending, running, succeeded, failed, canceled, interrupted]
+    StageState:
+      type: string
+      enum: [pending, running, succeeded, failed, skipped, canceled]
+
+    JobSummary:
+      type: object
+      required: [total]
+      properties:
+        total:
+          type: integer
+        pending:
+          type: integer
+        running:
+          type: integer
+        succeeded:
+          type: integer
+        failed:
+          type: integer
+        interrupted:
+          type: integer
+        canceled:
+          type: integer
+
+    JobTargets:
+      type: object
+      required: [machine_ids]
+      properties:
+        machine_ids:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/MachineId'
+        overrides:
+          type: object
+          description: Per-machine Install Spec fragments, shallow-merged over `spec`.
+          additionalProperties:
+            $ref: '#/components/schemas/InstallSpec'
+
+    JobCreate:
+      type: object
+      required: [type, targets]
+      properties:
+        type:
+          $ref: '#/components/schemas/JobType'
+        targets:
+          $ref: '#/components/schemas/JobTargets'
+        spec:
+          $ref: '#/components/schemas/InstallSpec'
+        action:
+          $ref: '#/components/schemas/ActionRequest'
+          description: "Required for `power` jobs (the BMC action to run on each target); optional for `discover` (defaults to `probe: auto`); ignored for `install`."
+        policy:
+          $ref: '#/components/schemas/Policy'
+
+    Job:
+      type: object
+      required: [id, type, state, summary, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/JobId'
+        type:
+          $ref: '#/components/schemas/JobType'
+        state:
+          $ref: '#/components/schemas/JobState'
+        summary:
+          $ref: '#/components/schemas/JobSummary'
+        machine_ids:
+          type: array
+          items:
+            $ref: '#/components/schemas/MachineId'
+        spec:
+          allOf:
+            - $ref: '#/components/schemas/InstallSpec'
+          nullable: true
+          description: Resolved final spec (template/override merge applied), for audit; install jobs only.
+        action:
+          $ref: '#/components/schemas/ActionRequest'
+        policy:
+          $ref: '#/components/schemas/Policy'
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+        finished_at:
+          allOf:
+            - $ref: '#/components/schemas/Timestamp'
+          nullable: true
+
+    JobList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Job'
+        next_cursor:
+          type: string
+          nullable: true
+
+    Stage:
+      type: object
+      required: [name, state]
+      properties:
+        name:
+          type: string
+        state:
+          $ref: '#/components/schemas/StageState'
+        attempt:
+          type: integer
+        started_at:
+          allOf:
+            - $ref: '#/components/schemas/Timestamp'
+          nullable: true
+        finished_at:
+          allOf:
+            - $ref: '#/components/schemas/Timestamp'
+          nullable: true
+        duration_ms:
+          type: integer
+          nullable: true
+
+    Task:
+      type: object
+      required: [id, job_id, machine_id, state, attempt, stages, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/TaskId'
+        job_id:
+          $ref: '#/components/schemas/JobId'
+        machine_id:
+          $ref: '#/components/schemas/MachineId'
+        state:
+          $ref: '#/components/schemas/TaskState'
+        attempt:
+          type: integer
+        flow_name:
+          type: string
+        stages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Stage'
+        error:
+          allOf:
+            - $ref: '#/components/schemas/ErrorInfo'
+          nullable: true
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+        updated_at:
+          $ref: '#/components/schemas/Timestamp'
+        finished_at:
+          allOf:
+            - $ref: '#/components/schemas/Timestamp'
+          nullable: true
+
+    TaskList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Task'
+        next_cursor:
+          type: string
+          nullable: true

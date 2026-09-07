@@ -1,0 +1,38 @@
+# Topology 1: all-in-one — single mammoth (all facets) + PostgreSQL.
+# Evaluation / small-scale deployments.
+name: mammoth
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mammoth
+      POSTGRES_PASSWORD: mammoth
+      POSTGRES_DB: mammoth
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mammoth -d mammoth"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  mammoth:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MAMMOTH_MODE: all
+      MAMMOTH_DATABASE_URL: postgres://mammoth:mammoth@postgres:5432/mammoth?sslmode=disable
+      MAMMOTH_HTTP_ADDR: ":8080"
+      # Deployment-provided secrets; never bake into images.
+      MAMMOTH_API_TOKEN: ${MAMMOTH_API_TOKEN:?set MAMMOTH_API_TOKEN}
+      MAMMOTH_MASTER_KEY: ${MAMMOTH_MASTER_KEY:?set MAMMOTH_MASTER_KEY (base64 32B)}
+      MAMMOTH_LOG_FORMAT: json
+    ports:
+      - "8080:8080"
+
+volumes:
+  pgdata:

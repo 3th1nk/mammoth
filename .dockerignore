@@ -1,0 +1,11 @@
+.git
+bin/
+dist/
+data/
+*.db
+*.log
+.env
+docs/
+deploy/
+scripts/
+.github/

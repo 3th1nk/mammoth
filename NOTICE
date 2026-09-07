@@ -1,0 +1,9 @@
+mammoth — self-contained bare-metal provisioning engine
+Copyright 2026 The Mammoth Authors
+
+This product includes software developed as part of the mammoth project
+(https://github.com/3th1nk/mammoth), licensed under the Apache License,
+Version 2.0.
+
+The mammoth gopher brand assets in assets/brand/ are a derivative of the
+original Go gopher, created by Renée French, licensed under CC BY 3.0.

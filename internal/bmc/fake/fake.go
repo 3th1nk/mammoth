@@ -27,6 +27,7 @@ type BMC struct {
 	BootDevice bmc.BootDevice
 	BootOnce   bool
 	Media      []bmc.MediaImage
+	Hardware   *bmc.HardwareView
 
 	// Failures scripts error injection: set before the call under test.
 	FailOps map[string]error
@@ -55,16 +56,38 @@ func New() *Driver {
 func (d *Driver) Add(addr string) *BMC {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	serial := fmt.Sprintf("FAKE%06d", len(d.bmcs)+1)
 	b := &BMC{
 		Vendor:         "acme",
 		Model:          "MammothSim 1000",
 		Firmware:       "1.0.0-fake",
-		Serial:         fmt.Sprintf("FAKE%06d", len(d.bmcs)+1),
+		Serial:         serial,
 		Power:          bmc.PowerStateOff,
 		ConsoleBaseURL: "https://fake.bmc/console",
+		Hardware:       defaultHardware(serial),
 	}
 	d.bmcs[addr] = b
 	return b
+}
+
+// defaultHardware scripts a plausible two-NVMe + one-HDD server so the
+// discovery flow, acceptance and spec-view tests have stable data.
+func defaultHardware(serial string) *bmc.HardwareView {
+	return &bmc.HardwareView{
+		SerialNumber: serial,
+		CPU:          bmc.CPUView{Model: "Fake Xeon 6542Y", Cores: 32},
+		MemoryBytes:  128 * 1024 * 1024 * 1024,
+		Disks: []bmc.DiskView{
+			{Name: "nvme0", Serial: "S6XPN0001", SizeBytes: 1920383410176, Medium: "ssd", Protocol: "nvme"},
+			{Name: "nvme1", Serial: "S6XPN0002", SizeBytes: 1920383410176, Medium: "ssd", Protocol: "nvme"},
+			{Name: "sda", Serial: "GIM256_0001", SizeBytes: 4000787030016, Medium: "hdd", Protocol: "sata"},
+		},
+		NICs: []bmc.NICView{
+			{Name: "eno1", MAC: "aa:bb:cc:dd:ee:01", SpeedMbps: 25000, LinkUp: true, PCIAddress: "0000:0b:00.0"},
+			{Name: "eno2", MAC: "aa:bb:cc:dd:ee:02", SpeedMbps: 25000, LinkUp: true, PCIAddress: "0000:0c:00.0"},
+		},
+		Coverage: bmc.CoverageFull,
+	}
 }
 
 func (d *Driver) get(addr string, op string) (*BMC, error) {
@@ -207,5 +230,9 @@ func (d *Driver) CollectInventory(_ context.Context, addr string, _ bmc.Credenti
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return bmc.HardwareView{SerialNumber: b.Serial}, nil
+	if b.Hardware != nil {
+		return *b.Hardware, nil
+	}
+	return bmc.HardwareView{SerialNumber: b.Serial, Coverage: bmc.CoveragePartial,
+		CoverageNotes: []string{"simulator without scripted hardware"}}, nil
 }

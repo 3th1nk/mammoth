@@ -7,6 +7,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/bmc"
 	"github.com/3th1nk/mammoth/internal/obs"
+	"github.com/3th1nk/mammoth/internal/provision"
 	"github.com/3th1nk/mammoth/internal/store"
 )
 
@@ -88,6 +89,21 @@ func (s *Server) CreateMachine(ctx context.Context, request gen.CreateMachineReq
 	s.Events.Append(ctx, "machine", m.ID, "machine.created", map[string]any{"bmc_address": m.BMCAddress})
 	obs.FromContext(ctx).InfoContext(ctx, "machine registered",
 		obs.FieldMachineID, m.ID, obs.FieldBMCAddr, m.BMCAddress, "protocol", m.BMCProtocol)
+
+	// Auto-discovery on registration (docs/05-inventory.md §5): a machine
+	// should reach a complete spec view without a second API call. Failure
+	// to enqueue leaves the machine in registering — the explicit discover
+	// action is the retry path.
+	if _, err := s.createJobRecord(ctx, createJobRecord{
+		jobType:    "discover",
+		flow:       provision.FlowDiscover,
+		machineIDs: []string{m.ID},
+		actionRaw:  json.RawMessage(`{"type":"discover","probe":"auto"}`),
+		createdBy:  "system",
+	}); err != nil {
+		obs.FromContext(ctx).ErrorContext(ctx, "auto-discovery enqueue failed",
+			obs.FieldMachineID, m.ID, "err", err.Error())
+	}
 
 	fresh, err := s.Machines.Get(ctx, m.ID)
 	if err != nil {

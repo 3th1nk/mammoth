@@ -103,6 +103,18 @@ def wait_tasks(c, job_id, want_state, timeout=120):
     return tasks
 
 
+def wait_machine(c, machine_id, want, timeout=60):
+    """Poll a machine until its state reaches `want` (or error)."""
+    deadline = time.time() + timeout
+    m = {}
+    while time.time() < deadline:
+        _, m = c.get(f"/api/v1/machines/{machine_id}")
+        if m.get("state") == want:
+            return m
+        time.sleep(0.5)
+    return m
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--api", default="http://localhost:8080")
@@ -150,6 +162,23 @@ def main():
         ok &= check(f"machine {i} registered", status == 201, m.get("id", str(status)))
         machines.append(m["id"])
 
+    # M1 acceptance: complete spec view within 30s of registration
+    # (docs/09-roadmap.md M1) — auto-discovery must fill hardware.
+    print("· spec view readiness (30s window)")
+    started = time.time()
+    for m in machines:
+        ready = wait_machine(c, m, "ready", timeout=30)
+        elapsed = time.time() - started
+        hw = ready.get("hardware") or {}
+        ok &= check(f"{m} ready in {elapsed:.0f}s",
+                    ready.get("state") == "ready" and elapsed <= 30,
+                    f"state={ready.get('state')}")
+        ok &= check(f"{m} hardware view complete",
+                    len(hw.get("disks", [])) == 3 and hw.get("coverage") == "full"
+                    and (hw.get("cpu") or {}).get("cores", 0) > 0,
+                    f"disks={len(hw.get('disks', []))} coverage={hw.get('coverage')} "
+                    f"cores={(hw.get('cpu') or {}).get('cores')}")
+
     # 2. batch power_on
     print("· batch power_on")
     status, job = c.post("/api/v1/jobs", {
@@ -190,6 +219,23 @@ def main():
     ok &= check("discover backfilled vendor/model, state=ready",
                 machine["state"] == "ready" and machine["bmc"].get("vendor") == "acme",
                 f"state={machine['state']} vendor={machine['bmc'].get('vendor')}")
+
+    # 3.5 classified BMC error on unreachable target (M1 acceptance:
+    # "BMC credential errors get classified error codes" — same classified
+    # path carries unreachable).
+    print("· error classification")
+    status, bad = c.post("/api/v1/machines", {
+        "labels": {"env": "acceptance"},
+        "bmc": {"address": "192.0.2.1", "protocol": "redfish",
+                "credential_id": cred_id}})
+    if status == 201:
+        errored = wait_machine(c, bad["id"], "error", timeout=60)
+        code = (errored.get("last_error") or {}).get("code", "")
+        ok &= check("unreachable BMC → state=error with BMC_UNREACHABLE",
+                    errored.get("state") == "error" and code == "BMC_UNREACHABLE",
+                    f"state={errored.get('state')} code={code}")
+    else:
+        ok &= check("error-classification machine registered", False, str(status))
 
     # 4. idempotency
     print("· idempotency")

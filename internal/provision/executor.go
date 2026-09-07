@@ -3,15 +3,17 @@ package provision
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/3th1nk/mammoth/internal/bmc"
+	"github.com/3th1nk/mammoth/internal/bmc/compat"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/store"
 )
 
 // Executor performs the current stage of a claimed task. Stage Do() bodies
 // are idempotent-safe: retries re-enter them (docs/02-architecture.md §2.3) —
-// for M0's out-of-band actions this means re-issuing a power/boot/media call,
+// for out-of-band actions this means re-issuing a power/boot/media call,
 // which BMCs treat as convergent.
 type Executor struct {
 	Machines    *store.MachineRepo
@@ -20,6 +22,7 @@ type Executor struct {
 	Events      *store.EventRepo
 	Crypto      *store.SecretCrypto
 	BMC         *bmc.Registry
+	Compat      *compat.Registry
 }
 
 // ExecuteStage runs stage seq of the task's flow.
@@ -33,7 +36,7 @@ func (e *Executor) ExecuteStage(ctx context.Context, task *store.Task, job *stor
 	case FlowPower:
 		return e.runPowerAction(ctx, task, job)
 	case FlowDiscover:
-		return e.runDiscover(ctx, task)
+		return e.runDiscover(ctx, task, job)
 	case FlowInstall:
 		return classifiedErr("INSTALL_NOT_IMPLEMENTED", false,
 			"the install pipeline ships with M3; submit power/discover jobs meanwhile")
@@ -142,7 +145,7 @@ func (e *Executor) runPowerAction(ctx context.Context, task *store.Task, job *st
 		return err
 
 	case "discover":
-		return e.runDiscover(ctx, task)
+		return e.runDiscover(ctx, task, job)
 
 	default:
 		return classifiedErr("SCHEMA_INVALID_ACTION", false, "unknown action type "+a.Type)
@@ -163,34 +166,97 @@ func (e *Executor) refreshPowerState(ctx context.Context, task *store.Task, addr
 	return nil
 }
 
-// runDiscover probes the BMC and backfills machine identity.
-func (e *Executor) runDiscover(ctx context.Context, task *store.Task) error {
+// runDiscover is the spec-level probe (docs/05-inventory.md §2, M1): it
+// verifies BMC connectivity and credentials, backfills identity, and collects
+// the hardware view. Machine lifecycle follows registering → discovering →
+// ready | error; failures land on machine.last_error with classified BMC codes.
+func (e *Executor) runDiscover(ctx context.Context, task *store.Task, job *store.Job) error {
 	cred, addr, proto, ok := e.outOfBand(ctx, task)
 	if !ok {
 		return classifiedErr("CREDENTIAL_UNAVAILABLE", true, "machine or credential unavailable")
 	}
+
+	// Action-declared probe overrides the machine default (docs/03-api.md §2).
+	if job != nil {
+		if a, err := decodeAction(job.Action); err == nil && a.Probe != "" && a.Probe != "auto" {
+			if a.Probe == "inband_ssh" {
+				return classifiedErr("BMC_UNSUPPORTED", false,
+					"inband_ssh probe arrives with M2; use redfish or auto")
+			}
+			proto = bmc.Protocol(a.Probe)
+		}
+	}
+
+	_ = e.Machines.SetState(ctx, task.MachineID, "discovering")
+
 	res, err := e.BMC.Do(ctx, addr, cred, proto, "probe", func(ctx context.Context, d bmc.Driver) (any, error) {
 		return d.Probe(ctx, addr, cred)
 	})
 	if err != nil {
-		return err
+		return e.discoverFailed(ctx, task, err)
 	}
 	info := res.(bmc.BMCInfo)
-	vendor, model, serial, firmware := info.Vendor, info.Model, info.SerialNumber, info.FirmwareVersion
+
+	// Hardware view: redfish collects the spec-level view; drivers without
+	// inventory support (ipmi) leave hardware empty rather than failing —
+	// the BMC answered, so identity still lands.
+	var hardware bmc.HardwareView
+	hw, herr := e.BMC.Do(ctx, addr, cred, proto, "collect_inventory", func(ctx context.Context, d bmc.Driver) (any, error) {
+		return d.CollectInventory(ctx, addr, cred)
+	})
+	switch {
+	case herr == nil:
+		hardware = hw.(bmc.HardwareView)
+	case bmcKind(herr) == bmc.KindUnsupported:
+		// identity-only machine (e.g. ipmi-only): coverage notes stay empty
+	default:
+		return e.discoverFailed(ctx, task, herr)
+	}
+
+	// Known blind spots from the vendor matrix downgrade coverage (docs/07-bmc.md §4).
+	for _, note := range e.Compat.InventoryNotes(info.Vendor, info.Model) {
+		hardware.Note(note)
+	}
+
 	err = e.Machines.UpdateProbeResult(ctx, task.MachineID, store.ProbeResult{
-		Vendor:          strPtr(vendor),
-		Model:           strPtr(model),
-		SerialNumber:    strPtr(serial),
-		FirmwareVersion: strPtr(firmware),
+		Vendor:          strPtr(info.Vendor),
+		Model:           strPtr(info.Model),
+		SerialNumber:    strPtr(info.SerialNumber),
+		FirmwareVersion: strPtr(info.FirmwareVersion),
+		Hardware:        marshalJSON(hardware),
 		PowerState:      string(info.PowerState),
 		State:           "ready",
 	})
-	if err == nil {
-		e.Events.Append(ctx, "machine", task.MachineID, "machine.discovered", map[string]any{
-			"vendor": vendor, "model": model, "firmware": firmware,
-		})
+	if err != nil {
+		return err
 	}
-	return err
+	e.Events.Append(ctx, "machine", task.MachineID, "machine.discovered", map[string]any{
+		"vendor": info.Vendor, "model": info.Model, "firmware": info.FirmwareVersion,
+		"coverage": hardware.Coverage,
+	})
+	return nil
+}
+
+// discoverFailed records the classified failure on the machine (acceptance:
+// "BMC credential errors get classified error codes") and fails the stage.
+func (e *Executor) discoverFailed(ctx context.Context, task *store.Task, cause error) error {
+	ei := Classified(cause)
+	_ = e.Machines.SetError(ctx, task.MachineID, "error", &ei)
+	return cause
+}
+
+// bmcKind extracts the error kind from a possibly-wrapped bmc error.
+func bmcKind(err error) bmc.ErrorKind {
+	var be *bmc.Error
+	if errors.As(err, &be) {
+		return be.Kind
+	}
+	return ""
+}
+
+func marshalJSON(v any) json.RawMessage {
+	b, _ := json.Marshal(v)
+	return b
 }
 
 func powerActionFor(apiType string) (bmc.PowerAction, bool) {

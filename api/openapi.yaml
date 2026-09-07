@@ -739,6 +739,7 @@ components:
     HardwareView:
       type: object
       description: Hardware inventory as reported by probes; null until first discovery.
+      required: [coverage]
       properties:
         serial_number:
           type: string
@@ -755,6 +756,18 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/NIC'
+        coverage:
+          type: string
+          enum: [full, partial]
+          description: |
+            `full` — the probe collected the complete spec-level view.
+            `partial` — a known blind spot applies (vendor matrix hit, RAID
+            volumes not enumerable, storage resources missing); see coverage_notes.
+        coverage_notes:
+          type: array
+          description: Why coverage is partial (machine-readable reasons).
+          items:
+            type: string
 
     MachineCreate:
       type: object

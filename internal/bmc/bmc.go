@@ -69,15 +69,32 @@ type BMCInfo struct {
 	PowerState      PowerState
 }
 
-// HardwareView is the out-of-band hardware inventory shape (docs/04-install-spec.md §1).
-// Full population arrives with the Redfish inventory probe (M1); drivers may
-// return ErrUnsupported until then.
+// HardwareView is the out-of-band hardware inventory shape (docs/04-install-spec.md §1,
+// docs/05-inventory.md §2). Coverage annotations follow docs/05-inventory.md:
+// known blind spots (vendor matrix hits, unenumerable RAID volumes, missing
+// storage resources) mark the view partial instead of failing it.
 type HardwareView struct {
-	SerialNumber string     `json:"serial_number,omitempty"`
-	CPU          CPUView    `json:"cpu,omitempty"`
-	MemoryBytes  int64      `json:"memory_bytes,omitempty"`
-	Disks        []DiskView `json:"disks,omitempty"`
-	NICs         []NICView  `json:"nics,omitempty"`
+	SerialNumber  string     `json:"serial_number,omitempty"`
+	CPU           CPUView    `json:"cpu"`
+	MemoryBytes   int64      `json:"memory_bytes,omitempty"`
+	Disks         []DiskView `json:"disks,omitempty"`
+	NICs          []NICView  `json:"nics,omitempty"`
+	Coverage      Coverage   `json:"coverage"`
+	CoverageNotes []string   `json:"coverage_notes,omitempty"`
+}
+
+// Coverage expresses completeness of a spec-level inventory (docs/05-inventory.md §2).
+type Coverage string
+
+const (
+	CoverageFull    Coverage = "full"
+	CoveragePartial Coverage = "partial"
+)
+
+// Note appends a partial-coverage reason and downgrades coverage.
+func (h *HardwareView) Note(reason string) {
+	h.Coverage = CoveragePartial
+	h.CoverageNotes = append(h.CoverageNotes, reason)
 }
 
 type CPUView struct {

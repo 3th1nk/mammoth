@@ -13,6 +13,7 @@ import (
 
 	"github.com/3th1nk/mammoth/internal/api"
 	"github.com/3th1nk/mammoth/internal/bmc"
+	bmccompat "github.com/3th1nk/mammoth/internal/bmc/compat"
 	"github.com/3th1nk/mammoth/internal/bmc/fake"
 	ipmidrv "github.com/3th1nk/mammoth/internal/bmc/ipmi"
 	"github.com/3th1nk/mammoth/internal/bmc/redfish"
@@ -100,6 +101,17 @@ func serve(args []string) error {
 	registry.Register(redfish.New(cfg.BMCTLSInsecure, cfg.BMCTimeout))
 	registry.Register(ipmidrv.New(cfg.IPMIInterface, cfg.BMCTimeout))
 
+	// Vendor compatibility matrix: embedded defaults, optionally extended
+	// from a mounted directory (docs/compat/README.md).
+	compatReg, err := bmccompat.LoadDir(getenv("MAMMOTH_COMPAT_DIR", ""))
+	if err != nil {
+		logger.WarnContext(ctx, "compat matrix override failed to load, using embedded defaults",
+			"err", err.Error())
+		if compatReg, err = bmccompat.Default(); err != nil {
+			return err
+		}
+	}
+
 	deps := api.Deps{
 		Credentials: credRepo,
 		Machines:    machineRepo,
@@ -158,6 +170,7 @@ func serve(args []string) error {
 			Events:      eventRepo,
 			Crypto:      crypto,
 			BMC:         registry,
+			Compat:      compatReg,
 		}
 		runner := provision.NewRunner(tq, jobRepo, exec, metrics, provision.RunnerOptions{
 			Concurrency:     cfg.RunnerConcurrency,

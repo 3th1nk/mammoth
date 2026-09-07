@@ -15,10 +15,6 @@ and [brand-board.png](brand-board.png).
 | `SPEC.md` | Design specification (verbatim from the original design pack) |
 | `ref-gopher01c.svg` | Reference: the original Go gopher vector the mark derives from |
 
-Name mapping from the original design pack: `mark-color.svg` → `logo.svg`,
-`mark-reverse.svg` → `logo-dark.svg`, `mark-mono.svg` → `logo-mono.svg`,
-`mammoth-gopher-*.png` → `logo-*.png`.
-
 Color system: Go cyan `#00ADD8`, shadow `#0089AC`, ivory `#FFF7E8`, ink `#0E2A3A`.
 Wordmark: "mammoth", Inter Black, lowercase; tagline "Evolutionary Go Engineering".
 

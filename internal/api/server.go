@@ -42,23 +42,21 @@ type Server struct {
 	Deps
 }
 
-// New builds the gin engine: public health endpoints, /metrics, then the
-// contract routes behind bearer auth.
+// New builds the gin engine: observability middleware, /metrics, then the
+// contract routes (including /healthz and /readyz, which bearer auth skips).
 func New(d Deps, apiToken string) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery(), RequestID(), OTelSpan(), MetricsMiddleware(d.Metrics))
 
-	router.GET("/healthz", func(c *gin.Context) { c.Status(http.StatusNoContent) })
-	router.GET("/readyz", func(c *gin.Context) { readyz(c, d) })
+	srv := &Server{Deps: d}
+	strict := gen.NewStrictHandler(srv, nil)
+	router.Use(BearerAuth(apiToken))
+
 	if d.Metrics != nil {
 		router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	}
-
-	srv := &Server{Deps: d}
-	strict := gen.NewStrictHandler(srv, nil)
-	auth := router.Group("/", BearerAuth(apiToken))
-	gen.RegisterHandlers(auth, strict)
+	gen.RegisterHandlers(router, strict)
 
 	router.NoRoute(func(c *gin.Context) {
 		notFound(c, "route")

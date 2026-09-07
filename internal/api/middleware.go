@@ -32,8 +32,14 @@ func RequestID() gin.HandlerFunc {
 
 // BearerAuth enforces the static API token (first-version auth per
 // docs/02-architecture.md §5.4; an external IdP adapter point is reserved).
+// Liveness/readiness stay public so orchestrators can probe unauthenticated.
 func BearerAuth(token string) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		switch c.FullPath() {
+		case "/healthz", "/readyz":
+			c.Next()
+			return
+		}
 		if token == "" {
 			problem(c, http.StatusServiceUnavailable, "SCHEMA_AUTH_UNCONFIGURED",
 				"Auth not configured", "no API token configured on the server", false)

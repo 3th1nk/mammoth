@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/bmc"
@@ -74,6 +76,7 @@ func (s *Server) CreateMachine(ctx context.Context, request gen.CreateMachineReq
 		BMCProtocol:     protocol,
 		BMCCredentialID: string(body.Bmc.CredentialId),
 		SSHCredentialID: derefStr(body.SshCredentialId),
+		SSHAddress:      sshAddressOf(body.Ssh),
 	}
 	// The referenced credential must exist and be a BMC credential.
 	cred, err := s.Credentials.Get(ctx, m.BMCCredentialID)
@@ -168,6 +171,9 @@ func (s *Server) UpdateMachine(ctx context.Context, request gen.UpdateMachineReq
 				m.SSHCredentialID = str(string(*body.SshCredentialId))
 			}
 		}
+		if body.Ssh != nil && body.Ssh.Address != nil {
+			m.SSHAddress = *body.Ssh.Address
+		}
 	}
 	if err := s.Machines.Update(ctx, m); err != nil {
 		return nil, err
@@ -187,14 +193,25 @@ func (s *Server) DeleteMachine(ctx context.Context, request gen.DeleteMachineReq
 	return gen.DeleteMachine204Response{}, nil
 }
 
+// sshAddressOf extracts the in-band address from the optional ssh object.
+func sshAddressOf(ssh *gen.MachineSSH) string {
+	if ssh == nil || ssh.Address == nil {
+		return ""
+	}
+	return *ssh.Address
+}
+
 func (s *Server) GetMachineLayout(ctx context.Context, request gen.GetMachineLayoutRequestObject) (gen.GetMachineLayoutResponseObject, error) {
 	if _, err := s.Machines.Get(ctx, string(request.Id)); err != nil {
 		return nil, err
 	}
 	content, captured, err := s.Machines.LatestLayout(ctx, string(request.Id))
 	if err != nil {
-		if err == store.ErrNotFound {
-			return nil, verr("LAYOUT_SNAPSHOT_REQUIRED", "no layout snapshot captured for %s yet", request.Id)
+		if errors.Is(err, store.ErrNotFound) {
+			// The contract declares 404 for "no snapshot yet"
+			// (docs/03-api.md §2: machines/{id}/layout).
+			return nil, verrStatus(http.StatusNotFound, "LAYOUT_SNAPSHOT_REQUIRED",
+				"no layout snapshot captured for %s yet", request.Id)
 		}
 		return nil, err
 	}

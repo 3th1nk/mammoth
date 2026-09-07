@@ -18,9 +18,9 @@ func NewMachineRepo(db *sql.DB) *MachineRepo { return &MachineRepo{db: db} }
 func (r *MachineRepo) Create(ctx context.Context, m *Machine) error {
 	labels, _ := json.Marshal(m.Labels)
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO machines (id, labels, bmc_address, bmc_protocol, bmc_credential_id, ssh_credential_id)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
-		m.ID, labels, m.BMCAddress, m.BMCProtocol, m.BMCCredentialID, m.SSHCredentialID)
+		INSERT INTO machines (id, labels, bmc_address, bmc_protocol, bmc_credential_id, ssh_credential_id, ssh_address)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		m.ID, labels, m.BMCAddress, m.BMCProtocol, m.BMCCredentialID, m.SSHCredentialID, m.SSHAddress)
 	if isUniqueViolation(err) {
 		return fmt.Errorf("%w: bmc address %q already registered", ErrConflict, m.BMCAddress)
 	}
@@ -118,9 +118,9 @@ func (r *MachineRepo) Update(ctx context.Context, m *Machine) error {
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE machines SET
 		  labels = $2, bmc_address = $3, bmc_protocol = $4,
-		  bmc_credential_id = $5, ssh_credential_id = $6, updated_at = now()
+		  bmc_credential_id = $5, ssh_credential_id = $6, ssh_address = $7, updated_at = now()
 		WHERE id = $1`,
-		m.ID, labels, m.BMCAddress, m.BMCProtocol, m.BMCCredentialID, m.SSHCredentialID)
+		m.ID, labels, m.BMCAddress, m.BMCProtocol, m.BMCCredentialID, m.SSHCredentialID, m.SSHAddress)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return fmt.Errorf("%w: bmc address %q already registered", ErrConflict, m.BMCAddress)
@@ -224,7 +224,7 @@ func (r *MachineRepo) LatestLayout(ctx context.Context, machineID string) (json.
 }
 
 const machineSelect = `
-	SELECT id, labels, bmc_address, bmc_protocol, bmc_credential_id, ssh_credential_id,
+	SELECT id, labels, bmc_address, bmc_protocol, bmc_credential_id, ssh_credential_id, ssh_address,
 	       vendor, model, serial_number, firmware_version, hardware,
 	       power_state, state, last_error, created_at, updated_at
 	FROM machines`
@@ -236,11 +236,15 @@ func scanMachine(row rowScanner) (*Machine, error) {
 	var labels []byte
 	var sshCred, vendor, model, serial, firmware sql.NullString
 	var hardware, lastError []byte
+	var sshAddr sql.NullString
 	err := row.Scan(
-		&m.ID, &labels, &m.BMCAddress, &m.BMCProtocol, &m.BMCCredentialID, &sshCred,
+		&m.ID, &labels, &m.BMCAddress, &m.BMCProtocol, &m.BMCCredentialID, &sshCred, &sshAddr,
 		&vendor, &model, &serial, &firmware, &hardware,
 		&m.PowerState, &m.State, &lastError, &m.CreatedAt, &m.UpdatedAt,
 	)
+	if err == nil {
+		m.SSHAddress = sshAddr.String
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -282,5 +286,44 @@ func nullStrPtr(s sql.NullString) *string {
 func (r *MachineRepo) SetState(ctx context.Context, id, state string) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE machines SET state = $2, updated_at = now() WHERE id = $1`, id, state)
+	return err
+}
+
+// SaveLayout appends an immutable layout snapshot and prunes history to the
+// retention window in the same transaction (docs/08-data-model.md: snapshots
+// are append-only; docs/05-inventory.md §5: newest N versions per machine).
+func (r *MachineRepo) SaveLayout(ctx context.Context, machineID, source string, content json.RawMessage, keep int) (int64, error) {
+	if keep <= 0 {
+		keep = 10
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var id int64
+	if err := tx.QueryRowContext(ctx, `
+		INSERT INTO layout_snapshots (machine_id, source, content, captured_at)
+		VALUES ($1, $2, $3, now())
+		RETURNING id`, machineID, source, content).Scan(&id); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM layout_snapshots
+		WHERE machine_id = $1 AND id NOT IN (
+		  SELECT id FROM layout_snapshots WHERE machine_id = $1
+		  ORDER BY captured_at DESC, id DESC LIMIT $2
+		)`, machineID, keep); err != nil {
+		return 0, err
+	}
+	return id, tx.Commit()
+}
+
+// SetHardware replaces the stored hardware view (used by in-band link
+// refresh, which merges NIC facts into the redfish-collected view).
+func (r *MachineRepo) SetHardware(ctx context.Context, id string, hardware json.RawMessage) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE machines SET hardware = $2, updated_at = now() WHERE id = $1`, id, hardware)
 	return err
 }

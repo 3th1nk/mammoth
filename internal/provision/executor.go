@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/3th1nk/mammoth/internal/bmc"
 	"github.com/3th1nk/mammoth/internal/bmc/compat"
+	"github.com/3th1nk/mammoth/internal/inventory/inbandssh"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/store"
 )
@@ -23,6 +25,10 @@ type Executor struct {
 	Crypto      *store.SecretCrypto
 	BMC         *bmc.Registry
 	Compat      *compat.Registry
+	Inband      *inbandssh.Collector
+
+	// LayoutKeep is the per-machine snapshot retention (docs/08-data-model.md).
+	LayoutKeep int
 }
 
 // ExecuteStage runs stage seq of the task's flow.
@@ -41,7 +47,7 @@ func (e *Executor) ExecuteStage(ctx context.Context, task *store.Task, job *stor
 		return classifiedErr("INSTALL_NOT_IMPLEMENTED", false,
 			"the install pipeline ships with M3; submit power/discover jobs meanwhile")
 	default:
-		return classifiedErr("JOB_UNKNOWN_FLOW", false, "unknown flow "+task.FlowName)
+		return classifiedErr("JOB_UNKNOWN_FLOW", false, "unknown flow %s", task.FlowName)
 	}
 }
 
@@ -109,7 +115,7 @@ func (e *Executor) runPowerAction(ctx context.Context, task *store.Task, job *st
 	case "power_on", "power_off", "soft_off", "reboot", "hard_reboot", "cycle":
 		act, ok := powerActionFor(a.Type)
 		if !ok {
-			return classifiedErr("SCHEMA_INVALID_ACTION", false, "unknown power action "+a.Type)
+			return classifiedErr("SCHEMA_INVALID_ACTION", false, "unknown power action %s", a.Type)
 		}
 		if _, err := e.BMC.Do(ctx, addr, cred, proto, "set_power", func(ctx context.Context, d bmc.Driver) (any, error) {
 			return nil, d.SetPower(ctx, addr, cred, act)
@@ -124,7 +130,7 @@ func (e *Executor) runPowerAction(ctx context.Context, task *store.Task, job *st
 	case "set_boot_device":
 		dev, ok := bootDeviceFor(a.Device)
 		if !ok {
-			return classifiedErr("SCHEMA_INVALID_ACTION", false, "unknown boot device "+a.Device)
+			return classifiedErr("SCHEMA_INVALID_ACTION", false, "unknown boot device %s", a.Device)
 		}
 		once := true
 		if a.Once != nil {
@@ -148,7 +154,7 @@ func (e *Executor) runPowerAction(ctx context.Context, task *store.Task, job *st
 		return e.runDiscover(ctx, task, job)
 
 	default:
-		return classifiedErr("SCHEMA_INVALID_ACTION", false, "unknown action type "+a.Type)
+		return classifiedErr("SCHEMA_INVALID_ACTION", false, "unknown action type %s", a.Type)
 	}
 }
 
@@ -166,25 +172,29 @@ func (e *Executor) refreshPowerState(ctx context.Context, task *store.Task, addr
 	return nil
 }
 
-// runDiscover is the spec-level probe (docs/05-inventory.md §2, M1): it
-// verifies BMC connectivity and credentials, backfills identity, and collects
-// the hardware view. Machine lifecycle follows registering → discovering →
-// ready | error; failures land on machine.last_error with classified BMC codes.
+// runDiscover is the spec-level probe (docs/05-inventory.md §2) plus, under
+// `probe: auto`, the partition-level layout snapshot (docs/05-inventory.md §1
+// combination logic, M2). Machine lifecycle follows registering → discovering
+// → ready | error; failures land on machine.last_error with classified codes.
 func (e *Executor) runDiscover(ctx context.Context, task *store.Task, job *store.Job) error {
 	cred, addr, proto, ok := e.outOfBand(ctx, task)
 	if !ok {
 		return classifiedErr("CREDENTIAL_UNAVAILABLE", true, "machine or credential unavailable")
 	}
 
-	// Action-declared probe overrides the machine default (docs/03-api.md §2).
+	probeKind := "auto"
 	if job != nil {
-		if a, err := decodeAction(job.Action); err == nil && a.Probe != "" && a.Probe != "auto" {
-			if a.Probe == "inband_ssh" {
-				return classifiedErr("BMC_UNSUPPORTED", false,
-					"inband_ssh probe arrives with M2; use redfish or auto")
-			}
-			proto = bmc.Protocol(a.Probe)
+		if a, err := decodeAction(job.Action); err == nil && a.Probe != "" {
+			probeKind = a.Probe
 		}
+	}
+
+	// Explicit inband_ssh: partition-level only, no BMC round trip.
+	if probeKind == "inband_ssh" {
+		return e.collectLayout(ctx, task, true)
+	}
+	if probeKind != "auto" && probeKind != "redfish" {
+		return classifiedErr("SCHEMA_INVALID_ACTION", false, "unknown probe kind %s", probeKind)
 	}
 
 	_ = e.Machines.SetState(ctx, task.MachineID, "discovering")
@@ -234,7 +244,119 @@ func (e *Executor) runDiscover(ctx context.Context, task *store.Task, job *store
 		"vendor": info.Vendor, "model": info.Model, "firmware": info.FirmwareVersion,
 		"coverage": hardware.Coverage,
 	})
+
+	// auto: the spec view is complete; when SSH access is configured the
+	// layout snapshot is part of the discovery intent. An in-band failure is
+	// an explicit classified error (never a hang) while the machine keeps
+	// its ready spec view (docs/05-inventory.md §1, §3).
+	if probeKind == "auto" {
+		return e.collectLayout(ctx, task, false)
+	}
 	return nil
+}
+
+// collectLayout runs the inband_ssh probe and persists the snapshot. With
+// required=true (explicit probe action) a missing configuration is an error;
+// under auto it silently skips when SSH access was never configured.
+func (e *Executor) collectLayout(ctx context.Context, task *store.Task, required bool) error {
+	m, err := e.Machines.Get(ctx, task.MachineID)
+	if err != nil {
+		return err
+	}
+	if m.SSHCredentialID == nil || m.SSHAddress == "" {
+		if required {
+			return classifiedErr("SCHEMA_SSH_NOT_CONFIGURED", false,
+				"inband_ssh requires ssh_credential_id and ssh.address on the machine")
+		}
+		return nil
+	}
+	credRow, err := e.Credentials.Get(ctx, *m.SSHCredentialID)
+	if err != nil {
+		return classifiedErr("SCHEMA_UNKNOWN_CREDENTIAL", false, "ssh credential %q not found", *m.SSHCredentialID)
+	}
+	if credRow.Type != "ssh" {
+		return classifiedErr("SCHEMA_INVALID_CREDENTIAL", false, "credential %q is not an ssh credential", *m.SSHCredentialID)
+	}
+	plain, err := e.Crypto.Decrypt(credRow.SecretEncrypted)
+	if err != nil {
+		return classifiedErr("CREDENTIAL_DECRYPT_FAILED", false, "credential decrypt failed")
+	}
+	var secret struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.Unmarshal(plain, &secret); err != nil {
+		return classifiedErr("CREDENTIAL_DECRYPT_FAILED", false, "credential payload malformed")
+	}
+
+	_, span := obs.Tracer().Start(ctx, "probe.inband_ssh")
+	defer span.End()
+
+	res, err := e.Inband.Collect(ctx, m.SSHAddress, inbandssh.Credentials{
+		Username: secret.Username, Password: secret.Password,
+	})
+	if err != nil {
+		return e.inbandFailed(ctx, task, err)
+	}
+
+	version, err := e.Machines.SaveLayout(ctx, task.MachineID, res.Layout.Source, marshalJSON(res.Layout), e.LayoutKeep)
+	if err != nil {
+		return err
+	}
+	e.refreshNICs(ctx, task.MachineID, res.NICs)
+	e.Events.Append(ctx, "machine", task.MachineID, "machine.layout_captured", map[string]any{
+		"version": version, "source": res.Layout.Source, "disks": len(res.Layout.Disks),
+	})
+	obs.FromContext(ctx).InfoContext(ctx, "layout snapshot captured",
+		obs.FieldMachineID, task.MachineID, "version", version, "disks", len(res.Layout.Disks))
+	return nil
+}
+
+// inbandFailed surfaces in-band failures explicitly: the machine keeps its
+// ready spec view, the classified code lands on last_error, and the task
+// fails (retryable where the condition may clear).
+func (e *Executor) inbandFailed(ctx context.Context, task *store.Task, cause error) error {
+	ei := store.ErrorInfo{Code: "NETWORK_UNREACHABLE", Message: cause.Error(), Retryable: true}
+	var ie *inbandssh.Error
+	if errors.As(cause, &ie) {
+		ei = store.ErrorInfo{Code: ie.Code, Message: ie.Error(), Retryable: ie.Retryable}
+	}
+	// state stays "ready": the spec view already captured is valid.
+	_ = e.Machines.SetError(ctx, task.MachineID, "ready", &ei)
+	return &errInfo{ei}
+}
+
+// refreshNICs merges link facts (MAC join) into the stored hardware view
+// (docs/05-inventory.md §3: NIC link info refreshes alongside layout).
+func (e *Executor) refreshNICs(ctx context.Context, machineID string, facts []inbandssh.NICFacts) {
+	if len(facts) == 0 {
+		return
+	}
+	m, err := e.Machines.Get(ctx, machineID)
+	if err != nil || len(m.Hardware) == 0 {
+		return
+	}
+	var hw bmc.HardwareView
+	if json.Unmarshal(m.Hardware, &hw) != nil {
+		return
+	}
+	byMAC := map[string]inbandssh.NICFacts{}
+	for _, f := range facts {
+		if f.MAC != "" {
+			byMAC[strings.ToLower(f.MAC)] = f
+		}
+	}
+	changed := false
+	for i := range hw.NICs {
+		if f, ok := byMAC[strings.ToLower(hw.NICs[i].MAC)]; ok {
+			hw.NICs[i].LinkUp = f.LinkUp
+			changed = true
+		}
+	}
+	if !changed {
+		return
+	}
+	_ = e.Machines.SetHardware(ctx, machineID, marshalJSON(hw))
 }
 
 // discoverFailed records the classified failure on the machine (acceptance:

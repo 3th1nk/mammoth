@@ -58,6 +58,9 @@ func machineOut(m *store.Machine) gen.Machine {
 	if m.SSHCredentialID != nil {
 		out.SshCredentialId = str(*m.SSHCredentialID)
 	}
+	if m.SSHAddress != "" {
+		out.Ssh = &gen.MachineSSH{Address: str(m.SSHAddress)}
+	}
 	if m.LastError != nil {
 		out.LastError = errorInfoOut(*m.LastError)
 	}

@@ -63,6 +63,7 @@ type Machine struct {
 	BMCProtocol     string // redfish | ipmi | auto | fake
 	BMCCredentialID string
 	SSHCredentialID *string
+	SSHAddress      string
 	Vendor          *string
 	Model           *string
 	SerialNumber    *string

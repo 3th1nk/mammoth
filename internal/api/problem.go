@@ -65,7 +65,12 @@ func writeError(c *gin.Context, err error) {
 		}
 		var appErr interface{ Code() string }
 		if errors.As(err, &appErr) {
-			problem(c, http.StatusUnprocessableEntity, appErr.Code(), "Request rejected", err.Error(), false)
+			status := http.StatusUnprocessableEntity
+			var ve *validationError
+			if errors.As(err, &ve) {
+				status = ve.status
+			}
+			problem(c, status, appErr.Code(), "Request rejected", err.Error(), false)
 			return
 		}
 		problem(c, http.StatusInternalServerError, "SCHEMA_INTERNAL", "Internal error",
@@ -73,15 +78,23 @@ func writeError(c *gin.Context, err error) {
 	}
 }
 
-// validationError is a semantic validation failure (schema valid, constraints
-// violated) → 422 with a SCHEMA_* code (docs/03-api.md §4).
-type validationError struct{ code, msg string }
+// validationError is a semantic rejection carrying its HTTP status (422 by
+// default; resources that declare 404 in the contract use 404).
+type validationError struct {
+	code   string
+	msg    string
+	status int
+}
 
 func (e *validationError) Error() string { return e.msg }
 func (e *validationError) Code() string  { return e.code }
 
 func verr(code, format string, args ...any) error {
-	return &validationError{code: code, msg: fmt.Sprintf(format, args...)}
+	return &validationError{code: code, msg: fmt.Sprintf(format, args...), status: http.StatusUnprocessableEntity}
+}
+
+func verrStatus(status int, code, format string, args ...any) error {
+	return &validationError{code: code, msg: fmt.Sprintf(format, args...), status: status}
 }
 
 // notFound builds the standard "not found" problem for path resources.

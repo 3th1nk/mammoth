@@ -2,10 +2,9 @@
 
 | File | Use |
 |------|-----|
-| `logo.svg` | The mark — all digital surfaces (README, docs, slides, favicon source) |
-
-Single-file policy: the SVG scales to any size, and single-color needs (print,
-engraving) can be derived from it on demand.
+| `logo.svg` | Primary mark — light backgrounds (README, docs, slides) |
+| `logo-dark.svg` | Dark backgrounds (GitHub dark mode via `prefers-color-scheme`) |
+| `logo-512.png` | Raster fallback — favicon source, social preview upload |
 
 Color system: Go cyan `#00ADD8`, shadow `#0089AC`, ivory `#FFF7E8`, ink `#0E2A3A`.
 

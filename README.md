@@ -1,6 +1,9 @@
 # Mammoth
 
-<img src="assets/brand/logo.svg" alt="mammoth logo" width="140" align="right">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/logo-dark.svg">
+  <img src="assets/brand/logo.svg" alt="mammoth logo" width="140" align="right">
+</picture>
 
 > A self-contained bare-metal provisioning engine.
 > Send in an address and a credential, get back a machine that runs.

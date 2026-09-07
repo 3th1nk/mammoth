@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/3th1nk/mammoth/internal/api"
@@ -85,9 +87,16 @@ func serve(args []string) error {
 		return fmt.Errorf("master key: %w", err)
 	}
 
-	// BMC drivers: fake always available; redfish/ipmi per config.
+	// BMC drivers: fake always available (optionally slowed to exercise
+	// heartbeat/lease/reaper paths); redfish/ipmi per config.
 	registry := bmc.NewRegistry(metrics, cfg.BMCTimeout)
-	registry.Register(fake.New())
+	fakeDriver := fake.New()
+	if d := getenv("MAMMOTH_FAKE_BMC_DELAY", ""); d != "" {
+		if dur, err := time.ParseDuration(d); err == nil {
+			fakeDriver.Delay = dur
+		}
+	}
+	registry.Register(fakeDriver)
 	registry.Register(redfish.New(cfg.BMCTLSInsecure, cfg.BMCTimeout))
 	registry.Register(ipmidrv.New(cfg.IPMIInterface, cfg.BMCTimeout))
 
@@ -180,4 +189,11 @@ func serve(args []string) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+func getenv(key, def string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return def
 }

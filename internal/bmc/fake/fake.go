@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/3th1nk/mammoth/internal/bmc"
 )
@@ -40,6 +41,10 @@ type BMC struct {
 type Driver struct {
 	mu   sync.Mutex
 	bmcs map[string]*BMC
+
+	// Delay simulates a slow BMC on every operation — used to exercise
+	// heartbeats, lease renewal and the reaper without real hardware.
+	Delay time.Duration
 }
 
 func New() *Driver {
@@ -65,9 +70,13 @@ func (d *Driver) Add(addr string) *BMC {
 func (d *Driver) get(addr string, op string) (*BMC, error) {
 	d.mu.Lock()
 	b, ok := d.bmcs[addr]
+	delay := d.Delay
 	d.mu.Unlock()
 	if !ok {
 		b = d.Add(addr)
+	}
+	if delay > 0 {
+		time.Sleep(delay)
 	}
 	if err := b.fail(op); err != nil {
 		return nil, err

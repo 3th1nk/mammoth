@@ -134,22 +134,22 @@ func TestRenderRejectsUnrenderableInputs(t *testing.T) {
 		want string
 	}{
 		{
-			name: "keep disk without wipe is M4 territory",
+			name: "disk without wipe or keep",
 			in: render.InstallInputs{
 				AnswerURL: "u", CompleteURL: "c", ImageSource: "i",
 				Disks: []render.ResolvedDisk{{Device: "sda", Wipe: false}},
 			},
-			want: "M4",
+			want: "declare wipe or keep",
 		},
 		{
-			name: "preserve partition is M4 territory",
+			name: "preserved partition without onpart binding",
 			in: render.InstallInputs{
 				AnswerURL: "u", CompleteURL: "c", ImageSource: "i",
 				Disks: []render.ResolvedDisk{{Device: "sda", Wipe: true, Partitions: []render.ResolvedPartition{
-					{Mount: "/data", FS: "xfs", Preserve: true},
+					{Mount: "/data", FS: "xfs", Preserve: true, Number: 1},
 				}}},
 			},
-			want: "M4",
+			want: "no onpart binding",
 		},
 		{
 			name: "partition without size",
@@ -181,5 +181,115 @@ func TestPrefixToMask(t *testing.T) {
 		if got := prefixToMask(bits); got != want {
 			t.Errorf("prefixToMask(%d) = %s, want %s", bits, got, want)
 		}
+	}
+}
+
+// M4: keep semantics + %pre drift guard (docs/09-roadmap.md M4, docs/06 §4).
+func TestRenderKeepPartitionsAndDriftGuard(t *testing.T) {
+	d := New()
+	in := render.InstallInputs{
+		AnswerURL: "https://m/render/t/ks.cfg", CompleteURL: "https://m/render/t/complete",
+		ImageSource: "https://mirror.example/rocky9",
+		DriftCheck:  true,
+		BootDrive:   "nvme0n1",
+		Disks: []render.ResolvedDisk{
+			// system disk: wiped and rebuilt
+			{Device: "nvme0n1", Serial: "S6XPN0001", Wipe: true, Partitions: []render.ResolvedPartition{
+				{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+				{Mount: "/", FS: "xfs", Grow: true},
+			}},
+			// data disk: partitions kept block-level — partition 1 preserved,
+			// partition 2 (snapshot leftover) removed, rest rebuilt
+			{Device: "sda", Serial: "GIM256_2021", Baseline: []render.BaselinePartition{
+				{Device: "sda1", Number: 1, StartBytes: 1048576, EndBytes: 537001487, SizeBytes: 536870912, UUID: "b2a1c3d4-0000", FSType: "xfs"},
+				{Device: "sda2", Number: 2, StartBytes: 537001488, EndBytes: 1073741839, SizeBytes: 536870352, UUID: "9999-8888"},
+			}, Remove: []string{"sda2"}, Partitions: []render.ResolvedPartition{
+				{Mount: "/data", Preserve: true, Number: 1, OnPart: "sda1", UUID: "b2a1c3d4-0000", FS: "xfs"},
+				{Mount: "/extra", FS: "xfs", Grow: true},
+			}},
+		},
+	}
+	answers, _, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	ks := answers[0].Content
+
+	// wiped disk only in --drives; kept disk excluded
+	if !strings.Contains(ks, "clearpart --drives=nvme0n1 --initlabel --all") {
+		t.Errorf("wipe disk clearpart wrong")
+	}
+	if strings.Contains(ks, "--drives=nvme0n1,sda") || strings.Contains(ks, "--drives=sda") {
+		t.Errorf("kept disk must not be wiped: clearpart drives")
+	}
+	// precise removal of the non-preserved leftover
+	if !strings.Contains(ks, "clearpart --list=sda2") {
+		t.Errorf("clearpart --list for leftovers missing")
+	}
+	// preserved partition: reuse unformatted via onpart
+	if !strings.Contains(ks, "part /data --onpart=sda1 --noformat") {
+		t.Errorf("preserve mount line missing")
+	}
+	// new partitions on the kept disk target it explicitly
+	if !strings.Contains(ks, "part /extra --fstype=xfs --ondisk=sda --grow") {
+		t.Errorf("new partition on kept disk wrong")
+	}
+	// drift guard pins the snapshot baseline (sysfs sectors + blkid uuid)
+	for _, want := range []string{
+		"_d=/sys/block/sda/sda1",
+		`[ "$(cat $_d/start)" = "2048" ] || report "sda1 start drifted"`,
+		`[ "$(cat $_d/size)" = "1048576" ] || report "sda1 size drifted"`,
+		`[ "$(blkid -s UUID -o value /dev/sda1)" = "b2a1c3d4-0000" ] || report "sda1 uuid drifted"`,
+		`{"status":"failed","detail":"LAYOUT_DRIFT: '`,
+		`"$1"'"}'`,
+		"https://m/render/t/complete",
+	} {
+		if !strings.Contains(ks, want) {
+			t.Errorf("drift guard missing %q", want)
+		}
+	}
+}
+
+func TestRenderKeepDiskUntouched(t *testing.T) {
+	d := New()
+	in := render.InstallInputs{
+		AnswerURL: "u", CompleteURL: "c", ImageSource: "i", DriftCheck: true,
+		Disks: []render.ResolvedDisk{
+			{Device: "nvme0n1", Wipe: true, Partitions: []render.ResolvedPartition{
+				{Mount: "/", FS: "xfs", Grow: true}}},
+			{Device: "sdb", Serial: "KEEPME", KeepDisk: true},
+		},
+	}
+	answers, _, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	ks := answers[0].Content
+	if strings.Contains(ks, "sdb") {
+		t.Errorf("keep:disk device must not appear anywhere in the kickstart")
+	}
+}
+
+func TestRenderDriftCheckToggle(t *testing.T) {
+	d := New()
+	in := render.InstallInputs{
+		AnswerURL: "u", CompleteURL: "c", ImageSource: "i", DriftCheck: false,
+		Disks: []render.ResolvedDisk{
+			{Device: "sda", Baseline: []render.BaselinePartition{
+				{Device: "sda1", Number: 1, StartBytes: 1048576, SizeBytes: 536870896, UUID: "x"},
+			}, Remove: []string{"sda1"}, Partitions: []render.ResolvedPartition{
+				{Mount: "/data", Preserve: true, Number: 1, OnPart: "sda1", UUID: "x"},
+			}},
+		},
+	}
+	answers, _, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if strings.Contains(answers[0].Content, "LAYOUT_DRIFT") {
+		t.Errorf("drift guard must be omitted when policy.verify_layout is false")
+	}
+	if !strings.Contains(answers[0].Content, "part /data --onpart=sda1 --noformat") {
+		t.Errorf("preserve mount must survive the toggle")
 	}
 }

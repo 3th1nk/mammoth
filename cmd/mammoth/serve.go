@@ -95,9 +95,11 @@ func serve(args []string) error {
 	// heartbeat/lease/reaper paths); redfish/ipmi per config.
 	registry := bmc.NewRegistry(metrics, cfg.BMCTimeout)
 	fakeDriver := fake.New()
+	var fakeInbandDelay time.Duration
 	if d := getenv("MAMMOTH_FAKE_BMC_DELAY", ""); d != "" {
 		if dur, err := time.ParseDuration(d); err == nil {
 			fakeDriver.Delay = dur
+			fakeInbandDelay = dur
 		}
 	}
 	registry.Register(fakeDriver)
@@ -107,7 +109,11 @@ func serve(args []string) error {
 	// In-band probe: agent-less, read-only, one connection; the whole
 	// collection is bounded by the in-band timeout (docs/05-inventory.md §3).
 	inbandRunner := &inbandssh.SSHRunner{DialTimeout: cfg.InbandTimeout / 3}
-	inband := &inbandssh.Collector{Runner: inbandRunner}
+	inband := &inbandssh.Collector{Runner: &inbandssh.SwitchRunner{
+		SSH:   inbandRunner,
+		Fake:  &inbandssh.StaticRunner{Output: []byte(inbandssh.DefaultFixture)},
+		Delay: fakeInbandDelay,
+	}}
 
 	// Distro drivers register here; adding a distro never touches the
 	// orchestration layer (docs/06-install-pipeline.md §5).

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -184,6 +185,7 @@ func (s *Server) createJobRecord(ctx context.Context, in createJobRecord) (*gen.
 
 	taskIDs := make([]string, 0, len(in.machineIDs))
 	var taskContexts []json.RawMessage
+	var taskInitials []store.TaskInit
 	if in.jobType == "install" {
 		// Install tasks get their machine-facing credential (token), the
 		// expanded hostname, and the per-machine spec (base shallow-merged
@@ -202,9 +204,29 @@ func (s *Server) createJobRecord(ctx context.Context, in createJobRecord) (*gen.
 			if pattern != "" {
 				tctx["hostname"] = strings.ReplaceAll(pattern, "{index}", itoa(i+1))
 			}
-			if merged := mergeSpecOverride(in.specRaw, in.overrides, mid); merged != nil {
+			merged := mergeSpecOverride(in.specRaw, in.overrides, mid)
+			if merged != nil {
 				tctx["spec"] = json.RawMessage(merged)
 			}
+
+			// Submit-side snapshot binding (docs/04-install-spec.md §5.1):
+			// a spec that keeps partitions must hit the machine's latest
+			// layout snapshot, or the task is marked failed at creation —
+			// without blocking sibling machines.
+			effective := in.specRaw
+			if merged != nil {
+				effective = merged
+			}
+			init := store.TaskInit{}
+			if verr := s.validateSnapshotBinding(ctx, mid, effective); verr != nil {
+				init.State = "failed"
+				init.Error = &store.ErrorInfo{
+					Code:      appErrCode(verr),
+					Message:   verr.Error(),
+					Retryable: false,
+				}
+			}
+			taskInitials = append(taskInitials, init)
 
 			b, _ := json.Marshal(tctx)
 			taskContexts = append(taskContexts, b)
@@ -219,14 +241,18 @@ func (s *Server) createJobRecord(ctx context.Context, in createJobRecord) (*gen.
 		MachineIDs:   in.machineIDs,
 		Stages:       provision.StageNames(in.flow),
 		TaskContexts: taskContexts,
+		TaskInitials: taskInitials,
 	}
 	if err := s.Jobs.CreateJobWithTasks(ctx, input); err != nil {
 		return nil, err
 	}
 
-	// Enqueue one message per task; span context rides along so the task
-	// stays one trace across facets.
+	// Enqueue one message per task (pre-failed tasks are not queued); span
+	// context rides along so the task stays one trace across facets.
 	for i, tid := range taskIDs {
+		if i < len(taskInitials) && taskInitials[i].State == "failed" {
+			continue
+		}
 		msg := provision.MarshalMessage(ctx, tid)
 		if err := s.Queue.Enqueue(ctx, provision.QueueTasks, msg, queue.EnqueueOptions{}); err != nil {
 			// The job stays pending; the reaper/runner loop of record picks
@@ -309,30 +335,29 @@ func validateInstallSpec(spec *gen.InstallSpec) error {
 	if spec.Image.Distro == "" {
 		return verr("SCHEMA_INVALID_SPEC", "image.distro must be declared explicitly")
 	}
-	if spec.Storage != nil && len(spec.Storage.Disks) > 0 {
-		for i, disk := range spec.Storage.Disks {
-			if disk.Keep != nil && *disk.Keep != "" {
-				return verr("SCHEMA_INVALID_STORAGE", "disks[%d]: keep semantics arrive with M4; M3 supports the wipe path only", i)
-			}
-		}
-	}
 	if spec.Image.Source == nil && spec.Image.ImageId == nil {
 		return verr("SCHEMA_INVALID_SPEC", "image.source or image.image_id is required")
 	}
 	if spec.Storage == nil {
 		return verr("SCHEMA_INVALID_SPEC", "storage is required")
 	}
-	seenRest := map[string]bool{}
 	for i, disk := range spec.Storage.Disks {
-		keep := disk.Keep != nil && *disk.Keep != ""
-		partitions := derefOr(disk.Partitions, nil)
-		if keep && len(partitions) > 0 {
-			return verr("SCHEMA_INVALID_STORAGE", "disks[%d]: keep and partitions are mutually exclusive", i)
+		seenRest := false
+		keepKind := ""
+		if disk.Keep != nil {
+			keepKind = string(*disk.Keep)
 		}
-		if keep && disk.Wipe != nil && *disk.Wipe {
+		partitions := derefOr(disk.Partitions, nil)
+		// docs/04-install-spec.md §5.1: keep: disk excludes partitions and
+		// wipe; keep: partitions COEXISTS with partitions (preserved entries
+		// reuse blocks, the rest of the space is rebuilt — example ③).
+		if keepKind == "disk" && len(partitions) > 0 {
+			return verr("SCHEMA_INVALID_STORAGE", "disks[%d]: keep: disk excludes partitions", i)
+		}
+		if keepKind != "" && disk.Wipe != nil && *disk.Wipe {
 			return verr("SCHEMA_INVALID_STORAGE", "disks[%d]: keep and wipe are mutually exclusive", i)
 		}
-		if !keep && len(partitions) == 0 {
+		if keepKind == "" && len(partitions) == 0 {
 			return verr("SCHEMA_INVALID_STORAGE", "disks[%d]: declare partitions or keep", i)
 		}
 		for j, part := range partitions {
@@ -340,10 +365,10 @@ func validateInstallSpec(spec *gen.InstallSpec) error {
 				return verr("SCHEMA_INVALID_STORAGE", "disks[%d].partitions[%d]: size required", i, j)
 			}
 			if part.Size == "rest" {
-				if seenRest["rest"] {
+				if seenRest {
 					return verr("SCHEMA_INVALID_STORAGE", "disks[%d]: at most one 'rest' partition per disk", i)
 				}
-				seenRest["rest"] = true
+				seenRest = true
 			}
 		}
 	}
@@ -554,3 +579,106 @@ func mergeSpecOverride(base json.RawMessage, overrides map[string]gen.InstallSpe
 }
 
 func isZeroImage(i gen.InstallSpec) bool { return false } // placeholder
+
+// appErrType is the errors.As target for coded application errors.
+func appErrType() *validationError { return &validationError{} }
+
+func appErrCode(err error) string {
+	var ve *validationError
+	if errors.As(err, &ve) {
+		return ve.code
+	}
+	return "LAYOUT_SNAPSHOT_REQUIRED"
+}
+
+// validateSnapshotBinding: a spec declaring keep: partitions / preserve must
+// hit the machine's latest layout snapshot at submit time
+// (docs/04-install-spec.md §5.1; strict per-disk resolution repeats at
+// verify_layout when hardware is present).
+func (s *Server) validateSnapshotBinding(ctx context.Context, machineID string, specRaw json.RawMessage) error {
+	var spec struct {
+		Storage *struct {
+			Disks []struct {
+				Select struct {
+					Match struct {
+						Serial string `json:"serial"`
+					} `json:"match"`
+				} `json:"select"`
+				Keep      string `json:"keep"`
+				Paritions []any  `json:"partitions"`
+				Preserve  []struct {
+					Number int `json:"number"`
+				} `json:"preserve"`
+			} `json:"disks"`
+		} `json:"storage"`
+	}
+	if err := json.Unmarshal(specRaw, &spec); err != nil {
+		return nil // structural errors surface via the schema validation path
+	}
+	if spec.Storage == nil {
+		return nil
+	}
+	needs := false
+	for _, d := range spec.Storage.Disks {
+		if d.Keep == "partitions" || len(d.Preserve) > 0 {
+			needs = true
+		}
+	}
+	if !needs {
+		return nil
+	}
+	content, _, err := s.Machines.LatestLayout(ctx, machineID)
+	if err != nil {
+		return verr("LAYOUT_SNAPSHOT_REQUIRED",
+			"machine %s has no layout snapshot; capture one (in-band) before submitting keep:partitions", machineID)
+	}
+	var snap struct {
+		Disks []struct {
+			Device     string            `json:"device"`
+			Match      map[string]string `json:"match"`
+			Partitions []struct {
+				Number int `json:"number"`
+			} `json:"partitions"`
+		} `json:"disks"`
+	}
+	if json.Unmarshal(content, &snap) != nil {
+		return verr("LAYOUT_SNAPSHOT_REQUIRED", "machine %s layout snapshot is malformed", machineID)
+	}
+	for i, d := range spec.Storage.Disks {
+		if d.Keep != "partitions" && len(d.Preserve) == 0 {
+			continue
+		}
+		// Resolve the referenced disk in the snapshot: by serial when the
+		// selector pins it, otherwise any snapshot disk carrying the numbers.
+		var diskHit *int
+		for di := range snap.Disks {
+			sd := &snap.Disks[di]
+			if d.Select.Match.Serial != "" {
+				if sd.Match == nil || sd.Match["serial"] != d.Select.Match.Serial {
+					continue
+				}
+			}
+			for _, p := range d.Preserve {
+				found := false
+				for _, sp := range sd.Partitions {
+					if sp.Number == p.Number {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return verr("SCHEMA_INVALID_STORAGE",
+						"storage.disks[%d]: preserve partition %d not present in %s snapshot (%s)",
+						i, p.Number, machineID, sd.Device)
+				}
+			}
+			diskHit = &di
+			break
+		}
+		if diskHit == nil {
+			return verr("LAYOUT_SNAPSHOT_REQUIRED",
+				"storage.disks[%d]: selector does not match any disk in machine %s snapshot", i, machineID)
+		}
+	}
+	return nil
+}

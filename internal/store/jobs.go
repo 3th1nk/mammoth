@@ -29,6 +29,17 @@ type CreateJobInput struct {
 	// TaskContexts carries per-task initial context (install jobs: task
 	// token); nil entries initialize to {}.
 	TaskContexts []json.RawMessage
+	// TaskInitials carries per-task initial state/error — submit-side
+	// validation failures (e.g. LAYOUT_SNAPSHOT_REQUIRED) mark the task
+	// failed at creation without blocking sibling machines
+	// (docs/04-install-spec.md §5.1). Parallel arrays; nil = pending.
+	TaskInitials []TaskInit
+}
+
+// TaskInit is a task's submit-time state (see CreateJobInput).
+type TaskInit struct {
+	State string
+	Error *ErrorInfo
 }
 
 func (r *JobRepo) CreateJobWithTasks(ctx context.Context, in CreateJobInput) error {
@@ -63,9 +74,23 @@ func (r *JobRepo) CreateJobWithTasks(ctx context.Context, in CreateJobInput) err
 		if i < len(in.TaskContexts) && len(in.TaskContexts[i]) > 0 {
 			tctx = in.TaskContexts[i]
 		}
+		initState, initErr := "pending", (*ErrorInfo)(nil)
+		if i < len(in.TaskInitials) {
+			if in.TaskInitials[i].State != "" {
+				initState = in.TaskInitials[i].State
+			}
+			initErr = in.TaskInitials[i].Error
+		}
+		var initErrRaw any
+		if initErr != nil {
+			b, _ := json.Marshal(initErr)
+			initErrRaw = b
+		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO tasks (id, job_id, machine_id, state, flow_name, context)
-			VALUES ($1,$2,$3,'pending',$4,$5)`, tid, in.Job.ID, mid, in.Job.FlowName(), tctx); err != nil {
+			INSERT INTO tasks (id, job_id, machine_id, state, flow_name, context, error, finished_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,
+			  CASE WHEN $4 IN ('failed','canceled') THEN now() END)`,
+			tid, in.Job.ID, mid, initState, in.Job.FlowName(), tctx, initErrRaw); err != nil {
 			return err
 		}
 		for seq, name := range in.Stages {

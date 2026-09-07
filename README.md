@@ -1,5 +1,10 @@
 # Mammoth
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/logo-dark.svg">
+  <img src="assets/brand/logo.svg" alt="mammoth logo" width="140" align="right">
+</picture>
+
 > A self-contained bare-metal provisioning engine.
 > Send in an address and a credential, get back a machine that runs.
 
@@ -104,3 +109,9 @@ default, `MAMMOTH_OTEL_EXPORTER_ENDPOINT` to export).
 ## License
 
 Apache-2.0
+
+### Logo
+
+The mammoth gopher is a derivative of the original Go gopher by
+**Renée French** (CC BY 3.0), adapted under the same license.
+See `assets/brand/`.

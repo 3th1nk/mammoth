@@ -5,8 +5,12 @@
 package redfish
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -30,19 +34,108 @@ func New(insecure bool, timeout time.Duration) *Driver {
 
 func (d *Driver) Name() bmc.Protocol { return bmc.ProtocolRedfish }
 
-// connect establishes an authenticated Redfish session.
+// connect establishes an authenticated Redfish client. Session creation is
+// vendor-aware: several BMCs extend the standard session payload with OEM
+// fields (Huawei iBMC requires Oem.Huawei.Domain=LocaliBMC), so Mammoth owns
+// the session handshake — vendor detection runs on the unauthenticated
+// service root, the session POST carries the right shape, and gofish
+// continues with the pre-authenticated token.
 func (d *Driver) connect(ctx context.Context, addr string, cred bmc.Credentials) (*gofish.APIClient, error) {
-	client, err := gofish.ConnectContext(ctx, gofish.ClientConfig{
-		Endpoint:   normalizeHost(addr),
-		Username:   cred.Username,
-		Password:   cred.Password,
+	base := normalizeHost(addr)
+	httpClient := makeHTTPClient(d.Timeout, d.Insecure)
+
+	session, err := d.createSession(ctx, httpClient, base, cred)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := gofish.ClientConfig{
+		Endpoint:   base,
 		Insecure:   d.Insecure,
-		HTTPClient: makeHTTPClient(d.Timeout),
-	})
+		HTTPClient: httpClient,
+	}
+	if session.link != "" {
+		cfg.Session = &gofish.Session{ID: session.link, Token: session.token}
+	} else {
+		// No SessionService (rare): basic auth remains the only door.
+		cfg.Username = cred.Username
+		cfg.Password = cred.Password
+		cfg.BasicAuth = true
+	}
+	client, err := gofish.ConnectContext(ctx, cfg)
 	if err != nil {
 		return nil, bmc.Classify("connect", err)
 	}
 	return client, nil
+}
+
+// redfishSession is one established controller session.
+type redfishSession struct {
+	token string
+	link  string
+}
+
+// createSession performs the vendor-aware session handshake. The service
+// root is read unauthenticated to identify the vendor via Oem; non-Huawei
+// BMCs take the standard payload. 404/405 on the session endpoint signals
+// "no session service" (empty link → basic auth fallback).
+func (d *Driver) createSession(ctx context.Context, httpClient *http.Client, base string, cred bmc.Credentials) (*redfishSession, error) {
+	const op = "session"
+	rootReq, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/redfish/v1/", nil)
+	if err != nil {
+		return nil, bmc.Classify(op, err)
+	}
+	rootResp, err := httpClient.Do(rootReq)
+	if err != nil {
+		return nil, bmc.Classify(op, err)
+	}
+	defer rootResp.Body.Close()
+	rootRaw, _ := io.ReadAll(rootResp.Body)
+
+	payload := map[string]any{"UserName": cred.Username, "Password": cred.Password}
+	var root struct {
+		Oem struct {
+			Huawei json.RawMessage `json:"Huawei"`
+		} `json:"Oem"`
+	}
+	if json.Unmarshal(rootRaw, &root) == nil && len(root.Oem.Huawei) > 0 {
+		payload["Oem"] = map[string]any{
+			"Huawei": map[string]any{"Domain": "LocaliBMC"},
+		}
+	}
+	body, _ := json.Marshal(payload)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/redfish/v1/SessionService/Sessions", bytes.NewReader(body))
+	if err != nil {
+		return nil, bmc.Classify(op, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, bmc.Classify(op, err)
+	}
+	defer resp.Body.Close()
+
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode <= 299:
+		token := resp.Header.Get("X-Auth-Token")
+		link := resp.Header.Get("Location")
+		if token == "" || link == "" {
+			return nil, &bmc.Error{Kind: bmc.KindProtocolError, Op: op,
+				Detail: "session created without token/location headers"}
+		}
+		return &redfishSession{token: token, link: link}, nil
+	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed:
+		return &redfishSession{}, nil // no session service → caller uses basic auth
+	case resp.StatusCode >= 500:
+		raw, _ := io.ReadAll(resp.Body)
+		return nil, &bmc.Error{Kind: bmc.KindUnreachable, Op: op,
+			Detail: fmt.Sprintf("session creation: %s %s", resp.Status, bmc.FirstLine(string(raw)))}
+	default:
+		raw, _ := io.ReadAll(resp.Body)
+		return nil, &bmc.Error{Kind: bmc.KindAuthFailed, Op: op,
+			Detail: fmt.Sprintf("session creation: %s %s", resp.Status, bmc.FirstLine(string(raw)))}
+	}
 }
 
 func (d *Driver) Probe(ctx context.Context, addr string, cred bmc.Credentials) (bmc.BMCInfo, error) {
@@ -286,9 +379,17 @@ func normalizeHost(addr string) string {
 	return "https://" + addr
 }
 
-func makeHTTPClient(timeout time.Duration) *http.Client {
+// makeHTTPClient builds the transport used for both the session handshake
+// and gofish resource walks. InsecureSkipVerify is opt-in per deployment —
+// BMC self-signed certificates are the norm in the field
+// (MAMMOTH_BMC_TLS_INSECURE).
+func makeHTTPClient(timeout time.Duration, insecure bool) *http.Client {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	return &http.Client{Timeout: timeout}
+	transport := &http.Transport{}
+	if insecure {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // #nosec G402 — deployment opt-in
+	}
+	return &http.Client{Timeout: timeout, Transport: transport}
 }

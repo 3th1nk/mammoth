@@ -2,8 +2,12 @@ package redfish
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"strings"
 
+	"github.com/stmcginnis/gofish"
 	"github.com/stmcginnis/gofish/redfish"
 
 	"github.com/3th1nk/mammoth/internal/bmc"
@@ -31,14 +35,18 @@ func (d *Driver) CollectInventory(ctx context.Context, addr string, cred bmc.Cre
 	sys := systems[0]
 	hw.SerialNumber = sys.SerialNumber
 
-	// CPU: summary first (no per-processor walk needed for the spec view).
-	hw.CPU.Model = sys.ProcessorSummary.Model
-	hw.CPU.Cores = sys.ProcessorSummary.Count
-	if hw.CPU.Model == "" && hw.CPU.Cores == 0 {
-		if procs, perr := sys.Processors(); perr == nil && len(procs) > 0 {
-			hw.CPU.Model = procs[0].Model
-			hw.CPU.Cores = procs[0].TotalCores
-		} else {
+	// CPU: walk the collection and sum socket cores. Two vendor traps live
+	// here: Huawei reports an unreliable summary (Count=1, Model="Central
+	// Processor" on a Xeon Silver 4110 with 8 real cores), AND its
+	// ProcessorId.EffectiveFamily is a number where the spec says string —
+	// which makes strict parsers fail the whole collection. Both are why the
+	// walk uses the lenient collector with the summary as fallback.
+	if model, cores, ok := lenientProcessors(c, sys.ODataID); ok {
+		hw.CPU.Model, hw.CPU.Cores = model, cores
+	} else {
+		hw.CPU.Model = sys.ProcessorSummary.Model
+		hw.CPU.Cores = sys.ProcessorSummary.Count
+		if hw.CPU.Model == "" && hw.CPU.Cores == 0 {
 			hw.Note("processor summary not available")
 		}
 	}
@@ -146,13 +154,74 @@ func mapNICs(nics []*redfish.EthernetInterface) []bmc.NICView {
 	out := make([]bmc.NICView, 0, len(nics))
 	for _, n := range nics {
 		nic := bmc.NICView{
-			Name: n.Name,
+			Name: n.ID, // port identity (Huawei: "mainboardLOMPort1"; Name is generic)
 			MAC:  n.MACAddress,
+		}
+		if nic.Name == "" {
+			nic.Name = n.Name
 		}
 		if nic.MAC == "" {
 			nic.MAC = n.PermanentMACAddress
 		}
+		if nic.MAC == "" {
+			continue // no MAC → cannot participate in network spec matching
+		}
 		out = append(out, nic)
 	}
 	return out
+}
+
+// lenientProcessor mirrors the Processor fields Mammoth consumes, tolerant
+// of vendor protocol violations (numbers where strings are specified).
+type lenientProcessor struct {
+	Model      string `json:"Model"`
+	TotalCores int    `json:"TotalCores"`
+	// Intentionally no Socket/ProcessorId: Huawei emits both as numbers
+	// where the spec says string, and Mammoth doesn't consume them.
+}
+
+// lenientProcessors walks the Processor collection with lenient decoding.
+// ok=false means the collection is unusable and the caller should fall back
+// to the summary.
+func lenientProcessors(c *gofish.APIClient, systemODataID string) (model string, cores int, ok bool) {
+	if c == nil || systemODataID == "" {
+		return "", 0, false
+	}
+	resp, err := c.Get(strings.TrimSuffix(systemODataID, "/") + "/Processors")
+	if err != nil {
+		return "", 0, false
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return "", 0, false
+	}
+	var coll struct {
+		Members []struct {
+			ODataID string `json:"@odata.id"`
+		} `json:"Members"`
+	}
+	if json.Unmarshal(raw, &coll) != nil || len(coll.Members) == 0 {
+		return "", 0, false
+	}
+	for _, m := range coll.Members {
+		itemResp, err := c.Get(m.ODataID)
+		if err != nil {
+			continue
+		}
+		itemRaw, err := io.ReadAll(itemResp.Body)
+		_ = itemResp.Body.Close()
+		if err != nil {
+			continue
+		}
+		var p lenientProcessor
+		if json.Unmarshal(itemRaw, &p) != nil {
+			continue
+		}
+		if model == "" {
+			model = p.Model
+		}
+		cores += p.TotalCores
+	}
+	return model, cores, cores > 0 || model != ""
 }

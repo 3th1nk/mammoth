@@ -113,17 +113,19 @@ func httpStatusKind(op string, status int, body string) *Error {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return opErr(op, KindAuthFailed, nil, http.StatusText(status))
 	case status == http.StatusNotFound:
-		return opErr(op, KindProtocolError, nil, "http 404: "+firstLine(body))
+		return opErr(op, KindProtocolError, nil, "http 404: "+FirstLine(body))
 	case status == http.StatusServiceUnavailable || status == http.StatusBadGateway || status == http.StatusGatewayTimeout:
 		return opErr(op, KindUnreachable, nil, http.StatusText(status))
 	case status >= 400:
-		return opErr(op, KindProtocolError, nil, firstLine(body))
+		return opErr(op, KindProtocolError, nil, FirstLine(body))
 	default:
 		return nil
 	}
 }
 
-func firstLine(s string) string {
+// FirstLine returns the first line of a response body, bounded — for error
+// details surfaced to clients.
+func FirstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]
 	}

@@ -363,10 +363,10 @@ def main():
     ok &= check("both install tasks succeeded",
                 all(t["state"] == "succeeded" for t in final.get("tasks", [])),
                 str([t["state"] for t in final.get("tasks", [])]))
-    ok &= check("five stages all green",
+    ok &= check("six stages all green",
                 all(s["state"] == "succeeded" for t in final.get("tasks", [])
                     for s in t.get("stages", [])) and
-                len(final.get("tasks", [{}])[0].get("stages", [])) == 5,
+                len(final.get("tasks", [{}])[0].get("stages", [])) == 6,
                 str([s["name"] + ":" + s["state"] for s in
                      (final.get("tasks") or [{}])[0].get("stages", [])]))
 
@@ -547,6 +547,48 @@ def main():
                 ok &= check("drift job rendered", False)
     else:
         ok &= check("keep test machine registered", False, str(status))
+
+    # 4.8 M6: declarative hardware RAID via the fake controller — the
+    # configure_raid stage creates the volume, re-inventory binds the logical
+    # drive, and its partitions render on the bound device.
+    print("· hardware raid (configure_raid)")
+    status, hwjob = c.post("/api/v1/jobs", {
+        "type": "install",
+        "targets": {"machine_ids": [machines[0]]},
+        "spec": {
+            "image": {"source": "https://mirror.example/rocky9.iso", "distro": "rocky9"},
+            "storage": {"raid": [{
+                "name": "vol0", "level": "1", "mode": "hardware",
+                "members": [{"match": {"serial": "S6XPN0001"}},
+                            {"match": {"serial": "S6XPN0002"}}],
+                "partitions": [{"size": "rest", "fs": "xfs", "mount": "/"}]}]}},
+        "policy": {"on_task_failure": "continue"}})
+    ok &= check("hardware raid job accepted", status == 202, f"{status}")
+    if status == 202:
+        hurl = None
+        deadline = time.time() + 120
+        while time.time() < deadline and hurl is None:
+            _, tl = c.get(f"/api/v1/jobs/{hwjob['id']}/tasks")
+            for t in tl.get("items", []):
+                if t.get("answer_url"):
+                    hurl = t["answer_url"]
+                    break
+            time.sleep(0.5)
+        if hurl:
+            htok = hurl.rsplit("/render/", 1)[1].split("/", 1)[0]
+            _, hks = c.req("GET", f"/render/{htok}/ks.cfg")
+            ok &= check("raid volume bound and partitioned on it",
+                        "clearpart --drives=vol0 --initlabel --all" in hks
+                        and "part / --fstype=xfs --ondisk=vol0 --grow" in hks,
+                        "clearpart" in hks)
+            c.req("POST", f"/render/{htok}/complete", {"status": "ok"})
+            hjob_f, htasks = wait_job(c, hwjob["id"], {"succeeded", "failed", "partial"}, timeout=180)
+            ok &= check("hardware raid install six stages green",
+                        htasks and htasks[0]["state"] == "succeeded"
+                        and all(st["state"] == "succeeded" for st in htasks[0].get("stages", [])),
+                        str([st["state"] for st in (htasks[0].get("stages") if htasks else [])]))
+        else:
+            ok &= check("hardware raid answers rendered", False)
 
     # 4.9 M5: second distro (ubuntu22 autoinstall) + support matrix gating.
     print("· ubuntu autoinstall + matrix")

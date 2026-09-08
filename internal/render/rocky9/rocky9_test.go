@@ -293,3 +293,55 @@ func TestRenderDriftCheckToggle(t *testing.T) {
 		t.Errorf("preserve mount must survive the toggle")
 	}
 }
+
+// M6: declarative software RAID renders anaconda raid lines (docs/09 M6).
+func TestRenderSoftwareRaid(t *testing.T) {
+	d := New()
+	in := render.InstallInputs{
+		AnswerBaseURL: "https://m/render/t", CompleteURL: "https://m/render/t/complete",
+		ImageSource: "i", BootDrive: "sda",
+		Disks: []render.ResolvedDisk{
+			{Device: "sda", Wipe: true, Partitions: []render.ResolvedPartition{
+				{Mount: "/boot", FS: "xfs", SizeMB: 1024}}},
+			{Device: "sdb", Wipe: true, Partitions: []render.ResolvedPartition{
+				{Mount: "/boot2", FS: "xfs", SizeMB: 1024}}},
+		},
+		Raid: []render.ResolvedRaid{
+			{Name: "md0", Level: "1", Mode: "software", Members: []string{"sda", "sdb"},
+				Partitions: []render.ResolvedPartition{
+					{Mount: "/", FS: "xfs", Grow: true}}},
+		},
+	}
+	answers, _, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	ks := answers[0].Content
+	for _, want := range []string{
+		"part raid.md0-0 --size=1 --grow --ondisk=sda",
+		"part raid.md0-1 --size=1 --grow --ondisk=sdb",
+		"raid / --fstype=xfs --level=1 --device=md0 raid.md0-0 raid.md0-1",
+	} {
+		if !strings.Contains(ks, want) {
+			t.Errorf("software raid missing %q", want)
+		}
+	}
+}
+
+// M6: software raid with multiple partitions is rejected (LVM later).
+func TestRenderSoftwareRaidSinglePartition(t *testing.T) {
+	d := New()
+	in := render.InstallInputs{
+		AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i",
+		Raid: []render.ResolvedRaid{
+			{Name: "md0", Level: "1", Mode: "software", Members: []string{"sda", "sdb"},
+				Partitions: []render.ResolvedPartition{
+					{Mount: "/", FS: "xfs", Grow: true},
+					{Mount: "/var", FS: "xfs", SizeMB: 1024}}},
+		},
+	}
+	if _, _, err := d.RenderAnswers(in, render.MachineView{}); err == nil ||
+		!strings.Contains(err.Error(), "exactly one partition") {
+		t.Fatalf("want single-partition constraint, got %v", err)
+	}
+}

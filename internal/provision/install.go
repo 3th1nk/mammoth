@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -20,12 +21,16 @@ import (
 // here, versioned by field). The rendered answer files are snapshotted for
 // offline audit and replay (docs/06-install-pipeline.md §2.2).
 type installTaskContext struct {
-	Token    string                `json:"token,omitempty"` // machine-facing credential
-	Hostname string                `json:"hostname,omitempty"`
-	Answers  []render.AnswerFile   `json:"answers,omitempty"`
-	Boot     render.BootParams     `json:"boot,omitempty"`
-	Resolved []render.ResolvedDisk `json:"resolved,omitempty"`
-	Install  *installProgress      `json:"install,omitempty"`
+	Token    string              `json:"token,omitempty"` // machine-facing credential
+	Hostname string              `json:"hostname,omitempty"`
+	Answers  []render.AnswerFile `json:"answers,omitempty"`
+	Boot     render.BootParams   `json:"boot,omitempty"`
+	Resolved struct {
+		Disks []render.ResolvedDisk `json:"disks"`
+		Raid  []render.ResolvedRaid `json:"raid,omitempty"`
+	} `json:"resolved,omitempty"`
+	RaidBindings map[string]string `json:"raid_bindings,omitempty"`
+	Install      *installProgress  `json:"install,omitempty"`
 }
 
 type installProgress struct {
@@ -44,6 +49,8 @@ func (e *Executor) runInstallStage(ctx context.Context, task *store.Task, job *s
 	switch stage {
 	case "verify_layout":
 		return e.verifyLayout(ctx, task, job, seq)
+	case "configure_raid":
+		return e.configureRaid(ctx, task, job, seq)
 	case "prepare_media":
 		return e.prepareMedia(ctx, task, job, seq)
 	case "boot":
@@ -68,6 +75,7 @@ type installSpecView struct {
 	} `json:"image"`
 	Storage struct {
 		Disks []storageDiskView `json:"disks"`
+		Raid  []raidSpecView    `json:"raid"`
 	} `json:"storage"`
 	Identity struct {
 		HostnamePattern string `json:"hostname_pattern"`
@@ -160,6 +168,22 @@ type storageDiskView struct {
 	Wipe       bool            `json:"wipe"`
 	Keep       string          `json:"keep"`
 	Preserve   []preserveView  `json:"preserve"`
+	Partitions []partitionView `json:"partitions"`
+}
+
+type raidSpecView struct {
+	Name    string `json:"name"`
+	Level   string `json:"level"`
+	Mode    string `json:"mode"`
+	Members []struct {
+		Match struct {
+			Serial    string `json:"serial"`
+			Type      string `json:"type"`
+			Size      string `json:"size"`
+			Protocol  string `json:"protocol"`
+			Removable *bool  `json:"removable"`
+		} `json:"match"`
+	} `json:"members"`
 	Partitions []partitionView `json:"partitions"`
 }
 
@@ -378,15 +402,117 @@ func (e *Executor) verifyLayout(ctx context.Context, task *store.Task, job *stor
 		resolved = append(resolved, rd)
 	}
 
+	// RAID resolution (docs/09-roadmap.md M6): members resolve against the
+	// same hardware pool; overlap with disks[] entries is rejected — a RAID
+	// member is consumed by the volume.
+	usedDevices := map[string]string{}
+	for _, rd := range resolved {
+		usedDevices[rd.Device] = "disks"
+	}
+	raids := make([]render.ResolvedRaid, 0, len(spec.Storage.Raid))
+	for i, r := range spec.Storage.Raid {
+		mode := r.Mode
+		if mode == "" {
+			mode = "software"
+		}
+		if mode != "software" && mode != "hardware" {
+			return classifiedErr("SCHEMA_INVALID_STORAGE", false, "raid[%d]: unknown mode %s", i, mode)
+		}
+		if err := checkRaidShape(i, r.Level, len(r.Members)); err != nil {
+			return err
+		}
+		members := make([]string, 0, len(r.Members))
+		for j, m := range r.Members {
+			var pool []bmc.DiskView
+			for _, hd := range hw.Disks {
+				if m.Match.Serial != "" && hd.Serial != m.Match.Serial {
+					continue
+				}
+				if m.Match.Type != "" && !diskTypeMatches(m.Match.Type, hd) {
+					continue
+				}
+				if m.Match.Protocol != "" && !strings.EqualFold(m.Match.Protocol, hd.Protocol) {
+					continue
+				}
+				if m.Match.Removable != nil && hd.Removable != *m.Match.Removable {
+					continue
+				}
+				if m.Match.Size != "" {
+					best := bestDiskBySize(hw.Disks, m.Match.Size)
+					if best == nil || hd.Name != best.Name {
+						continue
+					}
+				}
+				pool = append(pool, hd)
+			}
+			if len(pool) != 1 {
+				return classifiedErr("LAYOUT_DISK_NOT_FOUND", false,
+					"raid[%d].members[%d]: selector matches %d disks (need exactly 1)", i, j, len(pool))
+			}
+			if prev, dup := usedDevices[pool[0].Name]; dup {
+				return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+					"raid[%d].members[%d]: %s already claimed by %s", i, j, pool[0].Name, prev)
+			}
+			usedDevices[pool[0].Name] = fmt.Sprintf("raid[%d]", i)
+			members = append(members, pool[0].Name)
+		}
+		rr := render.ResolvedRaid{Name: r.Name, Level: r.Level, Mode: mode, Members: members}
+		for _, p := range r.Partitions {
+			rp := render.ResolvedPartition{Mount: p.Mount, FS: p.FS, Flags: p.Flags}
+			if p.Size == "rest" {
+				rp.Grow = true
+			} else {
+				mb, err := sizeToMB(p.Size)
+				if err != nil {
+					return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+						"raid[%d].partitions: %s", i, err.Error())
+				}
+				rp.SizeMB = mb
+			}
+			rr.Partitions = append(rr.Partitions, rp)
+		}
+		raids = append(raids, rr)
+	}
+
 	ictx := installTaskContext{}
 	_ = json.Unmarshal(task.Context, &ictx)
-	raw, _ := json.Marshal(resolved)
+	raw, _ := json.Marshal(struct {
+		Disks []render.ResolvedDisk `json:"disks"`
+		Raid  []render.ResolvedRaid `json:"raid,omitempty"`
+	}{Disks: resolved, Raid: raids})
 	if err := e.Jobs.PatchTaskContext(ctx, task.ID, task.StageIndex, map[string]any{"resolved": json.RawMessage(raw)}); err != nil {
 		return err
 	}
-	ictx.Resolved = resolved
+	ictx.Resolved.Disks = resolved
+	ictx.Resolved.Raid = raids
 	obs.FromContext(ctx).InfoContext(ctx, "layout resolved",
-		"disks", len(resolved))
+		"disks", len(resolved), "raid", len(raids))
+	return nil
+}
+
+// checkRaidShape enforces level/member-count rules (docs: 0→2+, 1→2+, 5→3+, 10→4+).
+func checkRaidShape(i int, level string, members int) error {
+	var min, max int
+	switch level {
+	case "0":
+		min, max = 2, 0
+	case "1":
+		min, max = 2, 4
+	case "5":
+		min, max = 3, 0
+	case "10":
+		min, max = 4, 0
+		if members%2 != 0 {
+			return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+				"raid[%d]: level 10 requires an even member count", i)
+		}
+	default:
+		return classifiedErr("SCHEMA_INVALID_STORAGE", false, "raid[%d]: unknown level %q", i, level)
+	}
+	if members < min || (max > 0 && members > max) {
+		return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+			"raid[%d]: level %s needs %d+ members (got %d)", i, level, min, members)
+	}
 	return nil
 }
 
@@ -462,7 +588,7 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	if ictx.Token == "" {
 		return classifiedErr("JOB_CONTEXT_CORRUPT", false, "task token missing (install jobs only)")
 	}
-	if len(ictx.Resolved) == 0 {
+	if len(ictx.Resolved.Disks) == 0 && len(ictx.Resolved.Raid) == 0 {
 		return classifiedErr("JOB_STAGE_ORDER", false, "layout not resolved; verify_layout must run first")
 	}
 
@@ -486,12 +612,26 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 
 	var hw bmc.HardwareView
 	_ = json.Unmarshal(m.Hardware, &hw)
-	bootDrive := ictx.Resolved[0].Device
-	for _, d := range ictx.Resolved {
+	// Bootloader target: the disk (or bound hardware-raid volume) hosting /.
+	bootDrive := ""
+	for _, d := range ictx.Resolved.Disks {
 		for _, p := range d.Partitions {
 			if p.Mount == "/" {
 				bootDrive = d.Device
 			}
+		}
+	}
+	for _, r := range ictx.Resolved.Raid {
+		if r.BoundDevice == "" {
+			continue
+		}
+		for _, p := range r.Partitions {
+			if p.Mount == "/" {
+				bootDrive = r.BoundDevice
+			}
+		}
+		if bootDrive == "" {
+			bootDrive = r.BoundDevice
 		}
 	}
 
@@ -504,12 +644,20 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		RootPassword:  rootPassword,
 		SSHPublicKeys: spec.Access.SSHKeys,
 		BootDrive:     bootDrive,
-		Disks:         ictx.Resolved,
+		Disks:         ictx.Resolved.Disks,
 		Network:       networkEntries(spec.Network),
 		AnswerBaseURL: fmt.Sprintf("%s/render/%s", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
 		CompleteURL:   fmt.Sprintf("%s/render/%s/complete", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
 		Scripts:       scriptsFrom(spec.Scripts),
 	}
+	raidInputs := ictx.Resolved.Raid
+	for i := range raidInputs {
+		if raidInputs[i].Mode == "hardware" && raidInputs[i].BoundDevice == "" {
+			raidInputs[i].BoundDevice = ictx.RaidBindings[raidInputs[i].Name]
+		}
+	}
+	in.Raid = raidInputs
+
 	driver, err := e.Render.For(spec.Image.Distro)
 	if err != nil {
 		return classifiedErr("SCHEMA_UNKNOWN_DISTRO", false, "%s", err.Error())
@@ -793,4 +941,110 @@ func firstNonEmptyStr(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// ── configure_raid (docs/09-roadmap.md M6) ──────────────────────────────────
+
+// configureRaid realizes hardware RAID volumes via the controller
+// (Redfish Volume creation, or the fake equivalent). Software RAID needs no
+// BMC action — anaconda builds md arrays at install time. Idempotent by
+// volume name: existing volumes with the declared name are left alone
+// (docs/06-install-pipeline.md §6 retry semantics extended to this stage).
+func (e *Executor) configureRaid(ctx context.Context, task *store.Task, job *store.Job, seq int) error {
+	spec, err := e.loadSpec(ctx, task, job)
+	if err != nil {
+		return err
+	}
+	hardware := false
+	for _, r := range spec.Storage.Raid {
+		if r.Mode == "hardware" {
+			hardware = true
+		}
+	}
+	if !hardware {
+		// software-only (or no raid): nothing to do at BMC level.
+		return nil
+	}
+
+	cred, addr, proto, ok := e.outOfBand(ctx, task)
+	if !ok {
+		return classifiedErr("CREDENTIAL_UNAVAILABLE", true, "machine or credential unavailable")
+	}
+	m, err := e.Machines.Get(ctx, task.MachineID)
+	if err != nil {
+		return err
+	}
+
+	// before/after inventory diff binds each new logical drive to its
+	// declared volume name.
+	before := map[string]bool{}
+	if len(m.Hardware) > 0 {
+		var hw bmc.HardwareView
+		if json.Unmarshal(m.Hardware, &hw) == nil {
+			for _, d := range hw.Disks {
+				before[d.Name] = true
+			}
+		}
+	}
+
+	bindings := map[string]string{}
+	for _, r := range spec.Storage.Raid {
+		if r.Mode != "hardware" {
+			continue
+		}
+		res, cerr := e.BMC.Do(ctx, addr, cred, proto, "create_volume", func(ctx context.Context, d bmc.Driver) (any, error) {
+			creator, okc := d.(bmc.VolumeCreator)
+			if !okc {
+				return nil, classifiedErr("BMC_UNSUPPORTED", false,
+					"driver %s does not support volume creation", d.Name())
+			}
+			return nil, creator.CreateVolume(ctx, addr, cred, bmc.VolumeSpec{
+				Name: r.Name, RAIDType: "RAID" + r.Level,
+			})
+		})
+		if cerr != nil {
+			var be *bmc.Error
+			if errors.As(cerr, &be) && be.Kind == bmc.KindUnsupported {
+				return classifiedErr("BMC_UNSUPPORTED", false, "raid volume creation: %s", cerr.Error())
+			}
+			// a volume that already exists from a previous attempt is fine
+			if !strings.Contains(cerr.Error(), "already exists") {
+				return cerr
+			}
+		}
+		_ = res
+		bindings[r.Name] = "" // bound below by re-inventory
+	}
+
+	// Re-inventory: the controller exposes the new logical drive(s).
+	inv, ierr := e.BMC.Do(ctx, addr, cred, proto, "collect_inventory", func(ctx context.Context, d bmc.Driver) (any, error) {
+		return d.CollectInventory(ctx, addr, cred)
+	})
+	if ierr != nil {
+		return classifiedErr("INVENTORY_REFRESH_FAILED", true, "post-raid inventory: %s", ierr.Error())
+	}
+	hw := inv.(bmc.HardwareView)
+	for _, r := range spec.Storage.Raid {
+		if r.Mode != "hardware" {
+			continue
+		}
+		for _, d := range hw.Disks {
+			// fake/Redfish expose the volume under its declared name; bind
+			// only drives that were not present before the stage.
+			if d.Name == r.Name && !before[d.Name] {
+				bindings[r.Name] = d.Name
+			}
+		}
+		if bindings[r.Name] == "" {
+			return classifiedErr("INVENTORY_REFRESH_FAILED", true,
+				"raid volume %q did not appear in the refreshed inventory", r.Name)
+		}
+	}
+
+	if err := e.Jobs.PatchTaskContext(ctx, task.ID, task.StageIndex, map[string]any{"raid_bindings": bindings}); err != nil {
+		return err
+	}
+	obs.FromContext(ctx).InfoContext(ctx, "hardware raid configured",
+		"volumes", len(bindings))
+	return nil
 }

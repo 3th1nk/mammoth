@@ -156,9 +156,26 @@ type InstallInputs struct {
 	AnswerBaseURL string
 	CompleteURL   string // %post callback
 
+	// Raid carries declarative RAID volumes (docs/09-roadmap.md M6):
+	// software → kickstart raid lines; hardware → bound device discovered
+	// by the configure_raid stage.
+	Raid []ResolvedRaid `json:"raid,omitempty"`
+
 	// DriftCheck enables the %pre layout drift guard (policy.verify_layout,
 	// default true; docs/09-roadmap.md M4).
 	DriftCheck bool
+}
+
+// ResolvedRaid is one RAID volume with resolved member devices.
+type ResolvedRaid struct {
+	Name    string   `json:"name"`
+	Level   string   `json:"level"`   // 0 | 1 | 5 | 10
+	Mode    string   `json:"mode"`    // software | hardware
+	Members []string `json:"members"` // resolved member device names
+	// BoundDevice: for hardware mode, the logical drive's discovered kernel
+	// name (configure_raid binds it via re-inventory).
+	BoundDevice string              `json:"bound_device,omitempty"`
+	Partitions  []ResolvedPartition `json:"partitions,omitempty"`
 }
 
 // MachineView is the machine context a renderer may consult (hardware facts

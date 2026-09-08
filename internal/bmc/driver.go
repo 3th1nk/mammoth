@@ -40,3 +40,21 @@ type Driver interface {
 	// Redfish inventory probe (M1); IPMI yields the FRU-limited subset.
 	CollectInventory(ctx context.Context, addr string, cred Credentials) (HardwareView, error)
 }
+
+// VolumeSpec declares a RAID volume on a storage controller (docs/09-roadmap.md
+// M6 硬 RAID): Redfish Volume creation, or the fake equivalent.
+type VolumeSpec struct {
+	Name     string // volume label; the logical drive surfaces under this name
+	RAIDType string // "RAID0" | "RAID1" | "RAID5" | "RAID10"
+}
+
+// VolumeCreator is the optional capability of building RAID volumes on the
+// controller (docs/07-bmc.md §5: OEM/extended capabilities enter behind
+// optional interfaces). Drivers without it simply don't implement the
+// interface; the pipeline reports BMC_UNSUPPORTED.
+type VolumeCreator interface {
+	// CreateVolume builds a RAID volume from the storage controller's
+	// drives. Idempotent by Name: an existing volume with the same name is
+	// reported as "already exists" rather than rebuilt.
+	CreateVolume(ctx context.Context, addr string, cred Credentials, spec VolumeSpec) error
+}

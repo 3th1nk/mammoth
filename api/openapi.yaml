@@ -1349,6 +1349,47 @@ components:
           items:
             $ref: '#/components/schemas/PartitionSpec'
 
+    RaidLevel:
+      type: string
+      enum: ["0", "1", "5", "10"]
+
+    RaidMode:
+      type: string
+      enum: [software, hardware]
+      default: software
+      description: |
+        `software` builds mdadm arrays at install time (kickstart raid lines).
+        `hardware` creates Redfish Volumes on the storage controller in the
+        configure_raid stage; the resulting logical drive is re-inventoried
+        and its partitions bind to the discovered device.
+
+    RaidSpec:
+      type: object
+      required: [name, level, mode, members]
+      properties:
+        name:
+          type: string
+          description: Logical device name (md0 for software; volume label for hardware).
+        level:
+          $ref: '#/components/schemas/RaidLevel'
+        mode:
+          $ref: '#/components/schemas/RaidMode'
+        members:
+          type: array
+          minItems: 2
+          items:
+            type: object
+            required: [match]
+            properties:
+              match:
+                $ref: '#/components/schemas/DiskSelectorMatch'
+        partitions:
+          type: array
+          description: Partitions on the logical device (software mode renders
+            raid lines; hardware mode binds to the discovered drive).
+          items:
+            $ref: '#/components/schemas/PartitionSpec'
+
     StorageSpec:
       type: object
       required: [disks]
@@ -1357,6 +1398,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DiskSpec'
+        raid:
+          type: array
+          description: |
+            Declarative RAID volumes. Members are consumed disks resolved by
+            selector (implicitly wiped); they must not overlap with disks[]
+            entries. Level/member-count rules: 0→2+, 1→2+, 5→3+, 10→4+.
+          items:
+            $ref: '#/components/schemas/RaidSpec'
         root_device_hints:
           type: object
           properties:

@@ -29,6 +29,8 @@ type BMC struct {
 	Media      []bmc.MediaImage
 	Hardware   *bmc.HardwareView
 
+	Volumes []bmc.VolumeSpec
+
 	// Failures scripts error injection: set before the call under test.
 	FailOps map[string]error
 
@@ -227,6 +229,32 @@ func (d *Driver) ConsoleURL(_ context.Context, addr string, _ bmc.Credentials) (
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return fmt.Sprintf("%s/%s?token=one-time", b.ConsoleBaseURL, strings.ReplaceAll(addr, ":", "-")), nil
+}
+
+// CreateVolume implements the bmc.VolumeCreator capability: declarative
+// hardware RAID on the simulated controller. The logical drive surfaces in
+// CollectInventory under the declared volume name. Idempotent by name.
+func (d *Driver) CreateVolume(_ context.Context, addr string, _ bmc.Credentials, spec bmc.VolumeSpec) error {
+	b, err := d.get(addr, "create_volume")
+	if err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, v := range b.Volumes {
+		if v.Name == spec.Name {
+			return &bmc.Error{Kind: bmc.KindProtocolError, Op: "create_volume",
+				Detail: fmt.Sprintf("volume %q already exists", spec.Name)}
+		}
+	}
+	b.Volumes = append(b.Volumes, spec)
+	// The logical drive appears as a fresh disk; fake capacity is fixed.
+	if b.Hardware != nil {
+		b.Hardware.Disks = append(b.Hardware.Disks, bmc.DiskView{
+			Name: spec.Name, SizeBytes: 999922148352, Protocol: "raid",
+		})
+	}
+	return nil
 }
 
 func (d *Driver) CollectInventory(_ context.Context, addr string, _ bmc.Credentials) (bmc.HardwareView, error) {

@@ -506,7 +506,7 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		BootDrive:     bootDrive,
 		Disks:         ictx.Resolved,
 		Network:       networkEntries(spec.Network),
-		AnswerURL:     fmt.Sprintf("%s/render/%s/ks.cfg", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
+		AnswerBaseURL: fmt.Sprintf("%s/render/%s", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
 		CompleteURL:   fmt.Sprintf("%s/render/%s/complete", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
 		Scripts:       scriptsFrom(spec.Scripts),
 	}

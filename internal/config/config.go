@@ -73,6 +73,7 @@ type Config struct {
 	TaskStatusInterval time.Duration // terminal-transition sweep for job summary
 	LayoutRetention    int           // snapshots kept per machine (docs/08: default 10)
 	InbandTimeout      time.Duration // whole inband_ssh collection bound
+	RamdiskEnabled     bool          // optional ramdisk probe (docs/05 §4; PXE-first)
 
 	// OTELExporterEndpoint enables OTLP trace export when non-empty.
 	// Without it, tracing stays at the API boundary instrumentation level
@@ -113,6 +114,7 @@ func FromEnv() (Config, error) {
 		TaskStatusInterval:    getenvDuration("MAMMOTH_TASK_STATUS_INTERVAL", 2*time.Second),
 		LayoutRetention:       getenvInt("MAMMOTH_LAYOUT_RETENTION", 10),
 		InbandTimeout:         getenvDuration("MAMMOTH_INBAND_TIMEOUT", 20*time.Second),
+		RamdiskEnabled:        getenvBool("MAMMOTH_RAMDISK_ENABLED", false),
 		OTELExporterEndpoint:  os.Getenv("MAMMOTH_OTEL_EXPORTER_ENDPOINT"),
 		MetricsAddr:           os.Getenv("MAMMOTH_METRICS_ADDR"),
 		ExternalURL:           getenv("MAMMOTH_EXTERNAL_URL", "http://127.0.0.1:8080"),

@@ -15,6 +15,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/bmc"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/provision"
+	"github.com/3th1nk/mammoth/internal/render"
 	"github.com/3th1nk/mammoth/internal/store"
 	"github.com/3th1nk/mammoth/internal/store/queue"
 	"github.com/3th1nk/mammoth/internal/version"
@@ -29,6 +30,7 @@ type Deps struct {
 	Events      *store.EventRepo
 	Crypto      *store.SecretCrypto
 	BMC         *bmc.Registry
+	Render      *render.Registry
 	Queue       queue.TaskQueue
 	Metrics     *obs.Metrics
 	Logger      *slog.Logger
@@ -112,10 +114,22 @@ func (s *Server) notReadyProblem(detail string) gen.Problem {
 }
 
 func (s *Server) GetCapabilities(ctx context.Context, _ gen.GetCapabilitiesRequestObject) (gen.GetCapabilitiesResponseObject, error) {
-	return gen.GetCapabilities200JSONResponse(gen.Capabilities{
+	out := gen.Capabilities{
 		Version:   version.Version,
 		Resources: []string{"credentials", "machines", "jobs", "tasks"},
-	}), nil
+	}
+	var distros []gen.DistroSupport
+	// Distro support matrix surface (docs/06-install-pipeline.md §5).
+	for _, name := range s.Render.Distros() {
+		if d, err := s.Render.For(name); err == nil {
+			distros = append(distros, gen.DistroSupport{
+				Name:                 name,
+				KeepPartitionSupport: gen.DistroSupportKeepPartitionSupport(d.KeepPartitionSupport()),
+			})
+		}
+	}
+	out.Distros = &distros
+	return gen.GetCapabilities200JSONResponse(out), nil
 }
 
 // ── shared helpers ──────────────────────────────────────────────────────────

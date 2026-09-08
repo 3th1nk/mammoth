@@ -243,9 +243,10 @@ func first(s []string) string {
 
 // RenderAnswers produces the kickstart and boot parameters.
 func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([]render.AnswerFile, render.BootParams, error) {
-	if in.AnswerURL == "" || in.CompleteURL == "" {
+	if in.AnswerBaseURL == "" || in.CompleteURL == "" {
 		return nil, render.BootParams{}, fmt.Errorf("rocky9: answer/completion URLs are required")
 	}
+	primaryURL := strings.TrimSuffix(in.AnswerBaseURL, "/") + "/ks.cfg"
 	if in.ImageSource == "" {
 		return nil, render.BootParams{}, fmt.Errorf("rocky9: image source is required")
 	}
@@ -355,8 +356,8 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 
 	answers := []render.AnswerFile{{Name: "ks.cfg", Content: buf.String()}}
 	boot := render.BootParams{
-		AnswerURL:  in.AnswerURL,
-		KernelArgs: fmt.Sprintf("inst.ks=%s inst.repo=cdrom inst.text", in.AnswerURL),
+		AnswerURL:  primaryURL,
+		KernelArgs: fmt.Sprintf("inst.ks=%s inst.repo=cdrom inst.text", primaryURL),
 	}
 	return answers, boot, nil
 }

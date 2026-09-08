@@ -20,7 +20,7 @@ func TestRenderWipeStorageAndBond(t *testing.T) {
 		RootPassword:  "s3creT-pw",
 		SSHPublicKeys: []string{"ssh-ed25519 AAA k@h"},
 		BootDrive:     "nvme0n1",
-		AnswerURL:     "https://m/render/tok123/ks.cfg",
+		AnswerBaseURL: "https://m/render/tok123",
 		CompleteURL:   "https://m/render/tok123/complete",
 		Disks: []render.ResolvedDisk{
 			{Device: "nvme0n1", Wipe: true, Partitions: []render.ResolvedPartition{
@@ -106,7 +106,7 @@ func TestRenderWipeStorageAndBond(t *testing.T) {
 func TestRenderStaticAddressAndCIDR(t *testing.T) {
 	d := New()
 	in := render.InstallInputs{
-		AnswerURL: "https://m/render/t/ks.cfg", CompleteURL: "https://m/render/t/complete",
+		AnswerBaseURL: "https://m/render/t", CompleteURL: "https://m/render/t/complete",
 		ImageSource: "https://mirror.example/rocky9",
 		Network: []render.NetworkEntry{
 			{Match: &render.NetMatch{MAC: "aa:bb:cc:dd:ee:01"}, SetName: "mgmt0",
@@ -136,7 +136,7 @@ func TestRenderRejectsUnrenderableInputs(t *testing.T) {
 		{
 			name: "disk without wipe or keep",
 			in: render.InstallInputs{
-				AnswerURL: "u", CompleteURL: "c", ImageSource: "i",
+				AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i",
 				Disks: []render.ResolvedDisk{{Device: "sda", Wipe: false}},
 			},
 			want: "declare wipe or keep",
@@ -144,7 +144,7 @@ func TestRenderRejectsUnrenderableInputs(t *testing.T) {
 		{
 			name: "preserved partition without onpart binding",
 			in: render.InstallInputs{
-				AnswerURL: "u", CompleteURL: "c", ImageSource: "i",
+				AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i",
 				Disks: []render.ResolvedDisk{{Device: "sda", Wipe: true, Partitions: []render.ResolvedPartition{
 					{Mount: "/data", FS: "xfs", Preserve: true, Number: 1},
 				}}},
@@ -154,7 +154,7 @@ func TestRenderRejectsUnrenderableInputs(t *testing.T) {
 		{
 			name: "partition without size",
 			in: render.InstallInputs{
-				AnswerURL: "u", CompleteURL: "c", ImageSource: "i",
+				AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i",
 				Disks: []render.ResolvedDisk{{Device: "sda", Wipe: true, Partitions: []render.ResolvedPartition{
 					{Mount: "/", FS: "xfs"},
 				}}},
@@ -163,7 +163,7 @@ func TestRenderRejectsUnrenderableInputs(t *testing.T) {
 		},
 		{
 			name: "missing image source",
-			in:   render.InstallInputs{AnswerURL: "u", CompleteURL: "c"},
+			in:   render.InstallInputs{AnswerBaseURL: "u", CompleteURL: "c"},
 			want: "image source",
 		},
 	}
@@ -188,7 +188,7 @@ func TestPrefixToMask(t *testing.T) {
 func TestRenderKeepPartitionsAndDriftGuard(t *testing.T) {
 	d := New()
 	in := render.InstallInputs{
-		AnswerURL: "https://m/render/t/ks.cfg", CompleteURL: "https://m/render/t/complete",
+		AnswerBaseURL: "https://m/render/t", CompleteURL: "https://m/render/t/complete",
 		ImageSource: "https://mirror.example/rocky9",
 		DriftCheck:  true,
 		BootDrive:   "nvme0n1",
@@ -253,7 +253,7 @@ func TestRenderKeepPartitionsAndDriftGuard(t *testing.T) {
 func TestRenderKeepDiskUntouched(t *testing.T) {
 	d := New()
 	in := render.InstallInputs{
-		AnswerURL: "u", CompleteURL: "c", ImageSource: "i", DriftCheck: true,
+		AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i", DriftCheck: true,
 		Disks: []render.ResolvedDisk{
 			{Device: "nvme0n1", Wipe: true, Partitions: []render.ResolvedPartition{
 				{Mount: "/", FS: "xfs", Grow: true}}},
@@ -273,7 +273,7 @@ func TestRenderKeepDiskUntouched(t *testing.T) {
 func TestRenderDriftCheckToggle(t *testing.T) {
 	d := New()
 	in := render.InstallInputs{
-		AnswerURL: "u", CompleteURL: "c", ImageSource: "i", DriftCheck: false,
+		AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i", DriftCheck: false,
 		Disks: []render.ResolvedDisk{
 			{Device: "sda", Baseline: []render.BaselinePartition{
 				{Device: "sda1", Number: 1, StartBytes: 1048576, SizeBytes: 536870896, UUID: "x"},

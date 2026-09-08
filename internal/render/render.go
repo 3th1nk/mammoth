@@ -151,8 +151,10 @@ type InstallInputs struct {
 	Network   []NetworkEntry `json:"network,omitempty"`
 	Scripts   []ScriptEntry  `json:"scripts,omitempty"`
 
-	AnswerURL   string // inst.ks target (task-token URL)
-	CompleteURL string // %post callback
+	// AnswerBaseURL is the task-token URL base; the driver composes its own
+	// answer file names on it (rocky9: /ks.cfg; ubuntu22: /user-data).
+	AnswerBaseURL string
+	CompleteURL   string // %post callback
 
 	// DriftCheck enables the %pre layout drift guard (policy.verify_layout,
 	// default true; docs/09-roadmap.md M4).

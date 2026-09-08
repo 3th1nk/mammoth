@@ -310,6 +310,13 @@ def main():
             "identity": {"hostname_pattern": "node-{index}"},
             "access": {"root_password": "generate",
                        "ssh_keys": ["ssh-ed25519 AAA acceptance@mammoth"]},
+            "network": [{
+                "bond": {"interfaces": [
+                    {"match": {"mac": "aa:bb:cc:dd:ee:01"}},
+                    {"match": {"mac": "aa:bb:cc:dd:ee:02"}}],
+                    "mode": "802.3ad", "params": {"miimon": 100}},
+                "addresses": ["172.16.1.11/24"],
+                "routes": [{"to": "default", "via": "172.16.1.1"}]}],
             "scripts": [{"stage": "post_install",
                          "content_base64": "ZWNobyBtYW1tb3RoLXNldHVwLWRvbmUK"}]},
         "policy": {"concurrency": 2, "on_task_failure": "continue"}})
@@ -538,6 +545,88 @@ def main():
     else:
         ok &= check("keep test machine registered", False, str(status))
 
+    # 4.9 M5: second distro (ubuntu22 autoinstall) + support matrix gating.
+    print("· ubuntu autoinstall + matrix")
+    status, caps = c.get("/api/v1")
+    distros = {d["name"]: d["keep_partition_support"] for d in caps.get("distros", [])}
+    ok &= check("capabilities expose distro matrix",
+                distros.get("rocky9") == "full" and distros.get("ubuntu22") == "partial",
+                str(distros))
+
+    # partial distro + keep:partitions → rejected at submit (docs/06 §5)
+    status, rej = c.post("/api/v1/jobs", {
+        "type": "install",
+        "targets": {"machine_ids": [machines[0]]},
+        "spec": {
+            "image": {"source": "https://mirror.example/ubuntu-22.04.iso", "distro": "ubuntu22"},
+            "storage": {"disks": [{
+                "select": {"match": {"serial": "S6XPN0001"}}, "keep": "partitions",
+                "preserve": [{"number": 1, "mount": "/data"}]}]}},
+        "policy": {"on_task_failure": "continue"}})
+    ok &= check("partial distro rejects keep:partitions at submit",
+                status == 422 and (rej.get("code") == "SCHEMA_UNSUPPORTED_KEEP"),
+                f"{status} {rej.get('code')}")
+
+    # keep: disk IS allowed on a partial distro
+    # keep: disk IS allowed on a partial distro
+    status, ud_ok = c.post("/api/v1/jobs", {
+        "type": "install",
+        "targets": {"machine_ids": [machines[0]]},
+        "spec": {
+            "image": {"source": "https://mirror.example/ubuntu-22.04.iso", "distro": "ubuntu22"},
+            "storage": {"disks": [
+                {"select": {"match": {"serial": "S6XPN0001"}}, "wipe": True,
+                 "partitions": [{"size": "rest", "fs": "xfs", "mount": "/"}]},
+                {"select": {"match": {"serial": "GIM256_0001"}}, "keep": "disk"}]},
+            "network": [{
+                "bond": {"interfaces": [
+                    {"match": {"mac": "aa:bb:cc:dd:ee:01"}},
+                    {"match": {"mac": "aa:bb:cc:dd:ee:02"}}],
+                    "mode": "802.3ad", "params": {"miimon": 100}},
+                "addresses": ["172.16.2.11/24"]}],
+        },
+        "policy": {"on_task_failure": "continue"}})
+    if status == 202:
+        uurl = None
+        deadline = time.time() + 120
+        while time.time() < deadline and uurl is None:
+            _, tl = c.get(f"/api/v1/jobs/{ud_ok['id']}/tasks")
+            for t in tl.get("items", []):
+                if t.get("answer_url"):
+                    uurl = t["answer_url"]
+                    break
+            time.sleep(0.5)
+        if uurl:
+            utok = uurl.rsplit("/render/", 1)[1].split("/", 1)[0]
+            uurl_base = uurl.rsplit("/render/", 1)[0] + f"/render/{utok}"
+            _, meta = c.req("GET", f"/render/{utok}/meta-data")
+            _, udata = c.req("GET", f"/render/{utok}/user-data")
+            ok &= check("nocloud seed: meta-data + user-data served",
+                        meta is not None and "#cloud-config" in udata)
+            ok &= check("autoinstall: netplan bond matched by MAC",
+                        '"macaddress": "aa:bb:cc:dd:ee:01"' in udata
+                        and '"mode": "802.3ad"' in udata)
+            ok &= check("autoinstall: curtin storage keeps the kept disk out",
+                        '"/dev/sdb"' not in udata and '"/dev/nvme0n1"' in udata)
+            ok &= check("autoinstall: completion callback in late-commands",
+                        f"/render/{utok}/complete" in udata)
+            c.req("POST", f"/render/{utok}/complete", {"status": "ok"})
+            ujob_f, utasks = wait_job(c, ud_ok["id"], {"succeeded", "failed", "partial"}, timeout=180)
+            ok &= check("ubuntu install five stages green",
+                        utasks and utasks[0]["state"] == "succeeded"
+                        and all(st["state"] == "succeeded" for st in utasks[0].get("stages", [])),
+                        str([st["state"] for st in (utasks[0].get("stages") if utasks else [])]))
+
+    # ramdisk probe: optional feature, explicit gating (docs/05 §4)
+    status, rjob = c.post(f"/api/v1/machines/{machines[0]}/actions",
+                          {"type": "discover", "probe": "ramdisk"})
+    ok &= check("ramdisk discover accepted as job", status == 202, f"{status}")
+    rjob_f, rtasks = wait_job(c, rjob["id"], {"failed", "succeeded", "partial"}, timeout=60)
+    rerr = (rtasks[0].get("error") or {}) if rtasks else {}
+    ok &= check("ramdisk probe explicitly unsupported",
+                rtasks and rtasks[0]["state"] == "failed" and rerr.get("code") == "BMC_UNSUPPORTED",
+                f"{rerr.get('code')}: {rerr.get('message', '')[:50]}")
+
     # 5. crash path: requires the outer environment to run this instance with
     # MAMMOTH_FAKE_BMC_DELAY set (tasks slow enough to kill mid-flight) and
     # --dsn pointing at the same database for the restart.
@@ -568,7 +657,7 @@ def main():
                     if state == "running":
                         break
                     time.sleep(0.2)
-                subprocess.run(["pkill", "-9", "-f", "mammoth serve"], check=False)
+                subprocess.run(["pkill", "-9", "-f", "serve --mode=all"], check=False)
                 time.sleep(1)
                 ok &= check("task was running at SIGKILL", state == "running", state)
 

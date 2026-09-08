@@ -696,6 +696,30 @@ func (e OrderBy) Valid() bool {
 	}
 }
 
+// Defines values for ListEventsParamsResourceType.
+const (
+	ListEventsParamsResourceTypeCredential ListEventsParamsResourceType = "credential"
+	ListEventsParamsResourceTypeJob        ListEventsParamsResourceType = "job"
+	ListEventsParamsResourceTypeMachine    ListEventsParamsResourceType = "machine"
+	ListEventsParamsResourceTypeTask       ListEventsParamsResourceType = "task"
+)
+
+// Valid indicates whether the value is a known member of the ListEventsParamsResourceType enum.
+func (e ListEventsParamsResourceType) Valid() bool {
+	switch e {
+	case ListEventsParamsResourceTypeCredential:
+		return true
+	case ListEventsParamsResourceTypeJob:
+		return true
+	case ListEventsParamsResourceTypeMachine:
+		return true
+	case ListEventsParamsResourceTypeTask:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ListJobsParamsOrderBy.
 const (
 	ListJobsParamsOrderByCreatedAt ListJobsParamsOrderBy = "created_at"
@@ -1014,6 +1038,25 @@ type ErrorInfo struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
 	Retryable *bool  `json:"retryable,omitempty"`
+}
+
+// Event defines model for Event.
+type Event struct {
+	// Id Monotonic watermark (SSE Last-Event-ID).
+	Id           int64                   `json:"id"`
+	Payload      *map[string]interface{} `json:"payload,omitempty"`
+	ResourceId   string                  `json:"resource_id"`
+	ResourceType string                  `json:"resource_type"`
+
+	// Ts RFC 3339 UTC.
+	Ts   Timestamp `json:"ts"`
+	Type string    `json:"type"`
+}
+
+// EventList defines model for EventList.
+type EventList struct {
+	Items      []Event `json:"items"`
+	NextCursor *string `json:"next_cursor,omitempty"`
 }
 
 // HardwareView Hardware inventory as reported by probes; null until first discovery.
@@ -1440,6 +1483,29 @@ type CreateCredentialParams struct {
 	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
 }
 
+// ListEventsParams defines parameters for ListEvents.
+type ListEventsParams struct {
+	ResourceType *ListEventsParamsResourceType `form:"resource_type,omitempty" json:"resource_type,omitempty"`
+	ResourceId   *string                       `form:"resource_id,omitempty" json:"resource_id,omitempty"`
+
+	// Type Exact event type filter (e.g. machine.discovered).
+	Type     *string   `form:"type,omitempty" json:"type,omitempty"`
+	PageSize *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Cursor Opaque continuation token from a previous page (`next_cursor`).
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// ListEventsParamsResourceType defines parameters for ListEvents.
+type ListEventsParamsResourceType string
+
+// StreamEventsParams defines parameters for StreamEvents.
+type StreamEventsParams struct {
+	// Resource Filter to one resource id (e.g. job_x9k2).
+	Resource    *string `form:"resource,omitempty" json:"resource,omitempty"`
+	LastEventID *string `json:"Last-Event-ID,omitempty"`
+}
+
 // ListJobsParams defines parameters for ListJobs.
 type ListJobsParams struct {
 	PageSize *PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
@@ -1462,6 +1528,12 @@ type ListJobsParamsOrder string
 type CreateJobParams struct {
 	// IdempotencyKey Replay safety for creating POSTs; within the window a replay returns the original result.
 	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// StreamJobEventsParams defines parameters for StreamJobEvents.
+type StreamJobEventsParams struct {
+	// LastEventID Resume the stream after this event id.
+	LastEventID *string `json:"Last-Event-ID,omitempty"`
 }
 
 // ListJobTasksParams defines parameters for ListJobTasks.
@@ -1845,6 +1917,12 @@ type ServerInterface interface {
 	// Get credential metadata (never the secret)
 	// (GET /api/v1/credentials/{id})
 	GetCredential(c *gin.Context, id CredentialId)
+	// Query events (audit and SSE backlog)
+	// (GET /api/v1/events)
+	ListEvents(c *gin.Context, params ListEventsParams)
+	// Stream all events (SSE)
+	// (GET /api/v1/events/stream)
+	StreamEvents(c *gin.Context, params StreamEventsParams)
 	// List jobs
 	// (GET /api/v1/jobs)
 	ListJobs(c *gin.Context, params ListJobsParams)
@@ -1857,6 +1935,9 @@ type ServerInterface interface {
 	// Cancel a job
 	// (POST /api/v1/jobs/{id}/cancel)
 	CancelJob(c *gin.Context, id JobId)
+	// Stream a job's events (SSE)
+	// (GET /api/v1/jobs/{id}/events)
+	StreamJobEvents(c *gin.Context, id JobId, params StreamJobEventsParams)
 	// List tasks of a job
 	// (GET /api/v1/jobs/{id}/tasks)
 	ListJobTasks(c *gin.Context, id JobId, params ListJobTasksParams)
@@ -2024,6 +2105,117 @@ func (siw *ServerInterfaceWrapper) GetCredential(c *gin.Context) {
 	siw.Handler.GetCredential(c, id)
 }
 
+// ListEvents operation middleware
+func (siw *ServerInterfaceWrapper) ListEvents(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	c.Set(string(BearerAuthScopes), []string{})
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListEventsParams
+
+	// ------------- Optional query parameter "resource_type" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "resource_type", c.Request.URL.Query(), &params.ResourceType, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter resource_type: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "resource_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "resource_id", c.Request.URL.Query(), &params.ResourceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter resource_id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "type" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "type", c.Request.URL.Query(), &params.Type, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter type: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", c.Request.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page_size: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", c.Request.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter cursor: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListEvents(c, params)
+}
+
+// StreamEvents operation middleware
+func (siw *ServerInterfaceWrapper) StreamEvents(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	c.Set(string(BearerAuthScopes), []string{})
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StreamEventsParams
+
+	// ------------- Optional query parameter "resource" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "resource", c.Request.URL.Query(), &params.Resource, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter resource: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	headers := c.Request.Header
+
+	// ------------- Optional header parameter "Last-Event-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Last-Event-ID")]; found {
+		var LastEventID string
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for Last-Event-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Last-Event-ID", valueList[0], &LastEventID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter Last-Event-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.LastEventID = &LastEventID
+
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.StreamEvents(c, params)
+}
+
 // ListJobs operation middleware
 func (siw *ServerInterfaceWrapper) ListJobs(c *gin.Context) {
 
@@ -2187,6 +2379,57 @@ func (siw *ServerInterfaceWrapper) CancelJob(c *gin.Context) {
 	}
 
 	siw.Handler.CancelJob(c, id)
+}
+
+// StreamJobEvents operation middleware
+func (siw *ServerInterfaceWrapper) StreamJobEvents(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id JobId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	c.Set(string(BearerAuthScopes), []string{})
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StreamJobEventsParams
+
+	headers := c.Request.Header
+
+	// ------------- Optional header parameter "Last-Event-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Last-Event-ID")]; found {
+		var LastEventID string
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for Last-Event-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Last-Event-ID", valueList[0], &LastEventID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter Last-Event-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.LastEventID = &LastEventID
+
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.StreamJobEvents(c, id, params)
 }
 
 // ListJobTasks operation middleware
@@ -2728,10 +2971,13 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/api/v1/credentials", wrapper.CreateCredential)
 	router.DELETE(options.BaseURL+"/api/v1/credentials/:id", wrapper.DeleteCredential)
 	router.GET(options.BaseURL+"/api/v1/credentials/:id", wrapper.GetCredential)
+	router.GET(options.BaseURL+"/api/v1/events", wrapper.ListEvents)
+	router.GET(options.BaseURL+"/api/v1/events/stream", wrapper.StreamEvents)
 	router.GET(options.BaseURL+"/api/v1/jobs", wrapper.ListJobs)
 	router.POST(options.BaseURL+"/api/v1/jobs", wrapper.CreateJob)
 	router.GET(options.BaseURL+"/api/v1/jobs/:id", wrapper.GetJob)
 	router.POST(options.BaseURL+"/api/v1/jobs/:id/cancel", wrapper.CancelJob)
+	router.GET(options.BaseURL+"/api/v1/jobs/:id/events", wrapper.StreamJobEvents)
 	router.GET(options.BaseURL+"/api/v1/jobs/:id/tasks", wrapper.ListJobTasks)
 	router.GET(options.BaseURL+"/api/v1/jobs/:id/tasks/:taskId", wrapper.GetJobTask)
 	router.POST(options.BaseURL+"/api/v1/jobs/:id/tasks/:taskId/retry", wrapper.RetryJobTask)
@@ -2901,6 +3147,79 @@ func (response GetCredential404ApplicationProblemPlusJSONResponse) VisitGetCrede
 	return err
 }
 
+type ListEventsRequestObject struct {
+	Params ListEventsParams
+}
+
+type ListEventsResponseObject interface {
+	VisitListEventsResponse(w http.ResponseWriter) error
+}
+
+type ListEvents200JSONResponse EventList
+
+func (response ListEvents200JSONResponse) VisitListEventsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StreamEventsRequestObject struct {
+	Params StreamEventsParams
+}
+
+type StreamEventsResponseObject interface {
+	VisitStreamEventsResponse(w http.ResponseWriter) error
+}
+
+type StreamEvents200TexteventStreamResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response StreamEvents200TexteventStreamResponse) VisitStreamEventsResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		// If w doesn't support flushing, fall back to io.Copy.
+		_, err := io.Copy(w, response.Body)
+		return err
+	}
+	// text/event-stream messages are typically small; use a
+	// modest buffer and flush after each chunk so clients see
+	// events immediately instead of waiting on OS buffering.
+	buf := make([]byte, 4096)
+	for {
+		n, err := response.Body.Read(buf)
+		if n > 0 {
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				return writeErr
+			}
+			flusher.Flush()
+		}
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
 type ListJobsRequestObject struct {
 	Params ListJobsParams
 }
@@ -3066,6 +3385,74 @@ func (response CancelJob409ApplicationProblemPlusJSONResponse) VisitCancelJobRes
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StreamJobEventsRequestObject struct {
+	Id     JobId `json:"id"`
+	Params StreamJobEventsParams
+}
+
+type StreamJobEventsResponseObject interface {
+	VisitStreamJobEventsResponse(w http.ResponseWriter) error
+}
+
+type StreamJobEvents200TexteventStreamResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response StreamJobEvents200TexteventStreamResponse) VisitStreamJobEventsResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		// If w doesn't support flushing, fall back to io.Copy.
+		_, err := io.Copy(w, response.Body)
+		return err
+	}
+	// text/event-stream messages are typically small; use a
+	// modest buffer and flush after each chunk so clients see
+	// events immediately instead of waiting on OS buffering.
+	buf := make([]byte, 4096)
+	for {
+		n, err := response.Body.Read(buf)
+		if n > 0 {
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				return writeErr
+			}
+			flusher.Flush()
+		}
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+type StreamJobEvents404ApplicationProblemPlusJSONResponse struct {
+	NotFoundApplicationProblemPlusJSONResponse
+}
+
+func (response StreamJobEvents404ApplicationProblemPlusJSONResponse) VisitStreamJobEventsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -3666,6 +4053,12 @@ type StrictServerInterface interface {
 	// Get credential metadata (never the secret)
 	// (GET /api/v1/credentials/{id})
 	GetCredential(ctx context.Context, request GetCredentialRequestObject) (GetCredentialResponseObject, error)
+	// Query events (audit and SSE backlog)
+	// (GET /api/v1/events)
+	ListEvents(ctx context.Context, request ListEventsRequestObject) (ListEventsResponseObject, error)
+	// Stream all events (SSE)
+	// (GET /api/v1/events/stream)
+	StreamEvents(ctx context.Context, request StreamEventsRequestObject) (StreamEventsResponseObject, error)
 	// List jobs
 	// (GET /api/v1/jobs)
 	ListJobs(ctx context.Context, request ListJobsRequestObject) (ListJobsResponseObject, error)
@@ -3678,6 +4071,9 @@ type StrictServerInterface interface {
 	// Cancel a job
 	// (POST /api/v1/jobs/{id}/cancel)
 	CancelJob(ctx context.Context, request CancelJobRequestObject) (CancelJobResponseObject, error)
+	// Stream a job's events (SSE)
+	// (GET /api/v1/jobs/{id}/events)
+	StreamJobEvents(ctx context.Context, request StreamJobEventsRequestObject) (StreamJobEventsResponseObject, error)
 	// List tasks of a job
 	// (GET /api/v1/jobs/{id}/tasks)
 	ListJobTasks(ctx context.Context, request ListJobTasksRequestObject) (ListJobTasksResponseObject, error)
@@ -3891,6 +4287,58 @@ func (sh *strictHandler) GetCredential(ctx *gin.Context, id CredentialId) {
 	}
 }
 
+// ListEvents operation middleware
+func (sh *strictHandler) ListEvents(ctx *gin.Context, params ListEventsParams) {
+	var request ListEventsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.ListEvents(ctx, request.(ListEventsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListEvents")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(ListEventsResponseObject); ok {
+		if err := validResponse.VisitListEventsResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StreamEvents operation middleware
+func (sh *strictHandler) StreamEvents(ctx *gin.Context, params StreamEventsParams) {
+	var request StreamEventsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.StreamEvents(ctx, request.(StreamEventsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StreamEvents")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(StreamEventsResponseObject); ok {
+		if err := validResponse.VisitStreamEventsResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListJobs operation middleware
 func (sh *strictHandler) ListJobs(ctx *gin.Context, params ListJobsParams) {
 	var request ListJobsRequestObject
@@ -3995,6 +4443,33 @@ func (sh *strictHandler) CancelJob(ctx *gin.Context, id JobId) {
 		sh.options.HandlerErrorFunc(ctx, err)
 	} else if validResponse, ok := response.(CancelJobResponseObject); ok {
 		if err := validResponse.VisitCancelJobResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StreamJobEvents operation middleware
+func (sh *strictHandler) StreamJobEvents(ctx *gin.Context, id JobId, params StreamJobEventsParams) {
+	var request StreamJobEventsRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.StreamJobEvents(ctx, request.(StreamJobEventsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StreamJobEvents")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(StreamJobEventsResponseObject); ok {
+		if err := validResponse.VisitStreamJobEventsResponse(ctx.Writer); err != nil {
 			sh.options.ResponseErrorHandlerFunc(ctx, err)
 		}
 	} else if response != nil {
@@ -4429,122 +4904,131 @@ func (sh *strictHandler) FetchAnswerFile(ctx *gin.Context, token string, file st
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"nUHl7eXt/wYAAP//",
+	"3H39ctw28uCrdM3laqXLjCTLcW4jV2pLlp1EjmXrJHt3qyztDIZszsAiAQYAR5r4VLUPcc9w9x73KPsk",
+	"v8IHv8EhJUve1P5ja0h8NBrdje5Gd/PzKOBJyhkyJUcHn0dLJCEK8+ffz/C3DKU6DvWvEGUgaKooZ6OD",
+	"0TmKFYrJAhkKojAEYdsCDZEpGlEUY8BgyTEEyiDmCwmEhYBCcCF3RuORDJaYED2yWqc4OhhJJShbjG5v",
+	"b8ejlAiSoHKABALNqCS2oFANQUrUcjQeMZLozjQcjUcaBiowHB0okWF1im8ERqOD0X/bLRe7a9/K3aPq",
+	"6HryIBOSi/aa36Xktwwh4ExRlhH9FBS/QgaR4AkQSAWuKM8kpGSBsDVjeKOmdrTZtl6zAfy3DMW6hNzN",
+	"tgkh4xENMUm5Qhasf8V1G7QzTGOyBkkiVGuIuIBAIFGULeD03fl7+RyuqVpSBmqJcE1ZyK+BgLC9BKpM",
+	"MGnecUEXlJEYBMosVgXQlixKqI9LgCYaoir4Cbl5g2yhlqOD/WfPxp7lfOLzx9jJ12ZYPUFCgiVl+BiT",
+	"nBRD64m40GjJJ2lsrX1ZHTjEiGSxGh2Y/RuNR8iyZHTwcUTML/Pw0ocxM9SL9caZpvN1x2SGGDCcElWZ",
+	"svYwS8P8h3d+TdHn9HfsAkC/n0rdwAvBsz29Jzc00VPv7+lflNlfT4rpKFO4QGHmU0Rede6ee3nfHXxv",
+	"uxtBI1CmnEk0cuaIsyimgTIyhzOFzPxJ0jSmgeH33VTweYzJt5+k5rvPA2c8tb3slHXOzec0DApBJgQy",
+	"BVIRhbAVZnZmHANlKxLTEJQgTFLdeQz/+uf/3R7djkdvufqJZyz8mnCfoeSZCBAYVxCZ2W/How8sFTxA",
+	"Kck8xq8JzjkmhCkagMGSlc0RoXEmELZsf/tqrOW3VIJQpiSsKI813W8bonPzaDAOA72K8xQD/SsVPEWh",
+	"qCUTwbmapkTKay48R+MsPxRnRhATSFFMNMmCICzkCeRdx0AY4I3GClUaugzHoHvMpaYBxSGkBpFFD32O",
+	"UqaFcoNDxyMpl9MrXBsAqcJEeg6SohsRgqwtn9kHfP4JA6VbHAZ6GUfrwO5ffeW29edShJhmXoFRsuZH",
+	"+/ayc7KXVAZ8ZcVofT5NJjiEKvBXagmwCWGYj/2lQP5CRHiGc85VP1qWRIRTYRt/6bwnPGPqBENK2vOi",
+	"bjolkUJRk7YRiSUWI845j5EwPSRNtJjORKybR1wkRJ8OmaA+imquKtGQTBMDyrBVVSfsXuEpv0bxLor6",
+	"8ZrqllMeRV+MVTsnGzwl++IZh9LOA5GNU90NWVAtnRLKiLJabULSVA+pxbPlcz9jVUXBuOSkja0LXh7X",
+	"uGBjnwprjWtUtrFXhTHGFcrY2KcgtXG5sQM6MKNq9C+kWIRENdV/TkNc0aAHweeoXnCuXtqm45Hkkepf",
+	"yjmPlF6J1s0sQa3fOu1IU4RWGRm+i0YHHzdLz8a23Y6HNM/RcpfWBtYhzcuVDWntcD6scYXShnWwxD8Q",
+	"7to+DutTIeLby4J56yO1REZYPN80QQ2WEWe2R3FGWIW5fUQ05VGTlIdK/lbzpoTKt7lXIhb8cH+Z+OLk",
+	"qD0PCUOBUnrs/ExNeDSZExZCQhhZYKL1MdcetpZcKq2n6f8PUi7UtlcjK70WUxrezQkxHkVUJNdE4HSF",
+	"QlKrJLMsjq1eXdu8csaEhxgPapkKrnjA414iOjk6zZvejkcrZKHPM5KLDwytGivHENE4xhDma225IFNc",
+	"rMGoc8b50wNgY1/znWritGOrTyuLa6jmJFN85uCAMwwjKpcQUSGV8U5FJI4lzElwpbXv49OT450LNovI",
+	"Fc5AYoyBsl4SyibOzgFJkyzWJ6tR9kNcYcxTSy8sBIVSUbbYuWAVw1vYebV6lCZa9dJQjcYjPY+HyMej",
+	"ujAoVJMbdyxfacSEgiej8WhOufSOcXT6oc0CARdVnist8AottbemhfMjkpI5jWlFba+KKyqV4NJLNUpw",
+	"CAXVRA4CF1QqQ0ScgVpSCZRJRViA1jhWS6QCrhDTSUqEMkYwyCzVLAixxjxshTyQu3vfT0zPOJ6kNMWY",
+	"MtxJQvj//++Z9cLl5tEmyrfAndvR26aT8RwYA/hOFpdmoYKfW44AJUigwLUAiWJlOaiGC4+sabBLPkUV",
+	"Rh+rHHEmeYwfzt60N83ZCA3ByHCiaIKwokJlJDamNI8RPpy90WBttigaUHYZBaUk9NBr6bLq8/HQBKUi",
+	"SWrMnjuLX+to+txtFA0b7L1TxSreteFwN/BlXJbucDXgjQd48HxoPTK92sjN19zjvtXabSBQDcfCuW1/",
+	"T+z51QuHAQfK5gVbP2JKlEKhyfgf+hSZftyb/EAmv19++43v8G5B77kB0c8hJeuYk3AMUnEtupAFYp0q",
+	"DJ8DwxUK513PGRnh8PRY80rD0VHxJrVgySSKDoJs8lTecjNC3jc0rHkSjIwHyXtyvNQnTItatIWme1f0",
+	"NKkpdBnqfzN2xfg1847XyVtp57mNO4sdYKsExyCJ1P8o4tW5BCZ8lfse28qtROHkSpuo6e84na+VXV0h",
+	"yShT33838rqoq4jvRLpG3rnRHLg4ISpY+gjJvoaIYhxKIAIh4MmcMuP72zKL1wP/qDEA34IG9ceYiAVK",
+	"q3q2nGYFGu+PoDqMr270yWTfAsuSOQpI9HL8vkh3UZBThoNV01hC4lj/eTnA4VQlKL10vwHgR7nXcatV",
+	"h4ZzUOtOhTLh15wqr6sn/UaXZN7FwOHRAlKB5ngfPqLr0DWg1U49bJrTXI+u0yDSJn3bYXwEfk1TLy01",
+	"BnDwdbBIRdPybtq02IOpLNvl2xhlcZxvI9F/Mc7wLqLHx8zjrol9S3glBBfHLOI+FTv0S7sEpSQL7OBS",
+	"JdZdXNqA1kxQDucFb+WuYOqgUc/lxQlnXHFGA7gmCkVCxBVsnZ+/gjdEqokZaHL8crum7XXJSL0l5nB0",
+	"1rbBI4lPK0BY669uDVZ0a2c4e/Dj3ucioy1L5J00xEL03JAkjfM7xh2pyAKnwZKwBYa9Gq27VK6CVl9K",
+	"ob8p2b1Pb6j07VUuJAZJC7vhHjFRiUgY4Cdors9M7QP8FyLCayLwrxSv2zSVv614Aog29zQ7Wb3IGuTP",
+	"QcMDGVM0dkZ57nRet48589wxUMPK1wJhBv/65/8xCpcZHAIeawmEoXmmcRajQpApBhNrO64oXmtz38kR",
+	"OwABo8jAPKYsBJlyBeYeEyVsWW+IPgcFvYElVWM4Ozx+ecFWPM4SlOZqVAspFBrJVkUkC4TCLIOESknZ",
+	"Yvs5SNRQ2SVNGVco606DhpDzSbd69zZe/rZcF1MAleDGgi0XLTERSEKjcwgkkjNZt5Z7TdsgzXqV+9MP",
+	"uqU+eIdTs1FAPfMlmHCxvoPSNh4xGgyf9+3xkf+o1VrQ1GpB/adJQac+xjk2Grla+/WVJZdKH0bTwnap",
+	"SijGQ5x8pizEm9vRIM3o2DpF/JMRc+Pdh5PKvbgNSzLg9/WqLTO/h/SclUsMrqS1KjwGwEwuyf6z7w9+",
+	"iP78fbi3s7Mz82qf1t/k02HtTXu8hhCDmGhrbYtxoIm7gQ9RoXFNb4/BTCh4cLX+wTuJvdjsOJ4sd7ch",
+	"cPhHAaa7cZvAmaMVyFiMUsIsH3oGAiMUyLSgIFX3mGlxZ4eLw4uPDBmqay6uhnOGbX/MFIqI2BuGFpuY",
+	"hQ/ntnPTvlO/taKzdxDbzI7SPL6STi7M17HRQjM+OWUdnWswEVdaiiYkgItsb+8pQhrQaX5L4B5p9m2f",
+	"XQkJvITTbRqXIw/0yb7mcx+PK+d7HHKxZm+Qb8f3dbtFlFG5LPqROB5wH1kZ4dKjGfa78lwQYBEDOKXh",
+	"cCKsBPd5jDYe06BX1p3aVppmnZwdtvCqcNZLb4dbxSsMITLRmXpo2FKYpDFRuKuPGEFDhATFAp2GEm6P",
+	"bQBSFlL1HJxHHD7xuQTO4nX7HsbwmfMN9qD43LTTHbIkIWI9pItrOdAP+JrPvQ7Aqh5toS2BqJHqpZ8r",
+	"utyf9+SN+xLFYFIYjxQRC+w3aDTCXMsvRHFupbjROhDZcqt+4vMer+prPn8I80bLtq9n3BTUXr17Qxbq",
+	"UcYjkTFm/5JZECCGxlAsfRERobF5FBAWoP7z0o+Y85KRGlpR3tF7T+fG977TfwqRpaqrQb4M78t8Zd6X",
+	"5WK9rxVXNT9rl9/UtuvA+vuS7lvH55dJ9oSyY9vpSZuMcmEqu90Wd2LfuiA/RTFx8INrCLolRIIsEj3O",
+	"GOSSxDG/nhhpHoIGCGZacFQV3hxVLU9diZsuvDb8rO5kyIOiqrFePlp9Q9Y8Uz46TVUm7q4mtI3BrnCX",
+	"tg8t19fqPTrd/D5FqcO924i0ZOGd7MxIdnqmYjJHv2/ehL6lnFpfXVs5bBqcVXa82+2FOTmFulOPLPNa",
+	"O03fqQXSR3lNPlO5gzOnw0VqAgDnA4J1wzxYzg7S4cPvnru00EommBMWTqWJyxAkMXcDvXBUab4YNSdp",
+	"HyBODLUpbJ4EA4JxvkAbXzovXF+nmi9vkMZdE62GvDeKzi4/UomkmEg1NZliw9Xn0gXvtRtsuOcg7daE",
+	"K5b6rVwOB8Jh4vz8Fz8UUi6nrbCw3mCtQVDnU+dwP1jIgb0cruKv1LvdZt8tEsFB2qWHD2eEhyA1t71D",
+	"N7VjC4dRRz3IpGXila+N2UaZjUDcOj//ZbvwkPPUrnOntVkabxvQ3dLWk2DZo627ng+hsedi7+tp7ZVd",
+	"Gx75+X6J4BSoP0ng1wy23DZs5+GfY8hkGcxRnhp2h3aGOWJrzFoL/rc+PmtQ5FqYMzSQhNrCtXLxsnu/",
+	"Phj262SsTlQ8bADrvSJM/YfBH4XL+0mzNfHbY0/gcUzZ1TRL/REYD+waNA4HDKfJPJUD7LHOOJa3JLEB",
+	"CEJ2EtFdQyElEmHV9y9JWGv5oltcHcQ8CyeUUQXO0T0JOIvoAlb72tZKMdyBE5IkXC1d0Ja2vwKiUEKx",
+	"tuf6IcyK3zMbqGP8+ZNU8BUNMWy7eu+Jmzm36ZwNoZsvcpOtMijko+HyvrU5K8PiI7qDQVo3dC74wXOZ",
+	"QwJFVziZk+AqS8fw5739nackHMOcxIQFOFHx3HvxYioDyL6Igs02cgWNDkbfYu6Jx0RlfhuN1Vlo4/1K",
+	"pamGnWcKhx+2Z7q5n+E6t3g8WsWEdcWItBejZVg/pRgF0jS99O1JC+X1uKkWMFFMFnU0lLehKNPuJMYS",
+	"BZGsnreryCisN5EmBLxR2vKV1yT1Hq/GPO+MHey9maK/+6+lXNJ85FdjTgv3cjP6gdlc8WBdS+t50pNa",
+	"Px5xNlVEXk1ddnSjUICtbYHVMgHlIzLnQk3nDfavIFuPq2iCPFNTiQFnoayN//T7vV74tMITradx4WXq",
+	"SVny0lFpwlV224TEc5P9tyk+tRZq16bBxyCg0rXTcBYWaQ4u5lItiYIkkwrwhkoFrqJHqbNatIFkJJVL",
+	"rnYGhK52e2zKzOrKkl2ySiWJpfSc+NFpk/bbNUt+OoIfvnv2P8EVA4AQFaGxtMke+XmMNwqZpJxJXwiQ",
+	"73g5aUazGI0ZdGPYmpl72eDlu5PD47f2jnZqH53+8urtu5NXb9+5x7ZiSylgXpwcTT+8PXt1ePTL4Ys3",
+	"r7yRB2YB3h3OszeaideT4o7fH85ciQNsBvOgWhqKQJAkwaIAT0LW4LzzwBmYISpkUA32VURlHek/iqp4",
+	"cwbEnWIP7HDFlD5is6dWOxvQE8nx0mRV2SIPqcCI3gAXMHOCwh8VsqKk/7wylL2q5beXAFYCFHziWCHT",
+	"slHi9995IgjM3zDn4VqrOLoRINMkqVXPTGUkjteAN0GcSbpy+U6zTMT+xeBNamLZpnhD1VQP41Uvq/vZ",
+	"iqdw0RTFjZbAafUiQKrip4+rB9UQaJ50qisAozgcW4h7sVZoAt7BDgpbs2dP9k9mY5g92dv7ebZtdl6g",
+	"VDPY0rLR5GYyhBQFhFRejQFZxEWAIRBVqQ5iA+dLd8jWxUX47dbFxY7+f/svH389+fn95V+2v/nf/9CD",
+	"e/0j58obxaTHTFLl34cwE2b6qd2oDpOyepPwCEEUnTqguRV42LkGOS8NJp3r0h+MbYfx0k7Z9w4XtMW1",
+	"rLyiadp/QVsNLGrveEwXLHEx1qUy9d1VRY0yP5492fcHpt89ILIrUEqUudrTJWXe61PKTKmm6WLe4RLY",
+	"bD513268J75UIcLkNYqpN6UwP6wjEmju/nD2BnhkDjWBLDTRbrY7RDRG2MqjWKKYX8vtnQv26iblEsMy",
+	"0sXk3YY4zxYLyhbPzVim+o4t1eY0ppSoJVB5wSrqE5Qen75E0v2d/W0bn9vrvd8oDu55l/OwdyOPIWL0",
+	"/nTbmv3uxLxGl6kVN71X1Nedrq3M2XSHYEUj+v3nar+404t7+Isah6gaCsqrmpwMi6X2xkq9L0qwVY5J",
+	"Ja96bg10t4e4MjCy5OvdF5R7cp9TpDg76kE3PlFf7qLXInr69OkP8OH9US28V1OIybz26lgSg0xQtT7X",
+	"mHO+fiQCxWGmfNGsiigawOHpsROJtsZFcacRYhrztSlhsGWzMFxC+fZzW7BM0wKJ4Tg8BRKSVKEAE7UA",
+	"VIKzncOiwqexOQw0JexLpVJbxI26nKnmoWBtPyqBgMQ4mmj9mlCTRUsEThJUJAbjdNWA6ZMD2UJL5wt2",
+	"jsyUHCUMeKWQRx6Xa/6uSPoxLFDZkg+kOAiMmS0yJncu2AU74iZvRdugBxdsAkacSoh4HPNrKMzYrVlX",
+	"hbvZtlXoW3kWM626zwxMs8LWm1VtXj3fYRw3ynkCCQJM9VEHs0YlzhnYUp3PXXVP6an8aVOSvfU+9Xya",
+	"ewFZaDZVQiYRLL9BSha53bU1K0o+zuBbmLkyp2PIKypCo/ypwdwKxbpsERAhKEqY/X3iIionx+HMHtnW",
+	"/WmKrdaqIhgacxnVlOmujlomh6fHk7/aVjN7Nsc0QCaxTG4fHaYkWOJkf2evYuQW9HZ4ejyqVGgY7e08",
+	"sQ15ioykdHQwemoeGcthaThtl6R0d/VE/7mwaeJa5BkcaeE5+hlVrTxGo+Tk/t7ehjKJdyuPWJvHUyNR",
+	"c3xQb1OJ3y2reKwtz1U7j0fKuF4/jjTrjS51T7fy3ZKXrK7JpSdbvrwetAnO14IqnHAWrw/cdptseipb",
+	"efSGO8ytzAWr5tITti6IdAfeG43R0ZUetiAuDXBIFLEkUd8cG4NQqThRrzzcoQKVTXYbdXm1KuT8MC94",
+	"uH64nW0Wb7itH2xl2mSVsp48wvzeEqal2uxUCthy+2ky4EwVaFOo9Lu9H7qmKmDfLaqw1snzzN2N16R3",
+	"hTCrZNhFn7ufaXhriTNGe9TXCeKleV4jiAZSv/O5o3Sn0C7wu/4FFuVavxAjdt5h+Bh3S6cNi937+hSU",
+	"s+s9sFlDzs+oqvZcPixs2QveUuZsb8DZ3YRBUI/vqZAgrvLy6gtfKZEjc0ZO3OmqhZ9uDzG1xaPg0Ni1",
+	"v2VoBFpEY80G87WWhzbkcFcrVvbcPD9/BYuYz0kMUgkkiZaphZNYZuay0r3C8IKtKIGZ/WmyhuXMJyi1",
+	"SmBft0Wkrxx0Mwu6JJJctf7E5yN7Y1RaLLUCX97gy57ZrMXTXUfdX9bCYls3znFra244qHbCorpZZxH3",
+	"1jI9U/dQT1Fhe0BbZ/7Y4+aROLZMRvcwrHlpytw32O5/abxYjErYKh0ymiy1kh3zRZXhPvF5Q1rbrruW",
+	"Iju1qvMKwbYpsg7rT3ZPFTd+4ZxWgIZum7XdfPPD1X7n5uZd+jbYWyi/Vjdh4wj9m6nwRlkETUr83GE3",
+	"vYWzz1/lgmJr1ppgtr3T2GCLeRMLk+/y+fmrzXtqnnRtpSax17rBXcXtfRimv2VeaH9o01GXUGqJhIGZ",
+	"WP7RisjbocPl3vTHFBF5OpeHrF7zuU88GNPyk93tBr2MC8vBp6O/NsfFH1I5L3MKB2nl+w85cRfqrX/g",
+	"vjrp/n5/h3ql/4aMyOaJlvt6p2HLxIsU6ae7YELJYbeo7dEvOwq1vUuHtdTxmHTegeiH0FItmoyDiCoJ",
+	"ZS5rm0HuRP72Iys1PbRA5q51WFrn7n0GHXfY+eeKpxI04sIspmxhDn89FDJp4imdI9VcyUh3Aps69mBq",
+	"fhv/keICYc65sln25mBuCAUDvnfbH52/7NxfyGJfYPbl80OuQveyTp/94T7mZL464Q51++WKT3x+AOa+",
+	"YNd+kcSWQrJe1NxZGpFAyZ0L9reiYNTcaYBAw+cgMOCMmdK5AmWWoP1akjZJarrRBbOq0w68MO5iIJla",
+	"lsV2zKWZIIoLmesrhmWIdWJv+6wWq6u85vNhiuKZBc8YS07LiYzmuKSyWFDnF5H+AxS9L5NluWaoqeZP",
+	"skc7fFBhZmRJn4L53jT6Skrml6twlTvCR9Xhius6D8nod06L+zLSMGqflfg86pJcD08Su5/tl6L6dIf3",
+	"1gvxqDjuwu/DaBAmwKFUIbTEzsMpHwzR/Qzgvss1aEt2zX3XvRWQOwDTpaqc4QTZbxlmKMsgEXM2aRzG",
+	"RCqHSFNiawfesXgN9sZ3t3LJ6+g6IAzmaMItqb3+rFPamV5uJ63tPzqtmfn/fUqLm97hD0x+Yx2FG1UZ",
+	"p2tsFvIneaP/ME/C3Q6OeiJw2+f5hswxBvwtI+aqz3o8pda7UyTKlhye2aS7H5GtfkwFDy+yvb39791D",
+	"QYKrHw+fdn/RssgKLgEuU5XKUJKP//jx8tsf9b//45v+1I1HPQSrma4e3nGvOx0aSUl4xTVp/qjPsXFS",
+	"uL7/kM6NerL2V752LLKGu7ekrIr3bxBpxYVkbgrN1+bs6Io78d7TVSjFI/AG3liWVPSY15WN20fRQkAX",
+	"A3TpXp1g731FGnoYDawHA3dj7vLztUZ9yRMR6/ized5VFD4a+7uU8kHs/1W2zgJU+CC+dAvtcJBk9vwr",
+	"PBumIP/deHXX1pGTd9dsG5vu1Vk/MBpREx2j1SkbdRdxUfhU55yriY3+ht38My0T41mreFwvmANyBw7j",
+	"a7KWxSeg9/f2i2/tFMEcn/jc3C0LUzWY8Qsm1yxYCs54JuHFyZHJgq4E43yQ1ovyic+NGl4JJtPA2iQg",
+	"n8PmFEXEReI23tba+6OejI1KgH8I17+FqdDyx8az7Lbx33MV8JJKI76AgKRsEWNR/Kx2SAbNKLMBjOY+",
+	"PrTJts+1F9fyMeNbym8pefal+HBS5YNJ99qPZxtp6MG/qqx52+Ya+I48nq/q17+elNKmtsYHPw07qaHM",
+	"F+4hBle+7hFpwc3gwecbolCqZpJuhRK+1sbm6rPLg9b2OOMFQJCXNYM1Ks/Wa9ke26WEVF611vMou75E",
+	"Eqvl7507/It7P0QFPozpSosD68M37aohyF2Idc13/+6a2o/IVyLwRwcfL+vW4QqZ1v7tNwi2GIcQU2Sh",
+	"PpzAljvf9gfXmnI/3as9s6+HLNY0tcLj6deksbdcgS1atAlFGjpaxVFIFJkTicZiMu45PUqw1IdLJ65Y",
+	"iGL3s7kJut3NP+7gUcGMuyIlalmJ09CdRs3Du+q8qHwQ7cn+n8e++5yOoGeSfwNTc8x/141gyflVqWKV",
+	"iWnPIWPzmAdX+RcmzXX5BTMuyB04BMbZ5HcUHPCGKvf1DEiIqHdwDjafcnVmuriao0c5ju6vHDWrdHbm",
+	"vpd55kUlhqsyeWbIR52cdtVP6QEX4b1N204KNajOEeyoS+tZxUWmrZTssQErnswGkX6OaIy3nVeyjbzI",
+	"XIGGrcpeozA5KvonDdEDyAUzXgfCGNeEF4dAwObi5JemJm4+Y4vMaW/tTMkL5lIlc5PAeTB24CdUwRLz",
+	"75VlTNmMDDOCIaIb5SND0+3Q5HT+RIcoZeauMo0JbdBfk2ra2nAlcTQf7+sftR/cEWuRyi08GwnOYMh8",
+	"8cGTAauFSbFHA+52HkXijb3jRvl23luQNrBSz2P7eKklbVFB6aP7SOlo15h4Dg9Fpo85HjSg7nc1tLvy",
+	"uFBQKs8MKm8vb/8rAAD//w==",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

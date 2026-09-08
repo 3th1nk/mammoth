@@ -202,7 +202,7 @@ func serve(args []string) error {
 			RamdiskEnabled: cfg.RamdiskEnabled,
 			LayoutKeep:     cfg.LayoutRetention,
 		}
-		runner := provision.NewRunner(tq, jobRepo, exec, metrics, provision.RunnerOptions{
+		runner := provision.NewRunner(tq, jobRepo, eventRepo, exec, metrics, provision.RunnerOptions{
 			Concurrency:     cfg.RunnerConcurrency,
 			PollInterval:    cfg.QueuePollInterval,
 			Visibility:      cfg.VisibilityTimeout,

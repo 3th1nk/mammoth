@@ -157,6 +157,12 @@ func (e *Executor) runPowerAction(ctx context.Context, task *store.Task, job *st
 		})
 		return err
 
+	case "eject_media":
+		_, err = e.BMC.Do(ctx, addr, cred, proto, "eject_media", func(ctx context.Context, d bmc.Driver) (any, error) {
+			return nil, d.EjectMedia(ctx, addr, cred, bmc.MediaImage{URL: a.ImageURL})
+		})
+		return err
+
 	case "discover":
 		return e.runDiscover(ctx, task, job)
 

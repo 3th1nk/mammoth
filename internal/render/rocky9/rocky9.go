@@ -82,6 +82,12 @@ clearpart --list={{.RemoveParts}}
 {{- range .PartLines}}
 {{.}}
 {{- end}}
+{{- range .RaidMemberLines}}
+{{.}}
+{{- end}}
+{{- range .RaidLines}}
+{{.}}
+{{- end}}
 
 %packages
 @core
@@ -254,6 +260,8 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	var wipe []string
 	var removeList []string
 	var partLines []string
+	var raidMemberLines []string
+	var raidLines []string
 	var drift string
 	for _, disk := range in.Disks {
 		switch {
@@ -301,6 +309,45 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		}
 	}
 
+	// hardware raid volumes bind to their discovered drives: fresh logical
+	// drives get clearpart (harmless) and normal part lines
+	for _, r := range in.Raid {
+		if r.Mode != "hardware" || r.BoundDevice == "" {
+			continue
+		}
+		wipe = append(wipe, r.BoundDevice)
+		for _, p := range r.Partitions {
+			line, err := newPartLine(p, r.BoundDevice)
+			if err != nil {
+				return nil, render.BootParams{}, err
+			}
+			partLines = append(partLines, line)
+		}
+	}
+
+	// software raid: per-member full-disk raid partitions + one md per volume.
+	// Constraint (documented): one mount per volume — anaconda raid lines map
+	// one md to one mount; multi-partition volumes need LVM (later).
+	for _, r := range in.Raid {
+		if r.Mode != "software" {
+			continue
+		}
+		if len(r.Partitions) != 1 {
+			return nil, render.BootParams{}, fmt.Errorf(
+				"rocky9: software raid volume %s supports exactly one partition (LVM arrives later)", r.Name)
+		}
+		var tags []string
+		for mi, member := range r.Members {
+			tag := fmt.Sprintf("raid.%s-%d", r.Name, mi)
+			raidMemberLines = append(raidMemberLines,
+				fmt.Sprintf("part %s --size=1 --grow --ondisk=%s", tag, member))
+			tags = append(tags, tag)
+		}
+		p := r.Partitions[0]
+		raidLines = append(raidLines, fmt.Sprintf("raid %s --fstype=%s --level=%s --device=%s %s",
+			p.Mount, p.FS, r.Level, r.Name, strings.Join(tags, " ")))
+	}
+
 	var preScripts, postScripts []string
 	for _, s := range in.Scripts {
 		switch s.Stage {
@@ -323,22 +370,24 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	}
 
 	data := map[string]any{
-		"TaskToken":     in.TaskToken,
-		"MachineID":     in.MachineID,
-		"Hostname":      in.Hostname,
-		"RootPassword":  in.RootPassword,
-		"SSHPublicKeys": in.SSHPublicKeys,
-		"ImageSource":   in.ImageSource,
-		"BootDrive":     in.BootDrive,
-		"WipeDrives":    strings.Join(wipe, ","),
-		"RemoveParts":   strings.Join(removeList, ","),
-		"PartLines":     partLines,
-		"DriftScript":   drift,
-		"NetworkPre":    netPre != "",
-		"NetworkShell":  netPre,
-		"PreScripts":    preScripts,
-		"PostScripts":   postScripts,
-		"CompleteURL":   in.CompleteURL,
+		"TaskToken":       in.TaskToken,
+		"MachineID":       in.MachineID,
+		"Hostname":        in.Hostname,
+		"RootPassword":    in.RootPassword,
+		"SSHPublicKeys":   in.SSHPublicKeys,
+		"ImageSource":     in.ImageSource,
+		"BootDrive":       in.BootDrive,
+		"WipeDrives":      strings.Join(wipe, ","),
+		"RemoveParts":     strings.Join(removeList, ","),
+		"PartLines":       partLines,
+		"RaidMemberLines": raidMemberLines,
+		"RaidLines":       raidLines,
+		"DriftScript":     drift,
+		"NetworkPre":      netPre != "",
+		"NetworkShell":    netPre,
+		"PreScripts":      preScripts,
+		"PostScripts":     postScripts,
+		"CompleteURL":     in.CompleteURL,
 	}
 	if in.Hostname != "" {
 		// kickstart sets hostname via the network command or a %post; the

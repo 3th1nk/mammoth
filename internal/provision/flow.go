@@ -15,9 +15,10 @@ const (
 
 // StageNames returns the ordered stages of a flow.
 //
-//	power:    one generic BMC action
-//	discover: out-of-band probe
-//	install:  the five-stage pipeline (M3; fails explicitly until then)
+//	power:          one generic BMC action
+//	discover:       out-of-band probe
+//	install:        the six-stage pipeline (configure_raid added in M6 for
+//	                declarative hardware RAID; no-op for software-only specs)
 func StageNames(flow string) []string {
 	switch flow {
 	case FlowPower:
@@ -25,7 +26,7 @@ func StageNames(flow string) []string {
 	case FlowDiscover:
 		return []string{"probe"}
 	case FlowInstall:
-		return []string{"verify_layout", "prepare_media", "boot", "install_os", "verify_ready"}
+		return []string{"verify_layout", "configure_raid", "prepare_media", "boot", "install_os", "verify_ready"}
 	default:
 		return []string{"unknown"}
 	}

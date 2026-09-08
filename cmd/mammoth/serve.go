@@ -129,10 +129,15 @@ func serve(args []string) error {
 
 	// Vendor compatibility matrix: embedded defaults, optionally extended
 	// from a mounted directory (docs/compat/README.md).
-	compatReg, err := bmccompat.LoadDir(getenv("MAMMOTH_COMPAT_DIR", ""))
-	if err != nil {
-		logger.WarnContext(ctx, "compat matrix override failed to load, using embedded defaults",
-			"err", err.Error())
+	var compatReg *bmccompat.Registry
+	if dir := getenv("MAMMOTH_COMPAT_DIR", ""); dir != "" {
+		compatReg, err = bmccompat.LoadDir(dir)
+		if err != nil {
+			logger.WarnContext(ctx, "compat matrix override failed to load, using embedded defaults",
+				"err", err.Error())
+		}
+	}
+	if compatReg == nil {
 		if compatReg, err = bmccompat.Default(); err != nil {
 			return err
 		}

@@ -73,3 +73,24 @@ Redfish 上枚举盘拓扑(与 AVAGO 背板管理配置相关)。盘查结果标
   }
 }
 ```
+
+### 6. 虚拟介质:Redfish 未通告,绑定 KVM 控制台(实测)
+
+`/Managers/1/VirtualMedia` 下有 CD 与 USBStick 两个资源(`Inserted: False`,
+`Image: None`),但 **Actions 完全为空**——`#VirtualMedia.InsertMedia` 未通告。
+即 iBMC 6.41 上虚拟介质**只能经 KVM 远程控制台**(WebUI → 远程虚拟控制台 →
+虚拟介质,挂本地文件或网络 URL)挂载,Redfish 通道不可用。
+
+驱动行为:检测到动作未通告即返回 `BMC_UNSUPPORTED`(显式降级,
+不盲目 POST)——符合 docs/07-bmc.md §1 语义。
+
+**对安装流水线的影响**:此机型上引导介质只能走
+(a) KVM 控制台手动挂载(非 API 通路)、(b) PXE(待实现)、
+(c) iBMC 本地镜像上传(如固件提供)。
+Redfish 虚拟介质可用的机型(如 Dell/HPE 多数型号)不受影响。
+
+### 7. 其它已核实形状
+
+- 存储集合链接为 `/Systems/1/Storages`(非标准复数);gofish 按通告链接可走通;
+- `/Systems/1/Processors` 集合本身可用,仅单条目(本机 1 颗物理 CPU);
+- 网卡 `Id` 为真实端口身份(`mainboardLOMPort1/2`),`SpeedMbps`/`LinkStatus` 不上报。

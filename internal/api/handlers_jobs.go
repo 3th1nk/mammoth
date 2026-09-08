@@ -363,7 +363,7 @@ func encodeAction(body *gen.ActionRequest) (json.RawMessage, string, error) {
 	_ = json.Unmarshal(b, &probe)
 	switch probe.Type {
 	case "discover", "power_on", "power_off", "soft_off", "reboot", "hard_reboot",
-		"cycle", "set_boot_device", "mount_media":
+		"cycle", "set_boot_device", "mount_media", "eject_media":
 		return b, probe.Type, nil
 	default:
 		return nil, "", verr("SCHEMA_INVALID_ACTION", "unknown action type %q", probe.Type)

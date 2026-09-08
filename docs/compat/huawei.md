@@ -89,7 +89,8 @@ POST /redfish/v1/Managers/1/VirtualMedia/CD/Oem/Huawei/Actions/VirtualMedia.VmmC
 - **`http://` URI 被直接拒绝**:`iBMC.1.0.FileTransferProtocolMismatch`
   ("image URI 与动作参数中的传输协议不匹配")——即该固件的 VmmControl
   仅支持 NFS/CIFS 类共享,不支持 HTTP 直链;
-- `Disconnect` 为同步弹出;
+- `Disconnect` 为同步弹出(实测:`eject_media` 动作 → 任务 succeeded →
+  Redfish `Inserted: False`),契约已补 `eject_media` 动作类型;
 - 连接失败回报 `iBMC.1.0.ConnectionFailed`。
 
 驱动修复:`redfish.MountMedia/EjectMedia` 在标准动作未通告时回退到
@@ -105,7 +106,19 @@ VmmControl(任务轮询至终态,失败分类为 BMC_PROTOCOL_ERROR 并携带 iB
 `nfs://host/export/xxx.iso` 形态;引导介质注入(kickstart)在该机型上
 仍受 KVM 通路限制(见 §6 上述),完整安装需 NFS 介质 + PXE/KVM 组合。
 
-### 7. 其它已核实形状
+### 7. 一次性引导(实测)
+
+`BootSourceOverrideTarget=Cd + Enabled=Once` 设置成功,重启进入安装器后
+**自动回退**(`Target: None / Enabled: Disabled`)——一次性语义在真机正确,
+无需驱动侧补偿(07-bmc.md §4 的"非一次性引导补偿"在此机型不需要)。
+
+### 8. 软重启(实测)
+
+`GracefulRestart` 在此固件/电源状态下被拒("Correct the value for the
+parameter")——使用 `ForceRestart`(hard_reboot)成功。驱动侧该映射本就
+显式,无需改动;操作上软重启失败时用 hard_reboot 替代。
+
+### 9. 其它已核实形状
 
 - 存储集合链接为 `/Systems/1/Storages`(非标准复数);gofish 按通告链接可走通;
 - `/Systems/1/Processors` 集合本身可用,仅单条目(本机 1 颗物理 CPU);

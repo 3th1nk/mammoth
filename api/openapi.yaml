@@ -1178,6 +1178,7 @@ components:
         - $ref: '#/components/schemas/ActionCycle'
         - $ref: '#/components/schemas/ActionSetBootDevice'
         - $ref: '#/components/schemas/ActionMountMedia'
+        - $ref: '#/components/schemas/ActionEjectMedia'
       discriminator:
         propertyName: type
         mapping:
@@ -1190,6 +1191,7 @@ components:
           cycle: '#/components/schemas/ActionCycle'
           set_boot_device: '#/components/schemas/ActionSetBootDevice'
           mount_media: '#/components/schemas/ActionMountMedia'
+          eject_media: '#/components/schemas/ActionEjectMedia'
 
     ActionDiscover:
       type: object
@@ -1256,6 +1258,15 @@ components:
         once:
           type: boolean
           default: true
+
+    ActionEjectMedia:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [eject_media]
+      description: Eject virtual media from all slots that carry it.
 
     ActionMountMedia:
       type: object

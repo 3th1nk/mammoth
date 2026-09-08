@@ -96,6 +96,11 @@ POST /redfish/v1/Managers/1/VirtualMedia/CD/Oem/Huawei/Actions/VirtualMedia.VmmC
 VmmControl(任务轮询至终态,失败分类为 BMC_PROTOCOL_ERROR 并携带 iBMC
 消息)。**部署要求:机器可访问的 NFS 服务导出镜像目录**(也可用 CIFS)。
 
+**✅ 实测挂载成功**:`mount_media` + `nfs://198.51.100.248/data/os_iso/.../Rocky-9.7-x86_64-minimal.iso`
+→ VmmControl Connect → 任务 succeeded → Redfish `Inserted: true`、`Image` 指向该 NFS URI、
+`MediaTypes: ["CD"]`。注意 URI 路径必须精确到 NFS 导出目录下的真实文件
+(HTTP 根目录与 NFS 导出目录是两个不同路径,别混淆)。
+
 **对安装流水线的影响**:此机型上 image.source 与介质地址应使用
 `nfs://host/export/xxx.iso` 形态;引导介质注入(kickstart)在该机型上
 仍受 KVM 通路限制(见 §6 上述),完整安装需 NFS 介质 + PXE/KVM 组合。

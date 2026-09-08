@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/3th1nk/mammoth/internal/bmc"
+	"github.com/3th1nk/mammoth/internal/builder"
 	"github.com/3th1nk/mammoth/internal/inventory/inbandssh"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/render"
@@ -25,6 +27,9 @@ type installTaskContext struct {
 	Hostname string              `json:"hostname,omitempty"`
 	Answers  []render.AnswerFile `json:"answers,omitempty"`
 	Boot     render.BootParams   `json:"boot,omitempty"`
+	// MediaURI is the BMC-accessible URI of the assembled boot ISO
+	// (nfs://host/export/boot-<token>.iso for NFS-served media repos).
+	MediaURI string `json:"media_uri,omitempty"`
 	Resolved struct {
 		Disks []render.ResolvedDisk `json:"disks"`
 		Raid  []render.ResolvedRaid `json:"raid,omitempty"`
@@ -253,8 +258,22 @@ func (e *Executor) verifyLayout(ctx context.Context, task *store.Task, job *stor
 		}
 	}
 	if len(hw.Disks) == 0 {
-		return classifiedErr("LAYOUT_DISK_NOT_FOUND", false,
-			"machine %s has no hardware inventory; run discover first", task.MachineID)
+		// Redfish-blind storage (docs/compat/huawei.md §4): fall back to the
+		// in-band layout snapshot, which carries device names + serials —
+		// enough to resolve selectors on machines whose BMC hides drives.
+		snap, serr := e.layoutSnapshot(ctx, task.MachineID)
+		if serr != nil {
+			return classifiedErr("LAYOUT_DISK_NOT_FOUND", false,
+				"machine %s has no hardware inventory and no layout snapshot: run discover (with in-band access)",
+				task.MachineID)
+		}
+		for _, sd := range snap {
+			serial := sd.Match["serial"]
+			hw.Disks = append(hw.Disks, bmc.DiskView{
+				Name: sd.Device, Serial: serial, SizeBytes: snapshotDiskSize(sd),
+				Protocol: "inband",
+			})
+		}
 	}
 
 	resolved := make([]render.ResolvedDisk, 0, len(spec.Storage.Disks))
@@ -669,10 +688,31 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		return classifiedErr("RENDER_FAILED", false, "%s", err.Error())
 	}
 
+	// Assemble the per-task boot media (media B): bootloader carries
+	// inst.ks=<token URL>; packages come from inst.repo over the network
+	// (docs/06-install-pipeline.md §2.1). The ISO lands in the media repo
+	// and is exposed to the BMC through the NFS base URI.
+	mediaFile := fmt.Sprintf("boot-%s.iso", ictx.Token)
+	mediaURI := e.mediaURIFor(filepath.Base(mediaFile))
+	distroISO, err := e.Builder.EnsureISO(ctx, spec.Image.Source, e.MediaDir)
+	if err != nil {
+		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+			"distro ISO fetch failed: %s", err.Error())
+	}
+	if _, err := e.Builder.BuildBootISO(ctx, builder.BootMediaOptions{
+		ISOPath:    distroISO,
+		OutputPath: filepath.Join(e.MediaDir, filepath.Base(mediaFile)),
+		Timeout:    10 * time.Minute,
+	}, boot.KernelArgs); err != nil {
+		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+			"boot media build failed: %s", err.Error())
+	}
+
 	raw, _ := json.Marshal(ictx.Install)
 	patch := map[string]any{
-		"answers": answers,
-		"boot":    boot,
+		"answers":   answers,
+		"boot":      boot,
+		"media_uri": mediaURI,
 	}
 	if raw != nil && string(raw) != "null" {
 		patch["install"] = json.RawMessage(raw)
@@ -680,9 +720,17 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	if err := e.Jobs.PatchTaskContext(ctx, task.ID, task.StageIndex, patch); err != nil {
 		return err
 	}
-	obs.FromContext(ctx).InfoContext(ctx, "answers rendered",
-		"files", len(answers), "distro", spec.Image.Distro)
+	obs.FromContext(ctx).InfoContext(ctx, "answers rendered, boot media built",
+		"files", len(answers), "distro", spec.Image.Distro, "media_uri", mediaURI)
 	return nil
+}
+
+// distroTreeURL converts a distro ISO's source into the HTTP tree the boot
+// files can be fetched from (the mirror serving the ISO also serves its
+// extracted layout; see MAMMOTH_BOOT_TREE_BASE for overrides).
+func distroTreeURL(source string) string {
+	// Strip the .iso suffix: .../Rocky-9.7.iso → .../Rocky-9.7 (tree layout).
+	return strings.TrimSuffix(source, ".iso")
 }
 
 func networkEntries(spec []networkView) []render.NetworkEntry {
@@ -1047,4 +1095,25 @@ func (e *Executor) configureRaid(ctx context.Context, task *store.Task, job *sto
 	obs.FromContext(ctx).InfoContext(ctx, "hardware raid configured",
 		"volumes", len(bindings))
 	return nil
+}
+
+// snapshotDiskSize computes a snapshot disk's total size from its partitions
+// (end of the last partition, assuming contiguity — enough for selector
+// size=largest/smallest ordering).
+func snapshotDiskSize(sd snapPartition) int64 {
+	var last int64
+	for _, p := range sd.Partitions {
+		if p.EndBytes > last {
+			last = p.EndBytes
+		}
+	}
+	return last
+}
+
+// mediaURIFor returns the BMC-accessible URI for a media file name.
+func (e *Executor) mediaURIFor(filename string) string {
+	if e.MediaNFSBase == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s", strings.TrimSuffix(e.MediaNFSBase, "/"), filename)
 }

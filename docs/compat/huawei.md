@@ -74,20 +74,31 @@ Redfish 上枚举盘拓扑(与 AVAGO 背板管理配置相关)。盘查结果标
 }
 ```
 
-### 6. 虚拟介质:Redfish 未通告,绑定 KVM 控制台(实测)
+### 6. 虚拟介质:OEM VmmControl 动作,仅支持 NFS/CIFS(实测)
 
-`/Managers/1/VirtualMedia` 下有 CD 与 USBStick 两个资源(`Inserted: False`,
-`Image: None`),但 **Actions 完全为空**——`#VirtualMedia.InsertMedia` 未通告。
-即 iBMC 6.41 上虚拟介质**只能经 KVM 远程控制台**(WebUI → 远程虚拟控制台 →
-虚拟介质,挂本地文件或网络 URL)挂载,Redfish 通道不可用。
+`/Managers/1/VirtualMedia` 下有 CD 与 USBStick 两个资源,但标准
+`#VirtualMedia.InsertMedia` 动作**未通告**(Actions 为空)。真正的通路是
+华为 OEM 动作:
 
-驱动行为:检测到动作未通告即返回 `BMC_UNSUPPORTED`(显式降级,
-不盲目 POST)——符合 docs/07-bmc.md §1 语义。
+```
+POST /redfish/v1/Managers/1/VirtualMedia/CD/Oem/Huawei/Actions/VirtualMedia.VmmControl
+{"Image": "nfs://<server>/<export>/<file>.iso", "VmmControlType": "Connect"}
+```
 
-**对安装流水线的影响**:此机型上引导介质只能走
-(a) KVM 控制台手动挂载(非 API 通路)、(b) PXE(待实现)、
-(c) iBMC 本地镜像上传(如固件提供)。
-Redfish 虚拟介质可用的机型(如 Dell/HPE 多数型号)不受影响。
+- `Connect` 返回 202 + Redfish Task(轮询至终态;`Exception` 时读 Messages);
+- **`http://` URI 被直接拒绝**:`iBMC.1.0.FileTransferProtocolMismatch`
+  ("image URI 与动作参数中的传输协议不匹配")——即该固件的 VmmControl
+  仅支持 NFS/CIFS 类共享,不支持 HTTP 直链;
+- `Disconnect` 为同步弹出;
+- 连接失败回报 `iBMC.1.0.ConnectionFailed`。
+
+驱动修复:`redfish.MountMedia/EjectMedia` 在标准动作未通告时回退到
+VmmControl(任务轮询至终态,失败分类为 BMC_PROTOCOL_ERROR 并携带 iBMC
+消息)。**部署要求:机器可访问的 NFS 服务导出镜像目录**(也可用 CIFS)。
+
+**对安装流水线的影响**:此机型上 image.source 与介质地址应使用
+`nfs://host/export/xxx.iso` 形态;引导介质注入(kickstart)在该机型上
+仍受 KVM 通路限制(见 §6 上述),完整安装需 NFS 介质 + PXE/KVM 组合。
 
 ### 7. 其它已核实形状
 

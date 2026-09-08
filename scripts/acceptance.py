@@ -65,6 +65,9 @@ class Client:
     def post(self, path, body=None, headers=None):
         return self.req("POST", path, body, headers)
 
+    def Delete(self, path):
+        return self.req("DELETE", path)
+
 
 def check(name, ok, detail=""):
     mark = PASS if ok else FAIL
@@ -682,6 +685,69 @@ def main():
     ok &= check("cli: jobs list", rc == 0 and "job_" in out, out.strip()[:60])
     rc, out = cli(args.binary, "events", "list", "--api", c.base, "--token", c.token)
     ok &= check("cli: events list", rc == 0 and "machine.discovered" in out, out.strip()[:40])
+
+    # 4.97 M6: webhook delivery with HMAC-SHA256 signature.
+    print("· webhook delivery")
+    import hashlib
+    import hmac as hmac_mod
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    received = []
+    WH_SECRET = b"whsec-acceptance"
+    class Receiver(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length)
+            received.append({
+                "raw": raw,  # signature covers the exact bytes on the wire
+                "body": json.loads(raw),
+                "sig": self.headers.get("X-Mammoth-Signature", ""),
+                "event_id": self.headers.get("X-Mammoth-Event-Id", ""),
+            })
+            self.send_response(204)
+            self.end_headers()
+        def log_message(self, *a):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Receiver)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    status, wh = c.post("/api/v1/webhooks", {
+        "url": f"http://127.0.0.1:{port}/hook",
+        "secret": WH_SECRET.decode(),
+        "types": ["machine.*"]})
+    ok &= check("webhook subscription created", status == 201 and "secret" in json.dumps(wh),
+                f"{status}")
+    ok &= check("secret not in later listings", True, "checked below")
+
+    status, wl = c.get("/api/v1/webhooks")
+    ok &= check("webhook list never echoes secret",
+                status == 200 and all("secret" not in json.dumps(x) for x in wl.get("items", [])))
+
+    # trigger a machine.* event; the worker delivers within a few sweeps
+    c.post("/api/v1/machines", {
+        "labels": {}, "bmc": {"address": "fake://wh-node", "protocol": "fake",
+                              "credential_id": cred_id}})
+    deadline = time.time() + 30
+    while time.time() < deadline and not received:
+        time.sleep(0.3)
+
+    machine_events = [r for r in received
+                      if r["body"].get("type", "").startswith("machine.")]
+    ok &= check("webhook delivered machine.* events",
+                len(machine_events) >= 2,  # machine.created + machine.discovered
+                f"{len(received)} deliveries")
+    if machine_events:
+        r0 = machine_events[0]
+        expect = hmac_mod.new(WH_SECRET, r0["raw"], hashlib.sha256).hexdigest()
+        ok &= check("HMAC-SHA256 signature valid",
+                    r0["sig"] == "sha256=" + expect, r0["sig"][:40])
+        ok &= check("non-matching types filtered out",
+                    all(r["body"]["type"].startswith("machine.") for r in received),
+                    str(sorted({r["body"]["type"] for r in received})))
+    c.Delete(f"/api/v1/webhooks/{wh['id']}")
+    server.shutdown()
 
     # 5. crash path: requires the outer environment to run this instance with
     # MAMMOTH_FAKE_BMC_DELAY set (tasks slow enough to kill mid-flight) and

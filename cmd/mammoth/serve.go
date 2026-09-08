@@ -27,6 +27,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/store"
 	"github.com/3th1nk/mammoth/internal/store/queue"
 	"github.com/3th1nk/mammoth/internal/version"
+	"github.com/3th1nk/mammoth/internal/webhook"
 )
 
 // serve wires the selected facets and blocks until shutdown.
@@ -85,6 +86,7 @@ func serve(args []string) error {
 	machineRepo := store.NewMachineRepo(db)
 	jobRepo := store.NewJobRepo(db)
 	eventRepo := store.NewEventRepo(db)
+	webhookRepo := store.NewWebhookRepo(db)
 
 	// Credential crypto (required to touch credentials at all).
 	crypto, err := store.NewSecretCrypto(cfg.MasterKey)
@@ -144,6 +146,7 @@ func serve(args []string) error {
 		Crypto:      crypto,
 		BMC:         registry,
 		Render:      renderReg,
+		Webhooks:    webhookRepo,
 		Queue:       tq,
 		Metrics:     metrics,
 		Logger:      logger,
@@ -184,6 +187,16 @@ func serve(args []string) error {
 			Logger: logger,
 		}
 		go func() { _ = reaper.Run(ctx) }()
+
+		// Webhook delivery: at-least-once, HMAC-signed (docs/09 M6).
+		dispatcher := &webhook.Worker{
+			Repo:   webhookRepo,
+			Events: eventRepo,
+			Crypto: crypto,
+			Opts:   webhook.Options{Interval: 2 * time.Second},
+			Logger: logger,
+		}
+		go func() { _ = dispatcher.Run(ctx) }()
 	}
 
 	// Runner facet (execution plane).

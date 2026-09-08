@@ -31,6 +31,7 @@ type Deps struct {
 	Crypto      *store.SecretCrypto
 	BMC         *bmc.Registry
 	Render      *render.Registry
+	Webhooks    *store.WebhookRepo
 	Queue       queue.TaskQueue
 	Metrics     *obs.Metrics
 	Logger      *slog.Logger

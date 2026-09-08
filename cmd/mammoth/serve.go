@@ -23,6 +23,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/provision"
 	"github.com/3th1nk/mammoth/internal/render"
 	"github.com/3th1nk/mammoth/internal/render/rocky9"
+	"github.com/3th1nk/mammoth/internal/render/ubuntu22"
 	"github.com/3th1nk/mammoth/internal/store"
 	"github.com/3th1nk/mammoth/internal/store/queue"
 	"github.com/3th1nk/mammoth/internal/version"
@@ -118,8 +119,10 @@ func serve(args []string) error {
 	// Distro drivers register here; adding a distro never touches the
 	// orchestration layer (docs/06-install-pipeline.md §5).
 	renderReg := render.NewRegistry()
-	if err := renderReg.Register(rocky9.New()); err != nil {
-		return err
+	for _, d := range []render.OSDriver{rocky9.New(), ubuntu22.New()} {
+		if err := renderReg.Register(d); err != nil {
+			return err
+		}
 	}
 
 	// Vendor compatibility matrix: embedded defaults, optionally extended
@@ -140,6 +143,7 @@ func serve(args []string) error {
 		Events:      eventRepo,
 		Crypto:      crypto,
 		BMC:         registry,
+		Render:      renderReg,
 		Queue:       tq,
 		Metrics:     metrics,
 		Logger:      logger,
@@ -185,17 +189,18 @@ func serve(args []string) error {
 	// Runner facet (execution plane).
 	if cfg.Mode.RunsRunner() {
 		exec := &provision.Executor{
-			Machines:    machineRepo,
-			Credentials: credRepo,
-			Jobs:        jobRepo,
-			Events:      eventRepo,
-			Crypto:      crypto,
-			BMC:         registry,
-			Compat:      compatReg,
-			Inband:      inband,
-			Render:      renderReg,
-			ExternalURL: cfg.ExternalURL,
-			LayoutKeep:  cfg.LayoutRetention,
+			Machines:       machineRepo,
+			Credentials:    credRepo,
+			Jobs:           jobRepo,
+			Events:         eventRepo,
+			Crypto:         crypto,
+			BMC:            registry,
+			Compat:         compatReg,
+			Inband:         inband,
+			Render:         renderReg,
+			ExternalURL:    cfg.ExternalURL,
+			RamdiskEnabled: cfg.RamdiskEnabled,
+			LayoutKeep:     cfg.LayoutRetention,
 		}
 		runner := provision.NewRunner(tq, jobRepo, exec, metrics, provision.RunnerOptions{
 			Concurrency:     cfg.RunnerConcurrency,

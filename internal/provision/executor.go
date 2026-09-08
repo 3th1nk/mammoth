@@ -30,6 +30,9 @@ type Executor struct {
 	Render      *render.Registry
 	// ExternalURL is the base address machines reach for answer files.
 	ExternalURL string
+	// RamdiskEnabled declares the optional ramdisk probe feature
+	// (docs/05-inventory.md §4 — requires the PXE boot infrastructure).
+	RamdiskEnabled bool
 
 	// LayoutKeep is the per-machine snapshot retention (docs/08-data-model.md).
 	LayoutKeep int
@@ -196,6 +199,14 @@ func (e *Executor) runDiscover(ctx context.Context, task *store.Task, job *store
 	// Explicit inband_ssh: partition-level only, no BMC round trip.
 	if probeKind == "inband_ssh" {
 		return e.collectLayout(ctx, task, true)
+	}
+	if probeKind == "ramdisk" {
+		if !e.RamdiskEnabled {
+			return classifiedErr("BMC_UNSUPPORTED", false,
+				"ramdisk probe is optional and disabled (set MAMMOTH_RAMDISK_ENABLED); it requires the PXE boot infrastructure")
+		}
+		return classifiedErr("BMC_UNSUPPORTED", false,
+			"ramdisk probe requires the PXE boot infrastructure (hardware validation phase); see docs/05-inventory.md §4")
 	}
 	if probeKind != "auto" && probeKind != "redfish" {
 		return classifiedErr("SCHEMA_INVALID_ACTION", false, "unknown probe kind %s", probeKind)

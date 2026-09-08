@@ -13,6 +13,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/provision"
+	"github.com/3th1nk/mammoth/internal/render"
 	"github.com/3th1nk/mammoth/internal/store"
 	"github.com/3th1nk/mammoth/internal/store/queue"
 )
@@ -136,6 +137,40 @@ func (s *Server) CreateJob(ctx context.Context, request gen.CreateJobRequestObje
 	if body.Type == "install" && body.Spec != nil && body.Spec.Identity != nil {
 		hostnamePattern = body.Spec.Identity.HostnamePattern
 	}
+	// Base-spec keep usage is a request-level error: it applies to every
+	// target, so a partial/none distro rejects the whole submission (docs/06
+	// §5). Per-machine override violations stay task-level (pre-failed).
+	if body.Type == "install" && body.Spec != nil && body.Spec.Storage != nil {
+		usesKeepDisk, usesKeepParts := false, false
+		for _, disk := range body.Spec.Storage.Disks {
+			switch derefOr(disk.Keep, "") {
+			case "disk":
+				usesKeepDisk = true
+			case "partitions":
+				usesKeepParts = true
+			}
+			if len(derefOr(disk.Preserve, nil)) > 0 {
+				usesKeepParts = true
+			}
+		}
+		if usesKeepDisk || usesKeepParts {
+			driver, derr := s.Render.For(body.Spec.Image.Distro)
+			if derr == nil {
+				switch driver.KeepPartitionSupport() {
+				case render.SupportPartial:
+					if usesKeepParts {
+						return nil, verr("SCHEMA_UNSUPPORTED_KEEP",
+							"distro %s declares partial keep support: keep: disk only; keep: partitions/preserve is not supported",
+							body.Spec.Image.Distro)
+					}
+				case render.SupportNone:
+					return nil, verr("SCHEMA_UNSUPPORTED_KEEP",
+						"distro %s does not support keep semantics", body.Spec.Image.Distro)
+				}
+			}
+		}
+	}
+
 	job, err := s.createJobRecord(ctx, createJobRecord{
 		jobType:         string(body.Type),
 		flow:            flow,
@@ -218,7 +253,14 @@ func (s *Server) createJobRecord(ctx context.Context, in createJobRecord) (*gen.
 				effective = merged
 			}
 			init := store.TaskInit{}
-			if verr := s.validateSnapshotBinding(ctx, mid, effective); verr != nil {
+			if verr := s.validateDistroKeepSupport(effective); verr != nil {
+				init.State = "failed"
+				init.Error = &store.ErrorInfo{
+					Code:      appErrCode(verr),
+					Message:   verr.Error(),
+					Retryable: false,
+				}
+			} else if verr := s.validateSnapshotBinding(ctx, mid, effective); verr != nil {
 				init.State = "failed"
 				init.Error = &store.ErrorInfo{
 					Code:      appErrCode(verr),
@@ -681,4 +723,60 @@ func (s *Server) validateSnapshotBinding(ctx context.Context, machineID string, 
 		}
 	}
 	return nil
+}
+
+// validateDistroKeepSupport gates keep semantics by the distro driver's
+// declared support level (docs/06-install-pipeline.md §5: 不支持分区级保留的
+// 发行版在提交时即拒绝,而不是装到一半失败).
+func (s *Server) validateDistroKeepSupport(specRaw json.RawMessage) error {
+	var spec struct {
+		Image struct {
+			Distro string `json:"distro"`
+		} `json:"image"`
+		Storage *struct {
+			Disks []struct {
+				Keep     string `json:"keep"`
+				Preserve []any  `json:"preserve"`
+			} `json:"disks"`
+		} `json:"storage"`
+	}
+	if err := json.Unmarshal(specRaw, &spec); err != nil {
+		return nil // structural errors surface via the schema validation path
+	}
+	if spec.Storage == nil {
+		return nil
+	}
+	keepDisk, keepParts := false, false
+	for _, d := range spec.Storage.Disks {
+		switch d.Keep {
+		case "disk":
+			keepDisk = true
+		case "partitions":
+			keepParts = true
+		}
+		if len(d.Preserve) > 0 {
+			keepParts = true
+		}
+	}
+	if !keepDisk && !keepParts {
+		return nil
+	}
+	driver, err := s.Render.For(spec.Image.Distro)
+	if err != nil {
+		return nil // unknown distro surfaces at execution with SCHEMA_UNKNOWN_DISTRO
+	}
+	switch driver.KeepPartitionSupport() {
+	case render.SupportFull:
+		return nil
+	case render.SupportPartial:
+		if keepParts {
+			return verr("SCHEMA_UNSUPPORTED_KEEP",
+				"distro %s declares partial keep support: keep: disk is supported, keep: partitions/preserve is not",
+				spec.Image.Distro)
+		}
+		return nil
+	default:
+		return verr("SCHEMA_UNSUPPORTED_KEEP",
+			"distro %s does not support keep semantics", spec.Image.Distro)
+	}
 }

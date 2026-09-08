@@ -74,6 +74,8 @@ type Config struct {
 	LayoutRetention    int           // snapshots kept per machine (docs/08: default 10)
 	InbandTimeout      time.Duration // whole inband_ssh collection bound
 	RamdiskEnabled     bool          // optional ramdisk probe (docs/05 §4; PXE-first)
+	MediaDir           string        // local media repository (boot ISOs)
+	MediaNFSBase       string        // NFS URI base for BMC media fetch (nfs://host/export)
 
 	// OTELExporterEndpoint enables OTLP trace export when non-empty.
 	// Without it, tracing stays at the API boundary instrumentation level
@@ -115,6 +117,8 @@ func FromEnv() (Config, error) {
 		LayoutRetention:       getenvInt("MAMMOTH_LAYOUT_RETENTION", 10),
 		InbandTimeout:         getenvDuration("MAMMOTH_INBAND_TIMEOUT", 20*time.Second),
 		RamdiskEnabled:        getenvBool("MAMMOTH_RAMDISK_ENABLED", false),
+		MediaDir:              getenv("MAMMOTH_MEDIA_DIR", "data/media"),
+		MediaNFSBase:          os.Getenv("MAMMOTH_MEDIA_NFS_BASE"),
 		OTELExporterEndpoint:  os.Getenv("MAMMOTH_OTEL_EXPORTER_ENDPOINT"),
 		MetricsAddr:           os.Getenv("MAMMOTH_METRICS_ADDR"),
 		ExternalURL:           getenv("MAMMOTH_EXTERNAL_URL", "http://127.0.0.1:8080"),

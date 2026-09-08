@@ -118,6 +118,13 @@ func serve(args []string) error {
 		Delay: fakeInbandDelay,
 	}}
 
+	// Media repository: boot ISOs land in MediaDir; MediaNFSBase exposes it
+	// to BMCs (nfs://host/export base for the virtual media mount URI).
+	mediaDir := getenv("MAMMOTH_MEDIA_DIR", "data/media")
+	if err := os.MkdirAll(mediaDir, 0o755); err != nil {
+		return fmt.Errorf("media dir: %w", err)
+	}
+
 	// Distro drivers register here; adding a distro never touches the
 	// orchestration layer (docs/06-install-pipeline.md §5).
 	renderReg := render.NewRegistry()

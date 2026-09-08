@@ -494,6 +494,90 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /api/v1/jobs/{id}/events:
+    parameters:
+      - $ref: '#/components/parameters/jobId'
+    get:
+      operationId: streamJobEvents
+      tags: [jobs]
+      summary: Stream a job's events (SSE)
+      description: |
+        Server-sent events for a job: stage/state changes and machine facts.
+        Watermark by event id; reconnects resume from the Last-Event-ID
+        header. Bearer auth applies (integrators stream with a token).
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          description: Resume the stream after this event id.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: SSE stream (`text/event-stream`).
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/Event'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/events:
+    get:
+      operationId: listEvents
+      tags: [jobs]
+      summary: Query events (audit and SSE backlog)
+      description: |
+        Cursor-paginated event listing. Audit queries filter by
+        resource/type; the SSE global stream is the same surface streamed
+        via `streamEvents`.
+      parameters:
+        - name: resource_type
+          in: query
+          schema:
+            type: string
+            enum: [job, task, machine, credential]
+        - name: resource_id
+          in: query
+          schema:
+            type: string
+        - name: type
+          in: query
+          description: Exact event type filter (e.g. machine.discovered).
+          schema:
+            type: string
+        - $ref: '#/components/parameters/pageSize'
+        - $ref: '#/components/parameters/cursor'
+      responses:
+        '200':
+          description: Event page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventList'
+
+  /api/v1/events/stream:
+    get:
+      operationId: streamEvents
+      tags: [jobs]
+      summary: Stream all events (SSE)
+      parameters:
+        - name: resource
+          in: query
+          description: Filter to one resource id (e.g. job_x9k2).
+          schema:
+            type: string
+        - name: Last-Event-ID
+          in: header
+          schema:
+            type: string
+      responses:
+        '200':
+          description: SSE stream (`text/event-stream`).
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/Event'
+
   /api/v1/jobs/{id}/tasks/{taskId}/retry:
     parameters:
       - $ref: '#/components/parameters/jobId'
@@ -1564,6 +1648,39 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Task'
+        next_cursor:
+          type: string
+          nullable: true
+
+    Event:
+      type: object
+      required: [id, resource_type, resource_id, type, ts]
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Monotonic watermark (SSE Last-Event-ID).
+        resource_type:
+          type: string
+        resource_id:
+          type: string
+        type:
+          type: string
+          example: task.stage_changed
+        payload:
+          additionalProperties: true
+          nullable: true
+        ts:
+          $ref: '#/components/schemas/Timestamp'
+
+    EventList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
         next_cursor:
           type: string
           nullable: true

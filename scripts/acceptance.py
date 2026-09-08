@@ -627,6 +627,62 @@ def main():
                 rtasks and rtasks[0]["state"] == "failed" and rerr.get("code") == "BMC_UNSUPPORTED",
                 f"{rerr.get('code')}: {rerr.get('message', '')[:50]}")
 
+    # 4.95 M6: events (audit query + SSE) and CLI smoke.
+    print("· events + audit + cli")
+    status, ev = c.get("/api/v1/events?page_size=200")
+    types = [e["type"] for e in ev.get("items", [])]
+    ok &= check("event backlog queryable",
+                status == 200 and "machine.discovered" in types and "job.created" in types,
+                f"{len(types)} events")
+    status, ev2 = c.get("/api/v1/events?resource_type=machine&type=machine.discovered")
+    ok &= check("audit filter by resource_type + type",
+                status == 200 and len(ev2.get("items", [])) >= 1, str(status))
+
+    # SSE: open the global stream with a cursor at the current watermark and
+    # trigger one event; the event must arrive within a few seconds.
+    import threading
+    wm = max((e["id"] for e in ev.get("items", [])), default=0)
+    got = {}
+    def consume():
+        try:
+            req = urllib.request.Request(c.base + "/api/v1/events/stream",
+                                         headers={"Authorization": "Bearer " + c.token,
+                                                  "Last-Event-ID": str(wm)})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                for line in resp:
+                    line = line.decode(errors="replace").strip()
+                    if line.startswith("event: "):
+                        got.setdefault("events", []).append(line[7:])
+                    if got.get("events"):
+                        return
+        except Exception:
+            pass
+    th = threading.Thread(target=consume, daemon=True)
+    th.start()
+    time.sleep(1.0)
+    c.post("/api/v1/machines", {  # triggers machine.created event
+        "labels": {}, "bmc": {"address": "fake://sse-node", "protocol": "fake",
+                              "credential_id": cred_id}})
+    th.join(timeout=15)
+    evs = got.get("events", [])
+    ok &= check("SSE stream delivers new events",
+                len(evs) > 0 and evs[0] in ("machine.created", "job.created",
+                                            "task.state_changed", "task.stage_changed"),
+                str(evs[:2]))
+
+    # CLI smoke: version, machine list, events list (subprocess against the
+    # same server — the CLI is a thin HTTP client).
+    import subprocess as sp
+    def cli(*args):
+        r = sp.run([args[0]] + list(args[1:]), capture_output=True, text=True, timeout=60)
+        return r.returncode, r.stdout + r.stderr
+    rc, out = cli(args.binary, "machines", "list", "--api", c.base, "--token", c.token)
+    ok &= check("cli: machines list", rc == 0 and "fake://acc-node0" in out, out.strip()[:60])
+    rc, out = cli(args.binary, "jobs", "list", "--api", c.base, "--token", c.token)
+    ok &= check("cli: jobs list", rc == 0 and "job_" in out, out.strip()[:60])
+    rc, out = cli(args.binary, "events", "list", "--api", c.base, "--token", c.token)
+    ok &= check("cli: events list", rc == 0 and "machine.discovered" in out, out.strip()[:40])
+
     # 5. crash path: requires the outer environment to run this instance with
     # MAMMOTH_FAKE_BMC_DELAY set (tasks slow enough to kill mid-flight) and
     # --dsn pointing at the same database for the restart.

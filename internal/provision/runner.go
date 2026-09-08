@@ -31,13 +31,14 @@ type Runner struct {
 	ID      string
 	Queue   queue.TaskQueue
 	Jobs    *store.JobRepo
+	Events  *store.EventRepo
 	Exec    *Executor
 	Metrics *obs.Metrics
 	Opts    RunnerOptions
 	Logger  *slog.Logger
 }
 
-func NewRunner(q queue.TaskQueue, jobs *store.JobRepo, exec *Executor, m *obs.Metrics, o RunnerOptions, logger *slog.Logger) *Runner {
+func NewRunner(q queue.TaskQueue, jobs *store.JobRepo, events *store.EventRepo, exec *Executor, m *obs.Metrics, o RunnerOptions, logger *slog.Logger) *Runner {
 	if o.Concurrency <= 0 {
 		o.Concurrency = 10
 	}
@@ -54,6 +55,7 @@ func NewRunner(q queue.TaskQueue, jobs *store.JobRepo, exec *Executor, m *obs.Me
 		ID:      "runner-" + uuid.NewString()[:8],
 		Queue:   q,
 		Jobs:    jobs,
+		Events:  events,
 		Exec:    exec,
 		Metrics: m,
 		Opts:    o,
@@ -188,6 +190,9 @@ func (r *Runner) handle(ctx context.Context, receipt queue.Receipt, log *slog.Lo
 				execErr = fmt.Errorf("advance stage: %w", err)
 				break
 			}
+			r.event(ctx, task, "task.stage_changed", map[string]any{
+				"stage": stages[seq], "seq": seq,
+			})
 			continue
 		}
 		_ = r.Jobs.FailStage(ctx, task.ID, seq)
@@ -207,6 +212,7 @@ func (r *Runner) finish(ctx context.Context, receipt queue.Receipt, task *store.
 		if err := r.Jobs.CompleteTask(ctx, task.ID); err != nil {
 			log.ErrorContext(ctx, "complete task failed", "err", err.Error())
 		}
+		r.event(ctx, task, "task.state_changed", map[string]any{"state": "succeeded"})
 		r.observe(ctx, job, "succeeded")
 		mustAck(ctx, r.Queue, receipt, log)
 		r.afterStateChange(ctx, job, nil)
@@ -218,6 +224,7 @@ func (r *Runner) finish(ctx context.Context, receipt queue.Receipt, task *store.
 		if err := r.Jobs.MarkCanceled(ctx, task.ID); err != nil {
 			log.ErrorContext(ctx, "cancel task failed", "err", err.Error())
 		}
+		r.event(ctx, task, "task.state_changed", map[string]any{"state": "canceled"})
 		r.observe(ctx, job, "canceled")
 		mustAck(ctx, r.Queue, receipt, log)
 		r.afterStateChange(ctx, job, nil)
@@ -249,6 +256,7 @@ func (r *Runner) finish(ctx context.Context, receipt queue.Receipt, task *store.
 		if err := r.Jobs.FailTask(ctx, task.ID, ei); err != nil {
 			log.ErrorContext(ctx, "fail task failed", "err", err.Error())
 		}
+		r.event(ctx, task, "task.state_changed", map[string]any{"state": "failed", "code": ei.Code})
 		r.observe(ctx, job, "failed")
 		mustAck(ctx, r.Queue, receipt, log)
 		r.afterStateChange(ctx, job, &ei)
@@ -331,4 +339,13 @@ func mustAck(ctx context.Context, q queue.TaskQueue, r queue.Receipt, log *slog.
 	if err := q.Ack(ctx, r); err != nil {
 		log.ErrorContext(ctx, "ack failed", "err", err.Error())
 	}
+}
+
+// event appends an observable fact for SSE consumers. Best-effort: event
+// loss never fails the transition it describes.
+func (r *Runner) event(ctx context.Context, task *store.Task, typ string, payload map[string]any) {
+	if r.Events == nil {
+		return
+	}
+	r.Events.Append(ctx, "task", task.ID, typ, payload)
 }

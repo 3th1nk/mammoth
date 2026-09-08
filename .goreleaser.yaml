@@ -1,0 +1,33 @@
+# goreleaser release pipeline (docs/09-roadmap.md M6: CLI, goreleaser 分发).
+# Release: git tag vX.Y.Z && goreleaser release --clean
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: mammoth
+    main: ./cmd/mammoth
+    binary: mammoth
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/3th1nk/mammoth/internal/version.Version={{.Version}}
+        -X github.com/3th1nk/mammoth/internal/version.Commit={{.Commit}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "mammoth_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - Merge pull request

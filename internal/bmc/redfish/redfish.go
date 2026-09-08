@@ -293,15 +293,23 @@ func (d *Driver) MountMedia(ctx context.Context, addr string, cred bmc.Credentia
 	}
 	defer c.Logout()
 
-	vm, err := firstVirtualMedia(c)
-	if err != nil {
+	vms, verr := managersVirtualMedia(c)
+	if verr != nil || len(vms) == 0 {
+		return &bmc.Error{Kind: bmc.KindUnsupported, Op: "mount_media", Detail: "no virtual media resource"}
+	}
+	for _, vm := range vms {
+		if vm.SupportsMediaInsert {
+			if err := vm.InsertMedia(img.URL, true, true); err != nil {
+				return bmc.Classify("mount_media", err)
+			}
+			return nil
+		}
+	}
+	// Standard InsertMedia not advertised anywhere (Huawei iBMC observed):
+	// fall back to the vendor OEM action (VmmControl) when the vendor is
+	// recognizable, with task polling until the mount settles.
+	if err := d.vmmControl(ctx, c, addr, img.URL, "Connect"); err != nil {
 		return err
-	}
-	if !vm.SupportsMediaInsert {
-		return &bmc.Error{Kind: bmc.KindUnsupported, Op: "mount_media", Detail: "virtual media insert not advertised"}
-	}
-	if err := vm.InsertMedia(img.URL, true, true); err != nil {
-		return bmc.Classify("mount_media", err)
 	}
 	return nil
 }
@@ -313,15 +321,16 @@ func (d *Driver) EjectMedia(ctx context.Context, addr string, cred bmc.Credentia
 	}
 	defer c.Logout()
 
-	vms, err := virtualMediaList(c)
-	if err != nil {
-		return err
-	}
-	if len(vms) == 0 {
+	vms, verr := managersVirtualMedia(c)
+	if verr != nil || len(vms) == 0 {
 		return &bmc.Error{Kind: bmc.KindUnsupported, Op: "eject_media", Detail: "no virtual media resource"}
 	}
-	var firstErr error
+	advertised := false
 	for _, vm := range vms {
+		if !vm.SupportsMediaEject {
+			continue
+		}
+		advertised = true
 		if !vm.Inserted {
 			continue
 		}
@@ -329,25 +338,19 @@ func (d *Driver) EjectMedia(ctx context.Context, addr string, cred bmc.Credentia
 		if img.URL != "" && vm.Image != "" && vm.Image != img.URL {
 			continue
 		}
-		if err := vm.EjectMedia(); err != nil && firstErr == nil {
-			firstErr = bmc.Classify("eject_media", err)
+		if err := vm.EjectMedia(); err != nil {
+			return bmc.Classify("eject_media", err)
 		}
+		return nil
 	}
-	return firstErr
+	if !advertised {
+		// Huawei-style: no eject action advertised → OEM VmmControl Disconnect.
+		return d.vmmControl(ctx, c, addr, img.URL, "Disconnect")
+	}
+	return nil
 }
 
-func firstVirtualMedia(c *gofish.APIClient) (*redfish.VirtualMedia, error) {
-	vms, err := virtualMediaList(c)
-	if err != nil {
-		return nil, err
-	}
-	if len(vms) == 0 {
-		return nil, &bmc.Error{Kind: bmc.KindUnsupported, Op: "mount_media", Detail: "no virtual media resource"}
-	}
-	return vms[0], nil
-}
-
-func virtualMediaList(c *gofish.APIClient) ([]*redfish.VirtualMedia, error) {
+func managersVirtualMedia(c *gofish.APIClient) ([]*redfish.VirtualMedia, error) {
 	managers, err := c.Service.Managers()
 	if err != nil {
 		return nil, bmc.Classify("virtual_media", err)

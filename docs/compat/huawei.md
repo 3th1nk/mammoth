@@ -91,7 +91,18 @@ POST /redfish/v1/Managers/1/VirtualMedia/CD/Oem/Huawei/Actions/VirtualMedia.VmmC
   仅支持 NFS/CIFS 类共享,不支持 HTTP 直链;
 - `Disconnect` 为同步弹出(实测:`eject_media` 动作 → 任务 succeeded →
   Redfish `Inserted: False`),契约已补 `eject_media` 动作类型;
-- 连接失败回报 `iBMC.1.0.ConnectionFailed`。
+- 连接失败回报 `iBMC.1.0.ConnectionFailed`;
+- **Connect 是概率性失败,重试即成功(实机抓包定论)**:对同一 NFS URI,
+  一次 Connect 3 秒即 Exception,紧接着的 Connect 却完整走通——tcpdump 显示
+  成功路径上 BMC 的 NFSv3 客户端完整完成 portmapper/mountd/NFS 握手、
+  lookup/getattr 后开始读镜像;失败路径在握手完成后即放弃。任务消息自带的
+  Resolution 就是 "Please try again"。驱动侧 `MountMedia` 对 Connect 做
+  应用内重试(≤3 次,间隔 4s),避免烧掉流水线任务级重试;
+- **成功挂载耗时 ~12-15s**:握手 <100ms 完成,中间 ~13s 是 BMC 校验
+  ISO9660 元数据(读 PVD/目录记录),随后任务 Completed + `Inserted: true`。
+  操作超时预算需覆盖这一段(MAMMOTH_BMC_TIMEOUT 建议 ≥60s);
+- Connect 前必须先 Disconnect:槽位被占时直接 Connect 报
+  `iBMC.1.0.ConnectionOccupied`。驱动固定"先断后连"(断开失败静默忽略)。
 
 驱动修复:`redfish.MountMedia/EjectMedia` 在标准动作未通告时回退到
 VmmControl(任务轮询至终态,失败分类为 BMC_PROTOCOL_ERROR 并携带 iBMC
@@ -114,12 +125,71 @@ VmmControl(任务轮询至终态,失败分类为 BMC_PROTOCOL_ERROR 并携带 iB
 
 ### 8. 软重启(实测)
 
-`GracefulRestart` 在此固件/电源状态下被拒("Correct the value for the
-parameter")——使用 `ForceRestart`(hard_reboot)成功。驱动侧该映射本就
-显式,无需改动;操作上软重启失败时用 hard_reboot 替代。
+`GracefulRestart` 与 `PowerCycle` 在此固件/电源状态下均被拒
+(`ActionParameterValueFormatError`)——`ForceRestart`(hard_reboot)可用。
+驱动侧已加回退:Reset 拒绝且属于重启类 ResetType 时,自动以 ForceRestart
+重试一次(安装流水线的 boot 阶段用 power cycle 引导进安装器,即靠此回退)。
 
 ### 9. 其它已核实形状
 
 - 存储集合链接为 `/Systems/1/Storages`(非标准复数);gofish 按通告链接可走通;
 - `/Systems/1/Processors` 集合本身可用,仅单条目(本机 1 颗物理 CPU);
 - 网卡 `Id` 为真实端口身份(`mainboardLOMPort1/2`),`SpeedMbps`/`LinkStatus` 不上报。
+
+## 端到端重装实录(2026-09-10,六阶段全通过)
+
+在此机型上完成首次真实硬件端到端重装(Rocky 9.7,UEFI,硬件 RAID 逻辑盘,
+NFS ISO 装包源,静态网络)。全链路打通过程中固化下来的事实:
+
+1. **存储拓扑可变性**:同一台机器,盘查结果会随 RAID 卡配置在
+   "物理盘直通"与"逻辑盘(LD0/LD1,coverage: full)"之间切换。逻辑盘名
+   (`LogicalDrive0/1`)不是安装器内核设备名(sda/sdb)——rocky9 驱动对
+   非 kernel 命名的 wipe 盘自动走 %pre 现场解析(按 size±1% + serial 匹配
+   lsblk,生成动态 %include 承载 clearpart/part/bootloader)。
+2. **UEFI 要素**(BootSourceOverrideMode=UEFI):
+   - 引导介质必须同时喂饱两种平台:isolinux 相对路径(syslinux 以配置
+     目录为基准)+ grub 绝对路径;内核/initrd 需在两个目录各有一份;
+   - kickstart 必须声明 ESP(`part /boot/efi --fstype=efi`),否则
+     anaconda 报 "failed to find a suitable stage1 device" 中止;
+3. **安装源形态**:anaconda 的 `url` 命令只收 http(s)/ftp 的解包树;
+   NFS 上的 ISO 用 `nfs --server= --dir=<ISO所在目录>`(kickstart 命令)
+   或 `inst.repo=nfs:server:/path/file.iso`(内核参数,冒号必须有),
+   anaconda 检测 .iso 自动 loop 挂载。
+4. **无 DHCP 的数据面**:安装器拉取远程 kickstart 前不配网——rocky9 驱动
+   从 spec.network 渲染早期网络内核参数(`ifname=m0:<mac> ip=...::gw:mask::m0:none`,
+   按 MAC 钉死网口,与安装器内命名无关);无静态配置时回退 `ip=dhcp`。
+   kickstart 内 network 命令经 %pre 按 MAC 解析真实接口名(含网关)。
+5. **eject 时机**:boot 阶段挂载的介质必须保持到安装器上报完成——
+   服务器 POST 自检期间固件才读介质,过早弹出 = CD 引导失败落回旧系统。
+6. **root 密码与 SSH**:Rocky 9 的 sshd 默认 `PermitRootLogin
+   prohibit-password`,生成的 root 密码仅控制台可登;SSH 进新系统需
+   在 spec.scripts 里自行放开或改用密钥。
+
+## 硬件 RAID 卷管理(实测,iBMC 6.41 + AVAGO)
+
+- **物理盘**暴露于 `/Chassis/{id}/Drives`(SerialNumber 齐全),而 Storage
+  资源的内联 Drives 数组额外携带 `Oem.Huawei.DriveID`(整数)——**建卷载荷
+  要的就是这个整数**:`POST /Storages/{id}/Volumes`,
+  `{"Name": ..., "Oem": {"Huawei": {"VolumeRaidLevel": "RAID1", "Drives": [0, 2]}}}`
+  → 202 + 任务,`VolumeCreationSuccess`。标准载荷(RAIDType 属性)被拒
+  (PropertyUnknown);盘被已有卷占用时报 `DriveStatusNotSupported`;
+- **DELETE** 卷资源可用(标准),同样 202 + 任务;删卷后成员盘转为
+  UnconfiguredGood,重新可建卷(UnconfiguredBad 的盘需先手工 make good);
+- **卷名被控制器忽略**:无论请求什么 Name,卷都叫 LogicalDriveN(自动
+  递增)——驱动 CreateVolume 返回"实际出现在盘查里的卷名",流水线按返回
+  值绑定;幂等语义按"成员序列号集合 + RAID 级别"判定,而非卷名;
+- **盘查呈现规则与 RAID 意图的关系**:卷优先呈现时物理盘不可见,而 RAID
+  成员选择恰恰需要物理盘 → 新增可选能力 `PhysicalDrives`(bmc.PhysicalDriveEnumerator)
+  供 verify_layout 解析硬件 RAID 成员;同时物理盘的协议名归一为 "raid"。
+- 驱动侧成员映射:内联数组的 Id(如 HDDPlaneDisk0)↔ 单盘资源里的
+  SerialNumber,两段拼出 serial→DriveID 的映射。
+
+## 介质中转竞态(部署注意)
+
+经中转(本地构建后 scp 推 NFS)分发引导介质时,**挂载成功 ≠ 文件完整**:
+iBMC 的挂载校验只读镜像头部,部分文件即可通过;固件在 POST 后期才真正
+读取内核/initrd,读到残缺数据即 CD 引导失败、静默落回旧系统盘(无任何
+报错回流)。两项缓解,均已实现:
+1. 推送侧原子可见(先传临时名再改名);
+2. `MAMMOTH_BOOT_SETTLE_DELAY`(boot 阶段挂载与上电之间的等待,默认 0;
+   中转分发部署建议 ≥ 推送耗时)。

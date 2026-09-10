@@ -712,7 +712,7 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	// (docs/06-install-pipeline.md §2.1). The ISO lands in the media repo
 	// and is exposed to the BMC through the NFS base URI.
 	mediaFile := fmt.Sprintf("boot-%s.iso", ictx.Token)
-	mediaURI := mediaURIFor(e.MediaNFSBase, filepath.Base(mediaFile))
+	mediaURI := mediaURIFor(e.MediaBaseURI, filepath.Base(mediaFile))
 	distroISO, err := builder.EnsureISO(ctx, spec.Image.Source, e.MediaDir)
 	if err != nil {
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
@@ -721,6 +721,18 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	if berr := buildBootISO(ctx, distroISO, filepath.Join(e.MediaDir, filepath.Base(mediaFile)), boot.KernelArgs); berr != nil {
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 			"boot media build failed: %s", berr.Error())
+	}
+	// Relay deployment: the BMC mounts the media from the remote export —
+	// the file must be complete there BEFORE the boot stage mounts it. The
+	// push is synchronous and atomic (temp name + rename), which is what
+	// makes the boot-stage race structurally impossible; the settle delay
+	// above remains for deployments that still push out-of-band.
+	if e.MediaUploader != nil {
+		if _, perr := e.MediaUploader.Push(ctx, filepath.Join(e.MediaDir, filepath.Base(mediaFile))); perr != nil {
+			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+				"boot media relay push failed: %s", perr.Error())
+		}
+		obs.FromContext(ctx).InfoContext(ctx, "boot media relayed", "file", filepath.Base(mediaFile))
 	}
 
 	raw, _ := json.Marshal(ictx.Install)
@@ -938,10 +950,17 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 	// The boot media has served its purpose — reclaim the media repository
 	// copy (the BMC-side copy is the deployment's NFS export; docs/compat/
 	// huawei.md media-relay notes).
-	if ictx.Token != "" && e.MediaDir != "" {
-		mediaFile := filepath.Join(e.MediaDir, fmt.Sprintf("boot-%s.iso", ictx.Token))
-		if err := os.Remove(mediaFile); err == nil {
-			obs.FromContext(ctx).InfoContext(ctx, "boot media removed", "file", mediaFile)
+	if ictx.Token != "" {
+		mediaFile := fmt.Sprintf("boot-%s.iso", ictx.Token)
+		if e.MediaDir != "" {
+			if err := os.Remove(filepath.Join(e.MediaDir, mediaFile)); err == nil {
+				obs.FromContext(ctx).InfoContext(ctx, "boot media removed", "file", mediaFile)
+			}
+		}
+		if e.MediaUploader != nil {
+			if err := e.MediaUploader.Remove(ctx, mediaFile); err == nil {
+				obs.FromContext(ctx).InfoContext(ctx, "boot media relay copy removed", "file", mediaFile)
+			}
 		}
 	}
 
@@ -1040,6 +1059,14 @@ func firstNonEmptyStr(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// MediaUploader moves assembled boot media into the BMC-reachable share.
+// MediaRelay (SSH) is the first implementation; FTP/HTTP relays would slot
+// in behind the same two calls.
+type MediaUploader interface {
+	Push(ctx context.Context, localPath string) (remoteName string, err error)
+	Remove(ctx context.Context, name string) error
 }
 
 // physicalDrives lists the controller's physical drives via the optional

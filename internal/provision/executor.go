@@ -2,10 +2,10 @@ package provision
 
 import (
 	"context"
-	"time"
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/3th1nk/mammoth/internal/bmc"
 	"github.com/3th1nk/mammoth/internal/bmc/compat"
@@ -38,6 +38,14 @@ type Executor struct {
 	// BootSettleDelay waits between media mount and power-on — covers
 	// out-of-band media transfer tails (NFS relay pushes).
 	BootSettleDelay time.Duration
+	// MediaBaseURI is the BMC-reachable media base URI the BMC mounts from
+	// (nfs://, cifs://, ftp:// — the firmware decides what it accepts).
+	MediaBaseURI string
+	// MediaUploader, when configured, moves the assembled boot ISO into the
+	// BMC-reachable share in-process (SSH relay today; FTP/HTTP relays slot
+	// in behind the same shape). Deployments that mount the export directly
+	// need none.
+	MediaUploader MediaUploader
 	// RamdiskEnabled declares the optional ramdisk probe feature
 	// (docs/05-inventory.md §4 — requires the PXE boot infrastructure).
 	RamdiskEnabled bool

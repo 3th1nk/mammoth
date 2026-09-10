@@ -75,8 +75,12 @@ type Config struct {
 	InbandTimeout      time.Duration // whole inband_ssh collection bound
 	RamdiskEnabled     bool          // optional ramdisk probe (docs/05 §4; PXE-first)
 	MediaDir           string        // local media repository (boot ISOs)
-	MediaNFSBase       string        // NFS URI base for BMC media fetch (nfs://host/export)
+	MediaBaseURI       string        // BMC-reachable media base URI (nfs://, cifs://, ftp:// — firmware decides)
 	BootSettleDelay    time.Duration // wait between media mount and power-on (NFS relay pushes)
+	MediaRelayAddr     string        // media relay SSH endpoint (host[:port]); empty = no relay
+	MediaRelayUser     string
+	MediaRelayPassword string
+	MediaRelayDir      string        // remote export directory the BMC mounts from
 
 	// OTELExporterEndpoint enables OTLP trace export when non-empty.
 	// Without it, tracing stays at the API boundary instrumentation level
@@ -119,7 +123,11 @@ func FromEnv() (Config, error) {
 		InbandTimeout:         getenvDuration("MAMMOTH_INBAND_TIMEOUT", 20*time.Second),
 		RamdiskEnabled:        getenvBool("MAMMOTH_RAMDISK_ENABLED", false),
 		MediaDir:              getenv("MAMMOTH_MEDIA_DIR", "data/media"),
-		MediaNFSBase:          os.Getenv("MAMMOTH_MEDIA_NFS_BASE"),
+		MediaBaseURI:          getenv("MAMMOTH_MEDIA_BASE_URI", os.Getenv("MAMMOTH_MEDIA_NFS_BASE")),
+		MediaRelayAddr:        os.Getenv("MAMMOTH_MEDIA_RELAY_ADDR"),
+		MediaRelayUser:        os.Getenv("MAMMOTH_MEDIA_RELAY_USER"),
+		MediaRelayPassword:    os.Getenv("MAMMOTH_MEDIA_RELAY_PASSWORD"),
+		MediaRelayDir:         os.Getenv("MAMMOTH_MEDIA_RELAY_DIR"),
 		BootSettleDelay:       getenvDuration("MAMMOTH_BOOT_SETTLE_DELAY", 0),
 		OTELExporterEndpoint:  os.Getenv("MAMMOTH_OTEL_EXPORTER_ENDPOINT"),
 		MetricsAddr:           os.Getenv("MAMMOTH_METRICS_ADDR"),

@@ -19,6 +19,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/bmc/redfish"
 	"github.com/3th1nk/mammoth/internal/config"
 	"github.com/3th1nk/mammoth/internal/inventory/inbandssh"
+	"github.com/3th1nk/mammoth/internal/mediarelay"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/provision"
 	"github.com/3th1nk/mammoth/internal/render"
@@ -125,6 +126,18 @@ func serve(args []string) error {
 		return fmt.Errorf("media dir: %w", err)
 	}
 
+	// Media relay (optional): when set, assembled boot media is pushed to the
+	// BMC-reachable export in-process — replacing out-of-band push scripts.
+	var mediaRelay *mediarelay.Relay
+	if getenv("MAMMOTH_MEDIA_RELAY_ADDR", "") != "" {
+		relay, rerr := mediarelay.New(cfg.MediaRelayAddr, cfg.MediaRelayUser,
+			cfg.MediaRelayPassword, cfg.MediaRelayDir, 10*time.Minute)
+		if rerr != nil {
+			return fmt.Errorf("media relay: %w", rerr)
+		}
+		mediaRelay = relay
+	}
+
 	// Distro drivers register here; adding a distro never touches the
 	// orchestration layer (docs/06-install-pipeline.md §5).
 	renderReg := render.NewRegistry()
@@ -225,8 +238,9 @@ func serve(args []string) error {
 			Render:          renderReg,
 			ExternalURL:     cfg.ExternalURL,
 			MediaDir:        cfg.MediaDir,
-			MediaNFSBase:    cfg.MediaNFSBase,
+			MediaBaseURI:    cfg.MediaBaseURI,
 			BootSettleDelay: cfg.BootSettleDelay,
+			MediaUploader:   mediaRelay,
 			RamdiskEnabled:  cfg.RamdiskEnabled,
 			LayoutKeep:      cfg.LayoutRetention,
 		}

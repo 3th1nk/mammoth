@@ -8,12 +8,28 @@ package rocky9
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
+	"path"
+	"regexp"
 	"strings"
 	"text/template"
 
 	"github.com/3th1nk/mammoth/internal/render"
 )
+
+// dynDisk is one claimed disk that must be re-identified in %pre: ph is the
+// $Dn placeholder its stanzas reference; device/sizeBytes/serial drive the
+// %pre resolution (docs/compat/huawei.md — Redfish logical drive names differ
+// from installer device names).
+type dynDisk struct {
+	idx       int
+	ph        string
+	device    string
+	sizeBytes int64
+	serial    string
+	partLines []string
+}
 
 // Driver is the rocky9 kickstart driver.
 type Driver struct{}
@@ -36,7 +52,20 @@ func (d *Driver) KeepPartitionSupport() render.SupportLevel { return render.Supp
 //   - storage: resolved disks/partitions from verify_layout;
 //   - %post: user scripts, then the completion callback that unblocks the
 //     install stage (docs/06-install-pipeline.md §3, §4).
-var ksTemplate = template.Must(template.New("ks").Parse(`# Mammoth — task {{.TaskToken}} / machine {{.MachineID}}
+// failtrap renders the per-hook ERR trap: a failing %pre/%post reports its
+// phase to the completion endpoint, so the task error carries the failing
+// installer phase instead of an opaque timeout — the portable stand-in for
+// console capture (the drift guard keeps its own precise LAYOUT_DRIFT report).
+func failtrap(detail, completeURL string) string {
+	payload := fmt.Sprintf(`{\"status\":\"failed\",\"detail\":\"%s\"}`, detail)
+	return fmt.Sprintf(
+		`trap 'curl -m 5 -sS -X POST -H "Content-Type: application/json" -d "%s" %s >/dev/null 2>&1 || true' ERR`,
+		payload, completeURL)
+}
+
+var ksTemplate = template.Must(template.New("ks").Funcs(template.FuncMap{
+	"failtrap": failtrap,
+}).Parse(`# Mammoth — task {{.TaskToken}} / machine {{.MachineID}}
 # Rendered by the mammoth server; fetched via inst.ks over the task-token URL.
 text
 reboot
@@ -58,6 +87,7 @@ sshkey --username=root "{{.}}"
 
 %pre --erroronfail
 set -e
+{{failtrap "network pre_install failed" .CompleteURL}}
 mkdir -p /run/install/mammoth
 cat > /run/install/mammoth/network.sh <<'MAMMOTH_NET'
 {{.NetworkShell}}
@@ -69,12 +99,31 @@ sh /run/install/mammoth/network.sh > /run/install/mammoth/90-network.ks
 
 network --bootproto=dhcp --activate
 {{- end}}
+{{- if .Hostname}}
 
-url --url={{.ImageSource}}
+network --hostname={{.Hostname}}
+{{- end}}
+{{- if .StoragePre}}
+
+%pre --erroronfail
+set -e
+{{failtrap "storage pre_install failed" .CompleteURL}}
+mkdir -p /run/install/mammoth
+cat > /run/install/mammoth/storage.sh <<'MAMMOTH_STORE'
+{{.StorageShell}}
+MAMMOTH_STORE
+sh /run/install/mammoth/storage.sh > /run/install/mammoth/90-storage.ks
+%end
+%include /run/install/mammoth/90-storage.ks
+{{- end}}
+
+{{.RepoCmd}}
+{{- if not .StoragePre}}
 bootloader --location=mbr{{if .BootDrive}} --boot-drive={{.BootDrive}}{{end}}
 {{- if .WipeDrives}}
 zerombr
 clearpart --drives={{.WipeDrives}} --initlabel --all
+{{- end}}
 {{- end}}
 {{- if .RemoveParts}}
 clearpart --list={{.RemoveParts}}
@@ -97,6 +146,7 @@ curl
 
 %pre --erroronfail
 set -e
+{{failtrap "pre_install script failed" .CompleteURL}}
 {{- range .PreScripts}}
 {{.}}
 {{- end}}
@@ -111,6 +161,7 @@ set -e
 
 %post --erroronfail
 set -e
+{{failtrap "post_install script failed" .CompleteURL}}
 {{- range .PostScripts}}
 {{.}}
 {{- end}}
@@ -233,7 +284,7 @@ func prefixToMask(bits int) string {
 
 func defaultVia(routes []render.NetRoute) string {
 	for _, r := range routes {
-		if r.To == "default" {
+		if r.To == "default" || r.To == "0.0.0.0/0" || r.To == "::/0" {
 			return r.Via
 		}
 	}
@@ -263,6 +314,20 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	var raidMemberLines []string
 	var raidLines []string
 	var drift string
+	// Disks claimed under non-kernel names (Redfish logical drives report
+	// e.g. "LogicalDrive1"; the installer sees sda/sdb) are resolved in %pre
+	// by size+serial: their part lines carry $Dn placeholders expanded by
+	// storage.sh into a dynamic %include (same pattern as network.sh).
+	var dyn []dynDisk
+	var dynMemberLines []string
+	dynPH := func(device string) (string, bool) {
+		for _, d := range dyn {
+			if d.device == device {
+				return d.ph, true
+			}
+		}
+		return "", false
+	}
 	for _, disk := range in.Disks {
 		switch {
 		case disk.KeepDisk:
@@ -273,6 +338,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			// unformatted (--onpart + --noformat, original UUID); the
 			// snapshot's non-preserved partitions are removed precisely
 			// (clearpart --list), leaving the rest of the disk alone.
+			// Device names here come from in-band snapshots — kernel names.
 			removeList = append(removeList, disk.Remove...)
 			if in.DriftCheck && len(disk.Baseline) > 0 {
 				drift += driftGuardScript(disk.Device, disk.Baseline, in.CompleteURL)
@@ -298,31 +364,60 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 				return nil, render.BootParams{}, fmt.Errorf(
 					"rocky9: disk %s must declare wipe or keep", disk.Device)
 			}
-			wipe = append(wipe, disk.Device)
+			if isKernelDeviceName(disk.Device) {
+				wipe = append(wipe, disk.Device)
+				for _, p := range disk.Partitions {
+					line, err := newPartLine(p, disk.Device)
+					if err != nil {
+						return nil, render.BootParams{}, err
+					}
+					partLines = append(partLines, line)
+				}
+				continue
+			}
+			// Redfish-claimed name: resolve in %pre, emit dynamic lines.
+			d := dynDisk{idx: len(dyn), ph: fmt.Sprintf("$D%d", len(dyn)),
+				device: disk.Device, sizeBytes: disk.SizeBytes, serial: disk.Serial}
 			for _, p := range disk.Partitions {
-				line, err := newPartLine(p, disk.Device)
+				line, err := newPartLine(p, d.ph)
+				if err != nil {
+					return nil, render.BootParams{}, err
+				}
+				d.partLines = append(d.partLines, line)
+			}
+			dyn = append(dyn, d)
+		}
+	}
+
+	// hardware raid volumes bind to their discovered drives: fresh logical
+	// drives get clearpart (harmless) and normal part lines. Controller
+	// assigned names (LogicalDriveN) are not kernel names — those resolve in
+	// %pre by size, like disks[].
+	for _, r := range in.Raid {
+		if r.Mode != "hardware" || r.BoundDevice == "" {
+			continue
+		}
+		if isKernelDeviceName(r.BoundDevice) {
+			wipe = append(wipe, r.BoundDevice)
+			for _, p := range r.Partitions {
+				line, err := newPartLine(p, r.BoundDevice)
 				if err != nil {
 					return nil, render.BootParams{}, err
 				}
 				partLines = append(partLines, line)
 			}
-		}
-	}
-
-	// hardware raid volumes bind to their discovered drives: fresh logical
-	// drives get clearpart (harmless) and normal part lines
-	for _, r := range in.Raid {
-		if r.Mode != "hardware" || r.BoundDevice == "" {
 			continue
 		}
-		wipe = append(wipe, r.BoundDevice)
+		d := dynDisk{idx: len(dyn), ph: fmt.Sprintf("$D%d", len(dyn)),
+			device: r.BoundDevice, sizeBytes: r.SizeBytes}
 		for _, p := range r.Partitions {
-			line, err := newPartLine(p, r.BoundDevice)
+			line, err := newPartLine(p, d.ph)
 			if err != nil {
 				return nil, render.BootParams{}, err
 			}
-			partLines = append(partLines, line)
+			d.partLines = append(d.partLines, line)
 		}
+		dyn = append(dyn, d)
 	}
 
 	// software raid: per-member full-disk raid partitions + one md per volume.
@@ -339,8 +434,17 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		var tags []string
 		for mi, member := range r.Members {
 			tag := fmt.Sprintf("raid.%s-%d", r.Name, mi)
-			raidMemberLines = append(raidMemberLines,
-				fmt.Sprintf("part %s --size=1 --grow --ondisk=%s", tag, member))
+			// Members claimed under Redfish names resolve via the same $Dn
+			// placeholders as disks[] (verify_layout consumed the same pool);
+			// their part lines must live in the dynamic include where the
+			// placeholders actually expand.
+			if ph, ok := dynPH(member); ok {
+				dynMemberLines = append(dynMemberLines,
+					fmt.Sprintf("part %s --size=1 --grow --ondisk=%s", tag, ph))
+			} else {
+				raidMemberLines = append(raidMemberLines,
+					fmt.Sprintf("part %s --size=1 --grow --ondisk=%s", tag, member))
+			}
 			tags = append(tags, tag)
 		}
 		p := r.Partitions[0]
@@ -369,6 +473,28 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		netPre = shell
 	}
 
+	// Dynamic storage resolution: when any claimed disk carries a non-kernel
+	// name (Redfish logical drives), the whole wipe/clearpart set moves into
+	// a %pre-generated %include so every name resolves at install time.
+	storageShellText := ""
+	bootDrive := in.BootDrive
+	if len(dyn) > 0 {
+		storageShellText = storageShell(dyn, wipe, dynMemberLines, bootDrive)
+		bootDrive = "" // the bootloader line moves into the include
+		wipe = nil     // clearpart is emitted by the include for all disks
+	}
+
+	// kickstart's `url` command speaks only http/https/ftp — an NFS-hosted
+	// ISO installs via the `nfs` command (dir = the file's directory;
+	// anaconda scans it for the ISO) or inst.repo on the kernel command line.
+	repoCmd := "url --url=" + in.ImageSource
+	if strings.HasPrefix(in.ImageSource, "nfs://") {
+		u := strings.TrimPrefix(in.ImageSource, "nfs://")
+		if i := strings.Index(u, "/"); i > 0 {
+			repoCmd = fmt.Sprintf("nfs --server=%s --dir=%s", u[:i], path.Dir(u[i:]))
+		}
+	}
+
 	data := map[string]any{
 		"TaskToken":       in.TaskToken,
 		"MachineID":       in.MachineID,
@@ -376,7 +502,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		"RootPassword":    in.RootPassword,
 		"SSHPublicKeys":   in.SSHPublicKeys,
 		"ImageSource":     in.ImageSource,
-		"BootDrive":       in.BootDrive,
+		"BootDrive":       bootDrive,
 		"WipeDrives":      strings.Join(wipe, ","),
 		"RemoveParts":     strings.Join(removeList, ","),
 		"PartLines":       partLines,
@@ -385,6 +511,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		"DriftScript":     drift,
 		"NetworkPre":      netPre != "",
 		"NetworkShell":    netPre,
+		"StoragePre":      storageShellText != "",
+		"RepoCmd":         repoCmd,
+		"StorageShell":    storageShellText,
 		"PreScripts":      preScripts,
 		"PostScripts":     postScripts,
 		"CompleteURL":     in.CompleteURL,
@@ -392,8 +521,11 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if in.Hostname != "" {
 		// kickstart sets hostname via the network command or a %post; the
 		// static form is a %post (works for both static and dhcp installs).
+		// hostnamectl cannot reach systemd from the %post chroot (it either
+		// fails or no-ops) — write /etc/hostname directly; the native
+		// `network --hostname=` command above is the primary mechanism.
 		postScripts = append([]string{
-			"hostnamectl set-hostname " + in.Hostname + " || echo " + in.Hostname + " > /etc/hostname",
+			"echo " + in.Hostname + " > /etc/hostname",
 		}, postScripts...)
 		data["PostScripts"] = postScripts
 	}
@@ -403,12 +535,161 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		return nil, render.BootParams{}, fmt.Errorf("rocky9: template: %w", err)
 	}
 
+	// inst.repo: when the distro source is an NFS-hosted ISO, anaconda can
+	// fetch packages from it directly — this allows single-slot BMCs to boot
+	// with ONLY the boot ISO (packages come over the network).
+	repo := "cdrom"
+	if strings.HasPrefix(in.ImageSource, "nfs://") {
+		// anaconda nfs syntax requires host:/path (an .iso path is loop-mounted
+		// automatically — the supported way to install from an NFS-hosted ISO;
+		// an HTTP ISO file is NOT installable: anaconda can only fetch an
+		// unpacked tree over HTTP).
+		u := strings.TrimPrefix(in.ImageSource, "nfs://")
+		if i := strings.Index(u, "/"); i > 0 {
+			u = u[:i] + ":" + u[i:]
+		}
+		repo = "nfs:" + u
+	} else {
+		repo = in.ImageSource
+	}
+
 	answers := []render.AnswerFile{{Name: "ks.cfg", Content: buf.String()}}
+	// Early network (dracut ip=/ifname=): the answer file is a remote URL on
+	// the boot media's kernel command line — anaconda must have network up
+	// BEFORE it can fetch it, and without an ip= argument it configures none
+	// (real-hardware finding: the installer sat idle and never fetched the
+	// kickstart). Spec-defined static interfaces become pinned dracut args
+	// (ifname= by MAC, so they work regardless of in-installer NIC naming);
+	// DHCP is the fallback. The kickstart's own network stanzas apply
+	// afterwards.
+	early := earlyNetworkArgs(in.Network)
+	if early == "" {
+		early = "ip=dhcp"
+	}
 	boot := render.BootParams{
 		AnswerURL:  primaryURL,
-		KernelArgs: fmt.Sprintf("inst.ks=%s inst.repo=cdrom inst.text", primaryURL),
+		KernelArgs: fmt.Sprintf("%s inst.ks=%s inst.repo=%s inst.text", early, primaryURL, repo),
 	}
 	return answers, boot, nil
+}
+
+// isKernelDeviceName reports whether dev looks like a Linux block device
+// name. Redfish inventories often report controller-level names instead
+// ("LogicalDrive1") — those must be re-identified in %pre.
+func isKernelDeviceName(dev string) bool {
+	return kernelDevRe.MatchString(dev)
+}
+
+var kernelDevRe = regexp.MustCompile(
+	`^(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+|hd[a-z]+|xvd[a-z]+|mmcblk[0-9]+|md[0-9]+|dm-[0-9]+)$`)
+
+// storageShell emits the sh snippet executed in %pre: claimed disks are
+// re-identified by size (+serial when known) among the installer's block
+// devices, and the wipe/part/bootloader stanzas land in a dynamic %include.
+// The tolerance is 1% (min 64MiB) — Redfish and kernel capacities agree to
+// within controller rounding, and real disks never sit that close.
+func storageShell(dyn []dynDisk, wipeStatic []string, dynMemberLines []string, bootDrive string) string {
+	var b strings.Builder
+	b.WriteString("# size/serial-resolved storage stanzas, produced by mammoth\n")
+	b.WriteString("resolve() {\n")
+	b.WriteString("  want_size=$1; want_serial=$2; excl=$3; best=\"\"; bestdiff=0\n")
+	b.WriteString("  while read -r name size serial type; do\n")
+	b.WriteString("    [ \"$type\" = \"disk\" ] || continue\n")
+	b.WriteString("    case \" $excl \" in *\" $name \"*) continue ;; esac\n")
+	b.WriteString("    if [ -n \"$want_serial\" ] && [ -n \"$serial\" ] && [ \"$serial\" != \"$want_serial\" ]; then continue; fi\n")
+	b.WriteString("    diff=$((size - want_size)); [ $diff -lt 0 ] && diff=$((-diff))\n")
+	b.WriteString("    if [ -z \"$best\" ] || [ $diff -lt $bestdiff ]; then best=$name; bestdiff=$diff; fi\n")
+	b.WriteString("  done <<MAMMOTH_DISKS\n")
+	b.WriteString("$(lsblk -dnb -o NAME,SIZE,SERIAL,TYPE)\n")
+	b.WriteString("MAMMOTH_DISKS\n")
+	b.WriteString("  tol=$((want_size / 100)); [ $tol -lt 67108864 ] && tol=67108864\n")
+	b.WriteString("  if [ -z \"$best\" ] || [ $bestdiff -gt $tol ]; then\n")
+	b.WriteString("    echo \"mammoth: no disk for size=$want_size serial=$want_serial (closest $best off by $bestdiff)\" >&2\n")
+	b.WriteString("    exit 1\n")
+	b.WriteString("  fi\n")
+	b.WriteString("  echo \"$best\"\n")
+	b.WriteString("}\n")
+
+	excl := ""
+	for _, d := range dyn {
+		fmt.Fprintf(&b, "D%d=$(resolve %d '%s' '%s')\n", d.idx, d.sizeBytes, d.serial, excl)
+		excl += "$D" + fmt.Sprint(d.idx) + " "
+	}
+	if len(wipeStatic) == 0 && len(dyn) == 0 {
+		return b.String() // nothing to write (defensive; callers skip empty)
+	}
+	b.WriteString("mkdir -p /run/install/mammoth\n")
+	b.WriteString("cat > /run/install/mammoth/90-storage.ks <<MAMMOTH_STORAGE_KS\n")
+	b.WriteString("zerombr\n")
+	drives := make([]string, 0, len(dyn)+len(wipeStatic))
+	for _, d := range dyn {
+		drives = append(drives, "$D"+fmt.Sprint(d.idx))
+	}
+	drives = append(drives, wipeStatic...)
+	fmt.Fprintf(&b, "clearpart --drives=%s --initlabel --all\n", strings.Join(drives, ","))
+	for _, d := range dyn {
+		for _, line := range d.partLines {
+			b.WriteString(line + "\n")
+		}
+	}
+	for _, line := range dynMemberLines {
+		b.WriteString(line + "\n")
+	}
+	if bootDrive != "" {
+		ph := bootDrive
+		for _, d := range dyn {
+			if d.device == bootDrive {
+				ph = "$D" + fmt.Sprint(d.idx)
+			}
+		}
+		fmt.Fprintf(&b, "bootloader --location=mbr --boot-drive=%s\n", ph)
+	} else {
+		b.WriteString("bootloader --location=mbr\n")
+	}
+	b.WriteString("MAMMOTH_STORAGE_KS\n")
+	return b.String()
+}
+
+// earlyNetworkArgs renders dracut early-network arguments from the spec's
+// static interface declarations: ifname= pins a stable name by MAC (immune
+// to in-installer NIC naming), ip= configures the address, nameserver= carries
+// DNS. Bond/vlan entries are skipped — their ks-side stanzas handle them and
+// the early phase falls back to DHCP. Returns "" when nothing static applies.
+func earlyNetworkArgs(entries []render.NetworkEntry) string {
+	var b strings.Builder
+	seenDNS := map[string]bool{}
+	n := 0
+	for _, e := range entries {
+		if e.Bond != nil || e.VLAN != nil || e.Match == nil || e.Match.MAC == "" || len(e.Addresses) == 0 {
+			continue
+		}
+		ipAddr, ipnet, err := net.ParseCIDR(e.Addresses[0])
+		if err != nil || ipAddr.To4() == nil {
+			continue
+		}
+		// Prefix → dotted mask for the dracut ip= field.
+		ones, _ := ipnet.Mask.Size()
+		mask := net.IP(net.CIDRMask(ones, 32)).String()
+
+		name := fmt.Sprintf("m%d", n)
+		n++
+		mac := strings.ToLower(e.Match.MAC)
+
+		gateway := ""
+		for _, r := range e.Routes {
+			if r.To == "0.0.0.0/0" || r.To == "default" {
+				gateway = r.Via
+			}
+		}
+		fmt.Fprintf(&b, " ifname=%s:%s ip=%s::%s:%s::%s:none", name, mac, ipAddr.String(), gateway, mask, name)
+		for _, dns := range e.Nameservers {
+			if !seenDNS[dns] {
+				seenDNS[dns] = true
+				fmt.Fprintf(&b, " nameserver=%s", dns)
+			}
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func scriptBody(s render.ScriptEntry) string {

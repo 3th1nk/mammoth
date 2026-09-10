@@ -24,6 +24,11 @@ import (
 type Credentials struct {
 	Username string
 	Password string
+	// PrivateKey (PEM) enables public-key auth — the recommended in-band
+	// path: provisioned systems commonly set PermitRootLogin
+	// prohibit-password (Rocky 9 default), which refuses password auth for
+	// root while accepting keys (real-hardware finding).
+	PrivateKey string
 }
 
 // Runner executes the read-only command set over a transport. The SSH

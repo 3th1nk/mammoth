@@ -858,13 +858,20 @@ components:
 
     CredentialSecret:
       type: object
-      description: Secret payload, stored encrypted; never returned by the API.
+      description: >-
+        Secret payload, stored encrypted; never returned by the API. BMC
+        credentials use username+password; SSH credentials take username and
+        either a private_key (PEM; recommended — provisioned systems commonly
+        refuse root password SSH) or a password.
       required: [username]
       properties:
         username:
           type: string
         password:
           type: string
+        private_key:
+          type: string
+          description: PEM-encoded SSH private key for public-key auth (ssh credentials).
 
     CredentialCreate:
       type: object

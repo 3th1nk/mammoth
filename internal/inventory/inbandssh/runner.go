@@ -31,9 +31,18 @@ func (r *SSHRunner) Run(ctx context.Context, addr string, cred Credentials, scri
 	if err != nil {
 		return nil, err
 	}
+	auth := []ssh.AuthMethod{}
+	if cred.PrivateKey != "" {
+		if signer, perr := ssh.ParsePrivateKey([]byte(cred.PrivateKey)); perr == nil {
+			auth = append(auth, ssh.PublicKeys(signer))
+		}
+	}
+	if cred.Password != "" {
+		auth = append(auth, ssh.Password(cred.Password))
+	}
 	cfg := &ssh.ClientConfig{
 		User: cred.Username,
-		Auth: []ssh.AuthMethod{ssh.Password(cred.Password)},
+		Auth: auth,
 		// Provisioned machines rotate host keys; see package comment.
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         dialTimeout,

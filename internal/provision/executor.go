@@ -319,8 +319,9 @@ func (e *Executor) collectLayout(ctx context.Context, task *store.Task, required
 		return classifiedErr("CREDENTIAL_DECRYPT_FAILED", false, "credential decrypt failed")
 	}
 	var secret struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Username   string `json:"username"`
+		Password   string `json:"password"`
+		PrivateKey string `json:"private_key"`
 	}
 	if err := json.Unmarshal(plain, &secret); err != nil {
 		return classifiedErr("CREDENTIAL_DECRYPT_FAILED", false, "credential payload malformed")
@@ -330,7 +331,7 @@ func (e *Executor) collectLayout(ctx context.Context, task *store.Task, required
 	defer span.End()
 
 	res, err := e.Inband.Collect(ctx, m.SSHAddress, inbandssh.Credentials{
-		Username: secret.Username, Password: secret.Password,
+		Username: secret.Username, Password: secret.Password, PrivateKey: secret.PrivateKey,
 	})
 	if err != nil {
 		return e.inbandFailed(ctx, task, err)

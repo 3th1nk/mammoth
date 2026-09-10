@@ -77,6 +77,8 @@ type Config struct {
 	MediaDir           string        // local media repository (boot ISOs)
 	MediaBaseURI       string        // BMC-reachable media base URI (nfs://, cifs://, ftp:// — firmware decides)
 	BootSettleDelay    time.Duration // wait between media mount and power-on (NFS relay pushes)
+	NFSExportEnabled   bool          // built-in read-only NFSv3 export of MediaDir (default true)
+	NFSExportPort      int           // port for the built-in export (default 2049)
 	MediaRelayAddr     string        // media relay SSH endpoint (host[:port]); empty = no relay
 	MediaRelayUser     string
 	MediaRelayPassword string
@@ -124,6 +126,8 @@ func FromEnv() (Config, error) {
 		RamdiskEnabled:        getenvBool("MAMMOTH_RAMDISK_ENABLED", false),
 		MediaDir:              getenv("MAMMOTH_MEDIA_DIR", "data/media"),
 		MediaBaseURI:          getenv("MAMMOTH_MEDIA_BASE_URI", os.Getenv("MAMMOTH_MEDIA_NFS_BASE")),
+		NFSExportEnabled:      getenvBool("MAMMOTH_NFS_EXPORT", true),
+		NFSExportPort:         getenvInt("MAMMOTH_NFS_EXPORT_PORT", 2049),
 		MediaRelayAddr:        os.Getenv("MAMMOTH_MEDIA_RELAY_ADDR"),
 		MediaRelayUser:        os.Getenv("MAMMOTH_MEDIA_RELAY_USER"),
 		MediaRelayPassword:    os.Getenv("MAMMOTH_MEDIA_RELAY_PASSWORD"),

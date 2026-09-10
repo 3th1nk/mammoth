@@ -12,21 +12,31 @@ require (
 	github.com/gin-gonic/gin v1.10.1
 	github.com/oapi-codegen/runtime v1.4.2
 	github.com/prometheus/client_golang v1.22.0
+	github.com/spf13/cobra v1.8.1
 	github.com/stmcginnis/gofish v0.19.0
 	github.com/vmware/goipmi v0.0.0-20181114221114-2333cd82d702
+	github.com/willscott/go-nfs v0.0.4
+	github.com/willscott/memphis v0.0.0-20241203204924-a148a489d367
 	go.opentelemetry.io/otel/sdk v1.40.0
 )
 
 require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
+	github.com/go-git/go-billy/v5 v5.6.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.26.1 // indirect
+	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/polydawn/go-timeless-api v0.0.0-20220821201550-b93919e12c56 // indirect
+	github.com/polydawn/refmt v0.0.0-20201211092308-30ac6d18308e // indirect
+	github.com/polydawn/rio v0.0.0-20220823181337-7c31ad9831a4 // indirect
+	github.com/rasky/go-xdr v0.0.0-20170124162913-1a41d1a06c93 // indirect
 	github.com/speakeasy-api/openapi v1.19.2 // indirect
-	github.com/spf13/cobra v1.8.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
+	github.com/warpfork/go-errcat v0.0.0-20180917083543-335044ffc86e // indirect
+	github.com/willscott/go-nfs-client v0.0.0-20240104095149-b44639837b00 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.35.0 // indirect
 	go.opentelemetry.io/otel/metric v1.40.0 // indirect
@@ -120,7 +130,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/arch v0.8.0 // indirect
 	golang.org/x/crypto v0.48.0
-	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
+	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56 // indirect
 	golang.org/x/mod v0.33.0 // indirect
 	golang.org/x/net v0.50.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect

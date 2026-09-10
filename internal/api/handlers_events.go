@@ -45,12 +45,21 @@ func (s *Server) ListEvents(ctx context.Context, request gen.ListEventsRequestOb
 		}
 		after = v
 	}
+	// page_size defaults and clamps exactly like every other list endpoint
+	// (contract: 1..200, default 50).
+	pageSize := int(derefOr(p.PageSize, gen.PageSize(50)))
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
 	events, err := s.Events.List(ctx, store.EventFilter{
 		AfterID:      after,
 		ResourceType: string(derefOr(p.ResourceType, gen.ListEventsParamsResourceType(""))),
 		ResourceID:   derefOr(p.ResourceId, ""),
 		Type:         derefOr(p.Type, ""),
-		Limit:        int(derefOr(p.PageSize, 100)) + 1,
+		Limit:        pageSize + 1,
 	})
 	if err != nil {
 		return nil, err
@@ -59,8 +68,8 @@ func (s *Server) ListEvents(ctx context.Context, request gen.ListEventsRequestOb
 	for _, e := range events {
 		page.Items = append(page.Items, eventOut(e))
 	}
-	if len(page.Items) > int(derefOr(p.PageSize, 100)) {
-		page.Items = page.Items[:int(derefOr(p.PageSize, 100))]
+	if len(page.Items) > pageSize {
+		page.Items = page.Items[:pageSize]
 		next := strconv.FormatInt(page.Items[len(page.Items)-1].Id, 10)
 		page.NextCursor = &next
 	}

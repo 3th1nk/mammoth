@@ -119,7 +119,7 @@ POST /api/v1/jobs
       "hostname_pattern": "node-{index}"  // 未逐台指定时的生成规则
     },
     "access": {
-      "root_password": "generate",        // generate | 显式值 | 缺省(禁用口令登录)
+      "root_password": "",                 // 缺省/空 = 自动生成;非空 = 明文口令
       "ssh_keys": ["ssh-ed25519 AAA..."]
     },
     "scripts": [
@@ -225,5 +225,6 @@ POST /api/v1/jobs
    `size: largest` 这类规则是 autoinstall / Ironic root device hints 验证过的批量写法。
 3. **`distro` 显式声明**:从 ISO 自动探测发行版是易错的安全假象——同名镜像可能对应
    不同的内核参数集与应答文件方言。显式声明 + checksum 是底线。
-4. **`root_password: generate` 为默认推荐**:一次性随机口令经任务事件一次性下发,
-   避免批口令长期存续;`ssh_keys` 是更优路径,文档引导优先使用。
+4. **`root_password` 缺省/空 = 自动生成**:一次性随机口令经任务事件一次性下发,
+   避免批口令长期存续;`ssh_keys` 是更优路径,文档引导优先使用。字符串形态下
+   哨兵值就是空串(空口令本身非法),非空值一律视为明文,无控制值歧义。

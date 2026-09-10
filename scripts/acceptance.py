@@ -311,7 +311,7 @@ def main():
                 "routes": [{"to": "default", "via": "172.16.1.1"}],
                 "nameservers": {"addresses": ["10.0.0.53"]}}],
             "identity": {"hostname_pattern": "node-{index}"},
-            "access": {"root_password": "generate",
+            "access": {
                        "ssh_keys": ["ssh-ed25519 AAA acceptance@mammoth"]},
             "network": [{
                 "bond": {"interfaces": [

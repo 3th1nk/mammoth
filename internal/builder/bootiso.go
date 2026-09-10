@@ -91,20 +91,24 @@ func BuildBootISO(ctx context.Context, opt BootMediaOptions, kernelArgs string) 
 		}
 	}
 
-	// Bootloader configs: identical kernel args for BIOS (isolinux) and UEFI (grub).
+	// Bootloader configs: identical kernel args for BIOS (isolinux) and UEFI
+	// (grub). syslinux resolves config paths relative to the config's own
+	// directory — ../ reaches the single copy in /images/pxeboot/ (upstream
+	// layout; keeping one copy halves the media size).
 	isolinuxCfg := fmt.Sprintf(`default mammoth
 timeout 1
 label mammoth
-  kernel /vmlinuz
-  append initrd=/initrd.img %s
+  kernel ../images/pxeboot/vmlinuz
+  append initrd=../images/pxeboot/initrd.img %s
 `, kernelArgs)
 	if err := os.WriteFile(filepath.Join(work, "isolinux", "isolinux.cfg"), []byte(isolinuxCfg), 0o644); err != nil {
 		return "", err
 	}
-	grubCfg := fmt.Sprintf(`set timeout=1
+	grubCfg := fmt.Sprintf(`set default=0
+set timeout=1
 menuentry 'mammoth' {
-  linux /vmlinuz %s
-  initrd /initrd.img
+  linux /images/pxeboot/vmlinuz %s
+  initrd /images/pxeboot/initrd.img
 }
 `, kernelArgs)
 	if err := os.WriteFile(filepath.Join(work, "EFI", "BOOT", "grub.cfg"), []byte(grubCfg), 0o644); err != nil {
@@ -138,28 +142,21 @@ func tail(b []byte, n int) string {
 	return string(b)
 }
 
-// EnsureISO makes the distribution ISO available locally: if sourceURL is an
-// HTTP(S) URL it is downloaded into cacheDir (keyed by filename, skipped when
-// already complete); local paths are returned as-is.
+
+// EnsureISO makes the distribution ISO available locally. sourceURL may be
+// an HTTP(S) URL or any URI (e.g. nfs://) — for non-HTTP URIs the file is
+// looked up in cacheDir by basename. Downloaded files are cached and
+// size-verified on subsequent calls.
 func EnsureISO(ctx context.Context, sourceURL, cacheDir string) (string, error) {
-	if !strings.Contains(sourceURL, "://") {
-		return sourceURL, nil // already a local path
-	}
 	filename := sourceURL[strings.LastIndex(sourceURL, "/")+1:]
 	dest := filepath.Join(cacheDir, filename)
 
-	if fi, err := os.Stat(dest); err == nil {
-		// Resume/verify by size against the server.
-		req, _ := http.NewRequestWithContext(ctx, http.MethodHead, sourceURL, nil)
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			resp.Body.Close()
-			if resp.ContentLength > 0 && fi.Size() == resp.ContentLength {
-				return dest, nil // complete
-			}
-		}
-		// incomplete: resume from current size
-		return dest, resumeDownload(ctx, sourceURL, dest, fi.Size())
+	if fi, err := os.Stat(dest); err == nil && fi.Size() > 0 {
+		return dest, nil // already cached
+	}
+
+	if !strings.HasPrefix(sourceURL, "http://") && !strings.HasPrefix(sourceURL, "https://") {
+		return "", fmt.Errorf("builder: %q is not an HTTP URL and no local cache exists at %s", sourceURL, dest)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
@@ -185,22 +182,3 @@ func EnsureISO(ctx context.Context, sourceURL, cacheDir string) (string, error) 
 	return dest, f.Close()
 }
 
-func resumeDownload(ctx context.Context, sourceURL, dest string, offset int64) error {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusPartialContent {
-		return fmt.Errorf("builder: server does not support resume (status %d)", resp.StatusCode)
-	}
-	f, err := os.OpenFile(dest, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
-	return err
-}

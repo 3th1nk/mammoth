@@ -16,6 +16,9 @@ coverage.html
 .env
 .env.local
 
+# Session handoff (local working notes, not for the public repo)
+/HANDOFF.md
+
 # Editors / OS
 .idea/
 .vscode/

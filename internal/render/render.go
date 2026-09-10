@@ -49,14 +49,14 @@ type BootParams struct {
 
 // ResolvedDisk is a selector-resolved install target.
 type ResolvedDisk struct {
-	Device   string `json:"device"` // kernel name, e.g. nvme0n1
-	Serial   string `json:"serial,omitempty"`
+	Device string `json:"device"` // kernel name, e.g. nvme0n1
+	Serial string `json:"serial,omitempty"`
 	// SizeBytes carries the inventory-reported capacity — %pre uses it to
 	// re-identify the device when Device is not a kernel name (Redfish
 	// logical drive names differ from installer device names).
 	SizeBytes int64 `json:"size_bytes,omitempty"`
 	Wipe      bool  `json:"wipe"`
-	KeepDisk bool   `json:"keep_disk,omitempty"` // keep: disk — untouched
+	KeepDisk  bool  `json:"keep_disk,omitempty"` // keep: disk — untouched
 	// KeepParts (keep: partitions): existing partitions to remove (all
 	// snapshot partitions not preserved); freed space hosts new partitions.
 	Remove []string `json:"remove,omitempty"`
@@ -185,8 +185,8 @@ type ResolvedRaid struct {
 	BoundDevice string `json:"bound_device,omitempty"`
 	// SizeBytes: the bound volume's capacity — %pre re-identifies non-kernel
 	// bound names (controller-assigned LogicalDriveN) by size.
-	SizeBytes int64                 `json:"size_bytes,omitempty"`
-	Partitions  []ResolvedPartition `json:"partitions,omitempty"`
+	SizeBytes  int64               `json:"size_bytes,omitempty"`
+	Partitions []ResolvedPartition `json:"partitions,omitempty"`
 }
 
 // MachineView is the machine context a renderer may consult (hardware facts

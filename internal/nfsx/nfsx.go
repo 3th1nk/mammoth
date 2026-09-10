@@ -25,9 +25,9 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/willscott/memphis"
 	nfs "github.com/willscott/go-nfs"
 	nfshelper "github.com/willscott/go-nfs/helpers"
+	"github.com/willscott/memphis"
 )
 
 // Server is one running export.

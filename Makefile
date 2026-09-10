@@ -3,7 +3,7 @@ SHELL := /bin/bash
 BIN := bin/mammoth
 DSN ?= postgres://mammoth:mammoth@localhost:5432/mammoth?sslmode=disable
 
-.PHONY: all build test test-pg generate lint fmt vet acceptance compose-up compose-down clean
+.PHONY: all build test test-pg generate lint fmt fmt-check vet acceptance compose-up compose-down clean
 
 all: fmt generate build test
 
@@ -22,11 +22,14 @@ contract-check: generate
 fmt:
 	gofmt -w cmd internal
 
+fmt-check:
+	@test -z "$$(gofmt -l cmd internal)" || { gofmt -l cmd internal; exit 1; }
+
 vet:
 	go vet ./...
 
 test:
-	go test ./... -count=1
+	go test ./... -count=1 -race
 
 # Queue/store suites against a disposable PostgreSQL (compose-postgres).
 test-pg:

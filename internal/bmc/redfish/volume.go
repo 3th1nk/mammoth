@@ -390,7 +390,6 @@ func serialSetsEqual(a, b map[string]bool) bool {
 	return true
 }
 
-
 // getRaw fetches one resource as raw JSON.
 func getRaw(c *gofish.APIClient, url string) ([]byte, error) {
 	resp, err := c.Get(url)
@@ -434,5 +433,3 @@ func pollTask(ctx context.Context, c *gofish.APIClient, op, taskID string) error
 		}
 	}
 }
-
-

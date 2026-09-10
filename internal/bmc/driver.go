@@ -46,6 +46,10 @@ type Driver interface {
 type VolumeSpec struct {
 	Name     string // volume label; the logical drive surfaces under this name
 	RAIDType string // "RAID0" | "RAID1" | "RAID5" | "RAID10"
+	// MemberSerials identifies the member physical drives by serial —
+	// controllers name volumes themselves (Huawei iBMC assigns
+	// LogicalDriveN), so drives, not the label, carry the intent.
+	MemberSerials []string
 }
 
 // VolumeCreator is the optional capability of building RAID volumes on the
@@ -53,8 +57,19 @@ type VolumeSpec struct {
 // optional interfaces). Drivers without it simply don't implement the
 // interface; the pipeline reports BMC_UNSUPPORTED.
 type VolumeCreator interface {
-	// CreateVolume builds a RAID volume from the storage controller's
-	// drives. Idempotent by Name: an existing volume with the same name is
-	// reported as "already exists" rather than rebuilt.
-	CreateVolume(ctx context.Context, addr string, cred Credentials, spec VolumeSpec) error
+	// CreateVolume builds a RAID volume over the requested member drives.
+	// Idempotent by members: an existing volume spanning exactly the
+	// requested serials at the same level is returned as-is rather than
+	// rebuilt. Returns the name the volume carries in inventory (the
+	// controller may rename — Huawei assigns LogicalDriveN).
+	CreateVolume(ctx context.Context, addr string, cred Credentials, spec VolumeSpec) (string, error)
+}
+
+// PhysicalDriveEnumerator is the optional capability of listing the
+// controller's physical drives — the RAID member pool. Unlike Disks in
+// HardwareView (which follow the volume-first presentation rule: the OS
+// sees logical drives when the controller reports them), RAID intent
+// always selects physical drives (docs/05-inventory.md §2).
+type PhysicalDriveEnumerator interface {
+	PhysicalDrives(ctx context.Context, addr string, cred Credentials) ([]DiskView, error)
 }

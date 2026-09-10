@@ -76,6 +76,7 @@ type Config struct {
 	RamdiskEnabled     bool          // optional ramdisk probe (docs/05 §4; PXE-first)
 	MediaDir           string        // local media repository (boot ISOs)
 	MediaNFSBase       string        // NFS URI base for BMC media fetch (nfs://host/export)
+	BootSettleDelay    time.Duration // wait between media mount and power-on (NFS relay pushes)
 
 	// OTELExporterEndpoint enables OTLP trace export when non-empty.
 	// Without it, tracing stays at the API boundary instrumentation level
@@ -119,6 +120,7 @@ func FromEnv() (Config, error) {
 		RamdiskEnabled:        getenvBool("MAMMOTH_RAMDISK_ENABLED", false),
 		MediaDir:              getenv("MAMMOTH_MEDIA_DIR", "data/media"),
 		MediaNFSBase:          os.Getenv("MAMMOTH_MEDIA_NFS_BASE"),
+		BootSettleDelay:       getenvDuration("MAMMOTH_BOOT_SETTLE_DELAY", 0),
 		OTELExporterEndpoint:  os.Getenv("MAMMOTH_OTEL_EXPORTER_ENDPOINT"),
 		MetricsAddr:           os.Getenv("MAMMOTH_METRICS_ADDR"),
 		ExternalURL:           getenv("MAMMOTH_EXTERNAL_URL", "http://127.0.0.1:8080"),

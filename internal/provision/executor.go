@@ -2,6 +2,7 @@ package provision
 
 import (
 	"context"
+	"time"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -28,13 +29,15 @@ type Executor struct {
 	Compat      *compat.Registry
 	Inband      *inbandssh.Collector
 	Render      *render.Registry
-	Builder     BootMediaBuilder
 	// ExternalURL is the base address machines reach for answer files.
 	ExternalURL string
 	// MediaDir is the local media repository (boot ISOs land here).
 	MediaDir string
 	// MediaNFSBase is the NFS URI base the BMC uses to fetch media.
 	MediaNFSBase string
+	// BootSettleDelay waits between media mount and power-on — covers
+	// out-of-band media transfer tails (NFS relay pushes).
+	BootSettleDelay time.Duration
 	// RamdiskEnabled declares the optional ramdisk probe feature
 	// (docs/05-inventory.md §4 — requires the PXE boot infrastructure).
 	RamdiskEnabled bool

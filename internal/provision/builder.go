@@ -2,30 +2,30 @@ package provision
 
 import (
 	"context"
+	"strings"
+	"time"
 
 	"github.com/3th1nk/mammoth/internal/builder"
 )
 
-// BootMediaBuilder assembles the per-task boot ISO (media B). Behind this
-// interface the builder facet may run in-process (default) or remotely; the
-// pipeline only cares that a bootable ISO lands in the media repository.
-type BootMediaBuilder interface {
-	BuildBootISO(ctx context.Context, opt builder.BootMediaOptions, kernelArgs string) (string, error)
-	// EnsureISO makes the distro ISO available locally (downloads/caches
-	// when sourceURL is remote; passthrough for local paths).
-	EnsureISO(ctx context.Context, sourceURL, cacheDir string) (string, error)
+// mediaURIFor returns the BMC-accessible URI for a media file name.
+func mediaURIFor(nfsBase, filename string) string {
+	if nfsBase == "" {
+		return ""
+	}
+	return strings.TrimSuffix(nfsBase, "/") + "/" + filename
 }
 
-// defaultBootMediaBuilder runs xorriso locally.
-type defaultBootMediaBuilder struct{}
-
-func (defaultBootMediaBuilder) BuildBootISO(ctx context.Context, opt builder.BootMediaOptions, kernelArgs string) (string, error) {
-	return builder.BuildBootISO(ctx, opt, kernelArgs)
-}
-
-func (defaultBootMediaBuilder) EnsureISO(ctx context.Context, sourceURL, cacheDir string) (string, error) {
+// ensureISO and buildBootISO wrap the builder package for the Executor.
+func ensureISO(ctx context.Context, sourceURL, cacheDir string) (string, error) {
 	return builder.EnsureISO(ctx, sourceURL, cacheDir)
 }
 
-// compile-time: render import reserved for future builder-side answer
-// embedding (kickstart inside the media for offline installs).
+func buildBootISO(ctx context.Context, isoPath, outputPath, kernelArgs string) error {
+	_, err := builder.BuildBootISO(ctx, builder.BootMediaOptions{
+		ISOPath:    isoPath,
+		OutputPath: outputPath,
+		Timeout:    10 * time.Minute,
+	}, kernelArgs)
+	return err
+}

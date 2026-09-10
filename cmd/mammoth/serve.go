@@ -214,18 +214,21 @@ func serve(args []string) error {
 	// Runner facet (execution plane).
 	if cfg.Mode.RunsRunner() {
 		exec := &provision.Executor{
-			Machines:       machineRepo,
-			Credentials:    credRepo,
-			Jobs:           jobRepo,
-			Events:         eventRepo,
-			Crypto:         crypto,
-			BMC:            registry,
-			Compat:         compatReg,
-			Inband:         inband,
-			Render:         renderReg,
-			ExternalURL:    cfg.ExternalURL,
-			RamdiskEnabled: cfg.RamdiskEnabled,
-			LayoutKeep:     cfg.LayoutRetention,
+			Machines:        machineRepo,
+			Credentials:     credRepo,
+			Jobs:            jobRepo,
+			Events:          eventRepo,
+			Crypto:          crypto,
+			BMC:             registry,
+			Compat:          compatReg,
+			Inband:          inband,
+			Render:          renderReg,
+			ExternalURL:     cfg.ExternalURL,
+			MediaDir:        cfg.MediaDir,
+			MediaNFSBase:    cfg.MediaNFSBase,
+			BootSettleDelay: cfg.BootSettleDelay,
+			RamdiskEnabled:  cfg.RamdiskEnabled,
+			LayoutKeep:      cfg.LayoutRetention,
 		}
 		runner := provision.NewRunner(tq, jobRepo, eventRepo, exec, metrics, provision.RunnerOptions{
 			Concurrency:     cfg.RunnerConcurrency,

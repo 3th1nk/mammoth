@@ -234,17 +234,16 @@ func (d *Driver) ConsoleURL(_ context.Context, addr string, _ bmc.Credentials) (
 // CreateVolume implements the bmc.VolumeCreator capability: declarative
 // hardware RAID on the simulated controller. The logical drive surfaces in
 // CollectInventory under the declared volume name. Idempotent by name.
-func (d *Driver) CreateVolume(_ context.Context, addr string, _ bmc.Credentials, spec bmc.VolumeSpec) error {
+func (d *Driver) CreateVolume(_ context.Context, addr string, _ bmc.Credentials, spec bmc.VolumeSpec) (string, error) {
 	b, err := d.get(addr, "create_volume")
 	if err != nil {
-		return err
+		return "", err
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, v := range b.Volumes {
 		if v.Name == spec.Name {
-			return &bmc.Error{Kind: bmc.KindProtocolError, Op: "create_volume",
-				Detail: fmt.Sprintf("volume %q already exists", spec.Name)}
+			return spec.Name, nil // already exists — idempotent
 		}
 	}
 	b.Volumes = append(b.Volumes, spec)
@@ -254,7 +253,22 @@ func (d *Driver) CreateVolume(_ context.Context, addr string, _ bmc.Credentials,
 			Name: spec.Name, SizeBytes: 999922148352, Protocol: "raid",
 		})
 	}
-	return nil
+	return spec.Name, nil
+}
+
+// PhysicalDrives implements the bmc.PhysicalDriveEnumerator capability: the
+// fake presents its fixture hardware as the RAID member pool.
+func (d *Driver) PhysicalDrives(_ context.Context, addr string, _ bmc.Credentials) ([]bmc.DiskView, error) {
+	b, err := d.get(addr, "physical_drives")
+	if err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.Hardware == nil {
+		return nil, nil
+	}
+	return append([]bmc.DiskView(nil), b.Hardware.Disks...), nil
 }
 
 func (d *Driver) CollectInventory(_ context.Context, addr string, _ bmc.Credentials) (bmc.HardwareView, error) {

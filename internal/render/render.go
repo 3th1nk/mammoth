@@ -51,7 +51,11 @@ type BootParams struct {
 type ResolvedDisk struct {
 	Device   string `json:"device"` // kernel name, e.g. nvme0n1
 	Serial   string `json:"serial,omitempty"`
-	Wipe     bool   `json:"wipe"`
+	// SizeBytes carries the inventory-reported capacity — %pre uses it to
+	// re-identify the device when Device is not a kernel name (Redfish
+	// logical drive names differ from installer device names).
+	SizeBytes int64 `json:"size_bytes,omitempty"`
+	Wipe      bool  `json:"wipe"`
 	KeepDisk bool   `json:"keep_disk,omitempty"` // keep: disk — untouched
 	// KeepParts (keep: partitions): existing partitions to remove (all
 	// snapshot partitions not preserved); freed space hosts new partitions.
@@ -172,9 +176,16 @@ type ResolvedRaid struct {
 	Level   string   `json:"level"`   // 0 | 1 | 5 | 10
 	Mode    string   `json:"mode"`    // software | hardware
 	Members []string `json:"members"` // resolved member device names
+	// MemberSerials parallels Members — the volume-creation capability
+	// identifies drives by serial (controllers rename volumes; serials carry
+	// the intent, docs/compat/huawei.md).
+	MemberSerials []string `json:"member_serials,omitempty"`
 	// BoundDevice: for hardware mode, the logical drive's discovered kernel
 	// name (configure_raid binds it via re-inventory).
-	BoundDevice string              `json:"bound_device,omitempty"`
+	BoundDevice string `json:"bound_device,omitempty"`
+	// SizeBytes: the bound volume's capacity — %pre re-identifies non-kernel
+	// bound names (controller-assigned LogicalDriveN) by size.
+	SizeBytes int64                 `json:"size_bytes,omitempty"`
 	Partitions  []ResolvedPartition `json:"partitions,omitempty"`
 }
 

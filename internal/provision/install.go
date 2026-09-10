@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -86,7 +87,7 @@ type installSpecView struct {
 		HostnamePattern string `json:"hostname_pattern"`
 	} `json:"identity"`
 	Access struct {
-		RootPassword string   `json:"root_password"`
+		RootPassword string   `json:"root_password"` // absent/empty → generate
 		SSHKeys      []string `json:"ssh_keys"`
 	} `json:"access"`
 	Network []networkView `json:"network"`
@@ -321,7 +322,7 @@ func (e *Executor) verifyLayout(ctx context.Context, task *store.Task, job *stor
 				"storage.disks[%d] resolves to %s, already claimed by disks[%d] (wipe/keep overlap)", i, device, prev)
 		}
 		used[device] = i
-		rd := render.ResolvedDisk{Device: device, Serial: candidates[0].Serial}
+		rd := render.ResolvedDisk{Device: device, Serial: candidates[0].Serial, SizeBytes: candidates[0].SizeBytes}
 
 		switch {
 		case d.Keep == "disk":
@@ -440,10 +441,21 @@ func (e *Executor) verifyLayout(ctx context.Context, task *store.Task, job *stor
 		if err := checkRaidShape(i, r.Level, len(r.Members)); err != nil {
 			return err
 		}
+		// Hardware RAID members select from the controller's PHYSICAL drives,
+		// not the OS presentation (volume-first hides them —
+		// docs/05-inventory.md §2). The enumerator capability supplies them;
+		// without it, fall back to the inventory disks (fake/legacy BMCs).
+		memberPool := hw.Disks
+		if mode == "hardware" {
+			if drives, err := e.physicalDrives(ctx, task); err == nil && len(drives) > 0 {
+				memberPool = drives
+			}
+		}
 		members := make([]string, 0, len(r.Members))
+		memberSerials := make([]string, 0, len(r.Members))
 		for j, m := range r.Members {
 			var pool []bmc.DiskView
-			for _, hd := range hw.Disks {
+			for _, hd := range memberPool {
 				if m.Match.Serial != "" && hd.Serial != m.Match.Serial {
 					continue
 				}
@@ -474,8 +486,10 @@ func (e *Executor) verifyLayout(ctx context.Context, task *store.Task, job *stor
 			}
 			usedDevices[pool[0].Name] = fmt.Sprintf("raid[%d]", i)
 			members = append(members, pool[0].Name)
+			memberSerials = append(memberSerials, pool[0].Serial)
 		}
-		rr := render.ResolvedRaid{Name: r.Name, Level: r.Level, Mode: mode, Members: members}
+		rr := render.ResolvedRaid{Name: r.Name, Level: r.Level, Mode: mode,
+			Members: members, MemberSerials: memberSerials}
 		for _, p := range r.Partitions {
 			rp := render.ResolvedPartition{Mount: p.Mount, FS: p.FS, Flags: p.Flags}
 			if p.Size == "rest" {
@@ -616,10 +630,15 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		return err
 	}
 
-	// Access: per-task random root password delivered once via the task
-	// event (docs/04-install-spec.md §6); explicit values pass through.
+	// Access: the root password policy is explicit (mode + optional value —
+	// a literal password must never collide with a control value). Random
+	// passwords are delivered once via the task event
+	// (docs/04-install-spec.md §6).
+	// Absent or empty → per-task random, delivered once via the task event
+	// (a usable machine needs a usable credential). Any non-empty value is
+	// the literal password.
 	rootPassword := spec.Access.RootPassword
-	if rootPassword == "generate" {
+	if rootPassword == "" {
 		rootPassword, err = randomPassword()
 		if err != nil {
 			return err
@@ -693,19 +712,15 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	// (docs/06-install-pipeline.md §2.1). The ISO lands in the media repo
 	// and is exposed to the BMC through the NFS base URI.
 	mediaFile := fmt.Sprintf("boot-%s.iso", ictx.Token)
-	mediaURI := e.mediaURIFor(filepath.Base(mediaFile))
-	distroISO, err := e.Builder.EnsureISO(ctx, spec.Image.Source, e.MediaDir)
+	mediaURI := mediaURIFor(e.MediaNFSBase, filepath.Base(mediaFile))
+	distroISO, err := builder.EnsureISO(ctx, spec.Image.Source, e.MediaDir)
 	if err != nil {
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 			"distro ISO fetch failed: %s", err.Error())
 	}
-	if _, err := e.Builder.BuildBootISO(ctx, builder.BootMediaOptions{
-		ISOPath:    distroISO,
-		OutputPath: filepath.Join(e.MediaDir, filepath.Base(mediaFile)),
-		Timeout:    10 * time.Minute,
-	}, boot.KernelArgs); err != nil {
+	if berr := buildBootISO(ctx, distroISO, filepath.Join(e.MediaDir, filepath.Base(mediaFile)), boot.KernelArgs); berr != nil {
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
-			"boot media build failed: %s", err.Error())
+			"boot media build failed: %s", berr.Error())
 	}
 
 	raw, _ := json.Marshal(ictx.Install)
@@ -780,29 +795,39 @@ func (e *Executor) bootStage(ctx context.Context, task *store.Task, job *store.J
 	if len(ictx.Answers) == 0 {
 		return classifiedErr("JOB_STAGE_ORDER", false, "answers not rendered; prepare_media must run first")
 	}
-	spec, err := e.loadSpec(ctx, task, job)
-	if err != nil {
-		return err
-	}
 	cred, addr, proto, ok := e.outOfBand(ctx, task)
 	if !ok {
 		return classifiedErr("CREDENTIAL_UNAVAILABLE", true, "machine or credential unavailable")
 	}
 
-	distroISO := bmc.MediaImage{URL: spec.Image.Source, Kind: bmc.MediaDistro}
-	bootMedia := bmc.MediaImage{URL: ictx.Boot.AnswerURL, Kind: bmc.MediaBoot}
-
-	if _, err := e.BMC.Do(ctx, addr, cred, proto, "mount_media", func(ctx context.Context, d bmc.Driver) (any, error) {
-		return nil, d.MountMedia(ctx, addr, cred, distroISO)
-	}); err != nil {
-		return err
+	// Mount the builder's boot ISO (media B) — the BMC fetches it via NFS.
+	// Eject any existing media first (the slot may be occupied from a
+	// previous task or mount_media action).
+	bootMedia := bmc.MediaImage{URL: ictx.MediaURI, Kind: bmc.MediaBoot}
+	if bootMedia.URL == "" {
+		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,
+			"boot ISO URI is empty; prepare_media must run first")
 	}
-	// Media B: the task boot media carrying inst.ks (grub.cfg served by
-	// Mammoth; ISO assembly is the builder-container step).
+	_, _ = e.BMC.Do(ctx, addr, cred, proto, "eject_media", func(ctx context.Context, d bmc.Driver) (any, error) {
+		return nil, d.EjectMedia(ctx, addr, cred, bootMedia)
+	})
 	if _, err := e.BMC.Do(ctx, addr, cred, proto, "mount_media", func(ctx context.Context, d bmc.Driver) (any, error) {
 		return nil, d.MountMedia(ctx, addr, cred, bootMedia)
 	}); err != nil {
 		return err
+	}
+	// Media settle delay: BMC virtual-media mounts can succeed while the
+	// backing file is still arriving (NFS relay deployments — the mount only
+	// validates the image header; the firmware reads the payload much later,
+	// and a partial read means a dead CD boot). Wait out the transfer.
+	if settle := e.BootSettleDelay; settle > 0 {
+		obs.FromContext(ctx).InfoContext(ctx, "waiting for boot media to settle",
+			"delay", settle.String())
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(settle):
+		}
 	}
 	if _, err := e.BMC.Do(ctx, addr, cred, proto, "set_boot_device", func(ctx context.Context, d bmc.Driver) (any, error) {
 		return nil, d.SetBootDevice(ctx, addr, cred, bmc.BootCDROM, true)
@@ -839,18 +864,13 @@ func (e *Executor) installOSStage(ctx context.Context, task *store.Task, job *st
 	if err := json.Unmarshal(task.Context, &ictx); err != nil {
 		return classifiedErr("JOB_CONTEXT_CORRUPT", false, "task context unreadable")
 	}
-	// Media B comes out as soon as the installer is up — second boots would
-	// otherwise re-enter the boot media (docs/06-install-pipeline.md §3.4).
-	if ictx.Token != "" && len(ictx.Answers) > 0 {
-		if cred, addr, proto, ok := e.outOfBand(ctx, task); ok {
-			bootMedia := bmc.MediaImage{URL: ictx.Boot.AnswerURL, Kind: bmc.MediaBoot}
-			if _, err := e.BMC.Do(ctx, addr, cred, proto, "eject_media", func(ctx context.Context, d bmc.Driver) (any, error) {
-				return nil, d.EjectMedia(ctx, addr, cred, bootMedia)
-			}); err != nil {
-				obs.FromContext(ctx).WarnContext(ctx, "eject boot media failed (continuing)", "err", err.Error())
-			}
-		}
-	}
+	// Media B stays mounted through the machine's reboot: with a one-shot CD
+	// override the firmware only reads the media tens of seconds into POST,
+	// so ejecting at stage entry breaks CD boot on real hardware (Huawei
+	// iBMC observed — the installer never came up). The media is ejected
+	// once the installer reports completion instead: its job is done by
+	// then, and the post-install reboot must not re-enter it
+	// (docs/06-install-pipeline.md §3.4).
 
 	deadline := time.Now().Add(job.Policy.TaskTimeout())
 	tick := time.NewTicker(5 * time.Second)
@@ -871,6 +891,9 @@ func (e *Executor) installOSStage(ctx context.Context, task *store.Task, job *st
 		var ictx2 installTaskContext
 		_ = json.Unmarshal(fresh.Context, &ictx2)
 		if ictx2.Install != nil && ictx2.Install.CompletedAt != nil {
+			// Completion reported: pull the boot media before the installer's
+			// reboot so no second boot can re-enter it.
+			e.ejectBootMediaBestEffort(ctx, task, &ictx2)
 			if ictx2.Install.Status == "failed" {
 				return classifiedErr("INSTALL_FAILED", true, "installer reported failure: %s", ictx2.Install.Detail)
 			}
@@ -883,6 +906,24 @@ func (e *Executor) installOSStage(ctx context.Context, task *store.Task, job *st
 	}
 }
 
+// ejectBootMediaBestEffort ejects the task boot media, logging (not failing)
+// on error — the pipeline must not depend on eject latency.
+func (e *Executor) ejectBootMediaBestEffort(ctx context.Context, task *store.Task, ictx *installTaskContext) {
+	if ictx.Token == "" || ictx.MediaURI == "" {
+		return
+	}
+	cred, addr, proto, ok := e.outOfBand(ctx, task)
+	if !ok {
+		return
+	}
+	bootMedia := bmc.MediaImage{URL: ictx.MediaURI, Kind: bmc.MediaBoot}
+	if _, err := e.BMC.Do(ctx, addr, cred, proto, "eject_media", func(ctx context.Context, d bmc.Driver) (any, error) {
+		return nil, d.EjectMedia(ctx, addr, cred, bootMedia)
+	}); err != nil {
+		obs.FromContext(ctx).WarnContext(ctx, "eject boot media failed (continuing)", "err", err.Error())
+	}
+}
+
 // ── stage 5: verify_ready (docs/06-install-pipeline.md §4) ──────────────────
 
 func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store.Job) error {
@@ -892,6 +933,16 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 	}
 	if ictx.Install == nil || ictx.Install.Status != "ok" {
 		return classifiedErr("INSTALL_NOT_VERIFIED", true, "no successful completion report recorded")
+	}
+
+	// The boot media has served its purpose — reclaim the media repository
+	// copy (the BMC-side copy is the deployment's NFS export; docs/compat/
+	// huawei.md media-relay notes).
+	if ictx.Token != "" && e.MediaDir != "" {
+		mediaFile := filepath.Join(e.MediaDir, fmt.Sprintf("boot-%s.iso", ictx.Token))
+		if err := os.Remove(mediaFile); err == nil {
+			obs.FromContext(ctx).InfoContext(ctx, "boot media removed", "file", mediaFile)
+		}
 	}
 
 	// RT consistency: when in-band access is configured, confirm the new
@@ -991,6 +1042,28 @@ func firstNonEmptyStr(vals ...string) string {
 	return ""
 }
 
+// physicalDrives lists the controller's physical drives via the optional
+// enumerator capability (docs/07-bmc.md §5).
+func (e *Executor) physicalDrives(ctx context.Context, task *store.Task) ([]bmc.DiskView, error) {
+	cred, addr, proto, ok := e.outOfBand(ctx, task)
+	if !ok {
+		return nil, fmt.Errorf("machine or credential unavailable")
+	}
+	out, err := e.BMC.Do(ctx, addr, cred, proto, "physical_drives", func(ctx context.Context, d bmc.Driver) (any, error) {
+		en, okc := d.(bmc.PhysicalDriveEnumerator)
+		if !okc {
+			return nil, &bmc.Error{Kind: bmc.KindUnsupported, Op: "physical_drives",
+				Detail: fmt.Sprintf("driver %s does not enumerate physical drives", d.Name())}
+		}
+		return en.PhysicalDrives(ctx, addr, cred)
+	})
+	if err != nil {
+		return nil, err
+	}
+	drives, _ := out.([]bmc.DiskView)
+	return drives, nil
+}
+
 // ── configure_raid (docs/09-roadmap.md M6) ──────────────────────────────────
 
 // configureRaid realizes hardware RAID volumes via the controller
@@ -999,10 +1072,20 @@ func firstNonEmptyStr(vals ...string) string {
 // volume name: existing volumes with the declared name are left alone
 // (docs/06-install-pipeline.md §6 retry semantics extended to this stage).
 func (e *Executor) configureRaid(ctx context.Context, task *store.Task, job *store.Job, seq int) error {
+	// Reload: verify_layout advanced the context (resolved raid) after this
+	// task snapshot was claimed (docs/06-install-pipeline.md §6 — no stale
+	// snapshots across stage boundaries).
+	fresh, ferr := e.Jobs.GetTask(ctx, task.ID)
+	if ferr != nil {
+		return ferr
+	}
+	task = fresh
 	spec, err := e.loadSpec(ctx, task, job)
 	if err != nil {
 		return err
 	}
+	var ictx installTaskContext
+	_ = json.Unmarshal(task.Context, &ictx)
 	hardware := false
 	for _, r := range spec.Storage.Raid {
 		if r.Mode == "hardware" {
@@ -1040,14 +1123,25 @@ func (e *Executor) configureRaid(ctx context.Context, task *store.Task, job *sto
 		if r.Mode != "hardware" {
 			continue
 		}
-		res, cerr := e.BMC.Do(ctx, addr, cred, proto, "create_volume", func(ctx context.Context, d bmc.Driver) (any, error) {
+		// Member serials come from the resolved raid in the task context —
+		// controllers identify drives, and rename volumes, themselves.
+		var memberSerials []string
+		for _, rr := range ictx.Resolved.Raid {
+			if rr.Name == r.Name {
+				memberSerials = rr.MemberSerials
+			}
+		}
+		obs.FromContext(ctx).DebugContext(ctx, "raid member resolution",
+			"volume", r.Name, "serials", strings.Join(memberSerials, ","),
+			"resolved_raid_entries", len(ictx.Resolved.Raid))
+		created, cerr := e.BMC.Do(ctx, addr, cred, proto, "create_volume", func(ctx context.Context, d bmc.Driver) (any, error) {
 			creator, okc := d.(bmc.VolumeCreator)
 			if !okc {
 				return nil, classifiedErr("BMC_UNSUPPORTED", false,
 					"driver %s does not support volume creation", d.Name())
 			}
-			return nil, creator.CreateVolume(ctx, addr, cred, bmc.VolumeSpec{
-				Name: r.Name, RAIDType: "RAID" + r.Level,
+			return creator.CreateVolume(ctx, addr, cred, bmc.VolumeSpec{
+				Name: r.Name, RAIDType: "RAID" + r.Level, MemberSerials: memberSerials,
 			})
 		})
 		if cerr != nil {
@@ -1060,8 +1154,12 @@ func (e *Executor) configureRaid(ctx context.Context, task *store.Task, job *sto
 				return cerr
 			}
 		}
-		_ = res
-		bindings[r.Name] = "" // bound below by re-inventory
+		// The controller may rename the volume (Huawei assigns LogicalDriveN)
+		// — bind via the returned name, falling back to the declared one.
+		bindings[r.Name], _ = created.(string)
+		if bindings[r.Name] == "" {
+			bindings[r.Name] = "" // bound below by re-inventory
+		}
 	}
 
 	// Re-inventory: the controller exposes the new logical drive(s).
@@ -1076,6 +1174,9 @@ func (e *Executor) configureRaid(ctx context.Context, task *store.Task, job *sto
 		if r.Mode != "hardware" {
 			continue
 		}
+		if bindings[r.Name] != "" {
+			continue // the creator already reported the controller's name
+		}
 		for _, d := range hw.Disks {
 			// fake/Redfish expose the volume under its declared name; bind
 			// only drives that were not present before the stage.
@@ -1089,7 +1190,25 @@ func (e *Executor) configureRaid(ctx context.Context, task *store.Task, job *sto
 		}
 	}
 
-	if err := e.Jobs.PatchTaskContext(ctx, task.ID, task.StageIndex, map[string]any{"raid_bindings": bindings}); err != nil {
+	// Persist bound names AND the bound volume's capacity — the renderer
+	// re-identifies non-kernel bound names by size in %pre.
+	for i := range ictx.Resolved.Raid {
+		if ictx.Resolved.Raid[i].Mode != "hardware" {
+			continue
+		}
+		if dev := bindings[ictx.Resolved.Raid[i].Name]; dev != "" {
+			ictx.Resolved.Raid[i].BoundDevice = dev
+			for _, d := range hw.Disks {
+				if d.Name == dev {
+					ictx.Resolved.Raid[i].SizeBytes = d.SizeBytes
+				}
+			}
+		}
+	}
+	if err := e.Jobs.PatchTaskContext(ctx, task.ID, task.StageIndex, map[string]any{
+		"raid_bindings": bindings,
+		"resolved":      ictx.Resolved,
+	}); err != nil {
 		return err
 	}
 	obs.FromContext(ctx).InfoContext(ctx, "hardware raid configured",

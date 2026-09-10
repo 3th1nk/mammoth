@@ -94,11 +94,12 @@ func TestRenderWipeStorageAndBond(t *testing.T) {
 		!strings.Contains(ks, "https://m/render/tok123/complete") {
 		t.Errorf("completion callback missing")
 	}
-	if !strings.Contains(ks, "hostnamectl set-hostname node-01") {
+	if !strings.Contains(ks, "network --hostname=node-01") ||
+		!strings.Contains(ks, "echo node-01 > /etc/hostname") {
 		t.Errorf("hostname missing")
 	}
 
-	if boot.KernelArgs != "inst.ks=https://m/render/tok123/ks.cfg inst.repo=cdrom inst.text" {
+	if boot.KernelArgs != "ip=dhcp inst.ks=https://m/render/tok123/ks.cfg inst.repo=https://mirror.example/rocky9 inst.text" {
 		t.Errorf("boot params wrong: %q", boot.KernelArgs)
 	}
 }
@@ -343,5 +344,140 @@ func TestRenderSoftwareRaidSinglePartition(t *testing.T) {
 	if _, _, err := d.RenderAnswers(in, render.MachineView{}); err == nil ||
 		!strings.Contains(err.Error(), "exactly one partition") {
 		t.Fatalf("want single-partition constraint, got %v", err)
+	}
+}
+
+// Static spec network entries must become pinned dracut early-network args —
+// the remote kickstart fetch needs network before anaconda runs (real-hardware
+// finding: without ip= the installer never fetched the answer file).
+func TestEarlyNetworkArgsFromSpec(t *testing.T) {
+	d := New()
+	in := render.InstallInputs{
+		AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i",
+		Network: []render.NetworkEntry{
+			{Match: &render.NetMatch{MAC: "02:00:00:00:00:00"},
+				Addresses:   []string{"198.51.100.170/24"},
+				Routes:      []render.NetRoute{{To: "0.0.0.0/0", Via: "198.51.100.1"}},
+				Nameservers: []string{"223.5.5.5"}},
+		},
+	}
+	_, boot, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "ifname=m0:02:00:00:00:00:00 ip=198.51.100.170::198.51.100.1:255.255.255.0::m0:none nameserver=223.5.5.5"
+	if !strings.HasPrefix(boot.KernelArgs, want+" ") {
+		t.Errorf("early net args missing: %q", boot.KernelArgs)
+	}
+	if !strings.Contains(boot.KernelArgs, "inst.ks=u/ks.cfg") {
+		t.Errorf("inst.ks lost: %q", boot.KernelArgs)
+	}
+}
+
+// nfs:// image source becomes an anaconda NFS ISO repo (host:/path, colon
+// required) — an HTTP ISO file is not a valid repo (anaconda fetches only
+// unpacked trees over HTTP; real-hardware finding).
+func TestNFSSourceRendersNFSIsoRepo(t *testing.T) {
+	d := New()
+	in := render.InstallInputs{
+		AnswerBaseURL: "u", CompleteURL: "c",
+		ImageSource: "nfs://198.51.100.248/data/os_iso/Rocky-9.7-x86_64-minimal.iso",
+	}
+	_, boot, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "inst.repo=nfs:198.51.100.248:/data/os_iso/Rocky-9.7-x86_64-minimal.iso"
+	if !strings.Contains(boot.KernelArgs, want) {
+		t.Errorf("nfs iso repo wrong: %q", boot.KernelArgs)
+	}
+}
+
+// Redfish logical-drive names ("LogicalDrive1") are not installer device
+// names — wipe stanzas must move into a %pre-generated include that resolves
+// the real device by size/serial (real-hardware finding: clearpart aborted
+// with "Disk LogicalDrive1 does not exist").
+func TestDynamicStorageResolution(t *testing.T) {
+	d := New()
+	in := render.InstallInputs{
+		AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i",
+		BootDrive: "LogicalDrive1",
+		Disks: []render.ResolvedDisk{{
+			Device: "LogicalDrive1", SizeBytes: 3997823926272, Wipe: true,
+			Partitions: []render.ResolvedPartition{{Mount: "/", FS: "xfs", Grow: true}},
+		}},
+	}
+	ks, boot, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := ks[0].Content
+	for _, want := range []string{
+		"90-storage.ks",
+		"D0=$(resolve 3997823926272 '' '')",
+		"clearpart --drives=$D0 --initlabel --all",
+		"--ondisk=$D0",
+		"bootloader --location=mbr --boot-drive=$D0",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dynamic storage missing %q", want)
+		}
+	}
+	// 静态区不得再出现 Redfish 盘名或重复的 bootloader/clearpart
+	if strings.Contains(body, "LogicalDrive1") {
+		t.Errorf("static ks leaks Redfish device name")
+	}
+	if strings.Count(body, "bootloader --location=mbr") != 1 {
+		t.Errorf("bootloader must appear exactly once (in the include)")
+	}
+	if boot.AnswerURL == "" {
+		t.Errorf("boot params lost")
+	}
+}
+
+// Hostname must land via the native network --hostname command (anaconda
+// writes /etc/hostname) plus a %post file write — hostnamectl is unreliable
+// from the %post chroot (real-hardware finding: hostname stayed
+// localhost.localdomain).
+func TestHostnameRendered(t *testing.T) {
+	d := New()
+	in := render.InstallInputs{
+		AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i", Hostname: "hw-real",
+	}
+	ks, _, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := ks[0].Content
+	if !strings.Contains(body, "network --hostname=hw-real") {
+		t.Errorf("native network --hostname missing")
+	}
+	if !strings.Contains(body, "echo hw-real > /etc/hostname") {
+		t.Errorf("post hostname fallback missing")
+	}
+}
+
+// %pre/%post failures must reach the completion endpoint with the failing
+// phase — the task error then shows the reason, not an opaque timeout.
+func TestFailTrapRendered(t *testing.T) {
+	d := New()
+	in := render.InstallInputs{
+		AnswerBaseURL: "http://m/render/tok", CompleteURL: "http://m/render/tok/complete",
+		ImageSource: "i", Hostname: "hw",
+		Network: []render.NetworkEntry{{Match: &render.NetMatch{MAC: "aa:bb:cc:dd:ee:01"}}},
+	}
+	ks, _, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := ks[0].Content
+	for _, want := range []string{
+		`detail\":\"network pre_install failed\"`,
+		`detail\":\"post_install script failed\"`,
+		"|| true' ERR",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("fail trap missing %q", want)
+		}
 	}
 }

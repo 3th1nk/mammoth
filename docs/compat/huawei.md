@@ -184,6 +184,19 @@ NFS ISO 装包源,静态网络)。全链路打通过程中固化下来的事实:
 - 驱动侧成员映射:内联数组的 Id(如 HDDPlaneDisk0)↔ 单盘资源里的
   SerialNumber,两段拼出 serial→DriveID 的映射。
 
+## 介质服务形态
+
+1. **内置导出(默认)**:mammoth 进程内建只读 NFSv3 导出(go-nfs,单端口
+   2049 多路复用 mount+nfs),BMC 直接挂 `nfs://<mammoth主机>/` 下的
+   MediaDir——零上传、零外部依赖。已用 Linux v3 客户端验证互操作;
+   iBMC 客户端的挂载验证待真机轮(注意 go-nfs 不提供 portmapper/rpcbind,
+   若 iBMC 的 mount 客户端强依赖 111 端口查询则需补一个 mini-portmapper)。
+2. **外部 NFS(大规模生产)**:`MAMMOTH_NFS_EXPORT=false` 关闭内置导出,
+   `MAMMOTH_MEDIA_BASE_URI` 指向客户的 NFS 服务;若 mammoth 主机对其无写
+   权限,配合 `MAMMOTH_MEDIA_RELAY_*`(SSH 中转,原子可见)。
+3. **内核 nfsd**:通用 NAS/大规模场景的最优解,由客户基础设施承担,
+   mammoth 不内嵌(内核模块与特权要求不适合默认形态)。
+
 ## 介质中转竞态(部署注意)
 
 经中转(本地构建后 scp 推 NFS)分发引导介质时,**挂载成功 ≠ 文件完整**:

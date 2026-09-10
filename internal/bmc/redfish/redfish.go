@@ -213,9 +213,35 @@ func (d *Driver) SetPower(ctx context.Context, addr string, cred bmc.Credentials
 		return &bmc.Error{Kind: bmc.KindProtocolError, Op: "set_power", Detail: "no computer system resource"}
 	}
 	if err := systems[0].Reset(resetType); err != nil {
+		// Some firmwares reject standard reboot ResetTypes with
+		// ActionParameterValueFormatError while supporting the operation via
+		// ForceRestart (Huawei iBMC 6.41 observed: PowerCycle and
+		// GracefulRestart both rejected — docs/compat/huawei.md §8). Retry
+		// once with the hard-reboot mapping before failing.
+		if alt, ok := hardRestartFallback(resetType); ok && isResetTypeFormatError(err) {
+			if serr := systems[0].Reset(alt); serr == nil {
+				return nil
+			}
+		}
 		return bmc.Classify("set_power", err)
 	}
 	return nil
+}
+
+// hardRestartFallback maps reboot-type reset types onto ForceRestart for
+// firmwares that reject the standard ResetType values.
+func hardRestartFallback(rt redfish.ResetType) (redfish.ResetType, bool) {
+	switch rt {
+	case redfish.PowerCycleResetType, redfish.GracefulRestartResetType:
+		return redfish.ForceRestartResetType, true
+	}
+	return "", false
+}
+
+// isResetTypeFormatError reports whether err is the Redfish
+// ActionParameterValueFormatError rejection of the sent ResetType.
+func isResetTypeFormatError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "ActionParameterValueFormatError")
 }
 
 // resetTypeFor maps unified power actions onto standard Redfish ResetType.

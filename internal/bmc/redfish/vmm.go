@@ -27,6 +27,50 @@ import (
 // reach the NFS server) surface as BMC_PROTOCOL_ERROR with the task message.
 func (d *Driver) vmmControl(ctx context.Context, c *gofish.APIClient, addr string, imageURI string, action string) error {
 	const op = "vmm_control"
+	if action != "Connect" && action != "Disconnect" {
+		return &bmc.Error{Kind: bmc.KindUnsupported, Op: op,
+			Detail: fmt.Sprintf("vmm action %q unsupported", action)}
+	}
+	if action == "Connect" {
+		// Clear the slot first: the firmware rejects a Connect while media is
+		// held (iBMC.1.0.ConnectionOccupied). Best effort — a Disconnect on an
+		// empty slot fails silently, and a genuinely stuck slot surfaces as a
+		// real error from the Connect below.
+		_ = d.vmmAction(ctx, c, addr, "", "Disconnect")
+		time.Sleep(3 * time.Second)
+		// The iBMC's NFS mount is probabilistic: the same request that fails
+		// with ConnectionFailed succeeds on an immediate retry (real-hardware
+		// capture shows the NFS client completing the full mount dance and
+		// reading the image on the winning attempt; the task message's own
+		// Resolution is "Please try again"). Retry in-driver so a flaky mount
+		// does not burn pipeline task attempts; a fully validated mount takes
+		// ~15s (the BMC verifies the ISO9660 metadata after connecting).
+		var last error
+		for attempt := 0; attempt < 3; attempt++ {
+			if attempt > 0 {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(4 * time.Second):
+				}
+			}
+			last = d.vmmAction(ctx, c, addr, imageURI, action)
+			if last == nil {
+				return nil
+			}
+			// A 400 rejection is a real configuration error (protocol
+			// mismatch, bad URI) — fail fast instead of retrying.
+			if strings.Contains(last.Error(), "vmm Connect rejected") {
+				return last
+			}
+		}
+		return last
+	}
+	return d.vmmAction(ctx, c, addr, imageURI, action)
+}
+
+func (d *Driver) vmmAction(ctx context.Context, c *gofish.APIClient, addr string, imageURI string, action string) error {
+	const op = "vmm_control"
 	managers, err := c.Service.Managers()
 	if err != nil {
 		return bmc.Classify(op, err)
@@ -37,7 +81,7 @@ func (d *Driver) vmmControl(ctx context.Context, c *gofish.APIClient, addr strin
 	actionURL := strings.TrimSuffix(managers[0].ODataID, "/") + "/VirtualMedia/CD/Oem/Huawei/Actions/VirtualMedia.VmmControl"
 
 	payload := map[string]any{"VmmControlType": action}
-	if imageURI != "" {
+	if imageURI != "" && action == "Connect" {
 		payload["Image"] = imageURI
 	}
 	resp, err := c.Post(actionURL, payload)
@@ -55,10 +99,6 @@ func (d *Driver) vmmControl(ctx context.Context, c *gofish.APIClient, addr strin
 		return &bmc.Error{Kind: bmc.KindProtocolError, Op: op,
 			Detail: fmt.Sprintf("vmm %s: %s %s", action, resp.Status, bmc.FirstLine(string(raw)))}
 	}
-	if action == "Disconnect" {
-		return nil // eject completes synchronously on this firmware
-	}
-
 	// Poll the mount task to terminal state.
 	var task struct {
 		Id        string          `json:"Id"`

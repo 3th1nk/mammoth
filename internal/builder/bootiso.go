@@ -142,7 +142,6 @@ func tail(b []byte, n int) string {
 	return string(b)
 }
 
-
 // EnsureISO makes the distribution ISO available locally. sourceURL may be
 // an HTTP(S) URL or any URI (e.g. nfs://) — for non-HTTP URIs the file is
 // looked up in cacheDir by basename. Downloaded files are cached and
@@ -181,4 +180,3 @@ func EnsureISO(ctx context.Context, sourceURL, cacheDir string) (string, error) 
 	}
 	return dest, f.Close()
 }
-

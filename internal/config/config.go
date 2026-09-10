@@ -82,7 +82,7 @@ type Config struct {
 	MediaRelayAddr     string        // media relay SSH endpoint (host[:port]); empty = no relay
 	MediaRelayUser     string
 	MediaRelayPassword string
-	MediaRelayDir      string        // remote export directory the BMC mounts from
+	MediaRelayDir      string // remote export directory the BMC mounts from
 
 	// OTELExporterEndpoint enables OTLP trace export when non-empty.
 	// Without it, tracing stays at the API boundary instrumentation level

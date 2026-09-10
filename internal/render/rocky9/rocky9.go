@@ -52,6 +52,7 @@ func (d *Driver) KeepPartitionSupport() render.SupportLevel { return render.Supp
 //   - storage: resolved disks/partitions from verify_layout;
 //   - %post: user scripts, then the completion callback that unblocks the
 //     install stage (docs/06-install-pipeline.md §3, §4).
+//
 // failtrap renders the per-hook ERR trap: a failing %pre/%post reports its
 // phase to the completion endpoint, so the task error carries the failing
 // installer phase instead of an opaque timeout — the portable stand-in for

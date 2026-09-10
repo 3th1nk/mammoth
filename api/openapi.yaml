@@ -1514,7 +1514,10 @@ components:
       properties:
         root_password:
           type: string
-          description: "`generate` for a per-task random password, an explicit value, or absent to disable password login."
+          description: >-
+            Absent or empty → per-task random password (default; delivered
+            once via the task.root_password event). Any non-empty value is
+            used as the literal root password.
         ssh_keys:
           type: array
           items:

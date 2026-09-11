@@ -149,7 +149,7 @@ func TestRenderAutoinstallWipeAndBond(t *testing.T) {
 		t.Errorf("hostname missing")
 	}
 
-	if boot.KernelArgs != "autoinstall ds=nocloud-net;s=https://m/render/tok9/" {
+	if boot.KernelArgs != "autoinstall ip=dhcp ds=nocloud-net;s=https://m/render/tok9/" {
 		t.Errorf("boot params wrong: %q", boot.KernelArgs)
 	}
 }

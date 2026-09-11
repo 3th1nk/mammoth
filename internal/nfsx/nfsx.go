@@ -34,6 +34,7 @@ import (
 type Server struct {
 	listener net.Listener
 	done     chan error
+	pm       *portmapper
 }
 
 // Start exports dir read-only over NFSv3 on port (mount + nfs multiplexed
@@ -51,6 +52,15 @@ func Start(ctx context.Context, dir string, port int) (*Server, error) {
 	handler := nfshelper.NewCachingHandler(nfshelper.NewNullAuthHandler(fs), 1024)
 
 	s := &Server{listener: listener, done: make(chan error, 1)}
+	// rpcbind/portmapper on 111: BMC mount clients resolve the mount/nfs
+	// ports here before mounting. go-nfs multiplexes both on one port, so
+	// every lookup for nfs(100003)/mountd(100005) answers with it.
+	pm := &portmapper{port: port}
+	if perr := pm.serve(ctx, 111); perr != nil {
+		listener.Close()
+		return nil, fmt.Errorf("nfsx: portmapper: %w", perr)
+	}
+	s.pm = pm
 	go func() { s.done <- nfs.Serve(listener, handler) }()
 	go func() {
 		select {

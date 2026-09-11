@@ -1,0 +1,8 @@
+# Dev override: run all-in-one from the local builder image (has xorriso).
+# Root user: the media volume is root-owned; production uses a dedicated uid.
+services:
+  mammoth:
+    image: mammoth-builder:dev
+    build: null
+    command: ["serve", "--mode=all"]
+    user: "0:0"

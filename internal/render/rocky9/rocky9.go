@@ -8,10 +8,8 @@ package rocky9
 
 import (
 	"fmt"
-	"net"
 	"net/netip"
 	"path"
-	"regexp"
 	"strings"
 	"text/template"
 
@@ -365,7 +363,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 				return nil, render.BootParams{}, fmt.Errorf(
 					"rocky9: disk %s must declare wipe or keep", disk.Device)
 			}
-			if isKernelDeviceName(disk.Device) {
+			if render.IsKernelDeviceName(disk.Device) {
 				wipe = append(wipe, disk.Device)
 				for _, p := range disk.Partitions {
 					line, err := newPartLine(p, disk.Device)
@@ -398,7 +396,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		if r.Mode != "hardware" || r.BoundDevice == "" {
 			continue
 		}
-		if isKernelDeviceName(r.BoundDevice) {
+		if render.IsKernelDeviceName(r.BoundDevice) {
 			wipe = append(wipe, r.BoundDevice)
 			for _, p := range r.Partitions {
 				line, err := newPartLine(p, r.BoundDevice)
@@ -563,7 +561,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// (ifname= by MAC, so they work regardless of in-installer NIC naming);
 	// DHCP is the fallback. The kickstart's own network stanzas apply
 	// afterwards.
-	early := earlyNetworkArgs(in.Network)
+	early := render.EarlyNetArgs(in.Network, true)
 	if early == "" {
 		early = "ip=dhcp"
 	}
@@ -573,16 +571,6 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	}
 	return answers, boot, nil
 }
-
-// isKernelDeviceName reports whether dev looks like a Linux block device
-// name. Redfish inventories often report controller-level names instead
-// ("LogicalDrive1") — those must be re-identified in %pre.
-func isKernelDeviceName(dev string) bool {
-	return kernelDevRe.MatchString(dev)
-}
-
-var kernelDevRe = regexp.MustCompile(
-	`^(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+|hd[a-z]+|xvd[a-z]+|mmcblk[0-9]+|md[0-9]+|dm-[0-9]+)$`)
 
 // storageShell emits the sh snippet executed in %pre: claimed disks are
 // re-identified by size (+serial when known) among the installer's block
@@ -649,48 +637,6 @@ func storageShell(dyn []dynDisk, wipeStatic []string, dynMemberLines []string, b
 	}
 	b.WriteString("MAMMOTH_STORAGE_KS\n")
 	return b.String()
-}
-
-// earlyNetworkArgs renders dracut early-network arguments from the spec's
-// static interface declarations: ifname= pins a stable name by MAC (immune
-// to in-installer NIC naming), ip= configures the address, nameserver= carries
-// DNS. Bond/vlan entries are skipped — their ks-side stanzas handle them and
-// the early phase falls back to DHCP. Returns "" when nothing static applies.
-func earlyNetworkArgs(entries []render.NetworkEntry) string {
-	var b strings.Builder
-	seenDNS := map[string]bool{}
-	n := 0
-	for _, e := range entries {
-		if e.Bond != nil || e.VLAN != nil || e.Match == nil || e.Match.MAC == "" || len(e.Addresses) == 0 {
-			continue
-		}
-		ipAddr, ipnet, err := net.ParseCIDR(e.Addresses[0])
-		if err != nil || ipAddr.To4() == nil {
-			continue
-		}
-		// Prefix → dotted mask for the dracut ip= field.
-		ones, _ := ipnet.Mask.Size()
-		mask := net.IP(net.CIDRMask(ones, 32)).String()
-
-		name := fmt.Sprintf("m%d", n)
-		n++
-		mac := strings.ToLower(e.Match.MAC)
-
-		gateway := ""
-		for _, r := range e.Routes {
-			if r.To == "0.0.0.0/0" || r.To == "default" {
-				gateway = r.Via
-			}
-		}
-		fmt.Fprintf(&b, " ifname=%s:%s ip=%s::%s:%s::%s:none", name, mac, ipAddr.String(), gateway, mask, name)
-		for _, dns := range e.Nameservers {
-			if !seenDNS[dns] {
-				seenDNS[dns] = true
-				fmt.Fprintf(&b, " nameserver=%s", dns)
-			}
-		}
-	}
-	return strings.TrimSpace(b.String())
 }
 
 func scriptBody(s render.ScriptEntry) string {

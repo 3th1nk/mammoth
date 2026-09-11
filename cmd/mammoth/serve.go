@@ -148,6 +148,9 @@ func serve(args []string) error {
 
 	// Media relay (optional): when set, assembled boot media is pushed to the
 	// BMC-reachable export in-process — replacing out-of-band push scripts.
+	// NOTE: keep the interface nil when no relay is configured — a typed-nil
+	// (*Relay)(nil) makes `MediaUploader != nil` true and panics at call time.
+	var mediaUploader provision.MediaUploader
 	var mediaRelay *mediarelay.Relay
 	if getenv("MAMMOTH_MEDIA_RELAY_ADDR", "") != "" {
 		relay, rerr := mediarelay.New(cfg.MediaRelayAddr, cfg.MediaRelayUser,
@@ -156,6 +159,9 @@ func serve(args []string) error {
 			return fmt.Errorf("media relay: %w", rerr)
 		}
 		mediaRelay = relay
+	}
+	if mediaRelay != nil {
+		mediaUploader = mediaRelay
 	}
 
 	// Distro drivers register here; adding a distro never touches the
@@ -260,7 +266,7 @@ func serve(args []string) error {
 			MediaDir:        cfg.MediaDir,
 			MediaBaseURI:    cfg.MediaBaseURI,
 			BootSettleDelay: cfg.BootSettleDelay,
-			MediaUploader:   mediaRelay,
+			MediaUploader:   mediaUploader,
 			RamdiskEnabled:  cfg.RamdiskEnabled,
 			LayoutKeep:      cfg.LayoutRetention,
 		}

@@ -174,7 +174,7 @@ menuentry 'mammoth' {
 	}
 	// The work tree (gigabytes of extracted ISO) never outlives the build —
 	// in server deployments it lives INSIDE the media export.
-	ensureRemovable(work)
+	_ = ensureRemovable(work) // cleanup path — best effort
 	_ = os.RemoveAll(work)
 	return opt.OutputPath, nil
 }
@@ -308,7 +308,11 @@ func rebuildPatchedISO(ctx context.Context, opt BootMediaOptions, kernelArgs str
 	if work == "" {
 		work = opt.OutputPath + ".build"
 	}
-	ensureRemovable(work)
+	_ = ensureRemovable(work) // pre-cleanup — best effort
+	// A prior failed build leaves a read-only tree behind; restore
+	// writability or the cleanup cannot descend into it (RemoveAll fails
+	// with "openfdat: permission denied" on darwin).
+	_ = exec.CommandContext(ctx, "chmod", "-R", "u+rwX", work).Run()
 	if err := os.RemoveAll(work); err != nil {
 		return "", err
 	}
@@ -334,8 +338,9 @@ func rebuildPatchedISO(ctx context.Context, opt BootMediaOptions, kernelArgs str
 		mkisofsArgs = append(mkisofsArgs, splitQuoted(line)...)
 	}
 	// debian-cd's report references HOST-side helpers (-isohybrid-mbr
-	// /usr/lib/ISOLINUX/isohdpfx.bin) that don't exist on the mammoth host.
-	mkisofsArgs = rewriteIsohybridMbr(mkisofsArgs, work)
+	// /usr/lib/ISOLINUX/isohdpfx.bin) or the SOURCE image via an --interval
+	// spec with a relative path — neither exists at assembly time.
+	mkisofsArgs = rewriteIsohybridMbr(mkisofsArgs, work, opt.ISOPath)
 
 	// Full extract. ISO9660 extraction preserves read-only modes — grant
 	// owner write over the tree or the grub.cfg patch below fails.
@@ -349,7 +354,19 @@ func rebuildPatchedISO(ctx context.Context, opt BootMediaOptions, kernelArgs str
 		_ = os.WriteFile("/tmp/extract-debug.log", extract, 0o644)
 		return "", fmt.Errorf("extract distro iso: %w: %s", err, tail(extract, 600))
 	}
-	ensureRemovable(work)
+	// auto_chmod_on restores the ISO's recorded modes when it finishes — the
+	// tree comes back read-only-ish (dirs often WITHOUT the search bit). The
+	// seed/config patching below needs a writable tree, so restore it
+	// first: chmod -R handles exotic modes (dirs without the search bit)
+	// more reliably than a Go walk (observed on macOS sandboxes); the
+	// in-process pass is both fallback and the explicit error surface — a
+	// silent failure here would resurface as a misleading "permission
+	// denied" on the first WriteFile.
+	if err := exec.CommandContext(ctx, "chmod", "-R", "u+rwX", work).Run(); err != nil {
+		if ferr := ensureRemovable(work); ferr != nil {
+			return "", fmt.Errorf("grant write over extracted tree: %w", ferr)
+		}
+	}
 
 	// Answer files at the ISO ROOT: the installer mounts the boot medium at
 	// /cdrom and reads its seed from there (casper: the nocloud-net
@@ -367,7 +384,7 @@ func rebuildPatchedISO(ctx context.Context, opt BootMediaOptions, kernelArgs str
 				return "", err
 			}
 			if err := os.WriteFile(dest, []byte(content), 0o644); err != nil {
-				return "", err
+				return "", fmt.Errorf("bake seed file %s: %w", name, err)
 			}
 		}
 	}
@@ -385,7 +402,7 @@ func rebuildPatchedISO(ctx context.Context, opt BootMediaOptions, kernelArgs str
 	}
 	// The work tree (gigabytes of extracted ISO) never outlives the build —
 	// in server deployments it lives INSIDE the media export.
-	ensureRemovable(work)
+	_ = ensureRemovable(work) // cleanup path — best effort
 	_ = os.RemoveAll(work)
 	return opt.OutputPath, nil
 }
@@ -482,14 +499,30 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// rewriteIsohybridMbr repoints -isohybrid-mbr at the image's own
-// isolinux/isohdpfx.bin (the report's host-side path never exists here), or
-// drops the pair when the image ships none — virtual-media boot needs El
-// Torito, not an isohybrid MBR.
-func rewriteIsohybridMbr(args []string, work string) []string {
+// rewriteIsohybridMbr repoints -isohybrid-mbr at something that exists at
+// assembly time. Two shapes occur in as_mkisofs reports:
+//   - a host-side helper path (/usr/lib/ISOLINUX/isohdpfx.bin — absent on the
+//     mammoth host): rewritten to the image's own isolinux/isohdpfx.bin, or
+//     dropped when the image ships none;
+//   - an --interval spec reading the SOURCE image's boot sector (debian-cd);
+//     the file is recorded as xorriso received it — often RELATIVE, which
+//     breaks at assembly time (different cwd). Repoint it at the absolute
+//     source path; drop when unavailable — virtual-media boot needs El
+//     Torito, not an isohybrid MBR.
+func rewriteIsohybridMbr(args []string, work, srcISO string) []string {
 	for i := 1; i < len(args); i++ {
 		if args[i-1] != "-isohybrid-mbr" {
 			continue
+		}
+		if v := args[i]; strings.HasPrefix(v, "--interval:") {
+			if srcISO != "" {
+				if idx := strings.LastIndex(v, ":"); idx >= 0 {
+					args[i] = v[:idx+1] + srcISO
+					break
+				}
+			}
+			args = append(args[:i-1], args[i+1:]...)
+			break
 		}
 		if local := filepath.Join(work, "isolinux", "isohdpfx.bin"); fileExists(local) {
 			args[i] = local
@@ -526,22 +559,28 @@ func splitQuoted(line string) []string {
 	return out
 }
 
-// ensureRemovable grants owner write over a whole tree, best effort — ISO
-// extraction preserves read-only modes that block patching and cleanup.
-func ensureRemovable(root string) {
+// ensureRemovable grants owner write over a whole tree — ISO extraction
+// preserves read-only modes that block patching and cleanup. The first
+// chmod error is returned (later ones would just repeat it); best effort
+// only where the tree is absent.
+func ensureRemovable(root string) error {
 	_, statErr := os.Stat(root)
 	if statErr != nil {
-		return // nothing to fix
+		return nil // nothing to fix
 	}
+	var firstErr error
 	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // best effort
+			return nil // unreadable entry — surface the chmod error instead
 		}
+		mode := os.FileMode(0o644)
 		if info.IsDir() {
-			_ = os.Chmod(path, 0o755)
-		} else {
-			_ = os.Chmod(path, 0o644)
+			mode = 0o755
+		}
+		if chErr := os.Chmod(path, mode); chErr != nil && firstErr == nil {
+			firstErr = fmt.Errorf("chmod %s: %w", path, chErr)
 		}
 		return nil
 	})
+	return firstErr
 }

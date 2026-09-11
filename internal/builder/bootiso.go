@@ -41,15 +41,31 @@ type BootMediaOptions struct {
 	WorkDir string
 	// XorrisoPath overrides the xorriso binary (default: PATH lookup).
 	XorrisoPath string
+	// SeedFiles are answer files baked into the rebuilt image at cloud-init's
+	// local seed path (/var/lib/cloud/seed/nocloud/) — casper-layout rebuilds
+	// only. The installer reads them from the CD with zero network dependency
+	// (the remote-seed path needs casper early networking, a known flake).
+	SeedFiles map[string]string
 	// Timeout bounds the whole build (default 10m).
 	Timeout time.Duration
 }
 
+// isoLayout is the boot-layout family a distro ISO belongs to. The layout
+// decides both the rebuild strategy (full repack vs selective assembly) and
+// which bootloader configs get the mammoth kernel arguments.
+type isoLayout string
+
+const (
+	layoutCasper   isoLayout = "casper"    // Ubuntu live-server (/casper)
+	layoutDebianDI isoLayout = "debian-di" // debian-installer (/install.amd | /install)
+)
+
 // BuildBootISO assembles a bootable ISO whose bootloader carries the given
 // kernel arguments (they must include inst.ks / inst.repo — the driver's
-// BootParams). The distro ISO must expose the standard layout:
-// images/pxeboot/{vmlinuz,initrd.img}, isolinux/{isolinux.bin,ldlinux.c32},
-// images/efiboot.img.
+// BootParams). Three layouts are understood: casper (Ubuntu live-server) and
+// debian-installer rebuild as a full patched image (both installers read
+// packages from the CD itself); the RHEL layout rebuilds as a selective
+// boot-media assembly (packages come over the network via inst.repo).
 func BuildBootISO(ctx context.Context, opt BootMediaOptions, kernelArgs string) (string, error) {
 	if opt.ISOPath == "" {
 		return "", fmt.Errorf("builder: distro ISO path is required")
@@ -67,7 +83,14 @@ func BuildBootISO(ctx context.Context, opt BootMediaOptions, kernelArgs string) 
 	if isoHasCasper(ctx, opt.ISOPath, opt.XorrisoPath) {
 		buildSem <- struct{}{}
 		defer func() { <-buildSem }()
-		return rebuildPatchedISO(ctx, opt, kernelArgs)
+		return rebuildPatchedISO(ctx, opt, kernelArgs, layoutCasper, "")
+	}
+	// debian-installer ISOs must be probed AFTER casper: Ubuntu live-server
+	// also ships an /install/ directory, but no netinst kernel layout.
+	if dir := debianInstallDir(ctx, opt.ISOPath, opt.XorrisoPath); dir != "" {
+		buildSem <- struct{}{}
+		defer func() { <-buildSem }()
+		return rebuildPatchedISO(ctx, opt, kernelArgs, layoutDebianDI, dir)
 	}
 
 	work := opt.WorkDir
@@ -251,12 +274,32 @@ func isoHasCasper(ctx context.Context, iso, xorrisoOverride string) bool {
 	return err == nil && strings.Contains(string(out), "/casper")
 }
 
-// rebuildPatchedISO handles casper-layout ISOs (Ubuntu live-server): extract
-// everything, replace /boot/grub/grub.cfg with a single mammoth entry (the
-// squashfs stays on the CD — the installer boots it directly, no network
-// root needed), then reassemble with the El Torito/MBR/GPT parameters the
-// original image reports. The volume label is preserved for casper.
-func rebuildPatchedISO(ctx context.Context, opt BootMediaOptions, kernelArgs string) (string, error) {
+// debianInstallDir returns the d-i kernel directory name ("install.amd" on
+// Debian; "install" kept for derivatives/UOS) or "" when the image carries
+// no debian-installer layout. Callers MUST probe casper first — Ubuntu
+// live-server ships an /install/ directory too.
+func debianInstallDir(ctx context.Context, iso, xorrisoOverride string) string {
+	xorriso := xorrisoOverride
+	if xorriso == "" {
+		xorriso = "xorriso"
+	}
+	for _, dir := range []string{"install.amd", "install"} {
+		out, err := exec.CommandContext(ctx, xorriso, "-indev", iso, "-find", "/"+dir, "-type", "d").CombinedOutput()
+		if err == nil && strings.Contains(string(out), "/"+dir) {
+			return dir
+		}
+	}
+	return ""
+}
+
+// rebuildPatchedISO handles full-repack layouts (casper: Ubuntu live-server;
+// debian-di: debian-installer netinst): extract everything, patch the boot
+// configs with the mammoth entry and bake the seed files at the ISO root,
+// then reassemble with the El Torito/MBR/GPT parameters the original image
+// reports. Both installers read their packages from the CD, so the whole
+// image must survive the repack — a selective boot-media assembly would
+// leave them without an install source.
+func rebuildPatchedISO(ctx context.Context, opt BootMediaOptions, kernelArgs string, layout isoLayout, installDir string) (string, error) {
 	xorriso := opt.XorrisoPath
 	if xorriso == "" {
 		xorriso = "xorriso"
@@ -290,6 +333,9 @@ func rebuildPatchedISO(ctx context.Context, opt BootMediaOptions, kernelArgs str
 		}
 		mkisofsArgs = append(mkisofsArgs, splitQuoted(line)...)
 	}
+	// debian-cd's report references HOST-side helpers (-isohybrid-mbr
+	// /usr/lib/ISOLINUX/isohdpfx.bin) that don't exist on the mammoth host.
+	mkisofsArgs = rewriteIsohybridMbr(mkisofsArgs, work)
 
 	// Full extract. ISO9660 extraction preserves read-only modes — grant
 	// owner write over the tree or the grub.cfg patch below fails.
@@ -305,23 +351,28 @@ func rebuildPatchedISO(ctx context.Context, opt BootMediaOptions, kernelArgs str
 	}
 	ensureRemovable(work)
 
-	// grub treats ';' as a command separator — the cloud-init datasource
-	// syntax (ds=nocloud-net;s=URL) must escape it or the kernel command
-	// line is truncated at the semicolon and autoinstall never engages.
-	grubArgs := strings.ReplaceAll(kernelArgs, ";", "\\;")
-	// Ubuntu's hybrid ISO serves UEFI from /EFI/boot/grub.cfg and BIOS from
-	// /boot/grub/grub.cfg — both get the mammoth entry.
-	grubCfg := fmt.Sprintf(`set default=0
-set timeout=1
-menuentry 'mammoth' {
-	linux /casper/vmlinuz %s
-	initrd /casper/initrd
-}
-`, grubArgs)
-	if err := os.WriteFile(filepath.Join(work, "boot", "grub", "grub.cfg"), []byte(grubCfg), 0o644); err != nil {
-		return "", err
+	// Answer files at the ISO ROOT: the installer mounts the boot medium at
+	// /cdrom and reads its seed from there (casper: the nocloud-net
+	// file:// seedfrom; d-i: file=/cdrom/preseed.cfg) — fully offline, no
+	// installer early networking involved (the initramfs ip= form proved
+	// unreliable). Nested names (run/mammoth/*.sh) need their directories.
+	seedDir := work
+	if len(opt.SeedFiles) > 0 {
+		if err := os.MkdirAll(seedDir, 0o755); err != nil {
+			return "", err
+		}
+		for name, content := range opt.SeedFiles {
+			dest := filepath.Join(seedDir, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+				return "", err
+			}
+			if err := os.WriteFile(dest, []byte(content), 0o644); err != nil {
+				return "", err
+			}
+		}
 	}
-	if err := os.WriteFile(filepath.Join(work, "EFI", "boot", "grub.cfg"), []byte(grubCfg), 0o644); err != nil {
+
+	if err := patchBootConfigs(work, kernelArgs, layout, installDir); err != nil {
 		return "", err
 	}
 
@@ -337,6 +388,117 @@ menuentry 'mammoth' {
 	ensureRemovable(work)
 	_ = os.RemoveAll(work)
 	return opt.OutputPath, nil
+}
+
+// patchBootConfigs overwrites the layout's bootloader configs with a single
+// mammoth entry carrying the given kernel arguments.
+//
+// grub treats ';' as a command separator — the escape applies to grub files
+// only (ds=nocloud-net;s=URL survives intact there). isolinux's append line
+// has no such special character, and the backslash would leak into the
+// kernel command line, so it gets the raw args.
+//
+// The d-i UEFI chain: the grub binary inside boot/grub/efi.img (the El
+// Torito EFI image) carries an embedded config that loads the ISO's
+// /boot/grub/grub.cfg — patching that file covers UEFI. A stray
+// EFI/boot/grub.cfg is patched too when present, so derivatives that ship
+// one don't resurrect a menu without the mammoth args.
+func patchBootConfigs(work, kernelArgs string, layout isoLayout, installDir string) error {
+	for rel, content := range bootConfigs(kernelArgs, layout, installDir) {
+		dest := filepath.Join(work, filepath.FromSlash(rel))
+		if layout == layoutDebianDI && !fileExists(filepath.Join(work, filepath.FromSlash(rel))) {
+			continue // d-i: only overwrite configs the image actually ships
+		}
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(dest, []byte(content), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// bootConfigs returns {ISO-relative path → config content} for the layout.
+// casper: BIOS from /boot/grub/grub.cfg and UEFI from /EFI/boot/grub.cfg,
+// kernel/initrd from /casper. debian-di: BIOS from isolinux (both
+// isolinux.cfg and the txt.cfg menu the stock config includes), UEFI from
+// /boot/grub/grub.cfg, kernel/initrd.gz from the d-i directory.
+func bootConfigs(kernelArgs string, layout isoLayout, installDir string) map[string]string {
+	grubArgs := strings.ReplaceAll(kernelArgs, ";", "\\;")
+	switch layout {
+	case layoutCasper:
+		grubCfg := fmt.Sprintf(`set default=0
+set timeout=1
+menuentry 'mammoth' {
+	linux /casper/vmlinuz %s
+	initrd /casper/initrd
+}
+`, grubArgs)
+		return map[string]string{
+			"boot/grub/grub.cfg": grubCfg,
+			"EFI/boot/grub.cfg":  grubCfg,
+		}
+	case layoutDebianDI:
+		cfgs := debianBootConfigs(kernelArgs, installDir)
+		// isolinux resolves the label from isolinux.cfg; txt.cfg is covered
+		// defensively (it exists in the stock image and is referenced from
+		// some derivative menu chains).
+		return map[string]string{
+			"isolinux/isolinux.cfg": cfgs.isolinux,
+			"isolinux/txt.cfg":      cfgs.isolinux,
+			"boot/grub/grub.cfg":    cfgs.grub,
+			"EFI/boot/grub.cfg":     cfgs.grub, // conditional — patched only if present
+		}
+	}
+	return nil
+}
+
+// debianBootConfigs builds the d-i boot entry pair. d-i arguments need no
+// `---` separator (there is no separate target-system argument section) and
+// the text installer's kernel is <installDir>/vmlinuz.
+type debianCfgs struct{ isolinux, grub string }
+
+func debianBootConfigs(kernelArgs, installDir string) debianCfgs {
+	isolinux := fmt.Sprintf(`default mammoth
+timeout 1
+prompt 0
+label mammoth
+  kernel /%[1]s/vmlinuz
+  append initrd=/%[1]s/initrd.gz %[2]s
+`, installDir, kernelArgs)
+	grub := fmt.Sprintf(`set default=0
+set timeout=1
+menuentry 'mammoth' {
+	linux /%[1]s/vmlinuz %[2]s
+	initrd /%[1]s/initrd.gz
+}
+`, installDir, strings.ReplaceAll(kernelArgs, ";", "\\;"))
+	return debianCfgs{isolinux: isolinux, grub: grub}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// rewriteIsohybridMbr repoints -isohybrid-mbr at the image's own
+// isolinux/isohdpfx.bin (the report's host-side path never exists here), or
+// drops the pair when the image ships none — virtual-media boot needs El
+// Torito, not an isohybrid MBR.
+func rewriteIsohybridMbr(args []string, work string) []string {
+	for i := 1; i < len(args); i++ {
+		if args[i-1] != "-isohybrid-mbr" {
+			continue
+		}
+		if local := filepath.Join(work, "isolinux", "isohdpfx.bin"); fileExists(local) {
+			args[i] = local
+		} else {
+			args = append(args[:i-1], args[i+1:]...)
+		}
+		break
+	}
+	return args
 }
 
 // splitQuoted tokenizes one shell-quoted report line (xorriso uses single

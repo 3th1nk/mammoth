@@ -38,6 +38,10 @@ type Executor struct {
 	// BootSettleDelay waits between media mount and power-on — covers
 	// out-of-band media transfer tails (NFS relay pushes).
 	BootSettleDelay time.Duration
+	// MediaWorkDir is the scratch directory for media builds — use when the
+	// media repo lives on a size-limited share (the extract+assemble needs
+	// ~2x the image size transient).
+	MediaWorkDir string
 	// MediaBaseURI is the BMC-reachable media base URI the BMC mounts from
 	// (nfs://, cifs://, ftp:// — the firmware decides what it accepts).
 	MediaBaseURI string

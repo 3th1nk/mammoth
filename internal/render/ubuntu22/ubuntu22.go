@@ -105,29 +105,30 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		}
 	}
 
-	meta := "" // meta-data content is unused by nocloud-net; the file must exist
-
+	meta := "" // nocloud meta-data must exist (empty ok)
 	userDataYAML, err := emitYAML(userData)
 	if err != nil {
 		return nil, render.BootParams{}, fmt.Errorf("ubuntu22: user-data: %w", err)
 	}
 
+	// The answer files are BAKED into the rebuilt ISO root; the kernel
+	// argument points the nocloud datasource at the CD mount (fully offline).
+	// nocloud REQUIRES the meta-data file to exist alongside user-data.
 	answers := []render.AnswerFile{
 		{Name: "meta-data", Content: meta},
 		{Name: "user-data", Content: userDataYAML},
 	}
-	seedURL := strings.TrimSuffix(primaryURL, "/user-data")
-	// Early network: casper/initramfs configures none without ip=, and the
-	// seed is a remote URL (same real-hardware finding as kickstart). The
-	// initramfs form has no per-interface pinning — a single static stanza
-	// without an interface name applies to the first NIC.
-	earlyNet := render.EarlyNetArgs(in.Network, false)
-	if earlyNet == "" {
-		earlyNet = "ip=dhcp"
-	}
+	// The answer files are BAKED into the rebuilt ISO root; the kernel
+	// argument points the nocloud-net datasource at the CD mount (file:// —
+	// fully offline). The autoinstall network section (above) configures the
+	// address for the install itself.
+	// subiquity scans the boot medium's root for autoinstall.yaml when
+	// `autoinstall` is on the kernel command line; the file:// seedfrom is
+	// the documented offline-ISO form (casper mounts the boot medium at
+	// /cdrom — cloud-init reads the seed from there, no networking).
 	boot := render.BootParams{
 		AnswerURL:  primaryURL,
-		KernelArgs: fmt.Sprintf("autoinstall %s ds=nocloud-net;s=%s/", earlyNet, seedURL),
+		KernelArgs: "autoinstall ds=nocloud-net;s=file:///cdrom/",
 	}
 	return answers, boot, nil
 }

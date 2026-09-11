@@ -31,14 +31,15 @@ services:
       MAMMOTH_API_TOKEN: ${MAMMOTH_API_TOKEN:?set MAMMOTH_API_TOKEN}
       MAMMOTH_MASTER_KEY: ${MAMMOTH_MASTER_KEY:?set MAMMOTH_MASTER_KEY (base64 32B)}
       MAMMOTH_LOG_FORMAT: json
-    ports:
-      - "8080:8080"
-      - "2049:2049" # built-in NFS media export (BMC mounts nfs://$MAMMOTH_HOST_IP/media)
-    environment:
       # The built-in NFS export (default on) serves the media dir from this
       # process — no external NFS service needed for the common deployment.
       MAMMOTH_MEDIA_DIR: /media
       MAMMOTH_MEDIA_BASE_URI: nfs://${MAMMOTH_HOST_IP:?set MAMMOTH_HOST_IP (BMC-reachable address)}/media
+      MAMMOTH_BMC_TLS_INSECURE: ${MAMMOTH_BMC_TLS_INSECURE:-false}
+    ports:
+      - "8080:8080"
+      - "2049:2049" # built-in NFS media export (BMC mounts nfs://$MAMMOTH_HOST_IP/media)
+      - "111:111/tcp" # portmapper (TCP; BMC UDP lookup falls back to TCP) — BMC mount clients resolve nfs/mountd ports here
 
 volumes:
   pgdata:

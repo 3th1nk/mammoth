@@ -117,9 +117,17 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		{Name: "user-data", Content: userDataYAML},
 	}
 	seedURL := strings.TrimSuffix(primaryURL, "/user-data")
+	// Early network: casper/initramfs configures none without ip=, and the
+	// seed is a remote URL (same real-hardware finding as kickstart). The
+	// initramfs form has no per-interface pinning — a single static stanza
+	// without an interface name applies to the first NIC.
+	earlyNet := render.EarlyNetArgs(in.Network, false)
+	if earlyNet == "" {
+		earlyNet = "ip=dhcp"
+	}
 	boot := render.BootParams{
 		AnswerURL:  primaryURL,
-		KernelArgs: fmt.Sprintf("autoinstall ds=nocloud-net;s=%s/", seedURL),
+		KernelArgs: fmt.Sprintf("autoinstall %s ds=nocloud-net;s=%s/", earlyNet, seedURL),
 	}
 	return answers, boot, nil
 }
@@ -129,6 +137,32 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 // simply absent (curtin never touches them) — the partial keep semantics.
 func storageConfig(in render.InstallInputs, m render.MachineView) (map[string]any, error) {
 	config := []map[string]any{}
+	rendered := 0
+
+	// Hardware RAID volumes are install targets like disks — the bound
+	// volume identifies by its SCSI serial (refreshed from the in-band
+	// snapshot at configure_raid; the controller assigns it, Redfish does
+	// not expose it).
+	type diskTarget struct {
+		id, device, serial string
+		wipe               bool
+		sizeBytes          int64
+		partitions         []render.ResolvedPartition
+	}
+	targets := []diskTarget{}
+	for _, r := range in.Raid {
+		if r.Mode != "hardware" || r.BoundDevice == "" {
+			continue
+		}
+		serial := ""
+		if r.VolumeSerial != "" {
+			serial = r.VolumeSerial // curtin matches the volume's SCSI serial
+		} else if render.IsKernelDeviceName(r.BoundDevice) {
+			serial = "" // kernel names take the path form
+		}
+		targets = append(targets, diskTarget{id: "raid-" + r.Name, device: r.BoundDevice,
+			serial: serial, wipe: true, sizeBytes: r.SizeBytes, partitions: r.Partitions})
+	}
 	for _, disk := range in.Disks {
 		if disk.KeepDisk {
 			continue
@@ -137,38 +171,46 @@ func storageConfig(in render.InstallInputs, m render.MachineView) (map[string]an
 			return nil, fmt.Errorf(
 				"ubuntu22: keep: partitions is not supported on this distro (partial); submit without preserve")
 		}
-		if !disk.Wipe {
-			return nil, fmt.Errorf("ubuntu22: disk %s must declare wipe or keep", disk.Device)
-		}
+		targets = append(targets, diskTarget{id: "disk-" + disk.Device, device: disk.Device,
+			serial: disk.Serial, wipe: disk.Wipe, sizeBytes: diskSizeOf(m, disk.Device),
+			partitions: disk.Partitions})
+	}
 
-		diskID := "disk-" + disk.Device
-		// Hardware size bounds the "rest" partition (curtin needs a number).
-		var diskBytes int64
-		if m.Hardware != nil {
-			for _, hd := range m.Hardware.Disks {
-				if hd.Name == disk.Device {
-					diskBytes = hd.SizeBytes
-				}
-			}
+	const gap = int64(1024 * 1024)
+	for _, disk := range targets {
+		if len(disk.partitions) == 0 {
+			continue
 		}
+		if !disk.wipe {
+			return nil, fmt.Errorf("ubuntu22: disk %s must declare wipe or keep", disk.device)
+		}
+		diskBytes := disk.sizeBytes
 
+		// curtin identifies drives by serial (udev ID_SERIAL_SHORT) —
+		// controller logical drives report their SCSI serial there, while
+		// their kernel names are unstable. Path is the fallback for
+		// serial-less (fake) disks.
 		entry := map[string]any{
-			"id":          diskID,
-			"type":        "disk",
-			"path":        "/dev/" + disk.Device,
-			"ptable":      "gpt",
-			"wipe":        "superblock",
-			"name":        "mammoth-" + disk.Device,
-			"grub_device": true,
+			"id":     disk.id,
+			"type":   "disk",
+			"ptable": "gpt",
+			"wipe":   "superblock",
+			"name":   "mammoth-" + disk.device,
 		}
+		if disk.serial != "" {
+			entry["serial"] = disk.serial
+		} else {
+			entry["path"] = "/dev/" + disk.device
+		}
+		entry["grub_device"] = true
+		rendered++
 		config = append(config, entry)
 
 		// Pre-compute grow sizes: rest takes the remainder minus a 1MiB gap
 		// per partition (alignment headroom).
-		const gap = int64(1024 * 1024)
 		var fixed int64
 		growCount := 0
-		for _, p := range disk.Partitions {
+		for _, p := range disk.partitions {
 			if p.Grow {
 				growCount++
 			} else {
@@ -177,19 +219,19 @@ func storageConfig(in render.InstallInputs, m render.MachineView) (map[string]an
 		}
 		var restSize int64
 		if growCount > 0 && diskBytes > 0 {
-			restSize = diskBytes - fixed - gap*int64(len(disk.Partitions))
+			restSize = diskBytes - fixed - gap*int64(len(disk.partitions))
 			if restSize < gap {
 				restSize = gap
 			}
 		}
 
-		for i, p := range disk.Partitions {
+		for i, p := range disk.partitions {
 			num := i + 1
-			partID := fmt.Sprintf("part-%s-%d", disk.Device, num)
+			partID := fmt.Sprintf("part-%s-%d", disk.id, num)
 			part := map[string]any{
 				"id":     partID,
 				"type":   "partition",
-				"device": diskID,
+				"device": disk.id,
 				"number": num,
 				"size":   fmt.Sprintf("%dM", p.SizeMB),
 				"wipe":   "superblock",
@@ -206,7 +248,7 @@ func storageConfig(in render.InstallInputs, m render.MachineView) (map[string]an
 			if hasFlag(p.Flags, "esp") {
 				fstype = "fat32"
 			}
-			fID := fmt.Sprintf("fmt-%s-%d", disk.Device, num)
+			fID := fmt.Sprintf("fmt-%s-%d", disk.id, num)
 			config = append(config, map[string]any{
 				"id":     fID,
 				"type":   "format",
@@ -215,7 +257,7 @@ func storageConfig(in render.InstallInputs, m render.MachineView) (map[string]an
 			})
 			if p.Mount != "" && p.Mount != "swap" {
 				config = append(config, map[string]any{
-					"id":     fmt.Sprintf("mnt-%s-%d", disk.Device, num),
+					"id":     fmt.Sprintf("mnt-%s-%d", disk.id, num),
 					"type":   "mount",
 					"path":   p.Mount,
 					"device": fID,
@@ -223,15 +265,12 @@ func storageConfig(in render.InstallInputs, m render.MachineView) (map[string]an
 			}
 		}
 	}
-	if len(config) == 0 {
+	if rendered == 0 {
 		return nil, fmt.Errorf("ubuntu22: storage config is empty")
 	}
 	return map[string]any{"version": 1, "config": config}, nil
 }
 
-// netplanConfig renders cloud-init network-config v2 (netplan semantics).
-// match.macaddress is the batch-stable selector — subiquity applies it
-// natively, no pre-install resolution required (docs/04-install-spec.md §5.2).
 func netplanConfig(entries []render.NetworkEntry) map[string]any {
 	if len(entries) == 0 {
 		return nil
@@ -389,4 +428,17 @@ func hasPreserve(parts []render.ResolvedPartition) bool {
 		}
 	}
 	return false
+}
+
+// diskSizeOf finds a hardware disk's capacity by inventory name.
+func diskSizeOf(m render.MachineView, device string) int64 {
+	if m.Hardware == nil {
+		return 0
+	}
+	for _, hd := range m.Hardware.Disks {
+		if hd.Name == device {
+			return hd.SizeBytes
+		}
+	}
+	return 0
 }

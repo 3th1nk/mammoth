@@ -129,8 +129,8 @@ func FirstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]
 	}
-	if len(s) > 200 {
-		s = s[:200]
+	if len(s) > 500 {
+		s = s[:500]
 	}
 	return strings.TrimSpace(s)
 }

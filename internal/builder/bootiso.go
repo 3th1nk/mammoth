@@ -12,6 +12,7 @@
 package builder
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -22,6 +23,12 @@ import (
 	"strings"
 	"time"
 )
+
+// buildSem serializes media builds: each build moves gigabytes of
+// extract+assemble IO, and N concurrent builds (batch installs) would
+// thrash the host. Callers queue; batches pay wall-clock in build count,
+// not resource collapse.
+var buildSem = make(chan struct{}, 2)
 
 // BootMediaOptions configure one boot ISO build.
 type BootMediaOptions struct {
@@ -54,10 +61,20 @@ func BuildBootISO(ctx context.Context, opt BootMediaOptions, kernelArgs string) 
 		return "", ctx.Err()
 	}
 
+	// Ubuntu live-server ISOs carry the installer in /casper with a
+	// grub-only boot chain (no isolinux, no images/pxeboot) — they rebuild
+	// as a full patched image instead of a selective boot-media assembly.
+	if isoHasCasper(ctx, opt.ISOPath, opt.XorrisoPath) {
+		buildSem <- struct{}{}
+		defer func() { <-buildSem }()
+		return rebuildPatchedISO(ctx, opt, kernelArgs)
+	}
+
 	work := opt.WorkDir
 	if work == "" {
 		work = opt.OutputPath + ".build"
 	}
+	_ = exec.CommandContext(ctx, "chmod", "-R", "u+rwX", work).Run()
 	if err := os.RemoveAll(work); err != nil {
 		return "", err
 	}
@@ -132,6 +149,10 @@ menuentry 'mammoth' {
 	if err != nil {
 		return "", fmt.Errorf("xorriso: %w: %s", err, tail(out, 400))
 	}
+	// The work tree (gigabytes of extracted ISO) never outlives the build —
+	// in server deployments it lives INSIDE the media export.
+	ensureRemovable(work)
+	_ = os.RemoveAll(work)
 	return opt.OutputPath, nil
 }
 
@@ -150,27 +171,66 @@ func EnsureISO(ctx context.Context, sourceURL, cacheDir string) (string, error) 
 	filename := sourceURL[strings.LastIndex(sourceURL, "/")+1:]
 	dest := filepath.Join(cacheDir, filename)
 
-	if fi, err := os.Stat(dest); err == nil && fi.Size() > 0 {
-		return dest, nil // already cached
+	isHTTP := strings.HasPrefix(sourceURL, "http://") || strings.HasPrefix(sourceURL, "https://")
+
+	// Size-verify the cache against the source: a truncated download left in
+	// the cache must not be mistaken for a complete image (it extracts fine
+	// up to the missing tail and then poisons every media build).
+	var wantSize int64
+	var have int64
+	if fi, err := os.Stat(dest); err == nil {
+		have = fi.Size()
+		if have > 0 && !isHTTP {
+			return dest, nil // non-HTTP sources (nfs://) are trusted
+		}
+	}
+	if isHTTP {
+		req, herr := http.NewRequestWithContext(ctx, http.MethodHead, sourceURL, nil)
+		if herr != nil {
+			return "", herr
+		}
+		resp, derr := http.DefaultClient.Do(req)
+		if derr == nil {
+			wantSize = resp.ContentLength
+			resp.Body.Close()
+		}
+		if have > 0 && wantSize > 0 && have == wantSize {
+			return dest, nil // already cached, complete
+		}
+	} else if have > 0 {
+		return dest, nil
 	}
 
-	if !strings.HasPrefix(sourceURL, "http://") && !strings.HasPrefix(sourceURL, "https://") {
+	if !isHTTP {
 		return "", fmt.Errorf("builder: %q is not an HTTP URL and no local cache exists at %s", sourceURL, dest)
 	}
 
+	// Resume when the cached file is a short prefix of the source.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
 	if err != nil {
 		return "", err
+	}
+	if have > 0 && have < wantSize {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", have))
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("builder: download distro ISO: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	switch {
+	case have > 0 && resp.StatusCode == http.StatusPartialContent:
+		// resuming
+	case resp.StatusCode == http.StatusOK:
+		have = 0 // full download
+	default:
 		return "", fmt.Errorf("builder: download distro ISO: %s", resp.Status)
 	}
-	f, err := os.Create(dest)
+	flag := os.O_WRONLY | os.O_CREATE
+	if have > 0 {
+		flag |= os.O_APPEND
+	}
+	f, err := os.OpenFile(dest, flag, 0o644)
 	if err != nil {
 		return "", err
 	}
@@ -179,4 +239,147 @@ func EnsureISO(ctx context.Context, sourceURL, cacheDir string) (string, error) 
 		return "", fmt.Errorf("builder: download distro ISO: %w", err)
 	}
 	return dest, f.Close()
+}
+
+// isoHasCasper reports whether the ISO carries an Ubuntu casper layout.
+func isoHasCasper(ctx context.Context, iso, xorrisoOverride string) bool {
+	xorriso := xorrisoOverride
+	if xorriso == "" {
+		xorriso = "xorriso"
+	}
+	out, err := exec.CommandContext(ctx, xorriso, "-indev", iso, "-find", "/casper", "-type", "d").CombinedOutput()
+	return err == nil && strings.Contains(string(out), "/casper")
+}
+
+// rebuildPatchedISO handles casper-layout ISOs (Ubuntu live-server): extract
+// everything, replace /boot/grub/grub.cfg with a single mammoth entry (the
+// squashfs stays on the CD — the installer boots it directly, no network
+// root needed), then reassemble with the El Torito/MBR/GPT parameters the
+// original image reports. The volume label is preserved for casper.
+func rebuildPatchedISO(ctx context.Context, opt BootMediaOptions, kernelArgs string) (string, error) {
+	xorriso := opt.XorrisoPath
+	if xorriso == "" {
+		xorriso = "xorriso"
+	}
+	work := opt.WorkDir
+	if work == "" {
+		work = opt.OutputPath + ".build"
+	}
+	ensureRemovable(work)
+	if err := os.RemoveAll(work); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		return "", err
+	}
+
+	// Reproduce parameters straight from the image (label, El Torito entries,
+	// MBR/GPT layout) — distro-version proof.
+	report, err := exec.CommandContext(ctx, xorriso, "-indev", opt.ISOPath,
+		"-report_el_torito", "as_mkisofs").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("el torito report: %w: %s", err, tail(report, 400))
+	}
+	var mkisofsArgs []string
+	scanner := bufio.NewScanner(strings.NewReader(string(report)))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "'") && !strings.HasPrefix(line, "\"") {
+			continue // report preamble lines
+		}
+		mkisofsArgs = append(mkisofsArgs, splitQuoted(line)...)
+	}
+
+	// Full extract. ISO9660 extraction preserves read-only modes — grant
+	// owner write over the tree or the grub.cfg patch below fails.
+	// auto_chmod_on is REQUIRED for casper-layout ISOs: osirrox applies the
+	// ISO root's recorded mode (0644, no search bit) to the target directory
+	// and its own subsequent opens then fail with "openfdat ...: permission
+	// denied". It temporarily chmods restored dirs so extraction completes.
+	extract, err := exec.CommandContext(ctx, xorriso, "-osirrox", "on:auto_chmod_on", "-indev", opt.ISOPath,
+		"-extract", "/", work).CombinedOutput()
+	if err != nil {
+		_ = os.WriteFile("/tmp/extract-debug.log", extract, 0o644)
+		return "", fmt.Errorf("extract distro iso: %w: %s", err, tail(extract, 600))
+	}
+	ensureRemovable(work)
+
+	// grub treats ';' as a command separator — the cloud-init datasource
+	// syntax (ds=nocloud-net;s=URL) must escape it or the kernel command
+	// line is truncated at the semicolon and autoinstall never engages.
+	grubArgs := strings.ReplaceAll(kernelArgs, ";", "\\;")
+	// Ubuntu's hybrid ISO serves UEFI from /EFI/boot/grub.cfg and BIOS from
+	// /boot/grub/grub.cfg — both get the mammoth entry.
+	grubCfg := fmt.Sprintf(`set default=0
+set timeout=1
+menuentry 'mammoth' {
+	linux /casper/vmlinuz %s
+	initrd /casper/initrd
+}
+`, grubArgs)
+	if err := os.WriteFile(filepath.Join(work, "boot", "grub", "grub.cfg"), []byte(grubCfg), 0o644); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(work, "EFI", "boot", "grub.cfg"), []byte(grubCfg), 0o644); err != nil {
+		return "", err
+	}
+
+	args := append([]string{"-as", "mkisofs", "-o", opt.OutputPath}, mkisofsArgs...)
+	args = append(args, work)
+	out, err := exec.CommandContext(ctx, xorriso, args...).CombinedOutput()
+	if err != nil {
+		_ = os.WriteFile("/tmp/asm-debug.log", append(out, []byte(fmt.Sprintf("\nARGS: %v\n", args))...), 0o644)
+		return "", fmt.Errorf("xorriso: %w: %s", err, tail(out, 400))
+	}
+	// The work tree (gigabytes of extracted ISO) never outlives the build —
+	// in server deployments it lives INSIDE the media export.
+	ensureRemovable(work)
+	_ = os.RemoveAll(work)
+	return opt.OutputPath, nil
+}
+
+// splitQuoted tokenizes one shell-quoted report line (xorriso uses single
+// quotes around values that may contain spaces).
+func splitQuoted(line string) []string {
+	var out []string
+	var cur strings.Builder
+	inQuote := false
+	for _, r := range line {
+		switch {
+		case r == '\'':
+			inQuote = !inQuote
+		case r == ' ' && !inQuote:
+			if cur.Len() > 0 {
+				out = append(out, cur.String())
+				cur.Reset()
+			}
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	if cur.Len() > 0 {
+		out = append(out, cur.String())
+	}
+	return out
+}
+
+// ensureRemovable grants owner write over a whole tree, best effort — ISO
+// extraction preserves read-only modes that block patching and cleanup.
+func ensureRemovable(root string) {
+	_, statErr := os.Stat(root)
+	if statErr != nil {
+		return // nothing to fix
+	}
+	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // best effort
+		}
+		if info.IsDir() {
+			_ = os.Chmod(path, 0o755)
+		} else {
+			_ = os.Chmod(path, 0o644)
+		}
+		return nil
+	})
 }

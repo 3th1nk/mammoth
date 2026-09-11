@@ -185,8 +185,11 @@ type ResolvedRaid struct {
 	BoundDevice string `json:"bound_device,omitempty"`
 	// SizeBytes: the bound volume's capacity — %pre re-identifies non-kernel
 	// bound names (controller-assigned LogicalDriveN) by size.
-	SizeBytes  int64               `json:"size_bytes,omitempty"`
-	Partitions []ResolvedPartition `json:"partitions,omitempty"`
+	SizeBytes int64 `json:"size_bytes,omitempty"`
+	// VolumeSerial: the bound volume's SCSI serial from the refreshed
+	// in-band snapshot — curtin (ubuntu) identifies drives by serial.
+	VolumeSerial string              `json:"volume_serial,omitempty"`
+	Partitions   []ResolvedPartition `json:"partitions,omitempty"`
 }
 
 // MachineView is the machine context a renderer may consult (hardware facts

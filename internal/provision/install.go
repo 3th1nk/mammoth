@@ -1146,6 +1146,7 @@ func (e *Executor) configureRaid(ctx context.Context, task *store.Task, job *sto
 	}
 
 	bindings := map[string]string{}
+	var boundSize int64
 	for _, r := range spec.Storage.Raid {
 		if r.Mode != "hardware" {
 			continue
@@ -1228,6 +1229,23 @@ func (e *Executor) configureRaid(ctx context.Context, task *store.Task, job *sto
 			for _, d := range hw.Disks {
 				if d.Name == dev {
 					ictx.Resolved.Raid[i].SizeBytes = d.SizeBytes
+					boundSize = d.SizeBytes
+				}
+			}
+		}
+	}
+	// Refresh the in-band snapshot when possible: it carries the bound
+	// volume's SCSI serial and kernel name as the OS actually sees them —
+	// what curtin (ubuntu) and kickstart storage resolution match on.
+	_ = e.collectLayout(ctx, task, false)
+	if snap, serr := e.layoutSnapshot(ctx, task.MachineID); serr == nil {
+		for i := range ictx.Resolved.Raid {
+			if ictx.Resolved.Raid[i].Mode != "hardware" || ictx.Resolved.Raid[i].BoundDevice == "" {
+				continue
+			}
+			for _, sd := range snap {
+				if withinTolerance(snapshotDiskSize(sd), boundSize) {
+					ictx.Resolved.Raid[i].VolumeSerial = sd.Match["serial"]
 				}
 			}
 		}
@@ -1241,6 +1259,20 @@ func (e *Executor) configureRaid(ctx context.Context, task *store.Task, job *sto
 	obs.FromContext(ctx).InfoContext(ctx, "hardware raid configured",
 		"volumes", len(bindings))
 	return nil
+}
+
+// withinTolerance reports a within b by ≤1% or 64MiB (controller rounding vs
+// kernel reporting; real disks never sit this close by coincidence).
+func withinTolerance(a, b int64) bool {
+	diff := a - b
+	if diff < 0 {
+		diff = -diff
+	}
+	tol := b / 100
+	if tol < 64*1024*1024 {
+		tol = 64 * 1024 * 1024
+	}
+	return diff <= tol
 }
 
 // snapshotDiskSize computes a snapshot disk's total size from its partitions

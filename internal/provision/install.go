@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -718,9 +719,34 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 			"distro ISO fetch failed: %s", err.Error())
 	}
-	if berr := buildBootISO(ctx, distroISO, filepath.Join(e.MediaDir, filepath.Base(mediaFile)), boot.KernelArgs); berr != nil {
+	// Seed from THIS stage's render output: ictx.Answers is the value patched
+	// by the previous prepare_media pass (empty on the first pass), so
+	// building from it produced a seed-less ISO — ubuntu22 autoinstall then
+	// fell back to interactive mode and stalled at the language prompt on
+	// real hardware. The context copy below stays for audit and the
+	// boot-stage order guard.
+	seed := map[string]string{}
+	for _, a := range answers {
+		seed[a.Name] = a.Content
+	}
+	// Build in the scratch space when configured (the media repo may be a
+	// size-limited share — the extract+assemble needs ~2x the image size
+	// transiently), then move the finished image into the repo.
+	outputPath := filepath.Join(e.MediaDir, filepath.Base(mediaFile))
+	buildWork := ""
+	if e.MediaWorkDir != "" {
+		buildWork = filepath.Join(e.MediaWorkDir, filepath.Base(mediaFile)+".build")
+		outputPath = filepath.Join(e.MediaWorkDir, filepath.Base(mediaFile))
+	}
+	if berr := buildBootISO(ctx, distroISO, outputPath, boot.KernelArgs, seed, buildWork); berr != nil {
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 			"boot media build failed: %s", berr.Error())
+	}
+	if buildWork != "" {
+		if merr := moveFile(outputPath, filepath.Join(e.MediaDir, filepath.Base(mediaFile))); merr != nil {
+			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+				"boot media move into repo failed: %s", merr.Error())
+		}
 	}
 	// Relay deployment: the BMC mounts the media from the remote export —
 	// the file must be complete there BEFORE the boot stage mounts it. The
@@ -1059,6 +1085,30 @@ func firstNonEmptyStr(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// moveFile relocates a file, falling back to copy+delete across devices.
+func moveFile(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Remove(src)
 }
 
 // MediaUploader moves assembled boot media into the BMC-reachable share.

@@ -25,7 +25,7 @@ func fetchUser(t *testing.T, answers []render.AnswerFile) (meta string, ud map[s
 		}
 	}
 	if ud == nil {
-		t.Fatal("user-data missing")
+		t.Fatal("autoinstall.yaml missing")
 	}
 	return meta, ud
 }
@@ -91,8 +91,8 @@ func TestRenderAutoinstallWipeAndBond(t *testing.T) {
 	if _, ok := ud["chpasswd"]; !ok {
 		t.Errorf("root password (chpasswd) missing")
 	}
-	ssh := auto["ssh"].(map[string]any)
-	keys := ssh["authorized-keys"].([]any)
+	ssh, _ := auto["ssh"].(map[string]any)
+	keys, _ := ssh["authorized-keys"].([]any)
 	if len(keys) != 1 || keys[0] != "ssh-ed25519 AAA u@m" {
 		t.Errorf("ssh keys wrong: %v", keys)
 	}
@@ -149,7 +149,7 @@ func TestRenderAutoinstallWipeAndBond(t *testing.T) {
 		t.Errorf("hostname missing")
 	}
 
-	if boot.KernelArgs != "autoinstall ip=dhcp ds=nocloud-net;s=https://m/render/tok9/" {
+	if boot.KernelArgs != "autoinstall ds=nocloud-net;s=file:///cdrom/" {
 		t.Errorf("boot params wrong: %q", boot.KernelArgs)
 	}
 }

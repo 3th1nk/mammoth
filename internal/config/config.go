@@ -75,6 +75,7 @@ type Config struct {
 	InbandTimeout      time.Duration // whole inband_ssh collection bound
 	RamdiskEnabled     bool          // optional ramdisk probe (docs/05 §4; PXE-first)
 	MediaDir           string        // local media repository (boot ISOs)
+	MediaWorkDir       string        // scratch dir for media builds (default: beside the output)
 	MediaBaseURI       string        // BMC-reachable media base URI (nfs://, cifs://, ftp:// — firmware decides)
 	BootSettleDelay    time.Duration // wait between media mount and power-on (NFS relay pushes)
 	NFSExportEnabled   bool          // built-in read-only NFSv3 export of MediaDir (default true)
@@ -125,6 +126,7 @@ func FromEnv() (Config, error) {
 		InbandTimeout:         getenvDuration("MAMMOTH_INBAND_TIMEOUT", 20*time.Second),
 		RamdiskEnabled:        getenvBool("MAMMOTH_RAMDISK_ENABLED", false),
 		MediaDir:              getenv("MAMMOTH_MEDIA_DIR", "data/media"),
+		MediaWorkDir:          os.Getenv("MAMMOTH_MEDIA_WORKDIR"),
 		MediaBaseURI:          getenv("MAMMOTH_MEDIA_BASE_URI", os.Getenv("MAMMOTH_MEDIA_NFS_BASE")),
 		NFSExportEnabled:      getenvBool("MAMMOTH_NFS_EXPORT", true),
 		NFSExportPort:         getenvInt("MAMMOTH_NFS_EXPORT_PORT", 2049),

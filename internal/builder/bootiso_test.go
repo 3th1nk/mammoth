@@ -93,12 +93,13 @@ func TestPatchBootConfigsOnlyExistingEFI(t *testing.T) {
 	}
 }
 
-// -isohybrid-mbr: host path rewritten to the image's own copy; dropped when
-// the image ships none.
+// -isohybrid-mbr: host path rewritten to the image's own copy; interval
+// specs repoint at the absolute source path; dropped when neither exists.
 func TestRewriteIsohybridMbr(t *testing.T) {
 	work := t.TempDir()
 
-	got := rewriteIsohybridMbr([]string{"-V", "X", "-isohybrid-mbr", "/usr/lib/ISOLINUX/isohdpfx.bin", "-b", "isolinux/isolinux.bin"}, work)
+	// host-side helper, no local isohdpfx.bin → dropped
+	got := rewriteIsohybridMbr([]string{"-V", "X", "-isohybrid-mbr", "/usr/lib/ISOLINUX/isohdpfx.bin", "-b", "isolinux/isolinux.bin"}, work, "")
 	want := []string{"-V", "X", "-b", "isolinux/isolinux.bin"}
 	if len(got) != len(want) {
 		t.Fatalf("drop path: got %v, want %v", got, want)
@@ -109,6 +110,7 @@ func TestRewriteIsohybridMbr(t *testing.T) {
 		}
 	}
 
+	// host-side helper with a local copy → rewritten
 	p := filepath.Join(work, "isolinux", "isohdpfx.bin")
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatal(err)
@@ -116,8 +118,21 @@ func TestRewriteIsohybridMbr(t *testing.T) {
 	if err := os.WriteFile(p, []byte("mbr"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got = rewriteIsohybridMbr([]string{"-V", "X", "-isohybrid-mbr", "/usr/lib/ISOLINUX/isohdpfx.bin", "-b", "isolinux/isolinux.bin"}, work)
+	got = rewriteIsohybridMbr([]string{"-V", "X", "-isohybrid-mbr", "/usr/lib/ISOLINUX/isohdpfx.bin", "-b", "isolinux/isolinux.bin"}, work, "")
 	if got[3] != p {
 		t.Errorf("rewrite path: got %v, want mbr at %s", got, p)
+	}
+
+	// interval spec (debian-cd shape) with a RELATIVE source → absolute
+	iv := "--interval:local_fs:0s-15s:zero_mbrpt,zero_gpt,zero_apm:debian-13.6.0-amd64-netinst.iso"
+	got = rewriteIsohybridMbr([]string{"-isohybrid-mbr", iv, "-b", "isolinux/isolinux.bin"}, work, "/data/media/debian-13.6.0-amd64-netinst.iso")
+	if got[1] != "--interval:local_fs:0s-15s:zero_mbrpt,zero_gpt,zero_apm:/data/media/debian-13.6.0-amd64-netinst.iso" {
+		t.Errorf("interval repoint: got %v", got)
+	}
+
+	// interval spec, no source known → dropped
+	got = rewriteIsohybridMbr([]string{"-isohybrid-mbr", iv, "-b", "isolinux/isolinux.bin"}, work, "")
+	if len(got) != 2 {
+		t.Errorf("interval drop: got %v", got)
 	}
 }

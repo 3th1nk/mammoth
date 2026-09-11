@@ -24,6 +24,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/provision"
 	"github.com/3th1nk/mammoth/internal/render"
+	"github.com/3th1nk/mammoth/internal/render/debian"
 	"github.com/3th1nk/mammoth/internal/render/rocky9"
 	"github.com/3th1nk/mammoth/internal/render/ubuntu22"
 	"github.com/3th1nk/mammoth/internal/store"
@@ -165,9 +166,17 @@ func serve(args []string) error {
 	}
 
 	// Distro drivers register here; adding a distro never touches the
-	// orchestration layer (docs/06-install-pipeline.md §5).
+	// orchestration layer (docs/06-install-pipeline.md §5). The debian
+	// preseed driver registers once per dialect member — "uniontechos" is
+	// the UOS Server V20 d-i derivative, experimental until real-hardware
+	// pass (docs/compat/distros.md).
 	renderReg := render.NewRegistry()
-	for _, d := range []render.OSDriver{rocky9.New(), ubuntu22.New()} {
+	for _, d := range []render.OSDriver{
+		rocky9.New(),
+		ubuntu22.New(),
+		debian.New("debian12"),
+		debian.New("uniontechos"),
+	} {
 		if err := renderReg.Register(d); err != nil {
 			return err
 		}
@@ -264,6 +273,7 @@ func serve(args []string) error {
 			Render:          renderReg,
 			ExternalURL:     cfg.ExternalURL,
 			MediaDir:        cfg.MediaDir,
+			MediaWorkDir:    cfg.MediaWorkDir,
 			MediaBaseURI:    cfg.MediaBaseURI,
 			BootSettleDelay: cfg.BootSettleDelay,
 			MediaUploader:   mediaUploader,

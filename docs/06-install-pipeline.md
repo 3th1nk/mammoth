@@ -99,7 +99,8 @@ type OSDriver interface {
 | 发行版 | 安装器 | 应答文件 | 保留分区 | 说明 |
 |--------|--------|---------|---------|------|
 | RHEL 系(Rocky/Alma) | Anaconda | kickstart | **full**(`%pre` + `--onpart/--noformat`) | 首发目标,机制最完整 |
-| Debian/Ubuntu | debian-installer / subiquity | preseed / autoinstall | partial | autoinstall 保留分区需 curtin 定制 |
+| Debian 12 / 统信 V20 | debian-installer | preseed | partial | `file=/cdrom` 离线注入;partman-auto 单盘;netcfg 无 bond/vlan(见 distros.md 实现注记) |
+| Ubuntu Server 22.04 | subiquity | autoinstall | partial | 保留分区需 curtin 定制;nocloud seed 烘入 ISO 离线加载 |
 | Windows | Setup | unattend | full | 应答文件体积大,介质策略需验证 |
 
 ## 6. 幂等与重试语义

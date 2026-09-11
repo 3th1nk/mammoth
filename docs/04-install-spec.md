@@ -216,6 +216,20 @@ POST /api/v1/jobs
 跨发行版稳定的选择器;`name` 受发行版命名方案(eno/ens/eth)影响,仅在用户明确知道
 目标命名时使用。**Mammoth 不做地址分配**——所有 `addresses` 由调用方显式给出。
 
+### 5.3 发行版方言差异(提交可过、渲染期拒绝的项)
+
+spec 是发行版无关的声明;方言不能落地的项在**渲染期显式拒绝**
+(`RENDER_FAILED`,任务失败且错误文案带方言说明),不做静默降级:
+
+| 项 | rocky9 | ubuntu22 | debian12 / uniontechos |
+|----|--------|----------|------------------------|
+| bond / vlan | ✅(`%pre` 解析) | ✅(netplan 原生) | ❌ netcfg 无 bond/vlan |
+| 多条静态接口 | ✅ | ✅ | ❌ netcfg 单接口(一条静态 + 其余 dhcp) |
+| 软件 RAID | ✅(raid 行) | —(未接) | ❌ partman md 配方未接 |
+| 硬件 RAID 卷 | ✅(绑定设备) | ✅(serial 绑定) | ✅(绑定设备,单目标) |
+| 多安装目标盘 | ✅ | ✅ | ❌ partman-auto 单盘(其余盘 keep: disk) |
+| xfs | ✅ | ✅(curtin) | ❌ netinst partman 白名单 ext2/3/4、vfat/fat32、swap |
+
 ## 6. 关键取舍
 
 1. **`layout` 是 machine 的子资源而非独立实体**:快照时效性由 `captured_at` 表达,

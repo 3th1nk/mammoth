@@ -23,15 +23,15 @@ rate limiting 依赖反向代理。
 | 静态加密 | AES-256-GCM,主密钥部署方注入(`MAMMOTH_MASTER_KEY`,base64 32B) |
 | 密钥不回显 | credential API 永不返回 secret;明文仅在 BMC 调用边界解密 |
 | 传输 | 生产要求 HTTPS 在反向代理终止(mammoth 自身监听 HTTP;distroless 内无证书管理) |
-| 一次性口令 | `root_password: generate` 任务级随机,经任务事件一次性下发,ks.cfg 是唯一持久副本(任务结束后可随事件 TTL 过期) |
+| 一次性口令 | `root_password: generate` 任务级随机,经任务事件一次性下发,应答文件(ks.cfg / user-data / preseed.cfg)是唯一持久副本(任务结束后可随事件 TTL 过期;应答文件烘入引导介质,介质随 verify_ready 删除) |
 | Host key | 带内 SSH 首连即接受(重装生命周期密钥轮换);严格指纹为部署层策略 |
-| 引导介质凭证 | 内核参数只携带应答文件 URL(token),不携带 BMC/系统凭证 |
+| 引导介质凭证 | 内核参数只携带应答文件位置(token 介质上的路径),不携带 BMC/系统凭证;口令随应答文件在介质内(离线 seed 的取舍,介质生命周期=任务生命周期) |
 
 ## 3. 输入与注入面
 
 | 面 | 缓解 |
 |----|------|
-| 应答文件注入(kickstart/autoinstall) | 模板变量来自结构化 spec;文本注入是**明确接受的风险**——spec 提交者即基础设施管理者(见 01-overview 明确不做的:不做多租户)。`%pre`/curtin 脚本由服务端生成,不拼接用户 shell |
+| 应答文件注入(kickstart/autoinstall/preseed) | 模板变量来自结构化 spec;文本注入是**明确接受的风险**——spec 提交者即基础设施管理者(见 01-overview 明确不做的:不做多租户)。`%pre`/curtin/preseed 钩子脚本由服务端生成,不拼接用户 shell |
 | shell 注入(带内探针) | 命令集是编译期常量,禁止参数拼接(有测试守护) |
 | SQL 注入 | 全部查询参数化($n/?),无字符串拼接值 |
 | 渲染注入(模板) | text/template 自动转义不适用于 shell 场景;注入面同上(提交者=管理者) |

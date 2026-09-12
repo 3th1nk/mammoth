@@ -515,7 +515,7 @@ func TestRenderGrowMaxsizeAndHostnameOnStanza(t *testing.T) {
 		"part / --fstype=ext4 --ondisk=sda --grow --maxsize=3814697",
 		"--hostname=rk9-host --activate",
 		"findmnt -nro SOURCE /mnt/sysimage",
-		"parted -s \"/dev/$root_disk\" resizepart \"$root_num\" 100%",
+		"sfdisk --no-reread --force -N \"$root_num\" \"/dev/$root_disk\"",
 		"resize2fs \"$root_src\"",
 	} {
 		if !strings.Contains(ks, want) {

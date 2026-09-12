@@ -63,9 +63,9 @@
 
 - Ubuntu(autoinstall)驱动,含保留分区的 partial 支持声明与提交时拒绝
 - 支持矩阵文档化;`KeepPartitionSupport()` 语义接入提交校验
-- ramdisk 探针(可选启用)——**V1 已通(qemu BIOS+UEFI 双模式闭环)**:
-  alpine standard 虚拟介质载体,apkovl 注入探针逻辑,上报端点与 discover
-  集成已落;真机验证待华为 2288H 批次;PXE 通路属真实网络环境阶段
+- ramdisk 探针(可选启用)——**✅ 真机闭环(2288H V5,2026-09-13)**:
+  alpine 虚拟介质载体,LSI RAID 卷可见,discover 端到端 succeeded;
+  PXE 通路属真实网络环境阶段
 
 ## M6 · 运营完备(主体已交付,余项如下)
 
@@ -77,8 +77,9 @@
 - ✅ docs/operations.md(备份恢复)、docs/security-baseline.md(安全基线)
 - ✅ task_logs 表与检索 API(日志双写落库,`GET /jobs/{id}/tasks/{taskId}/logs`,
   reaper TTL 默认 90d;stage 耗时直方图此前已埋)
-- ✅ ramdisk 探针 V1(alpine 虚拟介质载体,`POST /render/{token}/probe-report`
-  + discover `probe=ramdisk` 集成;qemu BIOS+UEFI 双模式闭环)——真机验证待批次
+- ✅ ramdisk 探针(alpine 虚拟介质载体,`POST /render/{token}/probe-report`
+  + discover `probe=ramdisk` 集成;qemu BIOS+UEFI 双模式闭环 + 2288H 真机
+  端到端 succeeded)
 
 ## 长期方向(不承诺排期)
 

@@ -350,8 +350,36 @@ poweroff,全链路 ~11s。迭代方式:`go test -tags probe_dev`(构建)+
 
 **下次路径**:上报端点(token 认证的 layout 快照写入,source=ramdisk)→
 discover 集成(probe=ramdisk 分支:构建探针 ISO → 虚拟介质挂载 → 一次性
-CD 引导 → 轮询报告 → 弹出+关机补偿)→ 真机验证(华为 2288H,once CD 与
-VmmControl 挂载时序仍需真机确认)。
+CD 引导 → 轮询报告 → 弹出+关机补偿)→ ~~真机验证~~ **✅ 已闭环(见下节)**。
+
+### 真机验证闭环(2026-09-13,✅ 全链路 succeeded)
+
+2288H V5(iBMC 6.41,BootType=UEFIBoot),`POST /machines/{id}/actions
+{"type":"discover","probe":"ramdisk"}` 四轮真机迭代后闭环:
+
+- **端到端 succeeded**:构建 probe-<token>.iso(~40s)→ VmmControl 挂载
+  (Redfish Managers/1/VirtualMedia/CD Inserted=True)→ 一次性 CD 引导 →
+  探针内 lts modloop 加载 → **megaraid LSI 4TB 卷可见**(/dev/sda,分区
+  start/end 与上轮 rocky 安装精确吻合)→ /sys 扫描上报 → layout 快照落库
+  (source=ramdisk)→ 弹介质 + 断电补偿 → ISO 回收。全程 ~6-8 分钟。
+- **时序结论**:eject → mount → set_boot_device(once,UEFI mode)→ power
+  cycle 在 iBMC 上工作正常(两轮独立验证 once 被正确消费);挂载与引导
+  之间无需额外间隔。
+- **诊断要点**:VGA/tty0 停在 initramfs 最后一行(console=ttyS0 最后注册,
+  openrc 输出全在串口)——屏幕"卡住"是显示假象,**诊断用 iBMC SOL**;
+  NFS 侧 proc3 READ 计数对 VmmControl 按需读无效,不能作为活性判据;
+  BMC SEL(System Boot Initiated / ACPI Power State)是重启与断电的
+  可靠证据源。
+- **真机缺陷修复**:机器关机态下 `set_power(PowerOn)` 的 Redfish
+  ForceOn 被 iBMC 拒绝(ActionParameterValueFormatError)——驱动增加
+  ForceOn→On 回退(d7c3f53);
+- **静态兜底**:`MAMMOTH_PROBE_STATIC_CIDR`(本机房 DHCP 可用未走到,
+  作为无 DHCP 机房的保险,同网段上报无需网关);
+- **预算**:`MAMMOTH_PROBE_WAIT` 默认 10m 对"冷启动 POST(RAID 自检
+  2-4min)+ modloop 经 VmmControl 慢读"的组合偏紧,建议慢盘环境配
+  20-30m;
+- **遗留**:LSI 虚拟卷的 model/serial 在 /sys 为空(vendor/model 层级
+  不同),串行号采集留待后续迭代(装后 inband_ssh 快照可补)。
 
 **正式实现的命名与生命周期**(与安装介质同构,避免并发冲突):探针 ISO 由
 builder 按任务生成,命名 `probe-<token>.iso`(token 为发现任务的机器面

@@ -58,6 +58,7 @@ type isoLayout string
 const (
 	layoutCasper   isoLayout = "casper"    // Ubuntu live-server (/casper)
 	layoutDebianDI isoLayout = "debian-di" // debian-installer (/install.amd | /install)
+	layoutAlpine   isoLayout = "alpine"    // alpine standard (/boot, syslinux.cfg; probe media)
 )
 
 // BuildBootISO assembles a bootable ISO whose bootloader carries the given
@@ -455,6 +456,31 @@ menuentry 'mammoth' {
 		return map[string]string{
 			"boot/grub/grub.cfg": grubCfg,
 			"EFI/boot/grub.cfg":  grubCfg,
+		}
+	case layoutAlpine:
+		// Alpine keeps its BIOS config at /boot/syslinux/syslinux.cfg and
+		// its UEFI chain at /boot/grub/grub.cfg (the efi.img grub loads it).
+		// installDir carries the kernel flavor ("lts"/"virt").
+		isolinux := fmt.Sprintf(`SERIAL 0 115200
+TIMEOUT 10
+PROMPT 0
+DEFAULT probe
+
+LABEL probe
+  MENU LABEL mammoth probe
+  KERNEL /boot/vmlinuz-%[1]s
+  INITRD /boot/initramfs-%[1]s
+  APPEND %[2]s
+`, installDir, kernelArgs)
+		grub := fmt.Sprintf(`set timeout=3
+menuentry 'mammoth probe' {
+  linux /boot/vmlinuz-%[1]s %[2]s
+  initrd /boot/initramfs-%[1]s
+}
+`, installDir, grubArgs)
+		return map[string]string{
+			"boot/syslinux/syslinux.cfg": isolinux,
+			"boot/grub/grub.cfg":         grub,
 		}
 	case layoutDebianDI:
 		cfgs := debianBootConfigs(kernelArgs, installDir)

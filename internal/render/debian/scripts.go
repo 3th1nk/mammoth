@@ -54,6 +54,12 @@ func postInstallScript(distro string, in render.InstallInputs) string {
 	b.WriteString("# Mammoth post_install stage (installer environment; /target is the new system).\n")
 	b.WriteString(failtrap("post_install", in.CompleteURL) + "\n")
 	b.WriteString("set -e\n")
+	if in.Hostname != "" {
+		// netcfg's hostname preseed does not always stick (dhcp-provided
+		// names win, defaults reappear) — write the file directly, the
+		// same contract as the ubuntu driver.
+		b.WriteString("echo " + quoteSh(in.Hostname) + " > /target/etc/hostname\n")
+	}
 	if len(in.SSHPublicKeys) > 0 {
 		b.WriteString("mkdir -p /target/root/.ssh\n")
 		b.WriteString("chmod 700 /target/root/.ssh\n")

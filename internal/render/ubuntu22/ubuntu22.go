@@ -237,8 +237,21 @@ func storageConfig(in render.InstallInputs, m render.MachineView) (map[string]an
 				"size":   fmt.Sprintf("%dM", p.SizeMB),
 				"wipe":   "superblock",
 			}
+			// BIOS + GPT needs the 1MiB bios_grub partition (curtin refuses to
+			// install grub without an explicit one); UEFI uses the esp partition
+			// (mounted by the OS as /boot/efi). A layout may declare both.
+			if hasFlag(p.Flags, "biosgrub") {
+				part["flag"] = "bios_grub"
+				config = append(config, part)
+				continue // raw partition: no filesystem, no mount
+			}
 			if hasFlag(p.Flags, "esp") {
+				// subiquity's bootloader check requires the ESP partition to
+				// carry the boot flag AND be marked as the grub device — a
+				// plain fat32/efi format without grub_device fails the
+				// "needed bootloader partition" check.
 				part["flag"] = "boot"
+				part["grub_device"] = true
 			}
 			if p.Grow {
 				part["size"] = restSize

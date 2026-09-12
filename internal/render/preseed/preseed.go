@@ -1,6 +1,7 @@
-// Package debian implements the OSDriver for the debian-installer preseed
-// dialect — Debian 12 and the UOS Server V20 derivative (a d-i fork) register
-// as separate drivers of the same package. Mechanics: the preseed file is
+// Package preseed implements the OSDriver for the debian-installer preseed
+// dialect (Debian 12 — docs/06-install-pipeline.md §5). UOS Server V20 was
+// moved to the kickstart package: ISO inspection showed its installer is an
+// anaconda derivative with an RHEL-style tree, not a d-i fork. Mechanics: the preseed file is
 // BAKED into the rebuilt boot ISO root and loaded offline via
 // `file=/cdrom/preseed.cfg` (d-i mounts the boot medium at /cdrom) — the
 // network preseed path needs installer early networking, which the ubuntu22

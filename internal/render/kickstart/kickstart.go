@@ -1,6 +1,6 @@
-// Package rocky9 implements the OSDriver for RHEL-lineage kickstart
-// (Rocky/Alma) — the first supported distro (docs/06-install-pipeline.md §5,
-// support matrix). Anaconda mechanics: the answer file is fetched from the
+// Package kickstart implements the OSDriver for RHEL-lineage anaconda
+// kickstart — Rocky/Alma (the first supported distro) and UOS Server V20
+// (docs/06-install-pipeline.md §5, support matrix). Anaconda mechanics: the answer file is fetched from the
 // Mammoth server via inst.ks; network stanzas are generated at install time
 // by a %pre hook that resolves MAC → interface name (batch-stable selection),
 // so bonds and static addresses survive the installer's device naming.

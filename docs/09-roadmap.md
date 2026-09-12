@@ -67,6 +67,10 @@
 
 ## 长期方向(不承诺排期)
 
+- install-plan 试算端点(`POST /machines/{id}/install-plan`):只读解析
+  spec → 返回命中盘/分区规划/方言限制,供业务层在提交前向用户展示确认
+  (设计见 docs/03-api.md §4;配套:盘查视角一致性提示、ramdisk 探针补全
+  裸机信息采集)
 - Windows 驱动(unattend)
 - IPAM/资产系统的官方适配器(以可选 provider 形式,不进核心依赖)
 - 多机 Raid/LVM 拓扑编排、固件基线校验

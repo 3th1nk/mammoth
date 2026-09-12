@@ -152,6 +152,37 @@ Content-Type: application/problem+json
 示例:`SCHEMA_INVALID_STORAGE`、`BMC_UNREACHABLE`、`BMC_AUTH_FAILED`、
 `LAYOUT_DRIFT`、`LAYOUT_DISK_NOT_FOUND`、`INSTALL_TIMEOUT`、`MEDIA_MOUNT_FAILED`。
 
+### install-plan 试算(提案,未实现)
+
+业务层(UI/编排方)的典型交互是:**采集机器信息 → 展示给用户 → 用户配置
+Install Spec → 确认后安装**。当前 spec 校验只发生在 `POST /jobs` 提交时
+(校验失败靠任务预失败试错),缺一个**只读试算端点**让业务层在提交前拿到
+"这份 spec 在这台机器上会装成什么样":
+
+```
+POST /machines/{id}/install-plan      (body = InstallSpec,同 install job)
+→ 200  安装计划(仅解析,不入队、不装机):
+   {
+     "resolved_disks": [ { "device": "sda",
+                           "matched_by": {"protocol": "raid"},
+                           "size_bytes": 3999999721472,
+                           "planned_partitions": [
+                             {"number":1,"size":"512M","fs":"vfat",
+                              "mount":"/boot/efi","flags":["esp"]} ] } ],
+     "resolved_network": [...],
+     "boot_drive": "sda",
+     "driver_notes": [ "netcfg: single interface only" ],
+     "warnings": [ ... ]
+   }
+→ 422  与真实提交同源的 SCHEMA_* / LAYOUT_* 错误(不产生任务)
+```
+
+实现要点:复用 verify_layout 与驱动渲染校验的解析逻辑(纯函数式,只读);
+带内快照缺失时 `resolved_*` 降级为带外视角并附 `warnings`(视角一致性——
+Redfish 卷名/serial 与安装器视图可能不一致,见 docs/compat/huawei.md);
+驱动方言限制(如 netcfg 单接口)以 `driver_notes` 结构化返回,供展示层
+在配置阶段就拦住,而不是装到一半 RENDER_FAILED。
+
 ## 5. 契约演进规则
 
 1. 新增字段不破坏契约;字段只能新增、废弃(标记 `deprecated`),不允许语义变更;

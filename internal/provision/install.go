@@ -792,6 +792,33 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	return nil
 }
 
+// bootMediaReleaseGrace is the delay before the completion-triggered media
+// release (eject + file reclaim): d-i keeps reading the CD minutes after its
+// late_command — the completion report races its finish stage.
+const bootMediaReleaseGrace = 3 * time.Minute
+
+// reclaimBootMediaFiles removes the repo, relay and build-scratch copies of
+// the task's boot ISO (the file-level half of the deferred release).
+func (e *Executor) reclaimBootMediaFiles(ctx context.Context, ictx *installTaskContext) {
+	if ictx.Token == "" {
+		return
+	}
+	mediaFile := fmt.Sprintf("boot-%s.iso", ictx.Token)
+	if e.MediaDir != "" {
+		if err := os.Remove(filepath.Join(e.MediaDir, mediaFile)); err == nil {
+			obs.FromContext(ctx).InfoContext(ctx, "boot media removed", "file", mediaFile)
+		}
+	}
+	if e.MediaUploader != nil {
+		if err := e.MediaUploader.Remove(ctx, mediaFile); err == nil {
+			obs.FromContext(ctx).InfoContext(ctx, "boot media relay copy removed", "file", mediaFile)
+		}
+	}
+	if e.MediaWorkDir != "" {
+		_ = os.RemoveAll(filepath.Join(e.MediaWorkDir, mediaFile+".build"))
+	}
+}
+
 // cleanupBootMedia removes this task's boot ISO (repo copy, relay copy,
 // build scratch) — verify_ready removes it on SUCCESS; without this sweep
 // every terminally failed or canceled run leaks ~2x the image size into the
@@ -971,9 +998,20 @@ func (e *Executor) installOSStage(ctx context.Context, task *store.Task, job *st
 		var ictx2 installTaskContext
 		_ = json.Unmarshal(fresh.Context, &ictx2)
 		if ictx2.Install != nil && ictx2.Install.CompletedAt != nil {
-			// Completion reported: pull the boot media before the installer's
-			// reboot so no second boot can re-enter it.
-			e.ejectBootMediaBestEffort(ctx, task, &ictx2)
+			// Completion reported: the media must NOT be released right away.
+			// d-i keeps reading the CD for minutes AFTER late_command (its
+			// finish stage re-mounts the cdrom) — ejecting or deleting the
+			// ISO now wedges the installer in a "media change" loop on a
+			// disconnected virtual drive (real-hardware). Release in the
+			// background after a grace period; the pipeline must not block
+			// on it. The delayed eject still precedes the installer's own
+			// reboot-with-one-shot-CD expiry in every observed run.
+			go func(ictx2 installTaskContext) {
+				dctx := context.WithoutCancel(ctx)
+				time.Sleep(bootMediaReleaseGrace)
+				e.ejectBootMediaBestEffort(dctx, task, &ictx2)
+				e.reclaimBootMediaFiles(dctx, &ictx2)
+			}(ictx2)
 			if ictx2.Install.Status == "failed" {
 				return classifiedErr("INSTALL_FAILED", true, "installer reported failure: %s", ictx2.Install.Detail)
 			}
@@ -1015,22 +1053,10 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 		return classifiedErr("INSTALL_NOT_VERIFIED", true, "no successful completion report recorded")
 	}
 
-	// The boot media has served its purpose — reclaim the media repository
-	// copy (the BMC-side copy is the deployment's NFS export; docs/compat/
-	// huawei.md media-relay notes).
-	if ictx.Token != "" {
-		mediaFile := fmt.Sprintf("boot-%s.iso", ictx.Token)
-		if e.MediaDir != "" {
-			if err := os.Remove(filepath.Join(e.MediaDir, mediaFile)); err == nil {
-				obs.FromContext(ctx).InfoContext(ctx, "boot media removed", "file", mediaFile)
-			}
-		}
-		if e.MediaUploader != nil {
-			if err := e.MediaUploader.Remove(ctx, mediaFile); err == nil {
-				obs.FromContext(ctx).InfoContext(ctx, "boot media relay copy removed", "file", mediaFile)
-			}
-		}
-	}
+	// The boot media's repo/relay copies are reclaimed by the deferred
+	// background release started when the completion report arrived (see
+	// installOSStage) — deleting them here, while the installer may still be
+	// finishing, truncates its last reads (real-hardware).
 
 	// RT consistency: when in-band access is configured, confirm the new
 	// system answers (docs/06-install-pipeline.md §4). Without in-band

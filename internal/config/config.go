@@ -78,6 +78,7 @@ type Config struct {
 	MediaWorkDir       string        // scratch dir for media builds (default: beside the output)
 	MediaBaseURI       string        // BMC-reachable media base URI (nfs://, cifs://, ftp:// — firmware decides)
 	BootSettleDelay    time.Duration // wait between media mount and power-on (NFS relay pushes)
+	VerifyReadyWait    time.Duration // verify_ready poll budget for the new system after the completion report
 	NFSExportEnabled   bool          // built-in read-only NFSv3 export of MediaDir (default true)
 	NFSExportPort      int           // port for the built-in export (default 2049)
 	MediaRelayAddr     string        // media relay SSH endpoint (host[:port]); empty = no relay
@@ -135,6 +136,7 @@ func FromEnv() (Config, error) {
 		MediaRelayPassword:    os.Getenv("MAMMOTH_MEDIA_RELAY_PASSWORD"),
 		MediaRelayDir:         os.Getenv("MAMMOTH_MEDIA_RELAY_DIR"),
 		BootSettleDelay:       getenvDuration("MAMMOTH_BOOT_SETTLE_DELAY", 0),
+		VerifyReadyWait:       getenvDuration("MAMMOTH_VERIFY_READY_WAIT", 10*time.Minute),
 		OTELExporterEndpoint:  os.Getenv("MAMMOTH_OTEL_EXPORTER_ENDPOINT"),
 		MetricsAddr:           os.Getenv("MAMMOTH_METRICS_ADDR"),
 		ExternalURL:           getenv("MAMMOTH_EXTERNAL_URL", "http://127.0.0.1:8080"),

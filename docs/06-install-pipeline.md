@@ -111,7 +111,7 @@ type OSDriver interface {
 | prepare_media | 渲染产物按 task-token 幂等(已存在即复用) |
 | boot | 重新设置引导并重启;若机器已在安装中,由 attempt 计数与 deadline 判定是否中断重装 |
 | install | 以 `%pre` 校验为安全边界:重装前快照漂移会被拦截 |
-| verify_ready | 纯读 |
+| verify_ready | 纯读;带内探活内建轮询(预算 `MAMMOTH_VERIFY_READY_WAIT`,默认 10m)——覆盖重启+POST 窗口;安装器环境(anaconda/subiquity/d-i 标记)不作为核验对象 |
 
 `ForceRetry`(跳过失败 stage 强行续跑)仅限 `verify_ready`;其余 stage 的失败必须
 从该 stage 重跑——不存在"跳过校验"的选项。

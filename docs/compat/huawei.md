@@ -345,19 +345,22 @@ builder 按任务生成,命名 `probe-<token>.iso`(token 为发现任务的机�
   装后快照自动刷新为 inband_ssh 视角(sda + 真实容量),下次重装的
   选择器/绑定直接命中设备名。
 
-## verify_ready 的两个真机发现(2026-09-12 夜)
+## verify_ready 的两个真机发现(2026-09-12 夜,均已修复)
 
 1. **探活窗口竞态**:完成回调到达 → anaconda 收尾 + 重启 + POST +
    新系统 sshd,全程 2-5 分钟;而 verify_ready 的单次探活失败只吃
    任务级重试(4 次 × ~7s 退避 ≈ 30s)——本轮装完即终态失败
-   (NETWORK_UNREACHABLE),机器就绪后手动 retry 才通过。**待修**:
-   verify_ready 内建轮询至 deadline(如 MAMMOTH_VERIFY_READY_TIMEOUT,
-   默认 ~10min),而非把重启等待摊给任务重试;
+   (NETWORK_UNREACHABLE),机器就绪后手动 retry 才通过。
+   **修复**:verify_ready 内建轮询(10s 间隔),预算
+   `MAMMOTH_VERIFY_READY_WAIT`(默认 10m);认证被拒立即失败(等待
+   无法愈合);真正核验前拒绝"安装器环境"会话;
 2. **安装器环境假阳性**:上一轮回归中 verify_ready 在回调后 7 秒
    "成功"——物理上新系统不可能已重启完成,探活命中的是 **anaconda
    安装器环境的 sshd**(kickstart 已设 rootpw,安装器 env 放开 root
-   密码登录)。RT 一致性核验读的是安装器对盘的视角。**待修**:探活
-   成功后须验证"新系统身份"(如 hostname 与 spec 一致)再落快照。
+   密码登录)。**修复**:带内采集器增加 ENV 节,探测安装器运行时
+   标记(/run/anaconda、/run/subiquity、/run/debian-installer、
+   /lib/debian-installer);verify_ready 只把"非安装器环境"的会话
+   当作新系统,安装器会话在轮询中继续等待。
 
 另:verify_ready 曾漏传凭证的 private_key(仅 discover 路径正确),
 密钥认证型凭证在装后探活必然 AUTH_FAILED——已修(b65b995)。

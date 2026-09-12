@@ -221,6 +221,9 @@ func (r *Runner) finish(ctx context.Context, receipt queue.Receipt, task *store.
 	case IsCanceled(execErr):
 		// Compensate side effects, then mark canceled (runner-owned write).
 		r.Exec.Compensate(ctx, task, job)
+		if task.FlowName == FlowInstall {
+			r.Exec.cleanupBootMedia(ctx, task, "canceled")
+		}
 		if err := r.Jobs.MarkCanceled(ctx, task.ID); err != nil {
 			log.ErrorContext(ctx, "cancel task failed", "err", err.Error())
 		}

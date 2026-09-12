@@ -71,7 +71,15 @@ func (e *Executor) ExecuteStage(ctx context.Context, task *store.Task, job *stor
 	case FlowDiscover:
 		return e.runDiscover(ctx, task, job)
 	case FlowInstall:
-		return e.runInstallStage(ctx, task, job, seq)
+		stage := StageNames(task.FlowName)[seq]
+		err := e.runInstallStage(ctx, task, job, seq)
+		// Terminal failure after the media was produced: reclaim the boot
+		// ISO now (retryable failures deliberately keep it — the retry's
+		// prepare_media rebuilds it anyway).
+		if err != nil && installMediaProduced(stage) && !Classified(err).Retryable {
+			e.cleanupBootMedia(ctx, task, "terminal failure")
+		}
+		return err
 	default:
 		return classifiedErr("JOB_UNKNOWN_FLOW", false, "unknown flow %s", task.FlowName)
 	}

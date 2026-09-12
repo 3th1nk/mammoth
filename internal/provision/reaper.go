@@ -14,6 +14,7 @@ type ReaperOptions struct {
 	Interval       time.Duration
 	HeartbeatLimit time.Duration // running + silent this long → interrupted
 	IdempotencyTTL time.Duration
+	TaskLogsTTL    time.Duration // task_logs retention (90d default)
 }
 
 // Reaper converts lost heartbeats into retryable interrupted tasks. It is a
@@ -21,11 +22,12 @@ type ReaperOptions struct {
 // interrupted (docs/08-data-model.md iron rule 1 & 3). A crashed runner thus
 // leaves no permanently suspended task — the M0 acceptance hinges on this.
 type Reaper struct {
-	Jobs    *store.JobRepo
-	Events  *store.EventRepo
-	Opts    ReaperOptions
-	Logger  *slog.Logger
-	Metrics *obs.Metrics
+	Jobs     *store.JobRepo
+	Events   *store.EventRepo
+	TaskLogs *store.TaskLogRepo
+	Opts     ReaperOptions
+	Logger   *slog.Logger
+	Metrics  *obs.Metrics
 }
 
 func (r *Reaper) Run(ctx context.Context) error {
@@ -40,6 +42,10 @@ func (r *Reaper) Run(ctx context.Context) error {
 	ttl := r.Opts.IdempotencyTTL
 	if ttl <= 0 {
 		ttl = 24 * time.Hour
+	}
+	logsTTL := r.Opts.TaskLogsTTL
+	if logsTTL <= 0 {
+		logsTTL = 90 * 24 * time.Hour
 	}
 
 	ticker := time.NewTicker(interval)
@@ -56,6 +62,11 @@ func (r *Reaper) Run(ctx context.Context) error {
 		if idemTick++; idemTick%4 == 0 {
 			if n, err := r.Jobs.ExpireIdempotencyKeys(ctx, ttl); err == nil && n > 0 {
 				r.Logger.DebugContext(ctx, "expired idempotency keys", "count", n)
+			}
+			if r.TaskLogs != nil {
+				if n, err := r.TaskLogs.ExpireTaskLogs(ctx, logsTTL); err == nil && n > 0 {
+					r.Logger.DebugContext(ctx, "expired task logs", "count", n)
+				}
 			}
 		}
 	}

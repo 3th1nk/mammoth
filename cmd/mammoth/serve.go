@@ -90,6 +90,13 @@ func serve(args []string) error {
 	jobRepo := store.NewJobRepo(db)
 	eventRepo := store.NewEventRepo(db)
 	webhookRepo := store.NewWebhookRepo(db)
+	logsRepo := store.NewTaskLogRepo(db)
+
+	// Log dual-write (docs/02-architecture.md §5.2): from here on, every log
+	// line that carries task_id is also persisted for API retrieval; lines
+	// without task_id just pass through the tee untouched.
+	logger = obs.NewTaskLogTee(logger, logsRepo)
+	ctx = obs.IntoContext(ctx, logger)
 
 	// Credential crypto (required to touch credentials at all).
 	crypto, err := store.NewSecretCrypto(cfg.MasterKey)
@@ -203,6 +210,7 @@ func serve(args []string) error {
 		Machines:    machineRepo,
 		Jobs:        jobRepo,
 		Events:      eventRepo,
+		Logs:        logsRepo,
 		Crypto:      crypto,
 		BMC:         registry,
 		Render:      renderReg,
@@ -237,12 +245,14 @@ func serve(args []string) error {
 		}()
 
 		reaper := &provision.Reaper{
-			Jobs:   jobRepo,
-			Events: eventRepo,
+			Jobs:     jobRepo,
+			Events:   eventRepo,
+			TaskLogs: logsRepo,
 			Opts: provision.ReaperOptions{
 				Interval:       cfg.ReaperInterval,
 				HeartbeatLimit: cfg.HeartbeatTimeout,
 				IdempotencyTTL: cfg.IdempotencyTTL,
+				TaskLogsTTL:    cfg.TaskLogsTTL,
 			},
 			Logger: logger,
 		}

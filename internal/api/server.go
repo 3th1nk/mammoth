@@ -28,6 +28,7 @@ type Deps struct {
 	Machines    *store.MachineRepo
 	Jobs        *store.JobRepo
 	Events      *store.EventRepo
+	Logs        *store.TaskLogRepo
 	Crypto      *store.SecretCrypto
 	BMC         *bmc.Registry
 	Render      *render.Registry

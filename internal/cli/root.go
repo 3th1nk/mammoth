@@ -313,6 +313,34 @@ func jobsCmd(newClient func() *Client) *cobra.Command {
 	}
 	retry.Flags().StringVar(&taskID, "task", "", "task id to retry")
 
+	var logTaskID string
+	logs := &cobra.Command{
+		Use:   "logs JOB_ID",
+		Short: "Show a task's execution logs (--task)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if logTaskID == "" {
+				return fmt.Errorf("--task is required")
+			}
+			var out struct {
+				Items []map[string]any `json:"items"`
+			}
+			path := fmt.Sprintf("/api/v1/jobs/%s/tasks/%s/logs?page_size=200", args[0], logTaskID)
+			if err := newClient().Get(path, &out); err != nil {
+				return err
+			}
+			for _, l := range out.Items {
+				stage := ""
+				if s, ok := l["stage"].(string); ok && s != "" {
+					stage = " [" + s + "]"
+				}
+				fmt.Printf("%s  %-5s%s %v\n", l["ts"], l["level"], stage, l["message"])
+			}
+			return nil
+		},
+	}
+	logs.Flags().StringVar(&logTaskID, "task", "", "task id to show logs for")
+
 	var watchID string
 	watch := &cobra.Command{
 		Use:   "watch ID",
@@ -324,7 +352,7 @@ func jobsCmd(newClient func() *Client) *cobra.Command {
 	}
 	_ = watchID
 
-	cmd.AddCommand(list, get, cancel, retry, watch)
+	cmd.AddCommand(list, get, cancel, retry, logs, watch)
 	return cmd
 }
 

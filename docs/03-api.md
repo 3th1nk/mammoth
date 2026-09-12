@@ -47,6 +47,7 @@ GET    /api/v1/jobs/{id}
 POST   /api/v1/jobs/{id}/cancel
 GET    /api/v1/jobs/{id}/tasks?state=failed
 GET    /api/v1/jobs/{id}/tasks/{tid}
+GET    /api/v1/jobs/{id}/tasks/{tid}/logs       # 任务执行日志(日志双写落库半边)
 POST   /api/v1/jobs/{id}/tasks/{tid}/retry
 GET    /api/v1/jobs/{id}/events                 # job 级 SSE
 

@@ -113,7 +113,7 @@ mammoth serve --mode=prober     # 盘查面
 
 | 维度 | 实现 |
 |------|------|
-| 日志 | 结构化(JSON);标准字段集(`task_id` `machine_id` `job_id` `request_id` `stage`)全链路透传;任务日志双写:存储(供 API 检索)+ 本地日志 |
+| 日志 | 结构化(JSON);标准字段集(`task_id` `machine_id` `job_id` `request_id` `stage`)全链路透传;任务日志双写:存储(`task_logs`,凡携带 `task_id` 的行写入时落库,`GET /jobs/{id}/tasks/{taskId}/logs` 检索,TTL 默认 90d)+ 本地日志 |
 | 指标 | Prometheus:job/task 计数(按 state)、各 stage 耗时直方图、`bmc_request_duration_seconds`(按 vendor/操作/结果)、`bmc_errors_total`(按错误码)、队列深度 |
 | 追踪 | OTel API 边界埋点(HTTP handler / 队列消费 / BMC 调用 / 渲染),默认 no-op 零依赖;配置启用 OTLP 导出后生效;span 上下文随队列消息透传,跨面不断链 |
 | 事件 | stage 变更与终态写入事件表,经 SSE 推送(job 级 + 全局,Last-Event-ID 续传);Webhook 订阅投递(HMAC-SHA256 签名、类型过滤、退避重试) |

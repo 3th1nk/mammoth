@@ -71,6 +71,7 @@ type Config struct {
 	IPMIInterface      string // lanplus (default) | lan
 	IdempotencyTTL     time.Duration
 	TaskStatusInterval time.Duration // terminal-transition sweep for job summary
+	TaskLogsTTL        time.Duration // task_logs retention (reaper-expired; 90d default)
 	LayoutRetention    int           // snapshots kept per machine (docs/08: default 10)
 	InbandTimeout      time.Duration // whole inband_ssh collection bound
 	RamdiskEnabled     bool          // optional ramdisk probe (docs/05 §4; PXE-first)
@@ -123,6 +124,7 @@ func FromEnv() (Config, error) {
 		IPMIInterface:         getenv("MAMMOTH_IPMI_INTERFACE", "lanplus"),
 		IdempotencyTTL:        getenvDuration("MAMMOTH_IDEMPOTENCY_TTL", 24*time.Hour),
 		TaskStatusInterval:    getenvDuration("MAMMOTH_TASK_STATUS_INTERVAL", 2*time.Second),
+		TaskLogsTTL:           getenvDuration("MAMMOTH_TASK_LOGS_TTL", 90*24*time.Hour),
 		LayoutRetention:       getenvInt("MAMMOTH_LAYOUT_RETENTION", 10),
 		InbandTimeout:         getenvDuration("MAMMOTH_INBAND_TIMEOUT", 20*time.Second),
 		RamdiskEnabled:        getenvBool("MAMMOTH_RAMDISK_ENABLED", false),

@@ -1,8 +1,12 @@
-# ubuntu22 真机回归操作清单（seed 时序修复验证）
+# ubuntu22 真机回归操作清单
 
-> 修复依据：首轮构建的引导介质此前不含应答文件（seed 取自渲染前的 task context），
-> subiquity 拿不到 autoinstall 即进交互模式——卡语言选择。commit `1338a7b` 后 seed
-> 取自本轮渲染结果。**本轮回归 = 真机复跑一次 ubuntu22 install，确认直接过语言选择。**
+> **状态**：✅ 首轮回归已于 2026-09-12 真机通过（Huawei 2288H V5，端到端 ~3h，
+> 见 [compat/huawei.md](../compat/huawei.md)）。本文档留作 ubuntu22 方言回归的
+> 操作模板，后续复跑按此执行。
+>
+> 背景：首轮构建的引导介质曾不含应答文件（seed 取自渲染前的 task context），
+> subiquity 拿不到 autoinstall 即进交互模式——卡语言选择。commit `1338a7b` 后
+> seed 取自本轮渲染结果，本轮回归即验证该修复。
 
 ## 1. 启动 serve（真机参数）
 
@@ -74,9 +78,13 @@ EOF
 - 控制台若仍停语言选择:导出 `data/media/boot-<token>.iso`,核对上述第 2 步;
   seed 在而仍卡 → 看 `/run/casper` 或 cloud-init 输出,可能是 `file:///cdrom/` 数据源形态问题
   (与 seed 时序是两个独立问题,反馈日志即可)
-- debian12 首测注意:`MAMMOTH_EXTERNAL_URL` 用 **http**(d-i busybox wget 的 TLS 受限)
+- 装后不可达:确认 spec 网络(静态 IP/MAC 钉口)与控制台实际一致;重装后目标机
+  SSH host key 轮换属正常,登录端清旧记录即可
 
-## 6. 后续矩阵
+## 6. 方言矩阵现状
 
-- debian12:同上,`distro:"debian12"` + netinst ISO(约 800MB,构建快)
-- uniontechos:debian12 跑通后,`distro:"uniontechos"` + UOS V20 ISO(实验性)
+- **debian12**:✅ 2026-09-12 真机通过(netinst,~6min);注意
+  `MAMMOTH_EXTERNAL_URL` 用 **http**(d-i busybox wget 的 TLS 受限);
+- **uniontechos(UOS)**:**blocked**——ISO 实测为 anaconda 定制(RHEL 系树,
+  非 d-i),已归 kickstart 方言;Finish 阶段崩溃待 UOS 支持
+  (见 [compat/distros.md](../compat/distros.md))。

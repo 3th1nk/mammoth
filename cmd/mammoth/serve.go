@@ -290,6 +290,7 @@ func serve(args []string) error {
 			MediaUploader:   mediaUploader,
 			RamdiskEnabled:  cfg.RamdiskEnabled,
 			ProbeAlpineISO:  cfg.ProbeAlpineISO,
+			ProbeStaticCIDR: cfg.ProbeStaticCIDR,
 			ProbeWait:       cfg.ProbeWait,
 			LayoutKeep:      cfg.LayoutRetention,
 		}

@@ -213,12 +213,13 @@ func (d *Driver) SetPower(ctx context.Context, addr string, cred bmc.Credentials
 		return &bmc.Error{Kind: bmc.KindProtocolError, Op: "set_power", Detail: "no computer system resource"}
 	}
 	if err := systems[0].Reset(resetType); err != nil {
-		// Some firmwares reject standard reboot ResetTypes with
-		// ActionParameterValueFormatError while supporting the operation via
-		// ForceRestart (Huawei iBMC 6.41 observed: PowerCycle and
-		// GracefulRestart both rejected — docs/compat/huawei.md §8). Retry
-		// once with the hard-reboot mapping before failing.
-		if alt, ok := hardRestartFallback(resetType); ok && isResetTypeFormatError(err) {
+		// Some firmwares reject standard ResetTypes with
+		// ActionParameterValueFormatError while accepting another value for
+		// the same operation (Huawei iBMC 6.41 observed: PowerCycle and
+		// GracefulRestart rejected in favor of ForceRestart, and ForceOn
+		// rejected in favor of On — docs/compat/huawei.md §8). Retry once
+		// with the firmware's accepted mapping before failing.
+		if alt, ok := resetTypeFallback(resetType); ok && isResetTypeFormatError(err) {
 			if serr := systems[0].Reset(alt); serr == nil {
 				return nil
 			}
@@ -228,12 +229,14 @@ func (d *Driver) SetPower(ctx context.Context, addr string, cred bmc.Credentials
 	return nil
 }
 
-// hardRestartFallback maps reboot-type reset types onto ForceRestart for
-// firmwares that reject the standard ResetType values.
-func hardRestartFallback(rt redfish.ResetType) (redfish.ResetType, bool) {
+// resetTypeFallback maps ResetTypes onto the values restrictive firmwares
+// accept for the same operation.
+func resetTypeFallback(rt redfish.ResetType) (redfish.ResetType, bool) {
 	switch rt {
 	case redfish.PowerCycleResetType, redfish.GracefulRestartResetType:
 		return redfish.ForceRestartResetType, true
+	case redfish.ForceOnResetType:
+		return redfish.OnResetType, true
 	}
 	return "", false
 }

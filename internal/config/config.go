@@ -74,7 +74,9 @@ type Config struct {
 	TaskLogsTTL        time.Duration // task_logs retention (reaper-expired; 90d default)
 	LayoutRetention    int           // snapshots kept per machine (docs/08: default 10)
 	InbandTimeout      time.Duration // whole inband_ssh collection bound
-	RamdiskEnabled     bool          // optional ramdisk probe (docs/05 §4; PXE-first)
+	RamdiskEnabled     bool          // optional ramdisk probe (docs/05 §4; alpine virtual-media carrier)
+	ProbeAlpineISO     string        // alpine standard ISO (path/URL) the probe medium is built from
+	ProbeWait          time.Duration // ramdisk discover's report wait budget (default 10m)
 	MediaDir           string        // local media repository (boot ISOs)
 	MediaWorkDir       string        // scratch dir for media builds (default: beside the output)
 	MediaBaseURI       string        // BMC-reachable media base URI (nfs://, cifs://, ftp:// — firmware decides)
@@ -128,6 +130,8 @@ func FromEnv() (Config, error) {
 		LayoutRetention:       getenvInt("MAMMOTH_LAYOUT_RETENTION", 10),
 		InbandTimeout:         getenvDuration("MAMMOTH_INBAND_TIMEOUT", 20*time.Second),
 		RamdiskEnabled:        getenvBool("MAMMOTH_RAMDISK_ENABLED", false),
+		ProbeAlpineISO:        getenv("MAMMOTH_PROBE_ALPINE_ISO", ""),
+		ProbeWait:             getenvDuration("MAMMOTH_PROBE_WAIT", 10*time.Minute),
 		MediaDir:              getenv("MAMMOTH_MEDIA_DIR", "data/media"),
 		MediaWorkDir:          os.Getenv("MAMMOTH_MEDIA_WORKDIR"),
 		MediaBaseURI:          getenv("MAMMOTH_MEDIA_BASE_URI", os.Getenv("MAMMOTH_MEDIA_NFS_BASE")),

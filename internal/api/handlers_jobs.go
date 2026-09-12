@@ -221,10 +221,10 @@ func (s *Server) createJobRecord(ctx context.Context, in createJobRecord) (*gen.
 	taskIDs := make([]string, 0, len(in.machineIDs))
 	var taskContexts []json.RawMessage
 	var taskInitials []store.TaskInit
-	if in.jobType == "install" {
-		// Install tasks get their machine-facing credential (token), the
-		// expanded hostname, and the per-machine spec (base shallow-merged
-		// with the machine's override) at creation; context grows afterwards.
+	if in.jobType == "install" || in.jobType == "discover" {
+		// Install and discover tasks get their machine-facing credential
+		// (token — the installer/probe cannot hold a bearer token) and the
+		// install-expanded hostname/spec at creation; context grows after.
 		pattern := ""
 		if in.hostnamePattern != nil {
 			pattern = *in.hostnamePattern

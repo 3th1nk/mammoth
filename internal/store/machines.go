@@ -223,6 +223,26 @@ func (r *MachineRepo) LatestLayout(ctx context.Context, machineID string) (json.
 	return json.RawMessage(content), captured, nil
 }
 
+// LatestLayoutBySource is LatestLayout constrained to one capture source —
+// the ramdisk discover flow waits on it (the probe report endpoint writes
+// the snapshot; the waiting task polls for one newer than its baseline).
+func (r *MachineRepo) LatestLayoutBySource(ctx context.Context, machineID, source string) (json.RawMessage, time.Time, error) {
+	var content []byte
+	var captured time.Time
+	err := r.db.QueryRowContext(ctx, `
+		SELECT content, captured_at FROM layout_snapshots
+		WHERE machine_id = $1 AND source = $2
+		ORDER BY captured_at DESC, id DESC LIMIT 1`, machineID, source).
+		Scan(&content, &captured)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, time.Time{}, ErrNotFound
+	}
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	return json.RawMessage(content), captured, nil
+}
+
 const machineSelect = `
 	SELECT id, labels, bmc_address, bmc_protocol, bmc_credential_id, ssh_credential_id, ssh_address,
 	       vendor, model, serial_number, firmware_version, hardware,

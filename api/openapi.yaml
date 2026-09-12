@@ -519,6 +519,42 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
 
+  /render/{token}/probe-report:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+          maxLength: 128
+    post:
+      operationId: reportProbeFindings
+      tags: [jobs]
+      security: []
+      summary: Submit ramdisk probe findings
+      description: |
+        Machine-facing endpoint for the ramdisk probe (docs/05-inventory.md
+        §4): the probe environment scans /sys and POSTs the layout content
+        here. The unguessable task token in the path is the credential; the
+        body is persisted verbatim as a layout snapshot (source=ramdisk).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProbeReport'
+      responses:
+        '204':
+          description: Recorded
+        '404':
+          description: Unknown token
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
   /render/{token}/complete:
     parameters:
       - name: token
@@ -1946,6 +1982,25 @@ components:
         next_cursor:
           type: string
           nullable: true
+
+    ProbeReport:
+      type: object
+      description: |
+        Ramdisk probe findings — the layout snapshot content in the same
+        shape the inband_ssh collector produces (docs/04-install-spec.md §3),
+        gathered by the probe environment's /sys scan.
+      required: [disks]
+      properties:
+        captured_at:
+          type: string
+          format: date-time
+        source:
+          type: string
+        disks:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
 
     TaskLog:
       type: object

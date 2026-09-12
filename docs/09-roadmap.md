@@ -1,11 +1,11 @@
 # 09 · 演进路线
 
 > **当前状态(2026-09)**:M0~M5 全部交付;M6 主体交付(SSE、审计/事件查询、
-> cobra CLI、goreleaser、Webhook 签名投递、软/硬 RAID 声明式配置、运维与安全文档)。
-> M6 余项:ramdisk 探针(真机路径 V0 进行中,PXE 未做)。
-> SQLite 最小部署形态已评估并放弃(见 10 §D2),存储收敛为 PostgreSQL-only。
-> 三方言(rocky9 / ubuntu22 / debian12)已真机端到端闭环,
-> uniontechos blocked(见 compat/distros.md)。
+> cobra CLI、goreleaser、Webhook 签名投递、软/硬 RAID 声明式配置、运维与安全文档、
+> task_logs 检索 API、ramdisk 探针 V1)。SQLite 最小部署形态已评估并放弃
+> (见 10 §D2),存储收敛为 PostgreSQL-only。M6 余项:ramdisk 真机验证
+> (华为 2288H)、uniontechos(见 compat/distros.md)、ubuntu 24.04 验证。
+> 三方言(rocky9 / ubuntu22 / debian12)已真机端到端闭环。
 
 里程碑按"每阶段交付物独立可用"的依赖关系排序。M1 之前没有任何东西能对用户产生价值,
 因此 M0 的唯一目标是让最通用的能力先跑起来。
@@ -63,8 +63,9 @@
 
 - Ubuntu(autoinstall)驱动,含保留分区的 partial 支持声明与提交时拒绝
 - 支持矩阵文档化;`KeepPartitionSupport()` 语义接入提交校验
-- ramdisk 探针(可选启用,PXE 优先)——**进行中**:虚拟介质探针 V0 已验证组件
-  链路,卡在探针 ISO 的 UEFI 引导结构(见 compat/huawei.md 复盘);PXE 通路未做
+- ramdisk 探针(可选启用)——**V1 已通(qemu BIOS+UEFI 双模式闭环)**:
+  alpine standard 虚拟介质载体,apkovl 注入探针逻辑,上报端点与 discover
+  集成已落;真机验证待华为 2288H 批次;PXE 通路属真实网络环境阶段
 
 ## M6 · 运营完备(主体已交付,余项如下)
 
@@ -76,7 +77,8 @@
 - ✅ docs/operations.md(备份恢复)、docs/security-baseline.md(安全基线)
 - ✅ task_logs 表与检索 API(日志双写落库,`GET /jobs/{id}/tasks/{taskId}/logs`,
   reaper TTL 默认 90d;stage 耗时直方图此前已埋)
-- ⬜ ramdisk 探针补全(qemu 迭代引导结构 → 上报端点 → discover 集成)
+- ✅ ramdisk 探针 V1(alpine 虚拟介质载体,`POST /render/{token}/probe-report`
+  + discover `probe=ramdisk` 集成;qemu BIOS+UEFI 双模式闭环)——真机验证待批次
 
 ## 长期方向(不承诺排期)
 

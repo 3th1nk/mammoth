@@ -314,3 +314,9 @@ early_command 采集(/sys 扫描,零工具依赖)+ wget 上报 + poweroff,为无
 **下次路径**:本地 qemu 迭代探针 ISO 引导结构(BIOS/UEFI 双模式验证)→
 引导成功后接上报端点(设计:token 认证的 layout 快照写入)→ discover
 集成(probe=ramdisk 分支)→ 真机验证。
+
+**正式实现的命名与生命周期**(与安装介质同构,避免并发冲突):探针 ISO 由
+builder 按任务生成,命名 `probe-<token>.iso`(token 为发现任务的机器面
+凭证);生成于探针触发的 prepare 阶段,上报/超时后随延迟释放删除——
+与 `boot-<token>.iso` 同生命周期。V0 的手工产物(`probe-v0-manual.iso`)
+仅用于链路验证,不进入任务流程。

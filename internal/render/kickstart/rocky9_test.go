@@ -1,4 +1,4 @@
-package rocky9
+package kickstart
 
 import (
 	"strings"

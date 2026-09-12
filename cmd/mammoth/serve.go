@@ -24,9 +24,9 @@ import (
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/provision"
 	"github.com/3th1nk/mammoth/internal/render"
-	"github.com/3th1nk/mammoth/internal/render/debian"
-	"github.com/3th1nk/mammoth/internal/render/rocky9"
-	"github.com/3th1nk/mammoth/internal/render/ubuntu22"
+	"github.com/3th1nk/mammoth/internal/render/autoinstall"
+	"github.com/3th1nk/mammoth/internal/render/kickstart"
+	"github.com/3th1nk/mammoth/internal/render/preseed"
 	"github.com/3th1nk/mammoth/internal/store"
 	"github.com/3th1nk/mammoth/internal/store/queue"
 	"github.com/3th1nk/mammoth/internal/version"
@@ -172,10 +172,10 @@ func serve(args []string) error {
 	// AppStream/BaseOS/isolinux, no debian-installer layout).
 	renderReg := render.NewRegistry()
 	for _, d := range []render.OSDriver{
-		rocky9.New("rocky9"),
-		rocky9.New("uniontechos"),
-		ubuntu22.New(),
-		debian.New("debian12"),
+		kickstart.New("rocky9"),
+		kickstart.New("uniontechos"),
+		autoinstall.New("ubuntu22"),
+		preseed.New("debian12"),
 	} {
 		if err := renderReg.Register(d); err != nil {
 			return err

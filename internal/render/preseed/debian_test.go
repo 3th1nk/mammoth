@@ -1,4 +1,4 @@
-package debian
+package preseed
 
 import (
 	"strings"

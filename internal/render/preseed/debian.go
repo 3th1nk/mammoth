@@ -7,7 +7,7 @@
 // real-hardware pass already proved unreliable. The questions d-i asks
 // BEFORE the seed loads (locale, keyboard) ride as kernel arguments, which
 // d-i treats as preseed values in their own right.
-package debian
+package preseed
 
 import (
 	"fmt"
@@ -70,13 +70,13 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	}
 
 	return []render.AnswerFile{
-		{Name: "preseed.cfg", Content: d.preseed(in, target, recipe, net)},
-		{Name: "run/mammoth/pre-install.sh", Content: preInstallScript(in)},
-		{Name: "run/mammoth/post-install.sh", Content: postInstallScript(d.distro, in)},
-	}, render.BootParams{
-		AnswerURL:  strings.TrimSuffix(in.AnswerBaseURL, "/") + "/preseed.cfg",
-		KernelArgs: kernelArgs,
-	}, nil
+			{Name: "preseed.cfg", Content: d.preseed(in, target, recipe, net)},
+			{Name: "run/mammoth/pre-install.sh", Content: preInstallScript(in)},
+			{Name: "run/mammoth/post-install.sh", Content: postInstallScript(d.distro, in)},
+		}, render.BootParams{
+			AnswerURL:  strings.TrimSuffix(in.AnswerBaseURL, "/") + "/preseed.cfg",
+			KernelArgs: kernelArgs,
+		}, nil
 }
 
 // preseed assembles the answer file. The netinst ISO carries the base system,

@@ -114,8 +114,9 @@ VmmControl(任务轮询至终态,失败分类为 BMC_PROTOCOL_ERROR 并携带 iB
 (HTTP 根目录与 NFS 导出目录是两个不同路径,别混淆)。
 
 **对安装流水线的影响**:此机型上 image.source 与介质地址应使用
-`nfs://host/export/xxx.iso` 形态;引导介质注入(kickstart)在该机型上
-仍受 KVM 通路限制(见 §6 上述),完整安装需 NFS 介质 + PXE/KVM 组合。
+`nfs://host/export/xxx.iso` 形态(早期"引导注入受 KVM 通路限制、需
+PXE/KVM 组合"的推测已被端到端重装实录证伪——NFS 介质 + 一次性 CD
+引导即可全自动安装)。
 
 ### 7. 一次性引导(实测)
 
@@ -195,15 +196,15 @@ NFS ISO 装包源,静态网络)。全链路打通过程中固化下来的事实:
 | ubuntu22(autoinstall) | live-server 22.04.4(2.1G) | ~3 h | squashfs 复制型,慢在虚拟光驱带宽 |
 | debian12(preseed) | netinst 13.6(792M) | **6 min** | 修复 standard 任务集后全自动闭环 |
 
-### 回归暴露的 rocky9 驱动缺陷(待修)
+### 回归暴露的 rocky9 驱动缺陷(均已修复)
 
 1. **grow 分区 2TiB 截断**:`part / --grow` 在该 LSI 卷上止步于扇区
-   2^32-1(盘尾 1.6T 未分配),GPT 本身无此限制——疑似 blivet 在
-   控制器卷几何上的 grow 分配问题。**修复方向**:渲染 grow 分区时随附
-   `--maxsize=<盘容量MB>`(盘查 size_bytes 已有),显式上限不依赖
-   anaconda 的分配推断;
+   2^32-1(盘尾 1.6T 未分配),GPT 本身无此限制——blivet 在控制器卷
+   几何上的 grow 分配问题(`--maxsize` 亦被忽略,初始设想的 maxsize
+   方案无效)。**已根治**:grow 分区改渲染显式 size(见下节"显式 size
+   替代 --grow",真机复核 ✅);
 2. **hostname 未落地**:`network --hostname` 未写入系统
-   (Static hostname unset)——改 %post 直接写 /etc/hostname
+   (Static hostname unset)——已改 %post 直接写 /etc/hostname
    (与 debian/ubuntu 驱动的修法对齐)。
 
 ### 流程级修复(跨方言,本轮回归验证)
@@ -214,8 +215,9 @@ NFS ISO 装包源,静态网络)。全链路打通过程中固化下来的事实:
   BootParams.InstallerAutoReboot 按方言声明(anaconda/subiquity 自重启,
   d-i 否),由流水线在介质释放后补发 power cycle;
 - **盘查视角一致性**:Redfish 卷名(LogicalDrive0/无 serial)与安装器
-  设备名(/dev/sda+SCSI serial)不一致——目前以联调手段(盘查记录改名)
-  绕过,正式机制为 early-commands 现场重识别或 ramdisk 探针(见 roadmap)。
+  设备名(/dev/sda+SCSI serial)不一致——正式机制 **ramdisk 探针已闭环**
+  (见 ramdisk 节:快照以安装器视角落库,下轮重装的选择器/绑定直接命中
+  设备名);装后 inband_ssh 快照自动刷新是第二条通路(已实现)。
 
 ## ubuntu22 autoinstall 端到端实录(2288H V5,iBMC 6.41)
 
@@ -265,7 +267,11 @@ Redfish 侧 `ID_SERIAL_SHORT` 与 `ID_SCSI_SERIAL`(lsblk SERIAL 列)是两个不
   `ra` 行计数混入元数据操作**不可用作进度**;NFS 导出上存在其他客户端时需
   tcpdump 按 host 过滤;
 - 精确完成时刻以 mammoth 的 `install_reported` 事件为准(修复后的回调链路);
-  subiquity 卡住时 curtin 日志不落盘,事后无法从目标盘考古精确完成时刻。
+  subiquity 卡住时 curtin 日志不落盘,事后无法从目标盘考古精确完成时刻;
+- **proc3 判据的适用边界**(ramdisk 探针批次实测补充):它反映的是
+  **安装器大流量复制阶段**;引导早期/modloop 这类小流量按需读取在
+  proc3 上**不计数**(探针引导期间计数恒 0 而介质实际在被读取)——
+  探针/引导活性判断用 BMC SEL,不要用 nfsd 计数。
 
 ## 介质服务形态
 
@@ -290,7 +296,7 @@ iBMC 的挂载校验只读镜像头部,部分文件即可通过;固件在 POST �
 2. `MAMMOTH_BOOT_SETTLE_DELAY`(boot 阶段挂载与上电之间的等待,默认 0;
    中转分发部署建议 ≥ 推送耗时)。
 
-## ramdisk 探针原型 V0 复盘(2026-09-12,进行中)
+## ramdisk 探针(2026-09-12 V0 原型 → 2026-09-13 真机闭环 ✅)
 
 **目标**:BMC 虚拟光驱形态的硬件采集探针——debian netinst 的 d-i 引导 +
 early_command 采集(/sys 扫描,零工具依赖)+ wget 上报 + poweroff,为无 OS
@@ -348,9 +354,10 @@ poweroff,全链路 ~11s。迭代方式:`go test -tags probe_dev`(构建)+
 `scripts/probe-dev/qemu-boot.sh bios|uefi`(引导验证,report-server.py
 捕获上报)。
 
-**下次路径**:上报端点(token 认证的 layout 快照写入,source=ramdisk)→
-discover 集成(probe=ramdisk 分支:构建探针 ISO → 虚拟介质挂载 → 一次性
-CD 引导 → 轮询报告 → 弹出+关机补偿)→ ~~真机验证~~ **✅ 已闭环(见下节)**。
+**已落地**:上报端点(`POST /render/{token}/probe-report`,token 认证,
+source=ramdisk)→ discover 集成(probe=ramdisk 分支:构建探针 ISO →
+虚拟介质挂载 → 一次性 CD 引导 → 轮询报告 → 弹出+关机补偿)→
+真机验证 ✅(见下节)。
 
 ### 真机验证闭环(2026-09-13,✅ 全链路 succeeded)
 

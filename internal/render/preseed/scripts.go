@@ -59,6 +59,23 @@ func postInstallScript(distro string, in render.InstallInputs) string {
 		// names win, defaults reappear) — write the file directly, the
 		// same contract as the ubuntu driver.
 		b.WriteString("echo " + quoteSh(in.Hostname) + " > /target/etc/hostname\n")
+		// netcfg's finish-install pass re-writes /etc/hostname AFTER
+		// late_command (real-hardware: the echo above lost to a second
+		// write and the host came up as "debian") — a first-boot oneshot
+		// re-applies the name and removes itself.
+		b.WriteString(`mkdir -p /target/etc/systemd/system/multi-user.target.wants
+cat > /target/etc/systemd/system/mammoth-hostname.service <<'UNIT'
+[Unit]
+Description=Mammoth hostname provisioning
+After=local-fs.target
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo ` + in.Hostname + ` > /etc/hostname; systemctl disable mammoth-hostname.service; rm -f /etc/systemd/system/mammoth-hostname.service /etc/systemd/system/multi-user.target.wants/mammoth-hostname.service'
+[Install]
+WantedBy=multi-user.target
+UNIT
+ln -sf /etc/systemd/system/mammoth-hostname.service /target/etc/systemd/system/multi-user.target.wants/mammoth-hostname.service
+`)
 	}
 	if len(in.SSHPublicKeys) > 0 {
 		b.WriteString("mkdir -p /target/root/.ssh\n")

@@ -1122,11 +1122,23 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 				if json.Unmarshal(plain, &secret) == nil {
 					probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 					defer cancel()
-					if _, err := e.Inband.Collect(probeCtx, m.SSHAddress, inbandssh.Credentials{
+					res, err := e.Inband.Collect(probeCtx, m.SSHAddress, inbandssh.Credentials{
 						Username: secret.Username, Password: secret.Password,
-					}); err != nil {
+					})
+					if err != nil {
 						return classifiedErr("INSTALL_NOT_REACHABLE", true,
 							"new system did not answer in-band: %s", err.Error())
+					}
+					// Post-install refresh: the freshly installed system is the
+					// best source for the layout snapshot (device names + serials
+					// exactly as the installer saw them), so the NEXT reinstall's
+					// selectors and bindings match reality without manual steps.
+					if version, verr := e.Machines.SaveLayout(ctx, task.MachineID, res.Layout.Source,
+						marshalJSON(res.Layout), e.LayoutKeep); verr == nil {
+						obs.FromContext(ctx).InfoContext(ctx, "post-install layout snapshot captured",
+							"version", version, "disks", len(res.Layout.Disks))
+					} else {
+						obs.FromContext(ctx).WarnContext(ctx, "post-install snapshot save failed", "err", verr.Error())
 					}
 				}
 			}

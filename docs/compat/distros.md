@@ -9,7 +9,7 @@
 | Rocky/RHEL 系(Rocky 9/Alma 9) | `rocky9` | Anaconda | kickstart(`inst.ks=`) | **full**:`%pre` 漂移守卫 + `--onpart/--noformat` | MAC → 接口名在 `%pre` 安装期解析 | ✅ v0.1 |
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
 | Debian 12 | `debian12` | debian-installer | preseed(`file=/cdrom/preseed.cfg`) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | 无(netcfg 不按 MAC 选口,单接口) | ✅ 真机跑通 |
-| 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,待真机复核) | MAC → 接口名在 %pre 安装期解析 | experimental,真机联调中 |
+| 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,待真机复核) | MAC → 接口名在 %pre 安装期解析 | **blocked**(见下) |
 | Windows | — | Setup | unattend | full(目标) | — | 未开始 |
 
 ## 保留分区支持语义(SupportLevel)
@@ -30,7 +30,7 @@
     {"name": "rocky9",  "keep_partition_support": "full"},
     {"name": "ubuntu22", "keep_partition_support": "partial"},
     {"name": "debian12", "keep_partition_support": "partial"},
-    {"name": "uniontechos", "keep_partition_support": "partial"}
+    {"name": "uniontechos", "keep_partition_support": "full"}
   ]
 }
 ```
@@ -53,10 +53,15 @@
 - 网络:netplan(cloud-init network-config v2),bond slaves 用 `match.macaddress`;
 - 存储:curtin storage config(disk→partition→format→mount 链);
   keep: disk = 该盘不进入 curtin 配置;
-- 完成回报:`late-commands` 末尾 curl 完成回调;
-- root 口令:user-data `chpasswd`(与 kickstart `rootpw` 同语义,一次性随机)。
+- 完成回报:`late-commands` 末尾 **python3/urllib** POST 回调(subiquity 环境
+  无 curl/wget);
+- **一切访问供给在安装期完成**(真机教训:first-boot cloud-init 读不到 seed,
+  静默失效)——root 口令(chpasswd)、authorized_keys、PermitRootLogin、
+  hostname 全部经 `late-commands`/`curtin in-target` 落盘;
+- 显式 `shutdown: reboot`——否则 subiquity 在 curtin 完成后停滞不重启;
+- root 口令:留空 = 安装期随机生成(经任务事件一次性下发)。
 
-### debian12 / uniontechos(preseed)
+### debian12(preseed)
 
 - 应答文件:`preseed.cfg` + `run/mammoth/{pre,post}-install.sh`,全部烘入 ISO 根,
   经 `file=/cdrom/preseed.cfg` 离线加载(d-i 将引导介质挂在 /cdrom);
@@ -75,8 +80,9 @@
   busybox `wget --post-data` 上报(d-i 环境无 curl;**部署需 http**,busybox wget 的
   TLS 受限);pre_install 挂 EXIT failtrap,失败即回报阶段名;
 - root 口令:`passwd/root-password` 明文(与 kickstart/ubuntu22 同语义,一次性随机);
-- `uniontechos` 是同一方言的第二注册名(统信服务器 V20 的 d-i 定制安装器),
-  真机验证内核目录名与 preseed 键兼容性后转正。
+- 注意:UOS Server V20(1050a)经 ISO 实测为 **anaconda 定制安装器**
+  (RHEL 系安装树),已改归 kickstart 方言(见 `uniontechos` 行与
+  docs/compat/huawei.md),不在本 preseed 包内。
 
 ### ubuntu d-i(legacy) 支持决策:不主动支持
 
@@ -104,6 +110,18 @@ mini.iso)提供驱动支持。
   partman 组件行为、ESM 源(若目标机依赖)的 mirror 配置;
 - **风险**:绑定一个上游停止演进的安装器,后续无人修复——变体需在文档与
   capabilities 中如实标注支持边界。
+
+### uniontechos 状态:blocked(UOS 定制 anaconda)
+
+- **现象**:全自动 kickstart(安装树/包/分区/网络全部正确,489 包安装完成)下,
+  UOS 定制 anaconda(33.16.4.15)在 Finish 阶段崩溃:
+  `dasbus.error.DBusError: max() arg is an empty sequence`(task_proxy.Finish);
+- **已排除**:`bootloader --location=mbr`(去除后同样崩溃)、`eula --agreed` +
+  `user` 注入(同样崩溃)——崩溃源在 UOS 定制 anaconda 的 Finish 任务组内部,
+  kickstart 参数层无法绕过;
+- **恢复路径**:拿 anaconda-tb 深层帧定位空任务组所属的 UOS 定制模块
+  (需 UOS 官方支持或 anaconda 定制源码),或等待 UOS 新版修复;
+- 引导/介质/包装配等其余链路均正常(包安装完成、只差 Finish 收尾)。
 
 ### 新增发行版
 

@@ -321,7 +321,7 @@ builder 按任务生成,命名 `probe-<token>.iso`(token 为发现任务的机�
 与 `boot-<token>.iso` 同生命周期。V0 的手工产物(`probe-v0-manual.iso`)
 仅用于链路验证,不进入任务流程。
 
-### 显式 size 替代 --grow(已实现,待真机复核)
+### 显式 size 替代 --grow(已实现,真机复核 ✅)
 
 - **发现**:anaconda 的 `--grow` 分配在该 LSI 卷上钳制于 2^32 扇区
   (`--maxsize` 亦被忽略),根分区停在 2TiB;%post 在线扩容(sfdisk +
@@ -337,4 +337,30 @@ builder 按任务生成,命名 `probe-<token>.iso`(token 为发现任务的机�
 - **已验证**:sfdisk 在线扩容对挂载中的根分区可行(手动实测 2T→3.6T);
   parted 对挂载分区直接拒绝(脚本模式警告后放弃);
 - **待真机**:显式 size 在 LSI 卷上一次建对分区(3.6T 根分区,不依赖
-  %post 扩容)。
+  %post 扩容);
+- **✅ 真机复核(2026-09-12 夜,job_a045f4b94988)**:六阶段 succeeded,
+  `part / --fstype=ext4 --ondisk=$D0 --size=3813673` 按预期渲染($D0 动态
+  解析路径),新系统实测 sda2 = 3999461785088 字节(root 满盘到盘尾
+  −1MiB 对齐;anaconda 一次建对,%post 安全网回收 512MB 余量);
+  装后快照自动刷新为 inband_ssh 视角(sda + 真实容量),下次重装的
+  选择器/绑定直接命中设备名。
+
+## verify_ready 的两个真机发现(2026-09-12 夜)
+
+1. **探活窗口竞态**:完成回调到达 → anaconda 收尾 + 重启 + POST +
+   新系统 sshd,全程 2-5 分钟;而 verify_ready 的单次探活失败只吃
+   任务级重试(4 次 × ~7s 退避 ≈ 30s)——本轮装完即终态失败
+   (NETWORK_UNREACHABLE),机器就绪后手动 retry 才通过。**待修**:
+   verify_ready 内建轮询至 deadline(如 MAMMOTH_VERIFY_READY_TIMEOUT,
+   默认 ~10min),而非把重启等待摊给任务重试;
+2. **安装器环境假阳性**:上一轮回归中 verify_ready 在回调后 7 秒
+   "成功"——物理上新系统不可能已重启完成,探活命中的是 **anaconda
+   安装器环境的 sshd**(kickstart 已设 rootpw,安装器 env 放开 root
+   密码登录)。RT 一致性核验读的是安装器对盘的视角。**待修**:探活
+   成功后须验证"新系统身份"(如 hostname 与 spec 一致)再落快照。
+
+另:verify_ready 曾漏传凭证的 private_key(仅 discover 路径正确),
+密钥认证型凭证在装后探活必然 AUTH_FAILED——已修(b65b995)。
+运维注记:**轮换 MAMMOTH_MASTER_KEY 后存量凭证全部失效**
+(`cipher: message authentication failed` → CREDENTIAL_UNAVAILABLE),
+须重建凭证并更新机器引用。

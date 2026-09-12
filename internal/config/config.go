@@ -76,7 +76,9 @@ type Config struct {
 	InbandTimeout      time.Duration // whole inband_ssh collection bound
 	RamdiskEnabled     bool          // optional ramdisk probe (docs/05 §4; alpine virtual-media carrier)
 	ProbeAlpineISO     string        // alpine standard ISO (path/URL) the probe medium is built from
-	ProbeStaticCIDR    string        // probe DHCP fallback address (no-DHCP machine rooms)
+	ProbeStaticCIDR    string        // probe DHCP fallback for machines without ssh.address
+	ProbePrefix        int           // prefix length for a bare ssh.address in the fallback CIDR (default 24)
+	ProbeGateway       string        // probe fallback default route (cross-subnet report targets)
 	ProbeWait          time.Duration // ramdisk discover's report wait budget (default 10m)
 	MediaDir           string        // local media repository (boot ISOs)
 	MediaWorkDir       string        // scratch dir for media builds (default: beside the output)
@@ -133,6 +135,8 @@ func FromEnv() (Config, error) {
 		RamdiskEnabled:        getenvBool("MAMMOTH_RAMDISK_ENABLED", false),
 		ProbeAlpineISO:        getenv("MAMMOTH_PROBE_ALPINE_ISO", ""),
 		ProbeStaticCIDR:       getenv("MAMMOTH_PROBE_STATIC_CIDR", ""),
+		ProbePrefix:           getenvInt("MAMMOTH_PROBE_PREFIX", 24),
+		ProbeGateway:          getenv("MAMMOTH_PROBE_GATEWAY", ""),
 		ProbeWait:             getenvDuration("MAMMOTH_PROBE_WAIT", 10*time.Minute),
 		MediaDir:              getenv("MAMMOTH_MEDIA_DIR", "data/media"),
 		MediaWorkDir:          os.Getenv("MAMMOTH_MEDIA_WORKDIR"),

@@ -42,9 +42,13 @@ type ProbeOptions struct {
 	ReportURL string
 	// StaticCIDR, when set (e.g. "198.51.100.75/24"), is applied to a NIC as
 	// the DHCP fallback — machine rooms without a DHCP service are the norm
-	// (install specs declare static networks too). The report URL is
-	// typically same-subnet, so no gateway is needed.
+	// (install specs declare static networks too). Callers should prefer the
+	// machine's own ssh.address as the source; the report URL may be in a
+	// different subnet, in which case StaticGateway carries the return path.
 	StaticCIDR string
+	// StaticGateway, when set, becomes the default route of the static
+	// fallback (cross-subnet report targets need it; same-subnet does not).
+	StaticGateway string
 	// Timeout bounds the whole build (default 10m).
 	Timeout time.Duration
 }
@@ -79,7 +83,7 @@ func BuildProbeISO(ctx context.Context, opt ProbeOptions) (string, error) {
 
 	// apkovl overlay: the probe script + its openrc hookup, baked at the ISO
 	// root where the initramfs applies it (apkovl= pins the exact name).
-	overlay, err := probeOverlay(opt.ReportURL, opt.StaticCIDR, kernel)
+	overlay, err := probeOverlay(opt.ReportURL, opt.StaticCIDR, opt.StaticGateway, kernel)
 	if err != nil {
 		return "", err
 	}
@@ -119,8 +123,8 @@ func alpineKernel(ctx context.Context, xorriso, iso string) (string, error) {
 
 // probeOverlay builds the apkovl tar.gz: the probe script under
 // etc/local.d/ plus the runlevel symlink that makes openrc execute it.
-func probeOverlay(reportURL, staticCIDR, kernel string) ([]byte, error) {
-	script := probeScript(reportURL, staticCIDR, kernel)
+func probeOverlay(reportURL, staticCIDR, staticGateway, kernel string) ([]byte, error) {
+	script := probeScript(reportURL, staticCIDR, staticGateway, kernel)
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
@@ -174,11 +178,12 @@ func probeOverlay(reportURL, staticCIDR, kernel string) ([]byte, error) {
 // report drops to a shell instead of hanging silently — the BMC SOL session
 // stays diagnosable. The JSON matches the inband_ssh snapshot shape
 // (docs/04-install-spec.md §3; end_bytes = start + size − 1).
-func probeScript(reportURL, staticCIDR, kernel string) string {
+func probeScript(reportURL, staticCIDR, staticGateway, kernel string) string {
 	return `#!/bin/sh
 # mammoth ramdisk probe — /sys scan + report + poweroff (docs/05-inventory.md §4)
 URL="` + reportURL + `"
 STATIC_CIDR="` + staticCIDR + `"
+STATIC_GW="` + staticGateway + `"
 KERN="` + kernel + `"
 OUT=/tmp/probe.json
 
@@ -245,7 +250,8 @@ report() {
 		udhcpc -i "$n" -n -q -t 6 -T 3 >/dev/null 2>&1
 		try_post "$n" && return 0
 	done
-	# No DHCP answered: same-subnet report needs only an address.
+	# No DHCP answered: apply the fallback address; the gateway is only
+	# needed when the report URL is in a different subnet.
 	if [ -n "$STATIC_CIDR" ]; then
 		for nic in /sys/class/net/*; do
 			n="${nic##*/}"
@@ -253,6 +259,9 @@ report() {
 			log "static fallback on $n ($STATIC_CIDR)"
 			ip addr add "$STATIC_CIDR" dev "$n" 2>/dev/null
 			ip link set "$n" up 2>/dev/null
+			if [ -n "$STATIC_GW" ]; then
+				ip route replace default via "$STATIC_GW" dev "$n" 2>/dev/null
+			fi
 			try_post "$n" && return 0
 		done
 	fi

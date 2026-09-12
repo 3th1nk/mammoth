@@ -291,6 +291,8 @@ func serve(args []string) error {
 			RamdiskEnabled:  cfg.RamdiskEnabled,
 			ProbeAlpineISO:  cfg.ProbeAlpineISO,
 			ProbeStaticCIDR: cfg.ProbeStaticCIDR,
+			ProbePrefix:     cfg.ProbePrefix,
+			ProbeGateway:    cfg.ProbeGateway,
 			ProbeWait:       cfg.ProbeWait,
 			LayoutKeep:      cfg.LayoutRetention,
 		}

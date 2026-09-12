@@ -96,8 +96,8 @@ and `--build-arg GOPROXY=https://goproxy.cn,direct`.
 
 ```bash
 make build        # bin/mammoth
-make test         # unit tests (SQLite queue; no external services)
-make test-pg      # queue/store suites against disposable PG
+make test         # unit tests (no external services)
+make test-pg      # queue/store contract suites against a disposable PG
 make generate     # regenerate from api/openapi.yaml (contract drift fails CI)
 make acceptance   # full M0 acceptance flow against a local all-in-one
 ```

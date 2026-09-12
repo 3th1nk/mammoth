@@ -42,7 +42,9 @@
   labels 过滤依赖 GIN 索引,spec 校验依赖 jsonpath;
 - `SELECT … FOR UPDATE SKIP LOCKED` 使表队列成为一等公民(见 D3);
 - 开源基础设施圈的默认心智(GitLab 等同款),文档与社区支持成本低;
-- SQLite 保留为 M6 的最小部署形态(单机演示/评估),不作为集群控制面选项。
+- **SQLite 曾规划为 M6 的最小部署形态,已评估并放弃**(2026-09,不作为运行时选项):
+  维持双方言迁移与 repo SQL 的持续成本,高于"单机不起容器"的收益——最小部署场景
+  用单机容器 PG(`deploy/compose.all-in-one.yml`)即可覆盖,不为它维护第二条 SQL 路径。
 
 ### D3 · 表队列(而非 Redis / NATS),队列语义独立封装
 
@@ -53,7 +55,7 @@
   远低于 PG 表队列的能力上限。
 
 **队列抽象层(TaskQueue)**是明确的设计目标,语义按"任务指令队列"的最小公共集定义
-(SQS 同款语义),三个实现按此适配:
+(SQS 同款语义),实现按此适配:
 
 ```go
 type TaskQueue interface {
@@ -70,8 +72,7 @@ type TaskQueue interface {
 
 | 实现 | 定位 | 适配说明 |
 |------|------|---------|
-| PostgreSQL(SKIP LOCKED) | **默认**,生产 | 领取/Ack/续期与任务状态同事务;lease 即可见性超时 |
-| SQLite | **测试与最小部署** | 同一表队列 SQL 方言子集;单元测试不依赖外部服务 |
+| PostgreSQL(SKIP LOCKED) | **默认且唯一实现** | 领取/Ack/续期与任务状态同事务;lease 即可见性超时 |
 | RabbitMQ(AMQP) | 未来可选 | 语义映射良好:prefetch ≈ 可见性、ack/nack 原生、死信队列原生 |
 | Kafka | **不适合任务队列** | 无 per-message ack 与可见性语义,强行适配需自建 offset 管理;Kafka 的正确位置是**事件流**(events 对外投递),不是任务指令 |
 
@@ -142,7 +143,7 @@ mammoth/
 │   ├── builder/              # 介质组装:发行版 ISO 探测/重打包(boot-<token>.iso)
 │   ├── inventory/            # 探针:inband_ssh(redfish 盘查在 bmc;ramdisk 规划)
 │   ├── render/               # 应答文件渲染,按方言分包:kickstart / autoinstall / preseed
-│   ├── store/                # repo + PG 迁移 + 表队列(PG/SQLite 双实现)
+│   ├── store/                # repo + PG 迁移 + 表队列(PG)
 │   ├── nfsx/                 # 内置只读 NFSv3 导出(go-nfs + mini rpcbind)
 │   ├── mediarelay/           # 介质 SSH 中转(原子可见推送)
 │   ├── webhook/              # Webhook 签名投递(HMAC-SHA256、退避)
@@ -157,5 +158,6 @@ mammoth/
 
 - [02-architecture.md](02-architecture.md):依赖组件表已随 D2/D3 修订
   (Redis 移除,队列与协调由 PostgreSQL 承担);
-- [09-roadmap.md](09-roadmap.md):M6 的"最小部署模式" = SQLite 后端 + 内嵌表队列;
+- [09-roadmap.md](09-roadmap.md):SQLite 最小部署形态已评估并放弃(见 D2),
+  M6 余项不含 SQLite;
 - [03-api.md](03-api.md):契约生成工具链即 oapi-codegen,spec 文件位于 `api/openapi.yaml`。

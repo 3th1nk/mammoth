@@ -1090,6 +1090,16 @@ func (e *Executor) ejectBootMediaBestEffort(ctx context.Context, task *store.Tas
 
 // ── stage 5: verify_ready (docs/06-install-pipeline.md §4) ──────────────────
 func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store.Job) error {
+	// Context mutates between stages — the completion report lands via
+	// RecordInstallComplete while install_os waits — and the runner passes
+	// the claim-time snapshot through all stages; re-enter from the fresh
+	// record like every other context-reading stage, or the report is
+	// invisible here (real-hardware: INSTALL_NOT_VERIFIED on first try).
+	fresh, ferr := e.Jobs.GetTask(ctx, task.ID)
+	if ferr != nil {
+		return ferr
+	}
+	task = fresh
 	var ictx installTaskContext
 	if err := json.Unmarshal(task.Context, &ictx); err != nil {
 		return classifiedErr("JOB_CONTEXT_CORRUPT", false, "task context unreadable")

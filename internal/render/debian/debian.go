@@ -125,7 +125,13 @@ func (d *Driver) preseed(in render.InstallInputs, t target, recipe, net string) 
 	b.WriteString("d-i partman-md/confirm_nooverwrite boolean true\n")
 	b.WriteString("d-i partman-lvm/device_remove_lvm boolean true\n")
 	b.WriteString("d-i partman-lvm/confirm boolean true\n")
-	b.WriteString("d-i partman-lvm/confirm_nooverwrite boolean true\n\n")
+	b.WriteString("d-i partman-lvm/confirm_nooverwrite boolean true\n")
+	// Layouts without a declared swap partition: answer partman's "return to
+	// the partitioning menu?" with No (false) instead of stalling, and skip
+	// any swapfile prompt (real-hardware: the dialog appears even under
+	// autoinstall's critical priority).
+	b.WriteString("d-i partman-basicfilesystems/no_swap boolean false\n")
+	b.WriteString("d-i partman-swapfile boolean false\n\n")
 	b.WriteString("#### bootloader\n")
 	b.WriteString("d-i grub-installer/only_debian boolean true\n")
 	b.WriteString("d-i grub-installer/with_other_os boolean false\n")

@@ -287,12 +287,12 @@ func TestRenderHardwareRaidTarget(t *testing.T) {
 	}
 }
 
-// One driver per registered distro name; both render the same dialect.
+// One driver per registered distro name.
 func TestMultiDistro(t *testing.T) {
 	if New("debian12").KeepPartitionSupport() != render.SupportPartial {
 		t.Errorf("keep support wrong: %v", New("debian12").KeepPartitionSupport())
 	}
-	for _, name := range []string{"debian12", "uniontechos"} {
+	for _, name := range []string{"debian12"} {
 		d := New(name)
 		if d.Distro() != name {
 			t.Errorf("distro wrong: %q", d.Distro())

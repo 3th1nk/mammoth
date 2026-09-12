@@ -29,12 +29,23 @@ type dynDisk struct {
 	partLines []string
 }
 
-// Driver is the rocky9 kickstart driver.
-type Driver struct{}
+// Driver is the rocky9 kickstart driver. One instance per distro name —
+// the anaconda/kickstart dialect also covers UOS Server V20 (anaconda-based,
+// RHEL-style install tree with AppStream/BaseOS), registered as a separate
+// distro name.
+type Driver struct {
+	distro string
+}
 
-func New() *Driver { return &Driver{} }
+// New returns the driver for one distro name ("rocky9", "uniontechos").
+func New(distro string) *Driver { return &Driver{distro: distro} }
 
-func (d *Driver) Distro() string { return "rocky9" }
+func (d *Driver) Distro() string {
+	if d.distro == "" {
+		return "rocky9" // keeps the zero-value constructor usable in tests
+	}
+	return d.distro
+}
 func (d *Driver) SupportedArchs() []render.Arch {
 	return []render.Arch{render.ArchAMD64, render.ArchARM64}
 }

@@ -18,7 +18,22 @@ type BMCDriver interface {
     ConsoleURL(ctx, addr, cred) (string, error)           // KVM/虚拟控制台,一次性 URL
     CollectInventory(ctx, addr, cred) (HardwareView, error)  // Redfish 盘查;IPMI 驱动返回有限集
 }
+
+// 可选能力接口(类型断言探测,不支持即降级/拒绝):
+type VolumeCreator interface {            // 硬件 RAID 声明式建卷(configure_raid)
+    CreateVolume(ctx, addr, cred, spec VolumeSpec) (Volume, error)  // 返回实际卷名(控制器可能改名)
+    DeleteVolume(ctx, addr, cred, volumeID string) error
+}
+type PhysicalDriveEnumerator interface {  // RAID 成员选择需要物理盘视角(卷优先呈现时不可见)
+    PhysicalDrives(ctx, addr, cred) ([]DiskView, error)
+}
 ```
+
+已实装的驱动侧适配(实录见 [compat/huawei.md](compat/huawei.md)):标准
+`InsertMedia` 未通告时回退厂商 OEM 动作(华为 `VmmControl`,应用内重试);
+Reset 拒绝时以 `ForceRestart` 重试重启类动作;自签名 TLS 经
+`MAMMOTH_BMC_TLS_INSECURE` 贯穿会话与资源遍历;厂商宽容解析(违反规范的
+数字类型字段)。
 
 所有方法:
 
@@ -32,11 +47,12 @@ type BMCDriver interface {
 
 | 能力 | Redfish | IPMI |
 |------|---------|------|
-| 电源控制 | ✅ `ComputerSystem.Reset` | ✅ `chassis power` |
+| 电源控制 | ✅ `ComputerSystem.Reset`(拒绝时 ForceRestart 回退) | ✅ `chassis power` |
 | 引导设备 | ✅ `BootSourceOverride` | ✅ `chassis bootdev` |
-| 虚拟介质 | ✅ `VirtualMedia.InsertMedia`(部分支持远程 URI) | ⚠️ 厂商私有( OEM 命令) |
+| 虚拟介质 | ✅ `InsertMedia`;未通告时回退 OEM 动作(华为 VmmControl 已实装,NFS/CIFS) | ⚠️ 厂商私有(OEM 命令) |
 | KVM | ✅ 厂商 OEM(归一为 URL) | ❌(仅 SOL 串口) |
-| 硬件盘查 | ✅ Storage/Ethernet/Processor/Memory | ⚠️ 有限(FRU/传感器) |
+| 硬件盘查 | ✅ Storage/Ethernet/Processor/Memory(宽容解析违规固件) | ⚠️ 有限(FRU/传感器) |
+| RAID 卷管理 | ✅ `VolumeCreator`(标准载荷被拒时走 OEM 载荷,如华为 DriveID) | ❌ |
 | 一次性引导 | ✅ | ✅ |
 
 选择逻辑(`protocol: auto`):

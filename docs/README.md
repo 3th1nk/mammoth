@@ -21,8 +21,12 @@ Mammoth 是一个自包含的裸金属服务器安装/重装引擎:以 `{带外�
 | [06-install-pipeline.md](06-install-pipeline.md) | 安装流水线:介质策略、应答文件渲染、分区校验、发行版驱动 |
 | [07-bmc.md](07-bmc.md) | BMC 驱动层:统一带外资源模型、Redfish/IPMI 适配、兼容矩阵 |
 | [08-data-model.md](08-data-model.md) | 内部数据模型:表结构、索引、保留策略 |
-| [09-roadmap.md](09-roadmap.md) | 演进路线:里程碑划分与各阶段验收标准 |
+| [09-roadmap.md](09-roadmap.md) | 演进路线:里程碑划分、当前状态与各阶段验收标准 |
 | [10-tech-stack.md](10-tech-stack.md) | 技术栈选型、决策记录、依赖树与仓库布局约定 |
+| [operations.md](operations.md) | 运维手册:备份恢复、介质服务形态、部署注意 |
+| [security-baseline.md](security-baseline.md) | 安全基线:鉴权、凭证加密、介质生命周期、审查余项 |
+| [related-work.md](related-work.md) | 与 Ironic/Metal3/Tinkerbell/Pixiecore 的对照与借鉴 |
+| [compat/](compat/README.md) | 厂商兼容矩阵(huawei 实录)与发行版支持矩阵(distros) |
 
 ## 设计参考
 

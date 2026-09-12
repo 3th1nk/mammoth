@@ -26,6 +26,8 @@ image / template ──▶ job ──▶ task ──▶ events      编排域
 ## 2. URL 空间
 
 ```
+GET    /api/v1                                  # capabilities:版本/资源/发行版支持矩阵
+
 POST   /api/v1/credentials
 GET    /api/v1/credentials/{id}
 DELETE /api/v1/credentials/{id}
@@ -37,10 +39,8 @@ PATCH  /api/v1/machines/{id}
 DELETE /api/v1/machines/{id}
 GET    /api/v1/machines/{id}/layout
 GET    /api/v1/machines/{id}/console            # 一次性 KVM URL
+POST   /api/v1/machines/{id}/install-plan       # 试算(只读;已实现 V1,见 §4)
 POST   /api/v1/machines/{id}/actions            # 单机动作 → 202 + job
-
-GET    /api/v1/images        POST / DELETE /{id}
-GET    /api/v1/templates     POST / DELETE /{id}
 
 POST   /api/v1/jobs                             # → 202
 GET    /api/v1/jobs/{id}
@@ -48,10 +48,18 @@ POST   /api/v1/jobs/{id}/cancel
 GET    /api/v1/jobs/{id}/tasks?state=failed
 GET    /api/v1/jobs/{id}/tasks/{tid}
 POST   /api/v1/jobs/{id}/tasks/{tid}/retry
-GET    /api/v1/jobs/{id}/events                 # SSE
+GET    /api/v1/jobs/{id}/events                 # job 级 SSE
 
-GET    /api/v1/events?resource=job_x9k2         # 全局 SSE
+GET    /api/v1/events?resource=job_x9k2         # 事件/审计查询(游标分页)
+GET    /api/v1/events/stream                    # 全局 SSE(Last-Event-ID 断线续传)
+
+POST   /api/v1/webhooks                         # 订阅(HMAC-SHA256 签名投递)
+GET    /api/v1/webhooks/{id}
+DELETE /api/v1/webhooks/{id}
 ```
+
+> images / templates 资源未进入实现(契约中亦不存在);spec 模板化复用由
+> 客户端自行管理,引擎只收最终 Install Spec。
 
 ### 单机动作
 

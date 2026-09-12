@@ -9,7 +9,7 @@
 |------|------|------|------|------|
 | `redfish` | BMC HTTPS(带外) | 硬件规格:盘/RAID 卷/网卡/CPU/内存/序列号/固件 | 机器支持 Redfish(2015 年后主流机型基本具备) | **默认**;同时验证 BMC 凭证与连通性 |
 | `inband_ssh` | SSH 到现存系统(带内) | **分区布局**:分区表/文件系统/挂载点 | 用户提供了 SSH 凭证且带内可达 | **"复用已有分区"意图的数据基础** |
-| `ramdisk`(可选) | 通用内存系统,引导一次 | 分区布局 | 引导通道(PXE 或虚拟介质) | SSH 凭证拿不到时的兜底 |
+| `ramdisk`(可选,`MAMMOTH_RAMDISK_ENABLED` 门控) | 通用内存系统,引导一次 | 分区布局 | 引导通道(PXE 或虚拟介质) | SSH 凭证拿不到时的兜底;**V0 原型进行中**(卡点见 compat/huawei.md),显式请求报 `BMC_UNSUPPORTED` |
 
 `probe: auto` 策略下的组合逻辑:
 
@@ -47,15 +47,19 @@ redfish(必做:规格 + BMC 连通性验证)
 
 ```
 ssh <machine> — 执行只读命令集(单次连接,超时短):
-  lsblk -J -b -o NAME,PATH,SIZE,TYPE,FSTYPE,MOUNTPOINT,PKNAME,PARTLABEL,PARTUUID
+  lsblk -J -b -o NAME,PATH,SIZE,TYPE,FSTYPE,MOUNTPOINT,PKNAME,PARTLABEL,PARTUUID,SERIAL,PTTYPE
   blkid -o export
   ip -j link
+  /sys/block/*/*/start          # sysfs 起始扇区(lsblk 不暴露,契约要求 start_bytes)
+  安装器运行时标记探测(/run/anaconda 等 → installer_env,verify_ready 防假阳性用)
 ```
 
 - 不向目标机写入任何文件;不改任何状态;失败即失败,无残留;
 - 采集结果解析为 layout 快照(见 [04-install-spec.md](04-install-spec.md) §3),
   `source: inband_ssh`,`captured_at` 取采集时刻;
-- 网卡链路信息(MAC/速率)同时刷新,供 network spec 的 `match` 使用。
+- 网卡链路信息(MAC/链路态)同时刷新,供 network spec 的 `match` 使用;
+- 凭证支持私钥(推荐——Rocky 9 默认 `PermitRootLogin prohibit-password` 拒密码)
+  与密码两种形态;失败分类为 `NETWORK_UNREACHABLE` / `CREDENTIAL_AUTH_FAILED`。
 
 **明确的能力边界(写入 API 文档与错误码)**:
 机器带内不可达时,**分区级布局物理上不可得**——不存在任何带外通路能读取分区表。
@@ -75,8 +79,11 @@ ssh <machine> — 执行只读命令集(单次连接,超时短):
 ```
 注册机器 ──▶ 自动盘查(auto)──▶ layout v1(captured_at)
    │
-   └─ 用户可随时 POST /machines/{id}/actions {"type":"discover"} 刷新
-      → 生成 v2(追加,不改 v1)
+   ├─ 用户可随时 POST /machines/{id}/actions {"type":"discover"} 刷新
+   │  → 生成 v2(追加,不改 v1)
+   └─ install job 成功后 verify_ready 自动刷新 ──▶ 装后视角快照
+      (设备名 + serial 即安装器所见;Redfish 卷名 → /dev/sda 的鸿沟
+       在下一轮重装时直接消除)
 
 install job 提交:
    preserve 声明 ──绑定──▶ 当前最新快照版本

@@ -91,7 +91,11 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		},
 		"storage": storage,
 		"late-commands": append([]string{
-			fmt.Sprintf("curtin in-target -- hostnamectl set-hostname %s", in.Hostname),
+			// Write the file directly: hostnamectl needs a running systemd,
+			// which the curtin chroot does not have (real-hardware lesson —
+			// the command silently no-oped and the host came up as
+			// localhost.localdomain).
+			fmt.Sprintf("echo %s > /target/etc/hostname", in.Hostname),
 		}, late...),
 		// Without this subiquity stalls after curtin instead of rebooting
 		// into the freshly installed system (real-hardware lesson).

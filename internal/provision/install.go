@@ -71,6 +71,16 @@ func (e *Executor) runInstallStage(ctx context.Context, task *store.Task, job *s
 	}
 }
 
+// mediaProduced stages: once prepare_media has run, a boot ISO exists in the
+// media export and every failed attempt must not strand it there.
+func installMediaProduced(stage string) bool {
+	switch stage {
+	case "boot", "install_os", "verify_ready":
+		return true
+	}
+	return false
+}
+
 // ── spec parsing (submit-side validated; exec-side re-reads the snapshot) ───
 
 type installSpecView struct {
@@ -622,6 +632,10 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	if ictx.Token == "" {
 		return classifiedErr("JOB_CONTEXT_CORRUPT", false, "task token missing (install jobs only)")
 	}
+	// Self-heal a retry: a previous prepare_media pass (or a stranded build)
+	// may have left an ISO with this token behind — remove it so the rebuild
+	// starts clean instead of accumulating copies in the media export.
+	e.cleanupBootMedia(ctx, task, "prepare_media retry rebuild")
 	if len(ictx.Resolved.Disks) == 0 && len(ictx.Resolved.Raid) == 0 {
 		return classifiedErr("JOB_STAGE_ORDER", false, "layout not resolved; verify_layout must run first")
 	}
@@ -776,6 +790,34 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	obs.FromContext(ctx).InfoContext(ctx, "answers rendered, boot media built",
 		"files", len(answers), "distro", spec.Image.Distro, "media_uri", mediaURI)
 	return nil
+}
+
+// cleanupBootMedia removes this task's boot ISO (repo copy, relay copy,
+// build scratch) — verify_ready removes it on SUCCESS; without this sweep
+// every terminally failed or canceled run leaks ~2x the image size into the
+// media export (observed: three failed runs filled the disk and poisoned
+// every later build).
+func (e *Executor) cleanupBootMedia(ctx context.Context, task *store.Task, reason string) {
+	var ictx installTaskContext
+	if len(task.Context) == 0 || json.Unmarshal(task.Context, &ictx) != nil || ictx.Token == "" {
+		return
+	}
+	mediaFile := fmt.Sprintf("boot-%s.iso", ictx.Token)
+	if e.MediaDir != "" {
+		if err := os.Remove(filepath.Join(e.MediaDir, mediaFile)); err == nil {
+			obs.FromContext(ctx).InfoContext(ctx, "boot media removed",
+				"file", mediaFile, "reason", reason)
+		}
+	}
+	if e.MediaUploader != nil {
+		if err := e.MediaUploader.Remove(ctx, mediaFile); err == nil {
+			obs.FromContext(ctx).InfoContext(ctx, "boot media relay copy removed",
+				"file", mediaFile, "reason", reason)
+		}
+	}
+	if e.MediaWorkDir != "" {
+		_ = os.RemoveAll(filepath.Join(e.MediaWorkDir, mediaFile+".build"))
+	}
 }
 
 // distroTreeURL converts a distro ISO's source into the HTTP tree the boot

@@ -43,6 +43,12 @@ type AnswerFile struct {
 type BootParams struct {
 	KernelArgs string `json:"kernel_args"` // inst.ks=… inst.repo=…
 	AnswerURL  string `json:"answer_url"`
+	// InstallerAutoReboot declares that the installer reboots by itself when
+	// it finishes (anaconda's reboot, subiquity's shutdown:reboot). d-i
+	// stalls on its "Installation complete — remove the media" confirmation
+	// dialog instead; for those installers the pipeline issues the reboot
+	// itself after the deferred media release.
+	InstallerAutoReboot bool `json:"installer_auto_reboot,omitempty"`
 }
 
 // ── resolved inputs (produced by verify_layout / orchestration) ─────────────

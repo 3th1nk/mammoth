@@ -1011,6 +1011,13 @@ func (e *Executor) installOSStage(ctx context.Context, task *store.Task, job *st
 				time.Sleep(bootMediaReleaseGrace)
 				e.ejectBootMediaBestEffort(dctx, task, &ictx2)
 				e.reclaimBootMediaFiles(dctx, &ictx2)
+				// Installers that stall on a completion dialog (d-i's
+				// "Installation complete — remove the media") need the
+				// pipeline to reboot them; self-rebooting installers
+				// (anaconda, subiquity) must not be touched.
+				if !ictx2.Boot.InstallerAutoReboot {
+					e.rebootBestEffort(dctx, task)
+				}
 			}(ictx2)
 			if ictx2.Install.Status == "failed" {
 				return classifiedErr("INSTALL_FAILED", true, "installer reported failure: %s", ictx2.Install.Detail)
@@ -1021,6 +1028,23 @@ func (e *Executor) installOSStage(ctx context.Context, task *store.Task, job *st
 			return classifiedErr("INSTALL_TIMEOUT", true,
 				"install did not report completion within %s", job.Policy.TaskTimeout())
 		}
+	}
+}
+
+// rebootBestEffort force-restarts the machine, logging (not failing) on
+// error — used for installers that stall on a completion dialog instead of
+// rebooting themselves (d-i's "Installation complete" screen).
+func (e *Executor) rebootBestEffort(ctx context.Context, task *store.Task) {
+	cred, addr, proto, ok := e.outOfBand(ctx, task)
+	if !ok {
+		return
+	}
+	if _, err := e.BMC.Do(ctx, addr, cred, proto, "set_power", func(ctx context.Context, d bmc.Driver) (any, error) {
+		return nil, d.SetPower(ctx, addr, cred, bmc.Cycle)
+	}); err != nil {
+		obs.FromContext(ctx).WarnContext(ctx, "installer reboot failed (continuing)", "err", err.Error())
+	} else {
+		obs.FromContext(ctx).InfoContext(ctx, "installer reboot issued")
 	}
 }
 
@@ -1043,7 +1067,6 @@ func (e *Executor) ejectBootMediaBestEffort(ctx context.Context, task *store.Tas
 }
 
 // ── stage 5: verify_ready (docs/06-install-pipeline.md §4) ──────────────────
-
 func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store.Job) error {
 	var ictx installTaskContext
 	if err := json.Unmarshal(task.Context, &ictx); err != nil {

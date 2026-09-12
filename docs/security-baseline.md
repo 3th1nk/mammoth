@@ -23,7 +23,7 @@ rate limiting 依赖反向代理。
 | 静态加密 | AES-256-GCM,主密钥部署方注入(`MAMMOTH_MASTER_KEY`,base64 32B) |
 | 密钥不回显 | credential API 永不返回 secret;明文仅在 BMC 调用边界解密 |
 | 传输 | 生产要求 HTTPS 在反向代理终止(mammoth 自身监听 HTTP;distroless 内无证书管理) |
-| 一次性口令 | `root_password: generate` 任务级随机,经任务事件一次性下发,应答文件(ks.cfg / user-data / preseed.cfg)是唯一持久副本(任务结束后可随事件 TTL 过期;应答文件烘入引导介质,介质随 verify_ready 删除) |
+| 一次性口令 | `root_password` 留空 = 任务级随机,经任务事件一次性下发(字段为纯明文字符串,无 generate 哨兵值),应答文件(ks.cfg / user-data / preseed.cfg)是唯一持久副本(任务结束后可随事件 TTL 过期;应答文件烘入引导介质,介质随 verify_ready 删除) |
 | Host key | 带内 SSH 首连即接受(重装生命周期密钥轮换);严格指纹为部署层策略 |
 | 引导介质凭证 | 内核参数只携带应答文件位置(token 介质上的路径),不携带 BMC/系统凭证;口令随应答文件在介质内(离线 seed 的取舍,介质生命周期=任务生命周期) |
 

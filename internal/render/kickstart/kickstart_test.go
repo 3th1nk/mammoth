@@ -416,7 +416,8 @@ func TestDynamicStorageResolution(t *testing.T) {
 		"90-storage.ks",
 		"D0=$(resolve 3997823926272 '' '')",
 		"clearpart --drives=$D0 --initlabel --all",
-		"--ondisk=$D0",
+		// explicit size (capacity − margin) inside the dynamic include too
+		"part / --fstype=xfs --ondisk=$D0 --size=3812110",
 		"bootloader --boot-drive=$D0",
 	} {
 		if !strings.Contains(body, want) {
@@ -483,11 +484,12 @@ func TestFailTrapRendered(t *testing.T) {
 }
 
 // Regression (Huawei 2288H V5): blivet clamped --grow at the 2^32 sector
-// boundary on a controller volume (3.6T disk, root stopped at 2TiB) — the
-// rendered grow line must carry an explicit --maxsize when the disk size is
-// known. And the hostname rides the FIRST resolved network stanza (a bare
+// boundary on a controller volume (3.6T disk, root stopped at 2TiB, --maxsize
+// ignored too) — a grow partition on a disk with known inventory size renders
+// as an explicit --size (capacity − fixed − 512MB margin), not --grow. And
+// the hostname rides the FIRST resolved network stanza (a bare
 // `network --hostname=` line is not applied by anaconda on every path).
-func TestRenderGrowMaxsizeAndHostnameOnStanza(t *testing.T) {
+func TestRenderGrowExplicitSizeAndHostnameOnStanza(t *testing.T) {
 	in := render.InstallInputs{
 		TaskToken:     "tokm",
 		MachineID:     "mch_m",
@@ -512,7 +514,7 @@ func TestRenderGrowMaxsizeAndHostnameOnStanza(t *testing.T) {
 	}
 	ks := answers[0].Content
 	for _, want := range []string{
-		"part / --fstype=ext4 --ondisk=sda --grow --maxsize=3814697",
+		"part / --fstype=ext4 --ondisk=sda --size=3813673",
 		"--hostname=rk9-host --activate",
 		"findmnt -nro SOURCE /mnt/sysimage",
 		"sfdisk --no-reread --force -N \"$root_num\" \"/dev/$root_disk\"",
@@ -522,8 +524,79 @@ func TestRenderGrowMaxsizeAndHostnameOnStanza(t *testing.T) {
 			t.Errorf("kickstart missing %q", want)
 		}
 	}
+	if strings.Contains(ks, "--grow") || strings.Contains(ks, "--maxsize") {
+		t.Errorf("known inventory size must render an explicit partition size, not --grow/--maxsize")
+	}
 	if strings.Count(ks, "--hostname=rk9-host") != 2 {
 		// stanza + the standalone `network --hostname=` line
 		t.Errorf("hostname should appear on the stanza and the standalone line: %d", strings.Count(ks, "--hostname=rk9-host"))
 	}
+}
+
+// grow partition sizing paths: explicit render-time size when the inventory
+// capacity is known (the blivet grow-clamp workaround), --grow fallback when
+// the budget cannot be trusted (no size, preserved/unsized siblings).
+func TestRenderGrowExplicitSizePaths(t *testing.T) {
+	run := func(t *testing.T, disks []render.ResolvedDisk) string {
+		t.Helper()
+		in := render.InstallInputs{
+			TaskToken: "tok", MachineID: "mch_g",
+			AnswerBaseURL: "https://m/render/t", CompleteURL: "https://m/render/t/complete",
+			ImageSource: "i", Disks: disks,
+		}
+		answers, _, err := New("rocky9").RenderAnswers(in, render.MachineView{})
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		return answers[0].Content
+	}
+	gib := int64(10) * 1024 * 1024 * 1024
+
+	t.Run("known capacity", func(t *testing.T) {
+		ks := run(t, []render.ResolvedDisk{{Device: "sda", SizeBytes: gib, Wipe: true,
+			Partitions: []render.ResolvedPartition{
+				{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+				{Mount: "/boot", FS: "xfs", SizeMB: 1024},
+				{Mount: "/", FS: "xfs", Grow: true}}}})
+		// 10240 − 512 − 1024 − 512(margin) = 8192
+		if !strings.Contains(ks, "part / --fstype=xfs --ondisk=sda --size=8192") {
+			t.Errorf("explicit grow size missing")
+		}
+		if strings.Contains(ks, "--grow") {
+			t.Errorf("known capacity must not fall back to --grow")
+		}
+	})
+
+	t.Run("multiple grows split the rest", func(t *testing.T) {
+		ks := run(t, []render.ResolvedDisk{{Device: "sda", SizeBytes: gib, Wipe: true,
+			Partitions: []render.ResolvedPartition{
+				{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+				{Mount: "/", FS: "xfs", Grow: true},
+				{Mount: "/data", FS: "xfs", Grow: true}}}})
+		// (10240 − 512 − 512) / 2 = 4608 each
+		if !strings.Contains(ks, "part / --fstype=xfs --ondisk=sda --size=4608") ||
+			!strings.Contains(ks, "part /data --fstype=xfs --ondisk=sda --size=4608") {
+			t.Errorf("grow split across partitions missing")
+		}
+	})
+
+	t.Run("unknown capacity falls back to --grow", func(t *testing.T) {
+		ks := run(t, []render.ResolvedDisk{{Device: "sda", Wipe: true,
+			Partitions: []render.ResolvedPartition{{Mount: "/", FS: "xfs", Grow: true}}}})
+		if !strings.Contains(ks, "part / --fstype=xfs --ondisk=sda --grow") {
+			t.Errorf("--grow fallback missing")
+		}
+	})
+
+	t.Run("preserved sibling invalidates the budget", func(t *testing.T) {
+		ks := run(t, []render.ResolvedDisk{{Device: "sda", SizeBytes: gib,
+			Baseline: []render.BaselinePartition{
+				{Device: "sda1", Number: 1, StartBytes: 1048576, SizeBytes: 536870912, UUID: "u"}},
+			Partitions: []render.ResolvedPartition{
+				{Mount: "/data", Preserve: true, Number: 1, OnPart: "sda1", UUID: "u", FS: "xfs"},
+				{Mount: "/extra", FS: "xfs", Grow: true}}}})
+		if !strings.Contains(ks, "part /extra --fstype=xfs --ondisk=sda --grow") {
+			t.Errorf("preserve sibling must fall back to --grow")
+		}
+	})
 }

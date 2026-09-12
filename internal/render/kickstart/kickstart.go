@@ -217,9 +217,11 @@ func hasExt4RootGrow(disks []render.ResolvedDisk) bool {
 }
 
 // growRootScript extends the root partition to disk end and grows the
-// filesystem. blivet clamps --grow at the 2^32 sector boundary on controller
-// volumes (real-hardware: 3.6T disk, root stopped at 2TiB) — anaconda also
-// ignores --maxsize there, so the extension happens in %post instead.
+// filesystem. Grow partitions normally carry an explicit render-time size
+// (growSizeMB), so this mostly reclaims the safety margin — it stays as the
+// safety net for the --grow fallback path (inventory size unknown), where
+// blivet's own allocation clamps at the 2^32 sector boundary on controller
+// volumes (real-hardware: 3.6T disk, root stopped at 2TiB).
 //
 // The %post runs with --nochroot, against anaconda's target mount
 // /mnt/sysimage. parted refuses to resizepart a mounted partition (script
@@ -416,6 +418,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			if in.DriftCheck && len(disk.Baseline) > 0 {
 				drift += driftGuardScript(disk.Device, disk.Baseline, in.CompleteURL)
 			}
+			growMB := growSizeMB(disk.Partitions, disk.SizeBytes)
 			for _, p := range disk.Partitions {
 				if p.Preserve {
 					if p.OnPart == "" {
@@ -426,7 +429,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 						fmt.Sprintf("part %s --onpart=%s --noformat", p.Mount, p.OnPart))
 					continue
 				}
-				line, err := d.newPartLine(p, disk.Device, disk.SizeBytes)
+				line, err := d.newPartLine(p, disk.Device, growMB)
 				if err != nil {
 					return nil, render.BootParams{}, err
 				}
@@ -439,8 +442,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			}
 			if render.IsKernelDeviceName(disk.Device) {
 				wipe = append(wipe, disk.Device)
+				growMB := growSizeMB(disk.Partitions, disk.SizeBytes)
 				for _, p := range disk.Partitions {
-					line, err := d.newPartLine(p, disk.Device, disk.SizeBytes)
+					line, err := d.newPartLine(p, disk.Device, growMB)
 					if err != nil {
 						return nil, render.BootParams{}, err
 					}
@@ -451,8 +455,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			// Redfish-claimed name: resolve in %pre, emit dynamic lines.
 			dd := dynDisk{idx: len(dyn), ph: fmt.Sprintf("$D%d", len(dyn)),
 				device: disk.Device, sizeBytes: disk.SizeBytes, serial: disk.Serial}
+			growMB := growSizeMB(disk.Partitions, disk.SizeBytes)
 			for _, p := range disk.Partitions {
-				line, err := d.newPartLine(p, dd.ph, dd.sizeBytes)
+				line, err := d.newPartLine(p, dd.ph, growMB)
 				if err != nil {
 					return nil, render.BootParams{}, err
 				}
@@ -472,8 +477,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		}
 		if render.IsKernelDeviceName(r.BoundDevice) {
 			wipe = append(wipe, r.BoundDevice)
+			growMB := growSizeMB(r.Partitions, r.SizeBytes)
 			for _, p := range r.Partitions {
-				line, err := d.newPartLine(p, r.BoundDevice, r.SizeBytes)
+				line, err := d.newPartLine(p, r.BoundDevice, growMB)
 				if err != nil {
 					return nil, render.BootParams{}, err
 				}
@@ -483,8 +489,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		}
 		dd := dynDisk{idx: len(dyn), ph: fmt.Sprintf("$D%d", len(dyn)),
 			device: r.BoundDevice, sizeBytes: r.SizeBytes}
+		growMB := growSizeMB(r.Partitions, r.SizeBytes)
 		for _, p := range r.Partitions {
-			line, err := d.newPartLine(p, dd.ph, dd.sizeBytes)
+			line, err := d.newPartLine(p, dd.ph, growMB)
 			if err != nil {
 				return nil, render.BootParams{}, err
 			}
@@ -590,10 +597,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		"PreScripts":      preScripts,
 		"PostScripts":     postScripts,
 		"CompleteURL":     in.CompleteURL,
-		// blivet clamps --grow at the 2^32 sector boundary on controller
-		// volumes (real-hardware: 3.6T disk, root stopped at 2TiB) — a
-		// %post --nochroot extends the root partition to disk end after
-		// anaconda's own (clamped) allocation.
+		// grow lines carry explicit render-time sizes (growSizeMB); this
+		// %post --nochroot extension remains the safety net for the --grow
+		// fallback (unknown inventory size) and reclaims the safety margin.
 		"GrowRootExtension": hasExt4RootGrow(in.Disks),
 		"GrowRootScript":    growRootScript(),
 	}
@@ -748,23 +754,57 @@ func hasPreserve(parts []render.ResolvedPartition) bool {
 	return false
 }
 
+// growSizeMB prices a disk's grow partition(s) explicitly: capacity minus the
+// fixed partitions minus a safety margin (GPT/alignment headroom), split
+// evenly across the grow partitions — all render-time arithmetic. blivet's
+// own grow allocation clamps at the 2^32 sector boundary on controller
+// volumes (real-hardware: 3.6T disk, root stopped at 2TiB; --maxsize ignored
+// there too), so the part line carries the explicit size instead. Returns 0
+// when the budget cannot be trusted (no inventory size, preserved or unsized
+// siblings) — the partition line then falls back to --grow.
+func growSizeMB(parts []render.ResolvedPartition, diskSizeBytes int64) int64 {
+	const marginMB = 512
+	if diskSizeBytes <= 0 {
+		return 0
+	}
+	growCount, fixedMB := 0, int64(0)
+	for _, p := range parts {
+		switch {
+		case p.Preserve:
+			return 0 // onpart siblings reuse existing blocks — no declared budget
+		case p.Grow:
+			growCount++
+		case p.SizeMB > 0:
+			fixedMB += int64(p.SizeMB)
+		default:
+			return 0 // unsized sibling: the budget is incomplete
+		}
+	}
+	if growCount == 0 {
+		return 0
+	}
+	rest := diskSizeBytes/1048576 - fixedMB - marginMB
+	if rest < int64(growCount) {
+		return 0
+	}
+	return rest / int64(growCount)
+}
+
 // newPartLine renders a fresh (non-preserved) partition line.
-func (d *Driver) newPartLine(p render.ResolvedPartition, device string, diskSizeBytes int64) (string, error) {
+func (d *Driver) newPartLine(p render.ResolvedPartition, device string, growMB int64) (string, error) {
 	fs := p.FS
 	if hasFlag(p.Flags, "esp") {
 		fs = "efi"
 	}
 	line := fmt.Sprintf("part %s --fstype=%s --ondisk=%s", p.Mount, fs, device)
 	switch {
+	case p.Grow && growMB > 0:
+		// explicit render-time size (growSizeMB): anaconda creates the
+		// partition right the first time, no reliance on the grow allocator.
+		line += fmt.Sprintf(" --size=%d", growMB)
 	case p.Grow:
+		// capacity unknown (no inventory size): let anaconda allocate.
 		line += " --grow"
-		// blivet's grow allocation can clamp at the 2^32 sector boundary on
-		// controller volumes (real-hardware: 3.6T disk, root stopped at
-		// 2TiB) — an explicit maxsize (disk capacity in MB) removes the
-		// ambiguity; anaconda grows to min(maxsize, available tail).
-		if diskSizeBytes > 0 {
-			line += fmt.Sprintf(" --maxsize=%d", diskSizeBytes/1048576)
-		}
 	case p.SizeMB > 0:
 		line += fmt.Sprintf(" --size=%d", p.SizeMB)
 	default:

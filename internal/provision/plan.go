@@ -16,6 +16,7 @@ package provision
 
 import (
 	"context"
+	"syscall"
 	"encoding/json"
 	"strings"
 
@@ -223,3 +224,13 @@ func planResolveDisks(disks []storageDiskView, hw *bmc.HardwareView) ([]render.R
 
 func boolPtr(b bool) *bool     { return &b }
 func intPtr(i int) *int        { return &i }
+
+// freeMB reports the available space (MB) on the filesystem holding path.
+// ok=false when the platform stat is unavailable (best-effort precheck).
+func freeMB(path string) (int64, bool) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(path, &st); err != nil {
+		return 0, false
+	}
+	return int64(st.Bavail) * int64(st.Bsize) / 1048576, true
+}

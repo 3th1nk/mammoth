@@ -27,6 +27,7 @@ Mammoth 是一个自包含的裸金属服务器安装/重装引擎:以 `{带外�
 | [security-baseline.md](security-baseline.md) | 安全基线:鉴权、凭证加密、介质生命周期、审查余项 |
 | [related-work.md](related-work.md) | 与 Ironic/Metal3/Tinkerbell/Pixiecore 的对照与借鉴 |
 | [compat/](compat/README.md) | 厂商兼容矩阵(huawei 实录)与发行版支持矩阵(distros) |
+| [runbooks/](runbooks/) | 真机回归操作清单(按方言;ubuntu22 首篇) |
 
 ## 设计参考
 

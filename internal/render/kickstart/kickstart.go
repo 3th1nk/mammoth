@@ -195,6 +195,36 @@ curl -fsS -X POST -H 'Content-Type: application/json' \
 %end
 `))
 
+// hasExt4RootGrow reports whether the layout declares an ext4 root with
+// grow semantics (the shape that needs the post-install extension).
+func hasExt4RootGrow(disks []render.ResolvedDisk) bool {
+	for _, d := range disks {
+		if d.KeepDisk {
+			continue
+		}
+		for _, p := range d.Partitions {
+			if p.Mount == "/" && p.Grow && p.FS == "ext4" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// growRootScript extends the root partition to disk end and grows the
+// filesystem inside the %post chroot (/ is the target root there). blivet
+// clamps --grow at the 2^32 sector boundary on controller volumes
+// (real-hardware: 3.6T disk, root stopped at 2TiB) — anaconda also ignores
+// --maxsize there, so the extension happens here instead. Every step is
+// failure-tolerant: the install itself must not be affected.
+func growRootScript() string {
+	return `if root_src=$(findmnt -nro SOURCE /); then
+  root_disk=$(lsblk -no PKNAME "$root_src") && root_num=$(printf %s "$root_src" | grep -o '[0-9]\+$') \
+    && parted -s "/dev/$root_disk" resizepart "$root_num" 100% \
+    && resize2fs "$root_src"
+fi`
+}
+
 // networkShell emits the sh snippet executed in %pre: resolve MAC → interface
 // name (batch-stable selector), then produce network stanzas — static, bond,
 // vlan — using the resolved names (docs/04-install-spec.md §5.2: mac is the
@@ -497,6 +527,13 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		default:
 			return nil, render.BootParams{}, fmt.Errorf("rocky9: unknown script stage %q", s.Stage)
 		}
+	}
+	// blivet clamps --grow at the 2^32 sector boundary on controller volumes
+	// (real-hardware: 3.6T disk, root stopped at 2TiB, tail stranded) —
+	// extend the root partition to disk end and grow the filesystem in
+	// %post. Any failure inside the guard leaves the install untouched.
+	if hasExt4RootGrow(in.Disks) {
+		postScripts = append([]string{growRootScript()}, postScripts...)
 	}
 
 	netPre := ""

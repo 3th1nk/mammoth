@@ -1116,14 +1116,16 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 			plain, derr := e.Crypto.Decrypt(credRow.SecretEncrypted)
 			if derr == nil {
 				var secret struct {
-					Username string `json:"username"`
-					Password string `json:"password"`
+					Username   string `json:"username"`
+					Password   string `json:"password"`
+					PrivateKey string `json:"private_key"`
 				}
 				if json.Unmarshal(plain, &secret) == nil {
 					probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 					defer cancel()
 					res, err := e.Inband.Collect(probeCtx, m.SSHAddress, inbandssh.Credentials{
 						Username: secret.Username, Password: secret.Password,
+						PrivateKey: secret.PrivateKey,
 					})
 					if err != nil {
 						return classifiedErr("INSTALL_NOT_REACHABLE", true,

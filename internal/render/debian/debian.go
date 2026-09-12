@@ -103,7 +103,15 @@ func (d *Driver) preseed(in render.InstallInputs, t target, recipe, net string) 
 	b.WriteString("d-i mirror/country string manual\n")
 	b.WriteString("d-i apt-setup/use_mirror boolean false\n")
 	b.WriteString("d-i apt-setup/services-select multiselect\n")
-	b.WriteString("popularity-contest popularity-contest/participate boolean false\n\n")
+	b.WriteString("popularity-contest popularity-contest/participate boolean false\n")
+	// Single-medium installs must not let apt hunt for other discs: the
+	// standard taskset is NOT fully present in the netinst pool (it expects
+	// a mirror), which otherwise loops apt on "Please insert the media
+	// labeled ..." forever (real-hardware). Base + pkgsel/include covers the
+	// provisioning contract; extra packages ride the config channel.
+	b.WriteString("d-i apt-setup/cdrom/set-first boolean false\n")
+	b.WriteString("d-i apt-setup/cdrom/set-next boolean false\n")
+	b.WriteString("d-i apt-setup/cdrom/set-double boolean false\n\n")
 	b.WriteString("#### account: root with the per-task password; no regular user\n")
 	b.WriteString("d-i passwd/root-login boolean true\n")
 	fmt.Fprintf(&b, "d-i passwd/root-password string %s\n", in.RootPassword)
@@ -136,8 +144,12 @@ func (d *Driver) preseed(in render.InstallInputs, t target, recipe, net string) 
 	b.WriteString("d-i grub-installer/only_debian boolean true\n")
 	b.WriteString("d-i grub-installer/with_other_os boolean false\n")
 	fmt.Fprintf(&b, "d-i grub-installer/bootdev string /dev/%s\n\n", t.device)
-	b.WriteString("#### packages: standard system + ssh server, nothing else\n")
-	b.WriteString("tasksel tasksel/first multiselect standard\n")
+	// No tasksel taskset: the standard task's packages are not fully in the
+	// netinst pool — offline installs would loop apt on a media-change
+	// prompt forever (real-hardware). Base + pkgsel/include carries the
+	// provisioning contract; extra packages ride the config channel.
+	b.WriteString("#### packages: base + ssh server only\n")
+	b.WriteString("tasksel tasksel/first multiselect\n")
 	b.WriteString("d-i pkgsel/include string openssh-server\n")
 	b.WriteString("d-i pkgsel/update-policy select none\n")
 	b.WriteString("d-i pkgsel/upgrade select none\n\n")

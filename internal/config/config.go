@@ -1,9 +1,13 @@
 // Package config loads Mammoth runtime configuration from environment
-// variables (12-factor style; a mounted config file is unnecessary for the
-// current surface). All durations accept Go duration strings (e.g. 10s, 1m).
+// variables (12-factor style), optionally seeded from a dotenv file
+// (MAMMOTH_ENV_FILE / serve --env-file; existing environment wins).
+// All durations accept Go duration strings (e.g. 10s, 1m). Invalid values
+// are configuration errors and fail startup — silent defaults would hide
+// typos in exactly the knobs an operator is deliberately tuning.
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -74,23 +78,36 @@ type Config struct {
 	TaskLogsTTL        time.Duration // task_logs retention (reaper-expired; 90d default)
 	LayoutRetention    int           // snapshots kept per machine (docs/08: default 10)
 	InbandTimeout      time.Duration // whole inband_ssh collection bound
-	RamdiskEnabled     bool          // optional ramdisk probe (docs/05 §4; alpine virtual-media carrier)
-	ProbeAlpineISO     string        // alpine standard ISO (path/URL) the probe medium is built from
-	ProbeStaticCIDR    string        // probe DHCP fallback for machines without ssh.address
-	ProbePrefix        int           // prefix length for a bare ssh.address in the fallback CIDR (default 24)
-	ProbeGateway       string        // probe fallback default route (cross-subnet report targets)
-	ProbeWait          time.Duration // ramdisk discover's report wait budget (default 10m)
-	MediaDir           string        // local media repository (boot ISOs)
-	MediaWorkDir       string        // scratch dir for media builds (default: beside the output)
-	MediaBaseURI       string        // BMC-reachable media base URI (nfs://, cifs://, ftp:// — firmware decides)
-	BootSettleDelay    time.Duration // wait between media mount and power-on (NFS relay pushes)
-	VerifyReadyWait    time.Duration // verify_ready poll budget for the new system after the completion report
-	NFSExportEnabled   bool          // built-in read-only NFSv3 export of MediaDir (default true)
-	NFSExportPort      int           // port for the built-in export (default 2049)
-	MediaRelayAddr     string        // media relay SSH endpoint (host[:port]); empty = no relay
+
+	// Ramdisk probe (docs/05-inventory.md §4; alpine virtual-media carrier).
+	RamdiskEnabled  bool
+	ProbeAlpineISO  string // alpine standard ISO (path/URL) the probe medium is built from
+	ProbeStaticCIDR string // DHCP fallback for machines without ssh.address
+	ProbePrefix     int    // prefix length for a bare ssh.address fallback CIDR (default 24)
+	ProbeGateway    string // fallback default route (cross-subnet report targets)
+	ProbeWait       time.Duration
+
+	MediaDir        string // local media repository (boot ISOs)
+	MediaWorkDir    string // scratch dir for media builds (default: beside the output)
+	MediaBaseURI    string // BMC-reachable media base URI (nfs://, cifs://, ftp:// — firmware decides)
+	BootSettleDelay time.Duration
+
+	VerifyReadyWait time.Duration // verify_ready poll budget for the new system after the completion report
+
+	NFSExportEnabled   bool   // built-in read-only NFSv3 export of MediaDir (default true)
+	NFSExportPort      int    // port for the built-in export (default 2049)
+	MediaRelayAddr     string // media relay SSH endpoint (host[:port]); empty = no relay
 	MediaRelayUser     string
 	MediaRelayPassword string
 	MediaRelayDir      string // remote export directory the BMC mounts from
+
+	// Vendor compatibility matrix override directory (docs/compat/README.md).
+	CompatDir string
+
+	// DevFakeBMCDelay slows the fake BMC/inband drivers to exercise
+	// heartbeat/lease/reaper paths (acceptance flow; a test knob, not a
+	// production one).
+	DevFakeBMCDelay time.Duration
 
 	// OTELExporterEndpoint enables OTLP trace export when non-empty.
 	// Without it, tracing stays at the API boundary instrumentation level
@@ -105,7 +122,20 @@ type Config struct {
 	ExternalURL string
 }
 
-// FromEnv builds a Config from the process environment with the MAMMOTH_ prefix.
+// Load reads MAMMOTH_ENV_FILE (when set), then builds the Config from the
+// process environment with the MAMMOTH_ prefix. File entries seed the
+// environment; variables already set in the process environment win.
+func Load() (Config, error) {
+	if path := getenv("MAMMOTH_ENV_FILE", ""); path != "" {
+		if err := LoadEnvFile(path); err != nil {
+			return Config{}, err
+		}
+	}
+	return FromEnv()
+}
+
+// FromEnv builds a Config from the process environment. Invalid values are
+// errors (fail fast) rather than silent defaults.
 func FromEnv() (Config, error) {
 	c := Config{
 		Mode:                  Mode(getenv("MAMMOTH_MODE", string(ModeAll))),
@@ -115,43 +145,82 @@ func FromEnv() (Config, error) {
 		MasterKey:             os.Getenv("MAMMOTH_MASTER_KEY"),
 		LogLevel:              getenv("MAMMOTH_LOG_LEVEL", "info"),
 		LogFormat:             getenv("MAMMOTH_LOG_FORMAT", "json"),
-		RunnerConcurrency:     getenvInt("MAMMOTH_RUNNER_CONCURRENCY", 10),
-		HeartbeatInterval:     getenvDuration("MAMMOTH_HEARTBEAT_INTERVAL", 10*time.Second),
-		VisibilityTimeout:     getenvDuration("MAMMOTH_VISIBILITY_TIMEOUT", 30*time.Second),
-		HeartbeatTimeout:      getenvDuration("MAMMOTH_HEARTBEAT_TIMEOUT", 60*time.Second),
-		ReaperInterval:        getenvDuration("MAMMOTH_REAPER_INTERVAL", 15*time.Second),
-		QueueMaxReceiveCount:  getenvInt("MAMMOTH_QUEUE_MAX_RECEIVE_COUNT", 5),
-		QueueRetryBackoff:     getenvDuration("MAMMOTH_QUEUE_RETRY_BACKOFF", 5*time.Second),
-		QueuePollInterval:     getenvDuration("MAMMOTH_QUEUE_POLL_INTERVAL", 250*time.Millisecond),
-		RunnerMaxTaskAttempts: getenvInt("MAMMOTH_RUNNER_MAX_TASK_ATTEMPTS", 5),
-		BMCTimeout:            getenvDuration("MAMMOTH_BMC_TIMEOUT", 30*time.Second),
-		BMCTLSInsecure:        getenvBool("MAMMOTH_BMC_TLS_INSECURE", false),
-		IPMIInterface:         getenv("MAMMOTH_IPMI_INTERFACE", "lanplus"),
-		IdempotencyTTL:        getenvDuration("MAMMOTH_IDEMPOTENCY_TTL", 24*time.Hour),
-		TaskStatusInterval:    getenvDuration("MAMMOTH_TASK_STATUS_INTERVAL", 2*time.Second),
-		TaskLogsTTL:           getenvDuration("MAMMOTH_TASK_LOGS_TTL", 90*24*time.Hour),
-		LayoutRetention:       getenvInt("MAMMOTH_LAYOUT_RETENTION", 10),
-		InbandTimeout:         getenvDuration("MAMMOTH_INBAND_TIMEOUT", 20*time.Second),
-		RamdiskEnabled:        getenvBool("MAMMOTH_RAMDISK_ENABLED", false),
-		ProbeAlpineISO:        getenv("MAMMOTH_PROBE_ALPINE_ISO", ""),
-		ProbeStaticCIDR:       getenv("MAMMOTH_PROBE_STATIC_CIDR", ""),
-		ProbePrefix:           getenvInt("MAMMOTH_PROBE_PREFIX", 24),
-		ProbeGateway:          getenv("MAMMOTH_PROBE_GATEWAY", ""),
-		ProbeWait:             getenvDuration("MAMMOTH_PROBE_WAIT", 10*time.Minute),
-		MediaDir:              getenv("MAMMOTH_MEDIA_DIR", "data/media"),
-		MediaWorkDir:          os.Getenv("MAMMOTH_MEDIA_WORKDIR"),
-		MediaBaseURI:          getenv("MAMMOTH_MEDIA_BASE_URI", os.Getenv("MAMMOTH_MEDIA_NFS_BASE")),
-		NFSExportEnabled:      getenvBool("MAMMOTH_NFS_EXPORT", true),
-		NFSExportPort:         getenvInt("MAMMOTH_NFS_EXPORT_PORT", 2049),
-		MediaRelayAddr:        os.Getenv("MAMMOTH_MEDIA_RELAY_ADDR"),
-		MediaRelayUser:        os.Getenv("MAMMOTH_MEDIA_RELAY_USER"),
-		MediaRelayPassword:    os.Getenv("MAMMOTH_MEDIA_RELAY_PASSWORD"),
-		MediaRelayDir:         os.Getenv("MAMMOTH_MEDIA_RELAY_DIR"),
-		BootSettleDelay:       getenvDuration("MAMMOTH_BOOT_SETTLE_DELAY", 0),
-		VerifyReadyWait:       getenvDuration("MAMMOTH_VERIFY_READY_WAIT", 10*time.Minute),
-		OTELExporterEndpoint:  os.Getenv("MAMMOTH_OTEL_EXPORTER_ENDPOINT"),
-		MetricsAddr:           os.Getenv("MAMMOTH_METRICS_ADDR"),
-		ExternalURL:           getenv("MAMMOTH_EXTERNAL_URL", "http://127.0.0.1:8080"),
+		RunnerConcurrency:     10,
+		HeartbeatInterval:     10 * time.Second,
+		VisibilityTimeout:     30 * time.Second,
+		HeartbeatTimeout:      60 * time.Second,
+		ReaperInterval:        15 * time.Second,
+		QueueMaxReceiveCount:  5,
+		QueueRetryBackoff:     5 * time.Second,
+		QueuePollInterval:     250 * time.Millisecond,
+		RunnerMaxTaskAttempts: 5,
+		BMCTimeout:            30 * time.Second,
+		IPMIInterface:         "lanplus",
+		IdempotencyTTL:        24 * time.Hour,
+		TaskStatusInterval:    2 * time.Second,
+		TaskLogsTTL:           90 * 24 * time.Hour,
+		LayoutRetention:       10,
+		InbandTimeout:         20 * time.Second,
+		ProbePrefix:           24,
+		ProbeWait:             10 * time.Minute,
+		MediaDir:              "data/media",
+		NFSExportEnabled:      true,
+		NFSExportPort:         2049,
+		BootSettleDelay:       0,
+		VerifyReadyWait:       10 * time.Minute,
+		ExternalURL:           "http://127.0.0.1:8080",
+	}
+
+	var errs []error
+	setString(&c.MediaWorkDir, "MAMMOTH_MEDIA_WORKDIR", &errs)
+	setString(&c.MediaBaseURI, "MAMMOTH_MEDIA_BASE_URI", &errs)
+	setString(&c.MediaRelayAddr, "MAMMOTH_MEDIA_RELAY_ADDR", &errs)
+	setString(&c.MediaRelayUser, "MAMMOTH_MEDIA_RELAY_USER", &errs)
+	setString(&c.MediaRelayPassword, "MAMMOTH_MEDIA_RELAY_PASSWORD", &errs)
+	setString(&c.MediaRelayDir, "MAMMOTH_MEDIA_RELAY_DIR", &errs)
+	setString(&c.OTELExporterEndpoint, "MAMMOTH_OTEL_EXPORTER_ENDPOINT", &errs)
+	setString(&c.MetricsAddr, "MAMMOTH_METRICS_ADDR", &errs)
+	setString(&c.CompatDir, "MAMMOTH_COMPAT_DIR", &errs)
+
+	applyString(&c.HTTPAddr, "MAMMOTH_HTTP_ADDR", &errs)
+	applyString(&c.LogLevel, "MAMMOTH_LOG_LEVEL", &errs)
+	applyString(&c.LogFormat, "MAMMOTH_LOG_FORMAT", &errs)
+	applyString(&c.IPMIInterface, "MAMMOTH_IPMI_INTERFACE", &errs)
+	applyString(&c.ProbeAlpineISO, "MAMMOTH_PROBE_ALPINE_ISO", &errs)
+	applyString(&c.ProbeStaticCIDR, "MAMMOTH_PROBE_STATIC_CIDR", &errs)
+	applyString(&c.ProbeGateway, "MAMMOTH_PROBE_GATEWAY", &errs)
+	applyString(&c.MediaDir, "MAMMOTH_MEDIA_DIR", &errs)
+	applyString(&c.ExternalURL, "MAMMOTH_EXTERNAL_URL", &errs)
+
+	applyInt(&c.RunnerConcurrency, "MAMMOTH_RUNNER_CONCURRENCY", &errs)
+	applyInt(&c.QueueMaxReceiveCount, "MAMMOTH_QUEUE_MAX_RECEIVE_COUNT", &errs)
+	applyInt(&c.RunnerMaxTaskAttempts, "MAMMOTH_RUNNER_MAX_TASK_ATTEMPTS", &errs)
+	applyInt(&c.LayoutRetention, "MAMMOTH_LAYOUT_RETENTION", &errs)
+	applyInt(&c.NFSExportPort, "MAMMOTH_NFS_EXPORT_PORT", &errs)
+	applyInt(&c.ProbePrefix, "MAMMOTH_PROBE_PREFIX", &errs)
+
+	applyDuration(&c.HeartbeatInterval, "MAMMOTH_HEARTBEAT_INTERVAL", &errs)
+	applyDuration(&c.VisibilityTimeout, "MAMMOTH_VISIBILITY_TIMEOUT", &errs)
+	applyDuration(&c.HeartbeatTimeout, "MAMMOTH_HEARTBEAT_TIMEOUT", &errs)
+	applyDuration(&c.ReaperInterval, "MAMMOTH_REAPER_INTERVAL", &errs)
+	applyDuration(&c.QueueRetryBackoff, "MAMMOTH_QUEUE_RETRY_BACKOFF", &errs)
+	applyDuration(&c.QueuePollInterval, "MAMMOTH_QUEUE_POLL_INTERVAL", &errs)
+	applyDuration(&c.BMCTimeout, "MAMMOTH_BMC_TIMEOUT", &errs)
+	applyDuration(&c.IdempotencyTTL, "MAMMOTH_IDEMPOTENCY_TTL", &errs)
+	applyDuration(&c.TaskStatusInterval, "MAMMOTH_TASK_STATUS_INTERVAL", &errs)
+	applyDuration(&c.TaskLogsTTL, "MAMMOTH_TASK_LOGS_TTL", &errs)
+	applyDuration(&c.InbandTimeout, "MAMMOTH_INBAND_TIMEOUT", &errs)
+	applyDuration(&c.ProbeWait, "MAMMOTH_PROBE_WAIT", &errs)
+	applyDuration(&c.BootSettleDelay, "MAMMOTH_BOOT_SETTLE_DELAY", &errs)
+	applyDuration(&c.VerifyReadyWait, "MAMMOTH_VERIFY_READY_WAIT", &errs)
+	applyDuration(&c.DevFakeBMCDelay, "MAMMOTH_FAKE_BMC_DELAY", &errs)
+
+	applyBool(&c.BMCTLSInsecure, "MAMMOTH_BMC_TLS_INSECURE", &errs)
+	applyBool(&c.RamdiskEnabled, "MAMMOTH_RAMDISK_ENABLED", &errs)
+	applyBool(&c.NFSExportEnabled, "MAMMOTH_NFS_EXPORT", &errs)
+
+	if err := errors.Join(errs...); err != nil {
+		return c, err
 	}
 	if !c.Mode.Valid() {
 		return c, fmt.Errorf("config: invalid MAMMOTH_MODE %q (want all|api|runner|builder|prober)", c.Mode)
@@ -162,36 +231,54 @@ func FromEnv() (Config, error) {
 	return c, nil
 }
 
+// setString reads an optional variable (empty = unset semantics).
+func setString(dst *string, key string, errs *[]error) {
+	*dst = os.Getenv(key)
+}
+
+// applyString overrides dst when the variable is set to a non-empty value.
+func applyString(dst *string, key string, errs *[]error) {
+	if v := os.Getenv(key); strings.TrimSpace(v) != "" {
+		*dst = v
+	}
+}
+
+func applyInt(dst *int, key string, errs *[]error) {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			*errs = append(*errs, fmt.Errorf("config: %s=%q is not an integer", key, v))
+			return
+		}
+		*dst = n
+	}
+}
+
+func applyBool(dst *bool, key string, errs *[]error) {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			*errs = append(*errs, fmt.Errorf("config: %s=%q is not a boolean", key, v))
+			return
+		}
+		*dst = b
+	}
+}
+
+func applyDuration(dst *time.Duration, key string, errs *[]error) {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			*errs = append(*errs, fmt.Errorf("config: %s=%q is not a duration (want e.g. 10s, 1m)", key, v))
+			return
+		}
+		*dst = d
+	}
+}
+
 func getenv(key, def string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v
-	}
-	return def
-}
-
-func getenvInt(key string, def int) int {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return def
-}
-
-func getenvBool(key string, def bool) bool {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			return b
-		}
-	}
-	return def
-}
-
-func getenvDuration(key string, def time.Duration) time.Duration {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			return d
-		}
 	}
 	return def
 }

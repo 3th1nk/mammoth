@@ -3,6 +3,16 @@
 > v1.0 门槛项之一(docs/09-roadmap.md:备份恢复文档)。本文描述 mammoth 的
 > 状态边界、备份策略与恢复流程。
 
+## 0. 配置入口
+
+- 全部配置为 `MAMMOTH_*` 环境变量(12-factor);完整清单以
+  `internal/config/config.go` 为准(带默认值与语义注释);
+- **dotenv 文件**:裸二进制部署可用 `serve --env-file /etc/mammoth.env`
+  (或 `MAMMOTH_ENV_FILE=`)——文件**播种**环境,进程已有变量**优先**于
+  文件;非法值(非整数/非布尔/非时长)**启动即报错**并聚合列出全部问题,
+  不静默用默认值;
+- systemd 部署等价物:`EnvironmentFile=`;compose:`env_file:`。
+
 ## 1. 状态边界:什么需要备份
 
 | 组件 | 状态 | 备份必要性 |

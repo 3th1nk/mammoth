@@ -374,11 +374,11 @@ func first(s []string) string {
 // RenderAnswers produces the kickstart and boot parameters.
 func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([]render.AnswerFile, render.BootParams, error) {
 	if in.AnswerBaseURL == "" || in.CompleteURL == "" {
-		return nil, render.BootParams{}, fmt.Errorf("rocky9: answer/completion URLs are required")
+		return nil, render.BootParams{}, fmt.Errorf("%s: answer/completion URLs are required", d.distro)
 	}
 	primaryURL := strings.TrimSuffix(in.AnswerBaseURL, "/") + "/ks.cfg"
 	if in.ImageSource == "" {
-		return nil, render.BootParams{}, fmt.Errorf("rocky9: image source is required")
+		return nil, render.BootParams{}, fmt.Errorf("%s: image source is required", d.distro)
 	}
 
 	var wipe []string
@@ -420,13 +420,13 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 				if p.Preserve {
 					if p.OnPart == "" {
 						return nil, render.BootParams{}, fmt.Errorf(
-							"rocky9: preserved partition %s has no onpart binding", p.Mount)
+							"%s: preserved partition %s has no onpart binding", d.distro, p.Mount)
 					}
 					partLines = append(partLines,
 						fmt.Sprintf("part %s --onpart=%s --noformat", p.Mount, p.OnPart))
 					continue
 				}
-				line, err := newPartLine(p, disk.Device, disk.SizeBytes)
+				line, err := d.newPartLine(p, disk.Device, disk.SizeBytes)
 				if err != nil {
 					return nil, render.BootParams{}, err
 				}
@@ -435,12 +435,12 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		default:
 			if !disk.Wipe {
 				return nil, render.BootParams{}, fmt.Errorf(
-					"rocky9: disk %s must declare wipe or keep", disk.Device)
+					"%s: disk %s must declare wipe or keep", d.distro, disk.Device)
 			}
 			if render.IsKernelDeviceName(disk.Device) {
 				wipe = append(wipe, disk.Device)
 				for _, p := range disk.Partitions {
-					line, err := newPartLine(p, disk.Device, disk.SizeBytes)
+					line, err := d.newPartLine(p, disk.Device, disk.SizeBytes)
 					if err != nil {
 						return nil, render.BootParams{}, err
 					}
@@ -449,16 +449,16 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 				continue
 			}
 			// Redfish-claimed name: resolve in %pre, emit dynamic lines.
-			d := dynDisk{idx: len(dyn), ph: fmt.Sprintf("$D%d", len(dyn)),
+			dd := dynDisk{idx: len(dyn), ph: fmt.Sprintf("$D%d", len(dyn)),
 				device: disk.Device, sizeBytes: disk.SizeBytes, serial: disk.Serial}
 			for _, p := range disk.Partitions {
-				line, err := newPartLine(p, d.ph, d.sizeBytes)
+				line, err := d.newPartLine(p, dd.ph, dd.sizeBytes)
 				if err != nil {
 					return nil, render.BootParams{}, err
 				}
-				d.partLines = append(d.partLines, line)
+				dd.partLines = append(dd.partLines, line)
 			}
-			dyn = append(dyn, d)
+			dyn = append(dyn, dd)
 		}
 	}
 
@@ -473,7 +473,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		if render.IsKernelDeviceName(r.BoundDevice) {
 			wipe = append(wipe, r.BoundDevice)
 			for _, p := range r.Partitions {
-				line, err := newPartLine(p, r.BoundDevice, r.SizeBytes)
+				line, err := d.newPartLine(p, r.BoundDevice, r.SizeBytes)
 				if err != nil {
 					return nil, render.BootParams{}, err
 				}
@@ -481,16 +481,16 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			}
 			continue
 		}
-		d := dynDisk{idx: len(dyn), ph: fmt.Sprintf("$D%d", len(dyn)),
+		dd := dynDisk{idx: len(dyn), ph: fmt.Sprintf("$D%d", len(dyn)),
 			device: r.BoundDevice, sizeBytes: r.SizeBytes}
 		for _, p := range r.Partitions {
-			line, err := newPartLine(p, d.ph, d.sizeBytes)
+			line, err := d.newPartLine(p, dd.ph, dd.sizeBytes)
 			if err != nil {
 				return nil, render.BootParams{}, err
 			}
-			d.partLines = append(d.partLines, line)
+			dd.partLines = append(dd.partLines, line)
 		}
-		dyn = append(dyn, d)
+		dyn = append(dyn, dd)
 	}
 
 	// software raid: per-member full-disk raid partitions + one md per volume.
@@ -502,7 +502,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		}
 		if len(r.Partitions) != 1 {
 			return nil, render.BootParams{}, fmt.Errorf(
-				"rocky9: software raid volume %s supports exactly one partition (LVM arrives later)", r.Name)
+				"%s: software raid volume %s supports exactly one partition (LVM arrives later)", d.distro, r.Name)
 		}
 		var tags []string
 		for mi, member := range r.Members {
@@ -533,7 +533,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		case "post_install":
 			postScripts = append(postScripts, scriptBody(s))
 		default:
-			return nil, render.BootParams{}, fmt.Errorf("rocky9: unknown script stage %q", s.Stage)
+			return nil, render.BootParams{}, fmt.Errorf("%s: unknown script stage %q", d.distro, s.Stage)
 		}
 	}
 	netPre := ""
@@ -611,7 +611,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 
 	var buf strings.Builder
 	if err := ksTemplate.Execute(&buf, data); err != nil {
-		return nil, render.BootParams{}, fmt.Errorf("rocky9: template: %w", err)
+		return nil, render.BootParams{}, fmt.Errorf("%s: template: %w", d.distro, err)
 	}
 
 	// inst.repo: when the distro source is an NFS-hosted ISO, anaconda can
@@ -749,7 +749,7 @@ func hasPreserve(parts []render.ResolvedPartition) bool {
 }
 
 // newPartLine renders a fresh (non-preserved) partition line.
-func newPartLine(p render.ResolvedPartition, device string, diskSizeBytes int64) (string, error) {
+func (d *Driver) newPartLine(p render.ResolvedPartition, device string, diskSizeBytes int64) (string, error) {
 	fs := p.FS
 	if hasFlag(p.Flags, "esp") {
 		fs = "efi"
@@ -768,7 +768,7 @@ func newPartLine(p render.ResolvedPartition, device string, diskSizeBytes int64)
 	case p.SizeMB > 0:
 		line += fmt.Sprintf(" --size=%d", p.SizeMB)
 	default:
-		return "", fmt.Errorf("rocky9: partition %s on %s needs a size or rest", p.Mount, device)
+		return "", fmt.Errorf("%s: partition %s on %s needs a size or rest", d.distro, p.Mount, device)
 	}
 	return line, nil
 }

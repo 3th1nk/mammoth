@@ -43,14 +43,14 @@ func (d *Driver) KeepPartitionSupport() render.SupportLevel { return render.Supp
 // RenderAnswers produces the nocloud seed files and boot parameters.
 func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([]render.AnswerFile, render.BootParams, error) {
 	if in.AnswerBaseURL == "" || in.CompleteURL == "" {
-		return nil, render.BootParams{}, fmt.Errorf("ubuntu22: answer/completion URLs are required")
+		return nil, render.BootParams{}, fmt.Errorf("%s: answer/completion URLs are required", d.distro)
 	}
 	primaryURL := strings.TrimSuffix(in.AnswerBaseURL, "/") + "/user-data"
 	if in.ImageSource == "" {
-		return nil, render.BootParams{}, fmt.Errorf("ubuntu22: image source is required")
+		return nil, render.BootParams{}, fmt.Errorf("%s: image source is required", d.distro)
 	}
 
-	storage, err := storageConfig(in, m)
+	storage, err := d.storageConfig(in, m)
 	if err != nil {
 		return nil, render.BootParams{}, err
 	}
@@ -124,7 +124,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	meta := "" // nocloud meta-data must exist (empty ok)
 	userDataYAML, err := emitYAML(userData)
 	if err != nil {
-		return nil, render.BootParams{}, fmt.Errorf("ubuntu22: user-data: %w", err)
+		return nil, render.BootParams{}, fmt.Errorf("%s: user-data: %w", d.distro, err)
 	}
 
 	// The answer files are BAKED into the rebuilt ISO root; the kernel
@@ -153,7 +153,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 // storageConfig builds the curtin storage config (autoinstall.storage).
 // Wiped disks get the full disk→partition→format→mount chain; kept disks are
 // simply absent (curtin never touches them) — the partial keep semantics.
-func storageConfig(in render.InstallInputs, m render.MachineView) (map[string]any, error) {
+func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (map[string]any, error) {
 	config := []map[string]any{}
 	rendered := 0
 
@@ -187,7 +187,7 @@ func storageConfig(in render.InstallInputs, m render.MachineView) (map[string]an
 		}
 		if len(disk.Baseline) > 0 || len(disk.Remove) > 0 || hasPreserve(disk.Partitions) {
 			return nil, fmt.Errorf(
-				"ubuntu22: keep: partitions is not supported on this distro (partial); submit without preserve")
+				"%s: keep: partitions is not supported on this distro (partial); submit without preserve", d.distro)
 		}
 		targets = append(targets, diskTarget{id: "disk-" + disk.Device, device: disk.Device,
 			serial: disk.Serial, wipe: disk.Wipe, sizeBytes: diskSizeOf(m, disk.Device),
@@ -200,7 +200,7 @@ func storageConfig(in render.InstallInputs, m render.MachineView) (map[string]an
 			continue
 		}
 		if !disk.wipe {
-			return nil, fmt.Errorf("ubuntu22: disk %s must declare wipe or keep", disk.device)
+			return nil, fmt.Errorf("%s: disk %s must declare wipe or keep", d.distro, disk.device)
 		}
 		diskBytes := disk.sizeBytes
 
@@ -297,7 +297,7 @@ func storageConfig(in render.InstallInputs, m render.MachineView) (map[string]an
 		}
 	}
 	if rendered == 0 {
-		return nil, fmt.Errorf("ubuntu22: storage config is empty")
+		return nil, fmt.Errorf("%s: storage config is empty", d.distro)
 	}
 	return map[string]any{"version": 1, "config": config}, nil
 }

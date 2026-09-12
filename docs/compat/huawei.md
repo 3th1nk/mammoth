@@ -289,3 +289,28 @@ iBMC 的挂载校验只读镜像头部,部分文件即可通过;固件在 POST �
 1. 推送侧原子可见(先传临时名再改名);
 2. `MAMMOTH_BOOT_SETTLE_DELAY`(boot 阶段挂载与上电之间的等待,默认 0;
    中转分发部署建议 ≥ 推送耗时)。
+
+## ramdisk 探针原型 V0 复盘(2026-09-12,进行中)
+
+**目标**:BMC 虚拟光驱形态的硬件采集探针——debian netinst 的 d-i 引导 +
+early_command 采集(/sys 扫描,零工具依赖)+ wget 上报 + poweroff,为无 OS
+机器提供内核设备名/SCSI serial(根治 Redfish 卷名与安装器设备名的鸿沟)。
+
+**已验证**:
+- VmmControl 挂载/弹出、一次性 CD 引导(ipmitool chassis bootdev cdrom)、
+  探针 ISO 组装(xorriso 双条目)等组件均单独可控;
+- 采集脚本设计(纯 /sys 扫描 + busybox wget 上报 + poweroff)无需任何
+  工具链依赖。
+
+**卡点(待解决)**:
+- UEFI 引导结构:探针 ISO 的 isolinux(BIOS)在 UEFI 机器(BootType=
+  UEFIBoot)上不被引导;补 efi.img 条目后仍未走通——引导回落到硬盘上
+  UOS 半成品的 grub 命令行(前轮 Finish 崩溃的残留);
+- once CD 引导与 VmmControl 挂载的**时序**(先挂后设/先设后挂)对引导
+  是否生效有影响,需系统化验证;
+- 34MB 探针 ISO 的 UEFI 结构(efi.img 内嵌 grub 配置与 /boot/grub/grub.cfg
+  的衔接)需要本地 qemu(SeaBIOS + OVMF 双模式)快速迭代,不再真机盲试。
+
+**下次路径**:本地 qemu 迭代探针 ISO 引导结构(BIOS/UEFI 双模式验证)→
+引导成功后接上报端点(设计:token 认证的 layout 快照写入)→ discover
+集成(probe=ramdisk 分支)→ 真机验证。

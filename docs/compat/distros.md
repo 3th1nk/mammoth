@@ -78,6 +78,33 @@
 - `uniontechos` 是同一方言的第二注册名(统信服务器 V20 的 d-i 定制安装器),
   真机验证内核目录名与 preseed 键兼容性后转正。
 
+### ubuntu d-i(legacy) 支持决策:不主动支持
+
+**决策(2026-09)**:不为 ubuntu 的 debian-installer 镜像(18.04 server ISO /
+mini.iso)提供驱动支持。
+
+- **上游已封存**:Ubuntu Server 自 20.04 起弃用 d-i,不再发布 d-i 版 ISO,
+  mini.iso 构建同样停更;最后一个版本 18.04 标准支持已于 2023-05 EOL
+  (仅 ESM 延续至 2028)。
+- **20.04+ 无对应镜像**:ubuntu 批量装机的加速正道是 PXE + live(网络拉
+  squashfs,较虚拟光驱快一个量级,roadmap M6),而非回退 d-i;ubuntu 方向
+  优先投入 24.04 兼容性验证(subiquity/autoinstall v1 主线,预计现有驱动
+  直接可用)。
+- **重评估触发条件**:存量 18.04 机器出现批量纳管/重装需求时。
+
+**如需适配的技术方向**(低成本,预计 ~1 天 + 一轮真机验证):
+
+- **方言复用**:18.04 的 d-i 与 debian 12 同源——preseed 键、partman
+  expert_recipe、`preseed/late_command`(busybox wget 回调)基本通用,即
+  `debian.New("ubuntu1804")` 级别的变体注册,无需新驱动;
+- **布局探测**:ubuntu d-i ISO 的内核目录为 `/install`(非 install.amd),
+  `builder.debianInstallDir` 的候选列表已包含 ✅;注意 ubuntu live-server
+  也含 `/install/`,探测顺序必须保持在 casper 之后(现有实现已如此);
+- **需核对的差异点**:ubuntu 仓库/apt-setup 键的措辞差异、18.04 d-i 版本的
+  partman 组件行为、ESM 源(若目标机依赖)的 mirror 配置;
+- **风险**:绑定一个上游停止演进的安装器,后续无人修复——变体需在文档与
+  capabilities 中如实标注支持边界。
+
 ### 新增发行版
 
 实现 `render.OSDriver`(六个方法)+ 注册一行,编排层零改动:

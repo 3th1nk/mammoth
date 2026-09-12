@@ -78,7 +78,11 @@ func (d *Driver) vmmAction(ctx context.Context, c *gofish.APIClient, addr string
 	if len(managers) == 0 {
 		return &bmc.Error{Kind: bmc.KindUnsupported, Op: op, Detail: "no manager resource"}
 	}
-	actionURL := strings.TrimSuffix(managers[0].ODataID, "/") + "/VirtualMedia/CD/Oem/Huawei/Actions/VirtualMedia.VmmControl"
+	// The OEM action hangs off the CD slot's own resource; discover the slot
+	// from the VirtualMedia collection instead of hardcoding Manager/CD
+	// (manager identities and slot names vary — Managers/1 vs /iBMC).
+	actionURL := strings.TrimSuffix(cdSlotODataID(c), "/") +
+		"/Oem/Huawei/Actions/VirtualMedia.VmmControl"
 
 	payload := map[string]any{"VmmControlType": action}
 	if imageURI != "" && action == "Connect" {
@@ -149,3 +153,31 @@ func (d *Driver) vmmAction(ctx context.Context, c *gofish.APIClient, addr string
 var (
 	_ = redfish.VirtualMedia{}
 )
+
+// cdSlotODataID locates the CD (or DVD) slot's resource URI across all
+// managers; falls back to the traditional "<manager>/VirtualMedia/CD" shape
+// when the collection cannot be walked.
+func cdSlotODataID(c *gofish.APIClient) string {
+	managers, err := c.Service.Managers()
+	if err == nil {
+		for _, m := range managers {
+			vms, verr := m.VirtualMedia()
+			if verr != nil {
+				continue
+			}
+			for _, vm := range vms {
+				for _, t := range vm.MediaTypes {
+					if t == "CD" || t == "DVD" {
+						return vm.ODataID
+					}
+				}
+			}
+		}
+		base := ""
+		if len(managers) > 0 {
+			base = strings.TrimSuffix(managers[0].ODataID, "/")
+		}
+		return base + "/VirtualMedia/CD"
+	}
+	return "/redfish/v1/Managers/1/VirtualMedia/CD"
+}

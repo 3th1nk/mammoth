@@ -320,3 +320,16 @@ builder 按任务生成,命名 `probe-<token>.iso`(token 为发现任务的机�
 凭证);生成于探针触发的 prepare 阶段,上报/超时后随延迟释放删除——
 与 `boot-<token>.iso` 同生命周期。V0 的手工产物(`probe-v0-manual.iso`)
 仅用于链路验证,不进入任务流程。
+
+### 显式 size 替代 --grow(下一步,未实现)
+
+- **发现**:anaconda 的 `--grow` 分配在该 LSI 卷上钳制于 2^32 扇区
+  (`--maxsize` 亦被忽略),根分区停在 2TiB;%post 在线扩容(sfdisk +
+  resize2fs)为 workaround,且 resize2fs 需在内核分区表刷新
+  (partprobe/partx -u)之后;
+- **根治方向(下次装机前实现)**:渲染 grow 分区时用**显式 size**替代
+  `--grow`——`--size = 盘查 size_bytes − 固定分区 − 512MB 余量`(全渲染期
+  可算,与 curtin 的显式 size 同构);anaconda 一次建对分区,不再依赖
+  grow 分配与 %post 扩容;配套测试断言同步更新;
+- **已验证**:sfdisk 在线扩容对挂载中的根分区可行(手动实测 2T→3.6T);
+  parted 对挂载分区直接拒绝(脚本模式警告后放弃)。

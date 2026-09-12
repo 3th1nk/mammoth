@@ -127,7 +127,7 @@ func TestRenderAutoinstallWipeAndBond(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"path":"/dev/nvme0n1"`, `"ptable":"gpt"`, `"wipe":"superblock"`,
-		`"fstype":"fat32"`, `"path":"/boot/efi"`, `"path":"/"`,
+		`"fstype":"fat32"`, `"path":"/boot/efi"`, `"path":"/"`, `"grub_device":true`,
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("curtin storage missing %q", want)
@@ -151,6 +151,35 @@ func TestRenderAutoinstallWipeAndBond(t *testing.T) {
 
 	if boot.KernelArgs != "autoinstall ds=nocloud-net;s=file:///cdrom/" {
 		t.Errorf("boot params wrong: %q", boot.KernelArgs)
+	}
+}
+
+// BIOS + GPT: a declared biosgrub partition renders as a raw bios_grub
+// partition (curtin refuses bootloader install without an explicit one).
+func TestRenderBiosGrubPartition(t *testing.T) {
+	in := render.InstallInputs{
+		AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i",
+		Disks: []render.ResolvedDisk{
+			{Device: "sda", Wipe: true, Partitions: []render.ResolvedPartition{
+				{FS: "fat32", SizeMB: 1, Flags: []string{"biosgrub"}},
+				{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+				{Mount: "/", FS: "ext4", Grow: true}}},
+		},
+	}
+	_, ud, err := func() ([]render.AnswerFile, map[string]any, error) {
+		answers, _, err := New().RenderAnswers(in, render.MachineView{})
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		_, u := fetchUser(t, answers)
+		return nil, u, nil
+	}()
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	st, _ := json.Marshal(ud["autoinstall"].(map[string]any)["storage"])
+	if !strings.Contains(string(st), `"flag":"bios_grub"`) {
+		t.Errorf("bios_grub partition missing from curtin config: %s", st)
 	}
 }
 

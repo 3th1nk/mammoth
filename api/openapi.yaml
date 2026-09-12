@@ -455,6 +455,33 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /api/v1/jobs/{id}/tasks/{taskId}/logs:
+    parameters:
+      - $ref: '#/components/parameters/jobId'
+      - $ref: '#/components/parameters/taskId'
+    get:
+      operationId: listJobTaskLogs
+      tags: [jobs]
+      summary: Task execution logs
+      description: |
+        Structured log lines emitted while the runner executed this task,
+        persisted at write time (docs/02-architecture.md §5.2 log dual-write).
+        Complements events — facts and state transitions — with the execution
+        trail: what the runner did and observed, stage by stage. Cursor
+        paginated over the monotonic log id (docs/03-api.md §1).
+      parameters:
+        - $ref: '#/components/parameters/pageSize'
+        - $ref: '#/components/parameters/cursor'
+      responses:
+        '200':
+          description: Task log page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskLogList'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /render/{token}/{file}:
     parameters:
       - name: token
@@ -1916,6 +1943,43 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Event'
+        next_cursor:
+          type: string
+          nullable: true
+
+    TaskLog:
+      type: object
+      description: One persisted execution log line (docs/08-data-model.md §2).
+      required: [id, level, message, ts]
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Monotonic within the task; cursor for pagination.
+        level:
+          type: string
+          enum: [DEBUG, INFO, WARN, ERROR]
+        stage:
+          type: string
+          nullable: true
+        message:
+          type: string
+        attrs:
+          type: object
+          description: Structured log fields beyond stage (machine_id, job_id, code, …).
+          additionalProperties: true
+          nullable: true
+        ts:
+          $ref: '#/components/schemas/Timestamp'
+
+    TaskLogList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskLog'
         next_cursor:
           type: string
           nullable: true

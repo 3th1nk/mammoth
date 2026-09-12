@@ -10,7 +10,7 @@ credentials 1 ──── n machines 1 ──── n layout_snapshots
                   │
 jobs 1 ──── n tasks 1 ──── n task_stages
                     │
-                    └── events(task_logs 为规划表,未建)
+                    └── events / task_logs
 ```
 
 ## 2. 表定义
@@ -123,7 +123,7 @@ jobs 1 ──── n tasks 1 ──── n task_stages
 
 | 表 | 关键字段 | 说明 |
 |----|---------|------|
-| task_logs | task_id, ts, level, message | **规划未建**(M6 余项):安装过程日志;按月分区,TTL 默认 90d |
+| task_logs | id(bigserial), task_id, ts, level, stage, message, attrs jsonb | ✅ 已建(M6):日志双写的落库半边(docs/02 §5.2)——携带 `task_id` 的结构化日志行在写入时同步落库,`GET /jobs/{id}/tasks/{taskId}/logs` 按游标检索;`idx(task_id, id)`;TTL 由 reaper 过期(`MAMMOTH_TASK_LOGS_TTL`,默认 90d),单表,月度分区留作超量后的演进 |
 | events | id(bigserial), resource_type, resource_id, type, payload jsonb, ts | ✅ 已建;SSE 水位线按 id(1s 轮询);审计/事件查询 API 与 Webhook 投递的数据源 |
 
 ## 3. 一致性与并发的三条铁律

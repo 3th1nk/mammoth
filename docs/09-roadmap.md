@@ -2,7 +2,7 @@
 
 > **当前状态(2026-09)**:M0~M5 全部交付;M6 主体交付(SSE、审计/事件查询、
 > cobra CLI、goreleaser、Webhook 签名投递、软/硬 RAID 声明式配置、运维与安全文档)。
-> M6 余项:task_logs 表与检索 API、ramdisk 探针(真机路径 V0 进行中,PXE 未做)。
+> M6 余项:ramdisk 探针(真机路径 V0 进行中,PXE 未做)。
 > SQLite 最小部署形态已评估并放弃(见 10 §D2),存储收敛为 PostgreSQL-only。
 > 三方言(rocky9 / ubuntu22 / debian12)已真机端到端闭环,
 > uniontechos blocked(见 compat/distros.md)。
@@ -74,7 +74,8 @@
 - ✅ CLI(cobra + goreleaser 分发):批量注册、盘查、安装提交、进度跟踪
 - ✅ install-plan 试算端点(只读解析 V1,`POST /machines/{id}/install-plan`)
 - ✅ docs/operations.md(备份恢复)、docs/security-baseline.md(安全基线)
-- ⬜ Prometheus 指标全集余项:task_logs 表与检索 API(stage 耗时直方图已埋)
+- ✅ task_logs 表与检索 API(日志双写落库,`GET /jobs/{id}/tasks/{taskId}/logs`,
+  reaper TTL 默认 90d;stage 耗时直方图此前已埋)
 - ⬜ ramdisk 探针补全(qemu 迭代引导结构 → 上报端点 → discover 集成)
 
 ## 长期方向(不承诺排期)

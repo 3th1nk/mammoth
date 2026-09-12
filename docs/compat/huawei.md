@@ -184,6 +184,39 @@ NFS ISO 装包源,静态网络)。全链路打通过程中固化下来的事实:
 - 驱动侧成员映射:内联数组的 Id(如 HDDPlaneDisk0)↔ 单盘资源里的
   SerialNumber,两段拼出 serial→DriveID 的映射。
 
+## 三方言回归实录(2288H V5,2026-09)
+
+同一台机器(LogicalDrive0 卷,RAID1 3.6T)、同一 spec 形状(esp + rest、
+静态单接口、MAC 钉口)连续重装三个方言,全部六阶段 succeeded:
+
+| 方言 | 镜像 | 耗时 | 备注 |
+|------|------|------|------|
+| rocky9(kickstart) | Rocky 9.7 minimal(1.7G) | ~10 min | anaconda 按包装,数据量小 |
+| ubuntu22(autoinstall) | live-server 22.04.4(2.1G) | ~3 h | squashfs 复制型,慢在虚拟光驱带宽 |
+| debian12(preseed) | netinst 13.6(792M) | **6 min** | 修复 standard 任务集后全自动闭环 |
+
+### 回归暴露的 rocky9 驱动缺陷(待修)
+
+1. **grow 分区 2TiB 截断**:`part / --grow` 在该 LSI 卷上止步于扇区
+   2^32-1(盘尾 1.6T 未分配),GPT 本身无此限制——疑似 blivet 在
+   控制器卷几何上的 grow 分配问题。**修复方向**:渲染 grow 分区时随附
+   `--maxsize=<盘容量MB>`(盘查 size_bytes 已有),显式上限不依赖
+   anaconda 的分配推断;
+2. **hostname 未落地**:`network --hostname` 未写入系统
+   (Static hostname unset)——改 %post 直接写 /etc/hostname
+   (与 debian/ubuntu 驱动的修法对齐)。
+
+### 流程级修复(跨方言,本轮回归验证)
+
+- **介质延迟释放**:完成回调到达时安装器可能仍在读介质(d-i 的 finish
+  阶段)——eject/删文件改为 3 分钟宽限期的后台释放,不再截断收尾读取;
+- **完成确认屏自动重启**:d-i 停在 "Installation complete" 等按键,
+  BootParams.InstallerAutoReboot 按方言声明(anaconda/subiquity 自重启,
+  d-i 否),由流水线在介质释放后补发 power cycle;
+- **盘查视角一致性**:Redfish 卷名(LogicalDrive0/无 serial)与安装器
+  设备名(/dev/sda+SCSI serial)不一致——目前以联调手段(盘查记录改名)
+  绕过,正式机制为 early-commands 现场重识别或 ramdisk 探针(见 roadmap)。
+
 ## ubuntu22 autoinstall 端到端实录(2288H V5,iBMC 6.41)
 
 netinst 形态的 ubuntu-22.04.4 live-server 经 BMC VmmControl 挂载 NFS 介质,

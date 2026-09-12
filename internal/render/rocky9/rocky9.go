@@ -173,7 +173,7 @@ curl -fsS -X POST -H 'Content-Type: application/json' \
 // name (batch-stable selector), then produce network stanzas — static, bond,
 // vlan — using the resolved names (docs/04-install-spec.md §5.2: mac is the
 // primary selector; Mammoth never allocates addresses).
-func networkShell(entries []render.NetworkEntry) (string, error) {
+func networkShell(entries []render.NetworkEntry, hostname string) (string, error) {
 	var b strings.Builder
 	b.WriteString("# MAC-resolved network stanzas, produced by mammoth\n")
 	b.WriteString("iface_by_mac() { for d in /sys/class/net/*; do [ \"$(cat \"$d/address\")\" = \"$1\" ] && basename \"$d\" && return 0; done; return 1; }\n")
@@ -251,7 +251,17 @@ func networkShell(entries []render.NetworkEntry) (string, error) {
 			b.WriteString(" --activate\"\n")
 		}
 	}
-	return b.String(), nil
+	out := b.String()
+	// hostname rides the FIRST full network stanza: a bare
+	// `network --hostname=` line without a device is not applied by
+	// anaconda on every kickstart path (real-hardware: the host came up
+	// with its default name while the stanza sat in the ks file).
+	if hostname != "" {
+		if i := strings.Index(out, " --activate\""); i >= 0 {
+			out = out[:i] + " --hostname=" + hostname + out[i:]
+		}
+	}
+	return out, nil
 }
 
 type ipmask struct{ ip, mask string }
@@ -352,7 +362,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 						fmt.Sprintf("part %s --onpart=%s --noformat", p.Mount, p.OnPart))
 					continue
 				}
-				line, err := newPartLine(p, disk.Device)
+				line, err := newPartLine(p, disk.Device, disk.SizeBytes)
 				if err != nil {
 					return nil, render.BootParams{}, err
 				}
@@ -366,7 +376,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			if render.IsKernelDeviceName(disk.Device) {
 				wipe = append(wipe, disk.Device)
 				for _, p := range disk.Partitions {
-					line, err := newPartLine(p, disk.Device)
+					line, err := newPartLine(p, disk.Device, disk.SizeBytes)
 					if err != nil {
 						return nil, render.BootParams{}, err
 					}
@@ -378,7 +388,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			d := dynDisk{idx: len(dyn), ph: fmt.Sprintf("$D%d", len(dyn)),
 				device: disk.Device, sizeBytes: disk.SizeBytes, serial: disk.Serial}
 			for _, p := range disk.Partitions {
-				line, err := newPartLine(p, d.ph)
+				line, err := newPartLine(p, d.ph, d.sizeBytes)
 				if err != nil {
 					return nil, render.BootParams{}, err
 				}
@@ -399,7 +409,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		if render.IsKernelDeviceName(r.BoundDevice) {
 			wipe = append(wipe, r.BoundDevice)
 			for _, p := range r.Partitions {
-				line, err := newPartLine(p, r.BoundDevice)
+				line, err := newPartLine(p, r.BoundDevice, r.SizeBytes)
 				if err != nil {
 					return nil, render.BootParams{}, err
 				}
@@ -410,7 +420,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		d := dynDisk{idx: len(dyn), ph: fmt.Sprintf("$D%d", len(dyn)),
 			device: r.BoundDevice, sizeBytes: r.SizeBytes}
 		for _, p := range r.Partitions {
-			line, err := newPartLine(p, d.ph)
+			line, err := newPartLine(p, d.ph, d.sizeBytes)
 			if err != nil {
 				return nil, render.BootParams{}, err
 			}
@@ -465,7 +475,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 
 	netPre := ""
 	if len(in.Network) > 0 {
-		shell, err := networkShell(in.Network)
+		shell, err := networkShell(in.Network, in.Hostname)
 		if err != nil {
 			return nil, render.BootParams{}, err
 		}
@@ -669,7 +679,7 @@ func hasPreserve(parts []render.ResolvedPartition) bool {
 }
 
 // newPartLine renders a fresh (non-preserved) partition line.
-func newPartLine(p render.ResolvedPartition, device string) (string, error) {
+func newPartLine(p render.ResolvedPartition, device string, diskSizeBytes int64) (string, error) {
 	fs := p.FS
 	if hasFlag(p.Flags, "esp") {
 		fs = "efi"
@@ -678,6 +688,13 @@ func newPartLine(p render.ResolvedPartition, device string) (string, error) {
 	switch {
 	case p.Grow:
 		line += " --grow"
+		// blivet's grow allocation can clamp at the 2^32 sector boundary on
+		// controller volumes (real-hardware: 3.6T disk, root stopped at
+		// 2TiB) — an explicit maxsize (disk capacity in MB) removes the
+		// ambiguity; anaconda grows to min(maxsize, available tail).
+		if diskSizeBytes > 0 {
+			line += fmt.Sprintf(" --maxsize=%d", diskSizeBytes/1048576)
+		}
 	case p.SizeMB > 0:
 		line += fmt.Sprintf(" --size=%d", p.SizeMB)
 	default:

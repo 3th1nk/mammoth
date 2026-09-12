@@ -481,3 +481,46 @@ func TestFailTrapRendered(t *testing.T) {
 		}
 	}
 }
+
+// Regression (Huawei 2288H V5): blivet clamped --grow at the 2^32 sector
+// boundary on a controller volume (3.6T disk, root stopped at 2TiB) — the
+// rendered grow line must carry an explicit --maxsize when the disk size is
+// known. And the hostname rides the FIRST resolved network stanza (a bare
+// `network --hostname=` line is not applied by anaconda on every path).
+func TestRenderGrowMaxsizeAndHostnameOnStanza(t *testing.T) {
+	in := render.InstallInputs{
+		TaskToken:     "tokm",
+		MachineID:     "mch_m",
+		Hostname:      "rk9-host",
+		RootPassword:  "pw",
+		AnswerBaseURL: "https://m/render/tokm",
+		CompleteURL:   "https://m/render/tokm/complete",
+		ImageSource:   "https://mirror.example/rocky9",
+		Disks: []render.ResolvedDisk{
+			{Device: "sda", SizeBytes: 3999999721472, Wipe: true, Partitions: []render.ResolvedPartition{
+				{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+				{Mount: "/", FS: "ext4", Grow: true}}},
+		},
+		Network: []render.NetworkEntry{
+			{Match: &render.NetMatch{MAC: "aa:bb:cc:dd:ee:01"},
+				Addresses: []string{"198.51.100.170/24"}},
+		},
+	}
+	answers, _, err := New().RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	ks := answers[0].Content
+	for _, want := range []string{
+		"part / --fstype=ext4 --ondisk=sda --grow --maxsize=3814697",
+		"--hostname=rk9-host --activate",
+	} {
+		if !strings.Contains(ks, want) {
+			t.Errorf("kickstart missing %q", want)
+		}
+	}
+	if strings.Count(ks, "--hostname=rk9-host") != 2 {
+		// stanza + the standalone `network --hostname=` line
+		t.Errorf("hostname should appear on the stanza and the standalone line: %d", strings.Count(ks, "--hostname=rk9-host"))
+	}
+}

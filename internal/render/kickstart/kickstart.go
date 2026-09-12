@@ -169,6 +169,11 @@ openssh-server
 curl
 %end
 
+%post --nochroot --erroronfail
+set -e
+{{.GrowRootScript}}
+%end
+
 %pre --erroronfail
 set -e
 {{failtrap "pre_install script failed" .CompleteURL}}
@@ -212,17 +217,17 @@ func hasExt4RootGrow(disks []render.ResolvedDisk) bool {
 }
 
 // growRootScript extends the root partition to disk end and grows the
-// filesystem inside the %post chroot (/ is the target root there). blivet
-// clamps --grow at the 2^32 sector boundary on controller volumes
-// (real-hardware: 3.6T disk, root stopped at 2TiB) — anaconda also ignores
-// --maxsize there, so the extension happens here instead. Every step is
-// failure-tolerant: the install itself must not be affected.
+// filesystem. blivet clamps --grow at the 2^32 sector boundary on controller
+// volumes (real-hardware: 3.6T disk, root stopped at 2TiB) — anaconda also
+// ignores --maxsize there, so the extension happens in %post instead.
+//
+// The %post runs chrooted INTO the target: / there IS the target root, so
+// findmnt resolves its source device directly. resize2fs then grows the
+// mounted ext4 online. Failure-tolerant: the install is unaffected.
 func growRootScript() string {
-	return `if root_src=$(findmnt -nro SOURCE /); then
-  root_disk=$(lsblk -no PKNAME "$root_src") && root_num=$(printf %s "$root_src" | grep -o '[0-9]\+$') \
-    && parted -s "/dev/$root_disk" resizepart "$root_num" 100% \
-    && resize2fs "$root_src"
-fi`
+	return `root_src=$(findmnt -nro SOURCE /mnt/sysimage) && root_disk=$(lsblk -nro PKNAME "$root_src") && root_num=$(printf %s "$root_src" | grep -o '[0-9]\+$') && \
+  parted -s "/dev/$root_disk" resizepart "$root_num" 100% && \
+  resize2fs "$root_src" || echo "grow root extension skipped (non-fatal)"`
 }
 
 // networkShell emits the sh snippet executed in %pre: resolve MAC → interface
@@ -528,14 +533,6 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			return nil, render.BootParams{}, fmt.Errorf("rocky9: unknown script stage %q", s.Stage)
 		}
 	}
-	// blivet clamps --grow at the 2^32 sector boundary on controller volumes
-	// (real-hardware: 3.6T disk, root stopped at 2TiB, tail stranded) —
-	// extend the root partition to disk end and grow the filesystem in
-	// %post. Any failure inside the guard leaves the install untouched.
-	if hasExt4RootGrow(in.Disks) {
-		postScripts = append([]string{growRootScript()}, postScripts...)
-	}
-
 	netPre := ""
 	if len(in.Network) > 0 {
 		shell, err := networkShell(in.Network, in.Hostname)
@@ -590,6 +587,12 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		"PreScripts":      preScripts,
 		"PostScripts":     postScripts,
 		"CompleteURL":     in.CompleteURL,
+		// blivet clamps --grow at the 2^32 sector boundary on controller
+		// volumes (real-hardware: 3.6T disk, root stopped at 2TiB) — a
+		// %post --nochroot extends the root partition to disk end after
+		// anaconda's own (clamped) allocation.
+		"GrowRootExtension": hasExt4RootGrow(in.Disks),
+		"GrowRootScript":    growRootScript(),
 	}
 	if in.Hostname != "" {
 		// kickstart sets hostname via the network command or a %post; the

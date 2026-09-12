@@ -364,6 +364,16 @@ builder 按任务生成,命名 `probe-<token>.iso`(token 为发现任务的机�
 
 另:verify_ready 曾漏传凭证的 private_key(仅 discover 路径正确),
 密钥认证型凭证在装后探活必然 AUTH_FAILED——已修(b65b995)。
+**第三处(当晚Clean验证时暴露)**:verify_ready 不重载任务快照——
+runner 将 claim 时快照贯穿全部 stage,其余读 context 的 stage 均在
+入口 `task = fresh` 重载,唯 verify_ready 直读旧快照,完成报告
+(install_os 等待期由 RecordInstallComplete 落库)对它不可见,首试必
+报 INSTALL_NOT_VERIFIED 白烧一次任务重试——已修(7cd6e1d)。
+
+**修复后全绿验证(job_dd4f7edf1bec,2026-09-12 夜)**:单次投递
+六阶段 succeeded、零任务级重试;verify_ready 首试通过检查并轮询
+2m19s 等到重启后的新系统,自动完成带内核验 + 装后快照刷新。
+
 运维注记:**轮换 MAMMOTH_MASTER_KEY 后存量凭证全部失效**
 (`cipher: message authentication failed` → CREDENTIAL_UNAVAILABLE),
 须重建凭证并更新机器引用。

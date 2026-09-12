@@ -1121,15 +1121,13 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 					PrivateKey string `json:"private_key"`
 				}
 				if json.Unmarshal(plain, &secret) == nil {
-					probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-					defer cancel()
-					res, err := e.Inband.Collect(probeCtx, m.SSHAddress, inbandssh.Credentials{
+					res, perr := e.waitForNewSystem(ctx, m.SSHAddress, inbandssh.Credentials{
 						Username: secret.Username, Password: secret.Password,
 						PrivateKey: secret.PrivateKey,
 					})
-					if err != nil {
+					if perr != nil {
 						return classifiedErr("INSTALL_NOT_REACHABLE", true,
-							"new system did not answer in-band: %s", err.Error())
+							"new system did not answer in-band: %s", perr.Error())
 					}
 					// Post-install refresh: the freshly installed system is the
 					// best source for the layout snapshot (device names + serials
@@ -1157,6 +1155,61 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 	}
 	obs.FromContext(ctx).InfoContext(ctx, "install verified ready")
 	return nil
+}
+
+// verifyReadyWait is the poll budget for the post-install in-band wait.
+func (e *Executor) verifyReadyWait() time.Duration {
+	if e.VerifyReadyWait > 0 {
+		return e.VerifyReadyWait
+	}
+	return 10 * time.Minute
+}
+
+// waitForNewSystem polls the in-band probe until the freshly installed
+// system answers — or the wait budget runs out. The completion report
+// arrives at the installer's %post/late-command, while the machine still
+// has to tear down the installer, reboot, POST and bring up sshd (minutes
+// on real hardware — far beyond what task-level retries cover). During
+// that window the installer environment's own sshd can answer the probe
+// (it carries the kickstart rootpw) — the installer marker filters that
+// false positive out, and the loop keeps polling until the real system
+// shows up. Auth rejections surface immediately: waiting cannot heal them
+// (the installer env accepts passwords the provisioned system refuses).
+func (e *Executor) waitForNewSystem(ctx context.Context, addr string, cred inbandssh.Credentials) (*inbandssh.Result, error) {
+	wait := e.verifyReadyWait()
+	deadline := time.Now().Add(wait)
+	for {
+		probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		res, err := e.Inband.Collect(probeCtx, addr, cred)
+		cancel()
+		if err == nil && !res.InstallerEnv {
+			return res, nil
+		}
+		var ie *inbandssh.Error
+		if err != nil && errors.As(err, &ie) && ie.Code == "CREDENTIAL_AUTH_FAILED" {
+			return nil, err
+		}
+		if time.Now().After(deadline) {
+			if err == nil {
+				return nil, fmt.Errorf("installer environment still finishing after %s wait", wait)
+			}
+			return nil, err
+		}
+		obs.FromContext(ctx).InfoContext(ctx, "verify_ready waiting for the new system",
+			"installer_env", err == nil, "err", errString(err))
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(10 * time.Second):
+		}
+	}
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // ── snapshot binding helpers (M4) ───────────────────────────────────────────

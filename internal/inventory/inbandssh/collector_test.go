@@ -179,3 +179,32 @@ func TestScriptIsReadOnly(t *testing.T) {
 }
 
 func scriptOf() string { return Script }
+
+// The ENV section flags a running installer environment — verify_ready's
+// guard against verifying against anaconda/subiquity/d-i instead of the
+// freshly installed system (real-hardware false positive).
+func TestCollectInstallerEnvMarker(t *testing.T) {
+	// absence (recorded fixtures / older outputs) reads as a regular system
+	res, err := parse(fixture)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if res.InstallerEnv {
+		t.Errorf("fixture without ENV section must not read as installer env")
+	}
+
+	// an installer marker flips the flag without disturbing the layout
+	installer := fixture + `===ENV===
+/run/anaconda
+`
+	res, err = parse(installer)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !res.InstallerEnv {
+		t.Errorf("anaconda marker must read as installer env")
+	}
+	if len(res.Layout.Disks) == 0 {
+		t.Errorf("installer-env session must still carry the layout")
+	}
+}

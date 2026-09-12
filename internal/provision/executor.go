@@ -56,6 +56,12 @@ type Executor struct {
 
 	// LayoutKeep is the per-machine snapshot retention (docs/08-data-model.md).
 	LayoutKeep int
+
+	// VerifyReadyWait bounds verify_ready's in-band poll for the new system
+	// after the completion report (reboot + POST + sshd takes minutes —
+	// real-hardware finding; task-level retries cover only ~30s). Zero
+	// applies the default (10m).
+	VerifyReadyWait time.Duration
 }
 
 // ExecuteStage runs stage seq of the task's flow.

@@ -41,20 +41,27 @@ type Runner interface {
 // Script is the exact read-only command set. Single connection, bounded
 // output, no side effects. The sysfs loop supplies partition start offsets,
 // which lsblk does not expose but the layout contract requires
-// (docs/04-install-spec.md §3: start_bytes/end_bytes).
+// (docs/04-install-spec.md §3: start_bytes/end_bytes). The ENV section
+// reports known installer-runtime markers (/run/anaconda, /run/subiquity,
+// …) — verify_ready uses it to tell the still-finishing installer apart
+// from the freshly installed system (real-hardware: the installer env has
+// its own sshd and can answer the post-install probe as a false positive).
 const Script = `lsblk -J -b -o NAME,PATH,SIZE,TYPE,FSTYPE,MOUNTPOINT,PKNAME,PARTLABEL,PARTUUID,SERIAL,PTTYPE
 echo '===BLKID==='
 blkid -o export 2>/dev/null || true
 echo '===LINK==='
 ip -j link 2>/dev/null || true
 echo '===PARTS==='
-for f in /sys/block/*/*/start; do printf '%s ' "$f"; cat "$f"; done 2>/dev/null || true`
+for f in /sys/block/*/*/start; do printf '%s ' "$f"; cat "$f"; done 2>/dev/null || true
+echo '===ENV==='
+for m in /run/anaconda /run/subiquity /run/debian-installer /lib/debian-installer; do [ -e "$m" ] && echo "$m"; done 2>/dev/null || true`
 
 // Sections split the combined output.
 const (
 	secLSBLK = "===BLKID==="
 	secBLKID = "===LINK==="
 	secLINK  = "===PARTS==="
+	secENV   = "===ENV==="
 )
 
 // Collector turns one Runner invocation into a layout snapshot plus refreshed
@@ -67,6 +74,11 @@ type Collector struct {
 type Result struct {
 	Layout Layout
 	NICs   []NICFacts
+	// InstallerEnv reports that the session landed in a running installer
+	// environment (anaconda/subiquity/d-i markers present) rather than a
+	// regular system. verify_ready refuses to verify against it; discovery
+	// treats it as informational.
+	InstallerEnv bool `json:"installer_env"`
 }
 
 // Layout is the snapshot contract shape (docs/04-install-spec.md §3).
@@ -181,7 +193,7 @@ type blkidDev struct {
 
 // parse converts the combined script output. Exported for tests.
 func parse(out string) (*Result, error) {
-	lsblkOut, blkidOut, linkOut, partsOut, err := splitSections(out)
+	lsblkOut, blkidOut, linkOut, partsOut, envOut, err := splitSections(out)
 	if err != nil {
 		return nil, err
 	}
@@ -238,21 +250,27 @@ func parse(out string) (*Result, error) {
 		// parse outcome but keep the snapshot.
 		nics = nil
 	}
-	return &Result{Layout: layout, NICs: nics}, nil
+	return &Result{Layout: layout, NICs: nics, InstallerEnv: strings.TrimSpace(envOut) != ""}, nil
 }
 
-func splitSections(out string) (lsblk, blkid, link, parts string, err error) {
+func splitSections(out string) (lsblk, blkid, link, parts, env string, err error) {
 	i1 := strings.Index(out, secLSBLK)
 	i2 := strings.Index(out, secBLKID)
 	i3 := strings.Index(out, secLINK)
 	if i1 < 0 || i2 < 0 || i3 < 0 {
-		return "", "", "", "", fmt.Errorf("output missing section markers (lsblk=%v blkid=%v link=%v)", i1 >= 0, i2 >= 0, i3 >= 0)
+		return "", "", "", "", "", fmt.Errorf("output missing section markers (lsblk=%v blkid=%v link=%v)", i1 >= 0, i2 >= 0, i3 >= 0)
 	}
 	lsblk = out[:i1]
 	blkid = out[i1+len(secLSBLK) : i2]
 	link = out[i2+len(secBLKID) : i3]
 	parts = out[i3+len(secLINK):]
-	return lsblk, blkid, link, parts, nil
+	// The installer-marker section is optional: recorded fixtures and older
+	// collected outputs may not carry it; absence reads as "not an installer".
+	if i4 := strings.Index(parts, secENV); i4 >= 0 {
+		env = parts[i4+len(secENV):]
+		parts = parts[:i4]
+	}
+	return lsblk, blkid, link, parts, env, nil
 }
 
 func parseLSBLK(out string) ([]lsblkDisk, error) {

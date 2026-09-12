@@ -276,6 +276,7 @@ func serve(args []string) error {
 			MediaWorkDir:    cfg.MediaWorkDir,
 			MediaBaseURI:    cfg.MediaBaseURI,
 			BootSettleDelay: cfg.BootSettleDelay,
+			VerifyReadyWait: cfg.VerifyReadyWait,
 			MediaUploader:   mediaUploader,
 			RamdiskEnabled:  cfg.RamdiskEnabled,
 			LayoutKeep:      cfg.LayoutRetention,

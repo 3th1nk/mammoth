@@ -221,6 +221,37 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /api/v1/machines/{id}/install-plan:
+    parameters:
+      - $ref: '#/components/parameters/machineId'
+    post:
+      operationId: createInstallPlan
+      tags: [machines]
+      summary: Resolve an install spec into a plan without installing
+      description: >
+        Read-only dry-run of the install pipeline's resolution stages:
+        selectors are resolved against the machine's inventory, the distro
+        driver renders its answer files, and the resolved plan is returned.
+        Nothing is queued and nothing is written; the validation surface is
+        identical to a real install submission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstallSpec'
+      responses:
+        '200':
+          description: Resolved install plan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallPlan'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
   /api/v1/machines/{id}/layout:
     parameters:
       - $ref: '#/components/parameters/machineId'
@@ -1554,6 +1585,71 @@ components:
           type: array
           items:
             type: integer
+
+    InstallPlan:
+      type: object
+      required: [driver, resolved_disks, boot_drive]
+      properties:
+        driver:
+          type: string
+          description: Distro driver the plan was rendered with.
+        resolved_disks:
+          type: array
+          items:
+            $ref: '#/components/schemas/InstallPlanDisk'
+        boot_drive:
+          type: string
+          description: Device holding the root partition (bootloader target).
+        warnings:
+          type: array
+          items:
+            type: string
+          description: Non-fatal observations (out-of-band view only, unused spec keys, …).
+
+    InstallPlanDisk:
+      type: object
+      required: [device, size_bytes, planned_partitions]
+      properties:
+        device:
+          type: string
+          description: Kernel device name the selector resolved to.
+        matched_by:
+          type: object
+          additionalProperties: true
+          description: The selector fields that produced this match.
+        serial:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        keep:
+          type: boolean
+          description: True when the disk is claimed with keep (never touched).
+        planned_partitions:
+          type: array
+          items:
+            $ref: '#/components/schemas/InstallPlanPartition'
+
+    InstallPlanPartition:
+      type: object
+      required: [number, mount, fs]
+      properties:
+        number:
+          type: integer
+          description: Partition number in declaration order.
+        mount:
+          type: string
+        fs:
+          type: string
+        size_mb:
+          type: integer
+          description: Fixed size in MB; absent when grow.
+        grow:
+          type: boolean
+        flags:
+          type: array
+          items:
+            type: string
 
     InstallSpec:
       type: object

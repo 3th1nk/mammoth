@@ -16,7 +16,9 @@
 | 迁移 | goose | — | SQL 文件式 schema 迁移 |
 | Redfish 客户端 | gofish(`stmcginnis/gofish`) | — | 带外盘查与控制;OEM 扩展自行封装 |
 | IPMI | 纯 Go 协议实现(以 `vmware/goipmi` 为基础裁剪) | — | chassis/bootdev/FRU 常用子集;零外部依赖 |
-| SSH | `golang.org/x/crypto/ssh` | — | inband_ssh 探针 |
+| SSH | `golang.org/x/crypto/ssh` | — | inband_ssh 探针、介质中转 |
+| 内置 NFS 导出 | go-nfs(用户态 NFSv3)+ 自带 mini rpcbind(`internal/nfsx`) | — | 介质目录的进程内只读导出,BMC 直挂 `nfs://<mammoth>/`;大规模部署关掉(`MAMMOTH_NFS_EXPORT=false`)走外部 NFS |
+| ISO 重打包 | xorriso(探测/提取/装配,纯用户态) | — | 发行版 ISO → `boot-<token>.iso`(应答文件与内核参数烘入) |
 | 模板渲染 | 标准库 `text/template` | — | 应答文件渲染(纯文本注入) |
 | 介质组装 | xorriso | 外部工具,仅 builder 面引用 | 通用引导介质制作 |
 | 日志 | `log/slog` | — | 结构化 JSON 日志 |
@@ -132,16 +134,22 @@ type TaskQueue interface {
 ```
 mammoth/
 ├── api/openapi.yaml          # 契约:唯一事实源
-├── cmd/mammoth/              # 入口:serve --mode / CLI 子命令
+├── cmd/mammoth/              # 入口:serve --mode / CLI 子命令(cobra)
 ├── internal/
-│   ├── api/                  # 控制面:HTTP 实现(gin 路由,契约生成的绑定 + 手写 handler)
-│   ├── bmc/                  # BMC 驱动:redfish / ipmi / fake(测试)
-│   ├── provision/            # 状态机与 flow 定义
-│   ├── builder/              # 渲染与介质组装
-│   ├── inventory/            # 探针:redfish / inband_ssh / ramdisk
-│   ├── store/                # repo 接口 + PG 实现 + 表队列
-│   └── render/               # 应答文件模板(text/template)
-├── docs/                     # 设计文档(本目录)+ compat/ 厂商矩阵
+│   ├── api/                  # 控制面:HTTP 实现(契约生成绑定 + 手写 handler、SSE、webhook 投递面)
+│   ├── bmc/                  # BMC 驱动:redfish / ipmi / fake + 可选能力(VolumeCreator 等)
+│   ├── provision/            # 状态机与 flow 定义(六阶段 install 流水线)、verify_ready
+│   ├── builder/              # 介质组装:发行版 ISO 探测/重打包(boot-<token>.iso)
+│   ├── inventory/            # 探针:inband_ssh(redfish 盘查在 bmc;ramdisk 规划)
+│   ├── render/               # 应答文件渲染,按方言分包:kickstart / autoinstall / preseed
+│   ├── store/                # repo + PG 迁移 + 表队列(PG/SQLite 双实现)
+│   ├── nfsx/                 # 内置只读 NFSv3 导出(go-nfs + mini rpcbind)
+│   ├── mediarelay/           # 介质 SSH 中转(原子可见推送)
+│   ├── webhook/              # Webhook 签名投递(HMAC-SHA256、退避)
+│   ├── cli/                  # CLI(纯 HTTP 客户端,契约之外零语义)
+│   ├── config/               # 环境变量配置(MAMMOTH_*)
+│   └── obs/                  # slog/Prometheus/OTel 可观测埋点
+├── docs/                     # 设计文档(本目录)+ compat/ 厂商与发行版矩阵
 └── deploy/                   # 容器与 compose 示例
 ```
 

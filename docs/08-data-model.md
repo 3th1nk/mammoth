@@ -8,12 +8,9 @@
 ```
 credentials 1 ──── n machines 1 ──── n layout_snapshots
                   │
-images            │(引用)
-templates ────────┤
-                  ▼
 jobs 1 ──── n tasks 1 ──── n task_stages
                     │
-                    └── n task_logs / events
+                    └── events(task_logs 为规划表,未建)
 ```
 
 ## 2. 表定义
@@ -37,6 +34,7 @@ jobs 1 ──── n tasks 1 ──── n task_stages
 | bmc_protocol | text | `redfish` \| `ipmi` \| `auto` |
 | bmc_credential_id | text FK → credentials | |
 | ssh_credential_id | text FK,nullable | 带内盘查用 |
+| ssh_address | text,nullable | 带内寻址(契约 `machine.ssh.address`;迁移 00002,`inband_ssh` 需与凭证同时配置) |
 | vendor / model / serial_number / firmware | text,nullable | 盘查回填 |
 | hardware | jsonb,nullable | 盘查结果(hardware view) |
 | power_state | text | `on` \| `off` \| `unknown` |
@@ -60,12 +58,14 @@ jobs 1 ──── n tasks 1 ──── n task_stages
 **只追加,不更新**;`machine` 视图取 `captured_at` 最新版本。
 保留策略:每机保留最近 N 版(默认 10),过期清理由后台任务执行。
 
-### images / templates
+### images / templates(未实现,规划保留)
 
 | 表 | 关键字段 |
 |----|---------|
 | images | id(`img_`), name, source, checksum, distro, size_bytes |
 | templates | id(`tpl_`), name, spec(jsonb,即 Install Spec), labels |
+
+> 现实现中介质引用直接进 Install Spec 的 `image.source`,spec 模板化复用由客户端管理。
 
 ### jobs
 
@@ -92,7 +92,7 @@ jobs 1 ──── n tasks 1 ──── n task_stages
 | job_id | text FK | `idx(job_id)` |
 | machine_id | text FK | |
 | state | text | `pending` \| `running` \| `succeeded` \| `failed` \| `canceled` \| `interrupted` |
-| flow_name | text | 状态机定义名(如 `install_rocky9`) |
+| flow_name | text | 状态机定义名:`install` \| `power` \| `discover`(stage 序列见 provision flow 定义) |
 | stage_index | int | 当前/最后到达的 stage |
 | stage_attempt | int | |
 | stage_deadline | timestamptz,nullable | 当前 stage 的超时点 |
@@ -123,8 +123,8 @@ jobs 1 ──── n tasks 1 ──── n task_stages
 
 | 表 | 关键字段 | 说明 |
 |----|---------|------|
-| task_logs | task_id, ts, level, message | 安装过程日志;按月分区,TTL 默认 90d |
-| events | id(bigserial), resource_type, resource_id, type, payload jsonb, ts | SSE 水位线按 id;TTL 默认 30d |
+| task_logs | task_id, ts, level, message | **规划未建**(M6 余项):安装过程日志;按月分区,TTL 默认 90d |
+| events | id(bigserial), resource_type, resource_id, type, payload jsonb, ts | ✅ 已建;SSE 水位线按 id(1s 轮询);审计/事件查询 API 与 Webhook 投递的数据源 |
 
 ## 3. 一致性与并发的三条铁律
 

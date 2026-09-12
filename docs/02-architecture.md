@@ -45,7 +45,7 @@ Mammoth 的运行时由三个职责面组成,可同进程运行,也可独立部�
 job(type: install | power | discover)
  └── task(per machine)
       └── stages(有序阶段序列,持久化推进)
-           verify_layout → prepare_media → boot → install → verify_ready
+           verify_layout → configure_raid → prepare_media → boot → install_os → verify_ready
 ```
 
 核心规则:
@@ -61,19 +61,21 @@ job(type: install | power | discover)
 
 ```
 InstallSpec(声明式意图)
-   │ 控制面校验(schema + 语义约束 + layout 快照引用)
+   │ 控制面校验(schema + 语义约束 + layout 快照引用;install-plan 可试算)
    ▼
 渲染(build 面)            ┌─ storage ──▶ 分区动作集(执行时 %pre 解析校验)
-   spec × machine layout ──┤  network ──▶ 应答文件 network 段
+   spec × machine layout ──┤  network ──▶ 应答文件 network 段(netplan/network 命令/netcfg)
                           └─ identity ─▶ 主机名/凭证/脚本
    ▼
-引导介质(通用,按架构常驻)+ 发行版原盘 ──▶ BMC 虚拟介质挂载(或 PXE,预留)
+发行版原盘重打包为 boot-<token>.iso(应答文件烘入,离线 seed)
+   ▼
+BMC 虚拟介质挂载 + 一次性引导(介质服务:内置 NFS 导出 / 外部 NFS / SSH 中转)
    ▼
 安装环境 %pre:校验实际分区表 vs 快照 ─── 不一致 ──▶ 中止回报(LAYOUT_DRIFT)
    ▼                       │ 一致
    动态生成分区指令 ◀───────┘
    ▼
-安装执行 ──▶ 首次启动核验(带内可达性)──▶ task.succeeded
+安装执行 ──▶ 完成回调 ──▶ verify_ready(带内探活轮询 + 装后快照刷新)──▶ task.succeeded
 ```
 
 要点:**最终分区指令不在提交时烧死**。提交时绑定的是"意图 + 快照基线",
@@ -84,8 +86,9 @@ InstallSpec(声明式意图)
 | 组件 | 用途 | 说明 |
 |------|------|------|
 | PostgreSQL ≥14 | 主存储 + 任务队列 + 分布式协调 | **唯一运行时强依赖**:资源/契约/任务状态/事件存于同一库;队列用 `SKIP LOCKED` 表队列,互斥用 advisory lock;repo 接口抽象,SQLite 为最小部署可选实现 |
-| 介质仓库 | 发行版原盘、通用引导介质、渲染产物 | 本地卷 / S3 兼容对象存储,路径式引用 |
-| 凭证加密 | credential 的静态加密 | 主密钥由部署方配置(KMS/环境注入) |
+| 介质仓库 | 发行版原盘、任务引导介质(`boot-<token>.iso`) | 本地卷(`MAMMOTH_MEDIA_DIR`);S3 兼容对象存储为规划后端 |
+| 介质服务 | 让 BMC 可挂载介质 | 内置只读 NFSv3 导出(`internal/nfsx`,go-nfs + mini rpcbind,默认开)/ 外部 NFS(`MAMMOTH_MEDIA_BASE_URI`)/ SSH 中转(`MAMMOTH_MEDIA_RELAY_*`,原子可见) |
+| 凭证加密 | credential 的静态加密 | 主密钥由部署方配置(`MAMMOTH_MASTER_KEY`;**轮换后存量凭证须重建**) |
 
 > 队列与协调由数据库承担的完整理由见 [10-tech-stack.md](10-tech-stack.md) D2/D3:
 > 部署单元从"存储 + 队列"两个服务降为一个,且任务状态与队列消息同库同事务,
@@ -99,11 +102,11 @@ InstallSpec(声明式意图)
 mammoth serve --mode=all        # 单机一体化(评估/小规模)
 mammoth serve --mode=api        # 控制面
 mammoth serve --mode=runner     # 执行面
-mammoth serve --mode=builder    # 构建面(需要 xorriso、loop mount 能力)
+mammoth serve --mode=builder    # 构建面(需要 xorriso,用户态装配无特权要求)
 mammoth serve --mode=prober     # 盘查面
 ```
 
-- 容器化交付;builder 容器需要特权(loop mount)或降级为用户态工具链,见 [06-install-pipeline.md](06-install-pipeline.md);
+- 容器化交付;builder 容器仅需 xorriso(纯用户态探测/提取/装配,不 loop mount),见 [06-install-pipeline.md](06-install-pipeline.md);
 - runner/builder/prober 与 api 同二进制、不同入口,共享一份配置与契约,避免分叉。
 
 ### 5.2 可观测性
@@ -113,7 +116,7 @@ mammoth serve --mode=prober     # 盘查面
 | 日志 | 结构化(JSON);标准字段集(`task_id` `machine_id` `job_id` `request_id` `stage`)全链路透传;任务日志双写:存储(供 API 检索)+ 本地日志 |
 | 指标 | Prometheus:job/task 计数(按 state)、各 stage 耗时直方图、`bmc_request_duration_seconds`(按 vendor/操作/结果)、`bmc_errors_total`(按错误码)、队列深度 |
 | 追踪 | OTel API 边界埋点(HTTP handler / 队列消费 / BMC 调用 / 渲染),默认 no-op 零依赖;配置启用 OTLP 导出后生效;span 上下文随队列消息透传,跨面不断链 |
-| 事件 | stage 变更与终态写入事件表,经 SSE 推送;Webhook 为可选扩展 |
+| 事件 | stage 变更与终态写入事件表,经 SSE 推送(job 级 + 全局,Last-Event-ID 续传);Webhook 订阅投递(HMAC-SHA256 签名、类型过滤、退避重试) |
 | 审计 | 全部写操作(凭证创建、动作下发、job 提交)记审计事件:who/when/what/target |
 
 > 埋点自 M0 写入代码(见 [10-tech-stack.md](10-tech-stack.md) D6):
@@ -126,7 +129,7 @@ mammoth serve --mode=prober     # 盘查面
 | 镜像 | 内容 | 基础镜像 | 说明 |
 |------|------|---------|------|
 | `mammoth` | 主二进制,`--mode=all/api/runner/prober` 共用 | distroless(静态编译,无 shell) | 业务面无外部命令依赖,可最小化 |
-| `mammoth-builder` | 主二进制 `--mode=builder` + xorriso | alpine/debian-slim | 需要外部工具与 loop mount 特权(capability) |
+| `mammoth-builder` | 主二进制 `--mode=builder` + xorriso | alpine/debian-slim | 需要外部工具 xorriso(用户态装配,无特权要求) |
 
 - 多架构:amd64 + arm64(goreleaser → 多架构 manifest);
 - 配置全部经环境变量与挂载配置文件注入,镜像无状态;

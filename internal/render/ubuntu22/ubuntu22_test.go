@@ -87,14 +87,18 @@ func TestRenderAutoinstallWipeAndBond(t *testing.T) {
 		t.Fatal("autoinstall section missing")
 	}
 
-	// access: per-task root password via chpasswd, ssh keys via autoinstall.ssh
-	if _, ok := ud["chpasswd"]; !ok {
-		t.Errorf("root password (chpasswd) missing")
+	// access: root password + ssh keys are set during install (late-commands)
+	// — anything left to first-boot cloud-init silently no-ops because the
+	// booted system cannot read the seed (real-hardware lesson).
+	if ud["chpasswd"] != nil {
+		t.Errorf("chpasswd must not ride in user-data anymore (first-boot cannot read it)")
 	}
 	ssh, _ := auto["ssh"].(map[string]any)
-	keys, _ := ssh["authorized-keys"].([]any)
-	if len(keys) != 1 || keys[0] != "ssh-ed25519 AAA u@m" {
-		t.Errorf("ssh keys wrong: %v", keys)
+	if _, ok := ssh["authorized-keys"]; ok {
+		t.Errorf("authorized-keys must move to late-commands")
+	}
+	if auto["shutdown"] != "reboot" {
+		t.Errorf("shutdown: reboot missing")
 	}
 
 	// netplan: bond slaves matched by MAC address natively
@@ -137,10 +141,22 @@ func TestRenderAutoinstallWipeAndBond(t *testing.T) {
 		t.Errorf("no sda in this spec, storage leaked: %s", joined)
 	}
 
-	// completion callback + user script + hostname
+	// completion callback + user script + hostname + access provisioning
 	late := strings.Join(toStrSlice(auto["late-commands"]), "\n")
 	if !strings.Contains(late, "https://m/render/tok9/complete") {
 		t.Errorf("completion callback missing")
+	}
+	if !strings.Contains(late, "python3") {
+		t.Errorf("completion callback must use python3 (curl absent in subiquity env)")
+	}
+	if !strings.Contains(late, `chpasswd`) || !strings.Contains(late, "uRoot-pw") {
+		t.Errorf("root password provisioning missing")
+	}
+	if !strings.Contains(late, "PermitRootLogin yes") {
+		t.Errorf("PermitRootLogin provisioning missing")
+	}
+	if !strings.Contains(late, "ssh-ed25519 AAA u@m") {
+		t.Errorf("ssh key provisioning missing")
 	}
 	if !strings.Contains(late, "echo u-done") {
 		t.Errorf("user post script missing")

@@ -514,6 +514,9 @@ func TestRenderGrowMaxsizeAndHostnameOnStanza(t *testing.T) {
 	for _, want := range []string{
 		"part / --fstype=ext4 --ondisk=sda --grow --maxsize=3814697",
 		"--hostname=rk9-host --activate",
+		"findmnt -nro SOURCE /mnt/sysimage",
+		"parted -s \"/dev/$root_disk\" resizepart \"$root_num\" 100%",
+		"resize2fs \"$root_src\"",
 	} {
 		if !strings.Contains(ks, want) {
 			t.Errorf("kickstart missing %q", want)

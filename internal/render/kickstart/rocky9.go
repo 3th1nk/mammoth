@@ -46,6 +46,20 @@ func (d *Driver) Distro() string {
 	}
 	return d.distro
 }
+
+// dialectExtras covers installer deltas between distro members of the same
+// kickstart package. UOS Server's anaconda (33.16 UOS build) crashes in its
+// Finish phase with "max() arg is an empty sequence" under a fully
+// unattended kickstart — its Finish task groups expect an EULA ack and a
+// created user. Both commands are harmless no-ops on standard RHEL-lineage
+// anaconda (and the eula command is skipped with a warning where absent).
+func (d *Driver) dialectExtras() string {
+	switch d.distro {
+	case "uniontechos":
+		return "eula --agreed\nuser --name=uos --password=Uos@2024 --plaintext --groups=wheel"
+	}
+	return ""
+}
 func (d *Driver) SupportedArchs() []render.Arch {
 	return []render.Arch{render.ArchAMD64, render.ArchARM64}
 }
@@ -128,8 +142,9 @@ sh /run/install/mammoth/storage.sh > /run/install/mammoth/90-storage.ks
 {{- end}}
 
 {{.RepoCmd}}
+{{.DialectExtras}}
 {{- if not .StoragePre}}
-bootloader --location=mbr{{if .BootDrive}} --boot-drive={{.BootDrive}}{{end}}
+bootloader{{if .BootDrive}} --boot-drive={{.BootDrive}}{{end}}
 {{- if .WipeDrives}}
 zerombr
 clearpart --drives={{.WipeDrives}} --initlabel --all
@@ -533,6 +548,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		"NetworkShell":    netPre,
 		"StoragePre":      storageShellText != "",
 		"RepoCmd":         repoCmd,
+		"DialectExtras":   d.dialectExtras(),
 		"StorageShell":    storageShellText,
 		"PreScripts":      preScripts,
 		"PostScripts":     postScripts,
@@ -653,9 +669,9 @@ func storageShell(dyn []dynDisk, wipeStatic []string, dynMemberLines []string, b
 				ph = "$D" + fmt.Sprint(d.idx)
 			}
 		}
-		fmt.Fprintf(&b, "bootloader --location=mbr --boot-drive=%s\n", ph)
+		fmt.Fprintf(&b, "bootloader --boot-drive=%s\n", ph)
 	} else {
-		b.WriteString("bootloader --location=mbr\n")
+		b.WriteString("bootloader\n")
 	}
 	b.WriteString("MAMMOTH_STORAGE_KS\n")
 	return b.String()

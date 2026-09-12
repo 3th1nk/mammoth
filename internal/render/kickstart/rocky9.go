@@ -4,7 +4,7 @@
 // Mammoth server via inst.ks; network stanzas are generated at install time
 // by a %pre hook that resolves MAC → interface name (batch-stable selection),
 // so bonds and static addresses survive the installer's device naming.
-package rocky9
+package kickstart
 
 import (
 	"fmt"

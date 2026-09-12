@@ -1,4 +1,4 @@
-package ubuntu22
+package autoinstall
 
 import (
 	"encoding/json"
@@ -34,7 +34,7 @@ func fetchUser(t *testing.T, answers []render.AnswerFile) (meta string, ud map[s
 // (the batch-stable selector), curtin storage for the wipe path, and the
 // completion callback (docs/06-install-pipeline.md §5 matrix: partial).
 func TestRenderAutoinstallWipeAndBond(t *testing.T) {
-	d := New()
+	d := New("ubuntu22")
 	in := render.InstallInputs{
 		TaskToken:     "tok9",
 		MachineID:     "mch_u",
@@ -183,7 +183,7 @@ func TestRenderBiosGrubPartition(t *testing.T) {
 		},
 	}
 	_, ud, err := func() ([]render.AnswerFile, map[string]any, error) {
-		answers, _, err := New().RenderAnswers(in, render.MachineView{})
+		answers, _, err := New("ubuntu22").RenderAnswers(in, render.MachineView{})
 		if err != nil {
 			t.Fatalf("render: %v", err)
 		}
@@ -201,7 +201,7 @@ func TestRenderBiosGrubPartition(t *testing.T) {
 
 // keep: disk on a partial distro: the disk is absent from the curtin config.
 func TestRenderKeepDiskPartial(t *testing.T) {
-	d := New()
+	d := New("ubuntu22")
 	in := render.InstallInputs{
 		AnswerBaseURL: "https://m/render/t", CompleteURL: "https://m/render/t/complete",
 		ImageSource: "i",
@@ -225,7 +225,7 @@ func TestRenderKeepDiskPartial(t *testing.T) {
 // keep: partitions on a partial distro is rejected at render (defense in
 // depth behind the submit gate).
 func TestRenderRejectsKeepPartitions(t *testing.T) {
-	d := New()
+	d := New("ubuntu22")
 	in := render.InstallInputs{
 		AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i",
 		Disks: []render.ResolvedDisk{

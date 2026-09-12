@@ -6,7 +6,7 @@
 // batch-stable selector natively — no pre-install resolution needed.
 // Keep-partition support is partial (docs/06-install-pipeline.md §5 matrix):
 // keep: disk works via curtin storage config; keep: partitions is rejected.
-package ubuntu22
+package autoinstall
 
 import (
 	"encoding/json"
@@ -17,11 +17,20 @@ import (
 )
 
 // Driver is the ubuntu22 autoinstall driver.
-type Driver struct{}
+type Driver struct {
+	distro string
+}
 
-func New() *Driver { return &Driver{} }
+// New returns the driver for one distro name (the subiquity dialect family
+// currently has a single member, "ubuntu22").
+func New(distro string) *Driver { return &Driver{distro: distro} }
 
-func (d *Driver) Distro() string { return "ubuntu22" }
+func (d *Driver) Distro() string {
+	if d.distro == "" {
+		return "ubuntu22"
+	}
+	return d.distro
+}
 func (d *Driver) SupportedArchs() []render.Arch {
 	return []render.Arch{render.ArchAMD64, render.ArchARM64}
 }

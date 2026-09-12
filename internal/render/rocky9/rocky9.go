@@ -566,8 +566,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		early = "ip=dhcp"
 	}
 	boot := render.BootParams{
-		AnswerURL:  primaryURL,
-		KernelArgs: fmt.Sprintf("%s inst.ks=%s inst.repo=%s inst.text", early, primaryURL, repo),
+		AnswerURL:           primaryURL,
+		KernelArgs:          fmt.Sprintf("%s inst.ks=%s inst.repo=%s inst.text", early, primaryURL, repo),
+		InstallerAutoReboot: true, // kickstart's reboot command
 	}
 	return answers, boot, nil
 }

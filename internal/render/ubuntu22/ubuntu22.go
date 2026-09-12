@@ -134,8 +134,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// the documented offline-ISO form (casper mounts the boot medium at
 	// /cdrom — cloud-init reads the seed from there, no networking).
 	boot := render.BootParams{
-		AnswerURL:  primaryURL,
-		KernelArgs: "autoinstall ds=nocloud-net;s=file:///cdrom/",
+		AnswerURL:           primaryURL,
+		KernelArgs:          "autoinstall ds=nocloud-net;s=file:///cdrom/",
+		InstallerAutoReboot: true, // shutdown: reboot
 	}
 	return answers, boot, nil
 }

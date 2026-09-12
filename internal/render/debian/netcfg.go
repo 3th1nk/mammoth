@@ -45,6 +45,12 @@ func netcfgSection(distro string, entries []render.NetworkEntry, hostname string
 		if err != nil {
 			return "", fmt.Errorf("%sinvalid network address %q", prefix, e.Addresses[0])
 		}
+		// Skip the DHCP probe entirely: on a network without a DHCP server
+		// netcfg raises "Network autoconfiguration failed" (an error-level
+		// dialog that autoinstall's critical priority still displays) before
+		// it ever reaches the static values (official static-preseed shape).
+		b.WriteString("d-i netcfg/disable_autoconfig boolean true\n")
+		b.WriteString("d-i netcfg/dhcp_options select Configure network manually\n")
 		fmt.Fprintf(&b, "d-i netcfg/get_ipaddress string %s\n", ip.String())
 		fmt.Fprintf(&b, "d-i netcfg/get_netmask string %s\n", dottedMask(ipnet.Mask))
 		for _, r := range e.Routes {

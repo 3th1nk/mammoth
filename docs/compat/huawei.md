@@ -311,9 +311,47 @@ early_command 采集(/sys 扫描,零工具依赖)+ wget 上报 + poweroff,为无
 - 34MB 探针 ISO 的 UEFI 结构(efi.img 内嵌 grub 配置与 /boot/grub/grub.cfg
   的衔接)需要本地 qemu(SeaBIOS + OVMF 双模式)快速迭代,不再真机盲试。
 
-**下次路径**:本地 qemu 迭代探针 ISO 引导结构(BIOS/UEFI 双模式验证)→
-引导成功后接上报端点(设计:token 认证的 layout 快照写入)→ discover
-集成(probe=ramdisk 分支)→ 真机验证。
+### V1:Alpine 载体 + qemu 双模式闭环(2026-09-13,卡点已根治 ✅)
+
+**载体改型**(debian d-i → **alpine standard**,对齐 Tinkerbell HookOS 思路
+——同为"微型 live 环境采集上报",hook 亦基于 alpine netboot 载荷):
+
+- initramfs+modloop 架构引导到采集脚本仅 ~11s(d-i 全套安装器流程远重于此);
+- busybox 自带 sh/ip/udhcpc/wget,采集/组网/上报零工具依赖;
+- **lts 内核 + modloop-lts 带全量真机存储驱动**(virt 内核缺 megaraid_sas
+  等,不可用于真机;40MB 级的 alpine-virt 亦然);
+- 探针逻辑以 **apkovl 覆盖层**注入(etc/local.d + default runlevel 软链),
+  不触碰任何安装器机制;上报 JSON 与 inband_ssh 快照同形(device/size_bytes/
+  model/serial + partitions{number,start_bytes,end_bytes,size_bytes},
+  end = start + size − 1)。
+
+**V0 卡点根因(qemu 双模式定位)**:
+1. **34MB 选择性组装丢 `/apks`**——alpine initramfs 从介质 boot repository
+   把 alpine-base 装进内存根,没有它 `/sbin/init` 都不存在(应急 shell);
+2. **apkovl= 文件名参数静默失效**——initramfs 的 prepare_apkovl 把单字段
+   值按 initramfs 相对路径解析(不存在即跳过);不传参数时 nlplug-findfs
+   自动探测介质根 `*.apkovl.tar.gz`,工作正常;
+3. **覆盖层存在时默认引导服务不安装**(init:`-f .default_boot_services
+   -o ! -f "$ovl"`)——apkovl 必须自带 `etc/.default_boot_services` 标记,
+   否则 sysinit/boot runlevel 全空(驱动/modloop/控制台全断)。
+
+**V1 结论**:alpine 自带的 UEFI 链(efi.img 嵌入 grub → 搜索并加载 ISO 内
+`/boot/grub/grub.cfg`)在**全量重打包 + 保留原卷标**下天然工作,V0 的
+"衔接"问题不存在于 alpine——无需自建 FAT/grub。`BuildProbeISO` 因此与
+安装介质共用 `rebuildPatchedISO`(alpine layout:boot/syslinux/syslinux.cfg
++ boot/grub/grub.cfg 双配置),探针 ISO ≈ 270MB。
+
+**qemu 双模式验证(scripts/probe-dev/,OVMF 走 pflash,qemu 11 的 -bios
+拒绝加载 edk2 code.fd)**:SeaBIOS ✅ / OVMF ✅——引导 → apkovl →
+/sys 扫描(测试盘 sda/sda1 的 start/size 换算精确)→ udhcpc → POST →
+poweroff,全链路 ~11s。迭代方式:`go test -tags probe_dev`(构建)+
+`scripts/probe-dev/qemu-boot.sh bios|uefi`(引导验证,report-server.py
+捕获上报)。
+
+**下次路径**:上报端点(token 认证的 layout 快照写入,source=ramdisk)→
+discover 集成(probe=ramdisk 分支:构建探针 ISO → 虚拟介质挂载 → 一次性
+CD 引导 → 轮询报告 → 弹出+关机补偿)→ 真机验证(华为 2288H,once CD 与
+VmmControl 挂载时序仍需真机确认)。
 
 **正式实现的命名与生命周期**(与安装介质同构,避免并发冲突):探针 ISO 由
 builder 按任务生成,命名 `probe-<token>.iso`(token 为发现任务的机器面

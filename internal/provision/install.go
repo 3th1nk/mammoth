@@ -745,12 +745,34 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	}
 	// Build in the scratch space when configured (the media repo may be a
 	// size-limited share — the extract+assemble needs ~2x the image size
-	// transiently), then move the finished image into the repo.
+	// transiently), then move the finished image into the repo. Precheck the
+	// space and fail fast with real numbers: a mid-write ENOSPC surfaces as
+	// an opaque xorriso SORRY/excess-space error instead (real-hardware: an
+	// 18G disk filled by accumulated media produced opaque build failures).
+	isoStat, err := os.Stat(distroISO)
+	if err != nil {
+		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true, "distro ISO missing: %s", err.Error())
+	}
+	needMB := isoStat.Size()/1048576*2 + 512 // extract + assemble + headroom
 	outputPath := filepath.Join(e.MediaDir, filepath.Base(mediaFile))
 	buildWork := ""
+	buildDir := e.MediaWorkDir
+	if buildDir == "" {
+		buildDir = filepath.Dir(outputPath)
+	}
 	if e.MediaWorkDir != "" {
 		buildWork = filepath.Join(e.MediaWorkDir, filepath.Base(mediaFile)+".build")
 		outputPath = filepath.Join(e.MediaWorkDir, filepath.Base(mediaFile))
+	}
+	if avail, ok := freeMB(buildDir); ok && avail < needMB {
+		return classifiedErr("MEDIA_NO_SPACE", true,
+			"media build needs ~%d MB free in %s, %d MB available: clear old ISOs or extend the volume",
+			needMB, buildDir, avail)
+	}
+	if avail, ok := freeMB(e.MediaDir); ok && avail < int64(isoStat.Size()/1048576) {
+		return classifiedErr("MEDIA_NO_SPACE", true,
+			"media repo %s needs ~%d MB free for the boot ISO, %d MB available",
+			e.MediaDir, isoStat.Size()/1048576, avail/1048576)
 	}
 	if berr := buildBootISO(ctx, distroISO, outputPath, boot.KernelArgs, seed, buildWork); berr != nil {
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,

@@ -34,3 +34,22 @@ Tinkerbell 换用 agent 工作流哲学,Pixiecore 只做引导层。
   完成后,mammoth 在"无平台依赖 + 原生方言"维度上具备独立生态位;
 - 与上述项目共存而非竞争:业务层若已有 OpenStack/K8s,可经其 API 驱动
   mammoth(mammoth 保持 API-first,任何编排器都可调用)。
+
+## BMC 驱动与异构服务器适配(Ironic 沉淀的借鉴方式)
+
+Ironic 的厂商硬件管理沉淀在 Python 库生态(proliantutils=HPE iLO、
+python-dracclient=Dell iDRAC、irmc-client=富士通……),**语言不通,无法直接
+搬代码**;可借鉴的是它的**适配组织方式**:
+
+1. **现代服务器已 Redfish 统一**:Dell iDRAC9+、HPE iLO5+、Supermicro X11+
+   原生 Redfish——mammoth 的 Redfish 驱动天然覆盖主流机型;Ironic 的厂商
+   Python 库主要服务老固件/非 Redfish 设备(mammoth 由 IPMI 驱动兜底)。
+2. **quirk 沉淀点 = bmccompat 兼容矩阵**:逐厂商真机实录(华为模式)——
+   Ironic 驱动代码里的厂商坑(缺失字段、必须走 OEM 端点的操作、固件版本
+   分界)正是我们的 compat 条目来源;Ironic 的已知名单可当**测试清单**用。
+3. **能力接口模型**:Ironic 的 `supported_*_interfaces` ↔ mammoth 的能力
+   接口(VolumeCreator/PhysicalDrives 已有)。可新增两个标准 Redfish 能力:
+   - **BiosSetter**(Bios Registry:属性表读/写,厂商无关);
+   - **FirmwareInventory**(SoftwareInventory 只读,固件基线核对)。
+4. **cleaning steps 模型**:Ironic 的 NIST 800-88 擦盘规范任务化——wipe
+   策略(superblock/整盘)之外的未来合规等级选项。

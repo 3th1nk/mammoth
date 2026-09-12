@@ -83,6 +83,7 @@ func (e *Executor) probeRamdisk(ctx context.Context, task *store.Task) error {
 		ISOPath:    carrierISO,
 		OutputPath: filepath.Join(e.MediaDir, mediaName),
 		ReportURL:  e.ExternalURL + "/render/" + pctx.Token + "/probe-report",
+		StaticCIDR: e.ProbeStaticCIDR,
 	}); err != nil {
 		return classifiedErr("PROBE_MEDIA_FAILED", true, "probe ISO build failed: %s", err.Error())
 	}

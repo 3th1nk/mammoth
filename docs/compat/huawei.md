@@ -184,6 +184,56 @@ NFS ISO 装包源,静态网络)。全链路打通过程中固化下来的事实:
 - 驱动侧成员映射:内联数组的 Id(如 HDDPlaneDisk0)↔ 单盘资源里的
   SerialNumber,两段拼出 serial→DriveID 的映射。
 
+## ubuntu22 autoinstall 端到端实录(2288H V5,iBMC 6.41)
+
+netinst 形态的 ubuntu-22.04.4 live-server 经 BMC VmmControl 挂载 NFS 介质,
+autoinstall 全自动安装,端到端跑通。过程中固化的实测结论:
+
+### 引导与介质
+
+- **VmmControl 挂载要求介质地址与 BMC 同网段可达**(介质 URI 指向跨网段地址时
+  Connect 任务报 `iBMC.1.0.ConnectionFailed`,且失败表现滞后、伴随超时重试);
+- 引导模式跟随 iBMC 全局设置(`Oem.Huawei BootType=UEFIBoot`);Redfish 的
+  `BootSourceOverrideMode` 在 `Enabled: Disabled` 时**不反映**实际引导模式;
+- 重装后目标机 SSH host key 重生成,登录端 `REMOTE HOST IDENTIFICATION HAS CHANGED`
+  属正常(重装生命周期既有结论的又一实例)。
+
+### ubuntu22 渲染缺陷(真机暴露,均已修复)
+
+1. **ESP 三要素**:`flag: boot` + `grub_device: true`(分区上!)+ `fat32`——缺
+   `grub_device` 即报 `autoinstall config did not create needed bootloader partition`
+   (curtin 拒绝安装 bootloader);
+2. **first-boot 陷阱**:`chpasswd`(user-data 顶层)与 `autoinstall.ssh.authorized-keys`
+   都依赖新系统首启 cloud-init 读 seed——**新系统启动后读不到**(光盘挂载点已变),
+   root 口令/公钥全部静默不生效 → 一切访问供给必须在安装期 late-commands 内完成
+   (`curtin in-target`),对齐 kickstart %post 契约;
+3. **完成回调用 curl 在 subiquity 环境不存在** → 改 python3/urllib;
+4. **不写 `shutdown: reboot` 时 subiquity 在 curtin 完成后停滞**,不自动重启;
+5. **`hostnamectl` 在 curtin chroot 内静默无效**(无 systemd)——直接写
+   `/target/etc/hostname`。
+
+### iBMC 卷名与安装器设备名的鸿沟(联调手段,机制待建)
+
+Redfish 呈现的卷名(`LogicalDrive0`)在安装器内**不存在**(实际为 `/dev/sda`+
+SCSI serial);ubuntu22 渲染在盘查无 serial 时回落 `/dev/<name>` 必然
+`matched no disk`。本轮以"盘查记录改名 sda"联调跑通,正式机制二选一:
+autoinstall early-commands 按 size 锚点现场重识别并改写 storage 配置
+(等价 rocky9 %pre),或 PXE ramdisk 探针先行落快照(roadmap M6)。
+Redfish 侧 `ID_SERIAL_SHORT` 与 `ID_SCSI_SERIAL`(lsblk SERIAL 列)是两个不同
+的值,subiquity 探测取后者——serial 匹配须以实测探测语义为准。
+
+### 安装时长与进度判断(虚拟光驱形态)
+
+- 实测全程 ~3h(引导→curtin 完成):数据复制 ~2h(2.6GB squashfs ÷ 实测
+  ~0.4MB/s)+ 本地解压/配置 ~1h;`installing system` 画面**数小时不动是常态**,
+  不是卡住指示器;
+- 活性/进度判断(服务端可测):`/proc/net/rpc/nfsd` 的 `proc3` 行 READ 计数
+  增量=复制阶段进行中;READ 停涨+数据流归零=进入收尾(10-30 分钟内完成);
+  `ra` 行计数混入元数据操作**不可用作进度**;NFS 导出上存在其他客户端时需
+  tcpdump 按 host 过滤;
+- 精确完成时刻以 mammoth 的 `install_reported` 事件为准(修复后的回调链路);
+  subiquity 卡住时 curtin 日志不落盘,事后无法从目标盘考古精确完成时刻。
+
 ## 介质服务形态
 
 1. **内置导出(默认)**:mammoth 进程内建只读 NFSv3 导出(go-nfs,单端口

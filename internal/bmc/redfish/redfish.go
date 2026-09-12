@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -212,13 +213,23 @@ func (d *Driver) SetPower(ctx context.Context, addr string, cred bmc.Credentials
 	if len(systems) == 0 {
 		return &bmc.Error{Kind: bmc.KindProtocolError, Op: "set_power", Detail: "no computer system resource"}
 	}
+	// Pre-read the Reset action's allowed values (sushy does the same):
+	// restrictive firmwares accept only a subset of the standard ResetTypes
+	// (Huawei iBMC 6.41: PowerCycle/GracefulRestart rejected in favor of
+	// ForceRestart, ForceOn in favor of On — docs/compat/huawei.md §8).
+	// Sending only values the firmware claims to accept avoids a failed
+	// round-trip; the runtime fallback below stays as the belt to the
+	// announcement's braces.
+	if allowed := resetAllowedValues(c, systems[0]); len(allowed) > 0 {
+		if !allowed[string(resetType)] {
+			if alt, ok := resetTypeFallback(resetType); ok && allowed[string(alt)] {
+				resetType = alt
+			}
+		}
+	}
 	if err := systems[0].Reset(resetType); err != nil {
-		// Some firmwares reject standard ResetTypes with
-		// ActionParameterValueFormatError while accepting another value for
-		// the same operation (Huawei iBMC 6.41 observed: PowerCycle and
-		// GracefulRestart rejected in favor of ForceRestart, and ForceOn
-		// rejected in favor of On — docs/compat/huawei.md §8). Retry once
-		// with the firmware's accepted mapping before failing.
+		// Retry once with the alternate mapping when the firmware rejects
+		// the sent ResetType despite (or without) its announcement.
 		if alt, ok := resetTypeFallback(resetType); ok && isResetTypeFormatError(err) {
 			if serr := systems[0].Reset(alt); serr == nil {
 				return nil
@@ -227,6 +238,39 @@ func (d *Driver) SetPower(ctx context.Context, addr string, cred bmc.Credentials
 		return bmc.Classify("set_power", err)
 	}
 	return nil
+}
+
+// resetAllowedValues reads the Reset action's
+// ResetType@Redfish.AllowableValues announcement; empty means the firmware
+// publishes nothing useful and any standard value is worth a try.
+func resetAllowedValues(c *gofish.APIClient, sys *redfish.ComputerSystem) map[string]bool {
+	resp, err := c.Get(sys.ODataID)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+	var doc struct {
+		Actions struct {
+			Reset struct {
+				Allowed []string `json:"ResetType@Redfish.AllowableValues"`
+			} `json:"#ComputerSystem.Reset"`
+		} `json:"Actions"`
+	}
+	if json.Unmarshal(raw, &doc) != nil {
+		return nil
+	}
+	if len(doc.Actions.Reset.Allowed) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(doc.Actions.Reset.Allowed))
+	for _, v := range doc.Actions.Reset.Allowed {
+		out[v] = true
+	}
+	return out
 }
 
 // resetTypeFallback maps ResetTypes onto the values restrictive firmwares
@@ -287,17 +331,56 @@ func (d *Driver) SetBootDevice(ctx context.Context, addr string, cred bmc.Creden
 		return &bmc.Error{Kind: bmc.KindProtocolError, Op: "set_boot_device", Detail: "no computer system resource"}
 	}
 	sys := systems[0]
-	boot := sys.Boot
-	boot.BootSourceOverrideTarget = target
-	if once {
-		boot.BootSourceOverrideEnabled = redfish.OnceBootSourceOverrideEnabled
-	} else {
-		boot.BootSourceOverrideEnabled = redfish.ContinuousBootSourceOverrideEnabled
+	// PATCH the Boot object directly instead of gofish's SetBoot: some
+	// firmware (Huawei iBMC 6.41 observed) requires If-Match on the main
+	// resource and has no Settings object — gofish falls back to that
+	// missing object with an error message that buries the real 412.
+	// Carrying the resource's own ETag when published is the sushy-proven
+	// form; absent an ETag the plain PATCH stays the first attempt.
+	boot := map[string]any{
+		"BootSourceOverrideTarget":  target,
+		"BootSourceOverrideEnabled": enabledFor(once),
 	}
-	if err := sys.SetBoot(boot); err != nil {
+	if sys.Boot.BootSourceOverrideMode != "" {
+		boot["BootSourceOverrideMode"] = sys.Boot.BootSourceOverrideMode
+	}
+	resp, err := patchSystemBoot(c, sys.ODataID, boot)
+	if err != nil {
 		return bmc.Classify("set_boot_device", err)
 	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		raw, _ := io.ReadAll(resp.Body)
+		return &bmc.Error{Kind: bmc.KindProtocolError, Op: "set_boot_device",
+			Detail: fmt.Sprintf("boot override PATCH: %s %s", resp.Status, bmc.FirstLine(string(raw)))}
+	}
 	return nil
+}
+
+func enabledFor(once bool) string {
+	if once {
+		return string(redfish.OnceBootSourceOverrideEnabled)
+	}
+	return string(redfish.ContinuousBootSourceOverrideEnabled)
+}
+
+// patchSystemBoot PATCHes the Boot object, carrying the resource's ETag as
+// If-Match when the firmware publishes one (409 PreconditionFailed otherwise).
+func patchSystemBoot(c *gofish.APIClient, systemURL string, boot map[string]any) (*http.Response, error) {
+	headers := map[string]string{}
+	if resp, err := c.Get(systemURL); err == nil {
+		// Pass the published ETag through verbatim (including any weak
+		// `W/` prefix — iBMC 6.41 both publishes and requires exactly this
+		// form; verified by a live 200 on the value its GET returned).
+		etag := resp.Header.Get("ETag")
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if etag != "" {
+			headers["If-Match"] = etag
+		}
+	}
+	payload := map[string]any{"Boot": boot}
+	return c.PatchWithHeaders(systemURL, payload, headers)
 }
 
 func bootTargetFor(d bmc.BootDevice) (redfish.BootSourceOverrideTarget, bool) {
@@ -326,21 +409,53 @@ func (d *Driver) MountMedia(ctx context.Context, addr string, cred bmc.Credentia
 	if verr != nil || len(vms) == 0 {
 		return &bmc.Error{Kind: bmc.KindUnsupported, Op: "mount_media", Detail: "no virtual media resource"}
 	}
-	for _, vm := range vms {
-		if vm.SupportsMediaInsert {
-			if err := vm.InsertMedia(img.URL, true, true); err != nil {
-				return bmc.Classify("mount_media", err)
-			}
+	// Slot fallback (the pattern Ironic's redfish boot interface is built
+	// on): slots vary wildly — Cisco ships KVM-only and internal-use slots
+	// that reject inserts, OpenBMC slots may lack the action entirely — so
+	// a rejected slot falls through to the next candidate instead of
+	// failing the operation.
+	for _, vm := range orderMediaSlots(vms) {
+		if !vm.SupportsMediaInsert {
+			continue
+		}
+		if err := vm.InsertMedia(img.URL, true, true); err != nil {
+			continue // next candidate slot
+		}
+		return nil
+	}
+	// No action worked — or none is advertised. Several BMCs accept a
+	// plain PATCH of the resource instead (Image + Inserted), which is the
+	// standards-track insert form for them.
+	for _, vm := range orderMediaSlots(vms) {
+		vm.Image = img.URL
+		vm.Inserted = true
+		vm.WriteProtected = true
+		if err := vm.Update(); err == nil {
 			return nil
 		}
 	}
-	// Standard InsertMedia not advertised anywhere (Huawei iBMC observed):
-	// fall back to the vendor OEM action (VmmControl) when the vendor is
-	// recognizable, with task polling until the mount settles.
-	if err := d.vmmControl(ctx, c, addr, img.URL, "Connect"); err != nil {
-		return err
+	// Vendor OEM path last (Huawei iBMC observed: VmmControl only, with
+	// task polling until the mount settles).
+	return d.vmmControl(ctx, c, addr, img.URL, "Connect")
+}
+
+// orderMediaSlots prefers CD slots, then DVD (some firmware — Cisco UCS —
+// ships only a DVD slot), everything else last.
+func orderMediaSlots(vms []*redfish.VirtualMedia) []*redfish.VirtualMedia {
+	rank := func(vm *redfish.VirtualMedia) int {
+		for _, t := range vm.MediaTypes {
+			switch t {
+			case "CD":
+				return 0
+			case "DVD":
+				return 1
+			}
+		}
+		return 2
 	}
-	return nil
+	ordered := append([]*redfish.VirtualMedia(nil), vms...)
+	sort.SliceStable(ordered, func(i, j int) bool { return rank(ordered[i]) < rank(ordered[j]) })
+	return ordered
 }
 
 func (d *Driver) EjectMedia(ctx context.Context, addr string, cred bmc.Credentials, img bmc.MediaImage) error {
@@ -355,7 +470,7 @@ func (d *Driver) EjectMedia(ctx context.Context, addr string, cred bmc.Credentia
 		return &bmc.Error{Kind: bmc.KindUnsupported, Op: "eject_media", Detail: "no virtual media resource"}
 	}
 	advertised := false
-	for _, vm := range vms {
+	for _, vm := range orderMediaSlots(vms) {
 		if !vm.SupportsMediaEject {
 			continue
 		}
@@ -368,9 +483,27 @@ func (d *Driver) EjectMedia(ctx context.Context, addr string, cred bmc.Credentia
 			continue
 		}
 		if err := vm.EjectMedia(); err != nil {
-			return bmc.Classify("eject_media", err)
+			// A just-issued eject can still be in flight on some firmware
+			// (Dell: the next insert would 500 until it settles) — retry
+			// once before falling through.
+			time.Sleep(3 * time.Second)
+			if err2 := vm.EjectMedia(); err2 != nil {
+				return bmc.Classify("eject_media", err2)
+			}
+			return nil
 		}
 		return nil
+	}
+	// PATCH form for action-less slots.
+	for _, vm := range orderMediaSlots(vms) {
+		if !vm.Inserted {
+			continue
+		}
+		vm.Inserted = false
+		vm.Image = ""
+		if err := vm.Update(); err == nil {
+			return nil
+		}
 	}
 	if !advertised {
 		// Huawei-style: no eject action advertised → OEM VmmControl Disconnect.

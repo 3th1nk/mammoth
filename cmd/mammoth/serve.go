@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/3th1nk/mammoth/internal/api"
@@ -37,11 +36,15 @@ import (
 func serve(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	mode := fs.String("mode", "", "runtime facet: all | api | runner | builder | prober (default from MAMMOTH_MODE)")
+	envFile := fs.String("env-file", "", "dotenv file to seed the environment before reading MAMMOTH_* (also MAMMOTH_ENV_FILE); existing environment variables win")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if *envFile != "" {
+		_ = os.Setenv("MAMMOTH_ENV_FILE", *envFile)
+	}
 
-	cfg, err := config.FromEnv()
+	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
@@ -109,11 +112,9 @@ func serve(args []string) error {
 	registry := bmc.NewRegistry(metrics, cfg.BMCTimeout)
 	fakeDriver := fake.New()
 	var fakeInbandDelay time.Duration
-	if d := getenv("MAMMOTH_FAKE_BMC_DELAY", ""); d != "" {
-		if dur, err := time.ParseDuration(d); err == nil {
-			fakeDriver.Delay = dur
-			fakeInbandDelay = dur
-		}
+	if cfg.DevFakeBMCDelay > 0 {
+		fakeDriver.Delay = cfg.DevFakeBMCDelay
+		fakeInbandDelay = cfg.DevFakeBMCDelay
 	}
 	registry.Register(fakeDriver)
 	registry.Register(redfish.New(cfg.BMCTLSInsecure, cfg.BMCTimeout))
@@ -128,10 +129,9 @@ func serve(args []string) error {
 		Delay: fakeInbandDelay,
 	}}
 
-	// Media repository: boot ISOs land in MediaDir; MediaNFSBase exposes it
+	// Media repository: boot ISOs land in MediaDir; MediaBaseURI exposes it
 	// to BMCs (nfs://host/export base for the virtual media mount URI).
-	mediaDir := getenv("MAMMOTH_MEDIA_DIR", "data/media")
-	if err := os.MkdirAll(mediaDir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.MediaDir, 0o755); err != nil {
 		return fmt.Errorf("media dir: %w", err)
 	}
 
@@ -139,13 +139,13 @@ func serve(args []string) error {
 	// NFSv3 in-process, so the BMC mounts nfs://<this host>/... directly.
 	// Disable (MAMMOTH_NFS_EXPORT=false) to use an external NFS service.
 	if cfg.NFSExportEnabled {
-		nfsSrv, nerr := nfsx.Start(ctx, mediaDir, cfg.NFSExportPort)
+		nfsSrv, nerr := nfsx.Start(ctx, cfg.MediaDir, cfg.NFSExportPort)
 		if nerr != nil {
 			// Not fatal: deployments may serve the media dir from an external
 			// NFS service — they just must set MAMMOTH_MEDIA_BASE_URI.
 			logger.Warn("built-in nfs export unavailable", "err", nerr.Error())
 		} else {
-			logger.Info("built-in nfs export serving", "dir", mediaDir, "port", cfg.NFSExportPort)
+			logger.Info("built-in nfs export serving", "dir", cfg.MediaDir, "port", cfg.NFSExportPort)
 			go func() {
 				if serr := nfsSrv.Wait(); serr != nil {
 					logger.Warn("built-in nfs export stopped", "err", serr.Error())
@@ -160,7 +160,7 @@ func serve(args []string) error {
 	// (*Relay)(nil) makes `MediaUploader != nil` true and panics at call time.
 	var mediaUploader provision.MediaUploader
 	var mediaRelay *mediarelay.Relay
-	if getenv("MAMMOTH_MEDIA_RELAY_ADDR", "") != "" {
+	if cfg.MediaRelayAddr != "" {
 		relay, rerr := mediarelay.New(cfg.MediaRelayAddr, cfg.MediaRelayUser,
 			cfg.MediaRelayPassword, cfg.MediaRelayDir, 10*time.Minute)
 		if rerr != nil {
@@ -192,8 +192,8 @@ func serve(args []string) error {
 	// Vendor compatibility matrix: embedded defaults, optionally extended
 	// from a mounted directory (docs/compat/README.md).
 	var compatReg *bmccompat.Registry
-	if dir := getenv("MAMMOTH_COMPAT_DIR", ""); dir != "" {
-		compatReg, err = bmccompat.LoadDir(dir)
+	if cfg.CompatDir != "" {
+		compatReg, err = bmccompat.LoadDir(cfg.CompatDir)
 		if err != nil {
 			logger.WarnContext(ctx, "compat matrix override failed to load, using embedded defaults",
 				"err", err.Error())
@@ -326,11 +326,4 @@ func serve(args []string) error {
 	case err := <-errCh:
 		return err
 	}
-}
-
-func getenv(key, def string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return def
 }

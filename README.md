@@ -34,6 +34,14 @@ MAMMOTH_MASTER_KEY=$(openssl rand -base64 32) \
 bin/mammoth serve --mode=all
 ```
 
+Configuration is 12-factor env (`MAMMOTH_*`). For bare-binary deployments a
+dotenv file works too — existing environment variables win over file entries,
+and invalid values fail startup instead of silently defaulting:
+
+```bash
+bin/mammoth serve --env-file /etc/mammoth.env   # or MAMMOTH_ENV_FILE=...
+```
+
 Try it:
 
 ```bash

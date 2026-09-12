@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/3th1nk/mammoth/internal/bmc"
@@ -24,6 +25,23 @@ func mintProbeToken() (string, error) {
 		return "", fmt.Errorf("entropy: %w", err)
 	}
 	return base64.RawURLEncoding.EncodeToString(b[:]), nil
+}
+
+// withPrefixLen normalizes an address into CIDR form: an address that
+// already carries a prefix passes through; a bare IP gets the given prefix
+// length. Empty input yields ("", false).
+func withPrefixLen(addr string, prefix int) (string, bool) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return "", false
+	}
+	if strings.Contains(addr, "/") {
+		return addr, true
+	}
+	if prefix <= 0 || prefix > 128 {
+		prefix = 24
+	}
+	return fmt.Sprintf("%s/%d", addr, prefix), true
 }
 
 // Ramdisk probe over virtual media (docs/05-inventory.md §4, V1 alpine
@@ -72,6 +90,17 @@ func (e *Executor) probeRamdisk(ctx context.Context, task *store.Task) error {
 		}
 	}
 
+	// Static network fallback: the machine's own ssh.address is the
+	// authoritative source (mammoth reaches the machine over it, the report
+	// travels the reverse path) — the global CIDR is the fallback for
+	// machines without one. The gateway carries cross-subnet report targets.
+	staticCIDR, gateway := e.ProbeStaticCIDR, e.ProbeGateway
+	if m, merr := e.Machines.Get(ctx, task.MachineID); merr == nil && m.SSHAddress != "" {
+		if c, ok := withPrefixLen(m.SSHAddress, e.ProbePrefix); ok {
+			staticCIDR, gateway = c, e.ProbeGateway
+		}
+	}
+
 	// Build the probe ISO from the alpine carrier (local path or URL —
 	// EnsureISO caches either).
 	carrierISO, err := builder.EnsureISO(ctx, e.ProbeAlpineISO, e.MediaWorkDir)
@@ -80,10 +109,11 @@ func (e *Executor) probeRamdisk(ctx context.Context, task *store.Task) error {
 	}
 	mediaName := "probe-" + pctx.Token + ".iso"
 	if _, err := builder.BuildProbeISO(ctx, builder.ProbeOptions{
-		ISOPath:    carrierISO,
-		OutputPath: filepath.Join(e.MediaDir, mediaName),
-		ReportURL:  e.ExternalURL + "/render/" + pctx.Token + "/probe-report",
-		StaticCIDR: e.ProbeStaticCIDR,
+		ISOPath:       carrierISO,
+		OutputPath:    filepath.Join(e.MediaDir, mediaName),
+		ReportURL:     e.ExternalURL + "/render/" + pctx.Token + "/probe-report",
+		StaticCIDR:    staticCIDR,
+		StaticGateway: gateway,
 	}); err != nil {
 		return classifiedErr("PROBE_MEDIA_FAILED", true, "probe ISO build failed: %s", err.Error())
 	}

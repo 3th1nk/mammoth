@@ -57,10 +57,16 @@ type Executor struct {
 	// probe medium is built from — the lts kernel+modloop carry the
 	// real-server storage drivers the probe exists to see.
 	ProbeAlpineISO string
-	// ProbeStaticCIDR, when set, is the probe's DHCP fallback address
-	// ("198.51.100.75/24") — machine rooms without DHCP. Empty disables the
-	// fallback. Same-subnet report targets need no gateway.
+	// ProbeStaticCIDR, when set, is the probe's DHCP fallback address for
+	// machines WITHOUT ssh.address ("198.51.100.75/24") — machine rooms
+	// without DHCP. Empty disables the fallback.
 	ProbeStaticCIDR string
+	// ProbePrefix is the prefix length applied to a machine's bare
+	// ssh.address when building the DHCP-fallback CIDR (default 24).
+	ProbePrefix int
+	// ProbeGateway, when set, becomes the static fallback's default route —
+	// needed when the report URL is in a different subnet than the machine.
+	ProbeGateway string
 	// ProbeWait bounds the ramdisk discover's wait for the machine's report
 	// (boot + scan + report ≈ 1 minute in qemu; real BMC virtual media is
 	// slower). Zero applies the default (10m).

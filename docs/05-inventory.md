@@ -81,6 +81,12 @@ ssh <machine> — 执行只读命令集(单次连接,超时短):
 - 载体 ISO 经 `MAMMOTH_PROBE_ALPINE_ISO` 声明(本地路径或 URL):**须 lts
   内核的 standard 版**——lts + modloop 才带全量真机存储驱动(megaraid_sas
   等);virt 内核/40MB 级 flavor 缺驱动,真机看不到盘;
+- 网络策略:DHCP 优先(业界先例 Ironic/Tinkerbell 的 agent 同此);
+  **无 DHCP 机房的静态兜底**,IP 数据源分两级——机器注册的 `ssh.address`
+  为权威(mammoth 的带内路径即它的回程;支持 CIDR 形态,裸 IP 按
+  `MAMMOTH_PROBE_PREFIX` 补前缀,默认 /24),无 ssh.address 的机器退到
+  全局 `MAMMOTH_PROBE_STATIC_CIDR`;上报目标跨网段时由
+  `MAMMOTH_PROBE_GATEWAY` 提供默认路由(同网段可空);
 - PXE 形态("通用内存系统按架构常驻")保留为后续演进:虚拟介质按任务构建
   已满足当前盘查需求;无 PXE 环境时的另一兜底是"发行版安装器本身"
   (见 §6 与 [06-install-pipeline.md](06-install-pipeline.md) 的 %pre 校验,

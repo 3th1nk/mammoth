@@ -373,8 +373,10 @@ CD 引导 → 轮询报告 → 弹出+关机补偿)→ ~~真机验证~~ **✅ �
 - **真机缺陷修复**:机器关机态下 `set_power(PowerOn)` 的 Redfish
   ForceOn 被 iBMC 拒绝(ActionParameterValueFormatError)——驱动增加
   ForceOn→On 回退(d7c3f53);
-- **静态兜底**:`MAMMOTH_PROBE_STATIC_CIDR`(本机房 DHCP 可用未走到,
-  作为无 DHCP 机房的保险,同网段上报无需网关);
+- **静态兜底**:DHCP 优先(对标 Ironic/Tinkerbell agent);无 DHCP 机房
+  按 `ssh.address`(权威,支持 CIDR,裸 IP 补 `MAMMOTH_PROBE_PREFIX`)
+  → 全局 `MAMMOTH_PROBE_STATIC_CIDR` 两级取 IP,跨网段上报经
+  `MAMMOTH_PROBE_GATEWAY` 设默认路由(本机房 DHCP 可用未走到兜底);
 - **预算**:`MAMMOTH_PROBE_WAIT` 默认 10m 对"冷启动 POST(RAID 自检
   2-4min)+ modloop 经 VmmControl 慢读"的组合偏紧,建议慢盘环境配
   20-30m;

@@ -47,18 +47,29 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	}
 	network := netplanConfig(in.Network)
 
-	// late-commands: user post_install scripts run in-target first, then the
-	// completion report unblocks the install stage (mirrors the kickstart
-	// %post contract, docs/06-install-pipeline.md §4).
+	// late-commands: ALL post-install side effects happen here, in the
+	// installer (real-hardware lesson: anything left to the target system's
+	// first-boot cloud-init silently no-ops — its nocloud datasource cannot
+	// read the seed once the system boots from disk and the CD mount point
+	// is gone). That covers the root password, ssh keys and the completion
+	// report. The completion POST uses python3 (present in the subiquity
+	// environment); curl/wget are not guaranteed there.
 	var late []string
 	late = append(late, "echo mammoth-install-finished")
+	if in.RootPassword != "" {
+		late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("echo root:"+in.RootPassword+" | chpasswd")))
+	}
+	late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("mkdir -p /etc/ssh/sshd_config.d && echo 'PermitRootLogin yes' > /etc/ssh/sshd_config.d/60-mammoth.conf")))
+	for _, k := range in.SSHPublicKeys {
+		late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("mkdir -p /root/.ssh && echo "+quoteSh(k)+" >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys")))
+	}
 	for _, s := range in.Scripts {
 		if s.Stage != "post_install" {
 			continue
 		}
 		late = append(late, scriptLine(s))
 	}
-	late = append(late, fmt.Sprintf("curl -fsS -m 10 -X POST -H 'Content-Type: application/json' --data-binary '{\"status\":\"ok\",\"detail\":\"autoinstall finished\"}' %s", in.CompleteURL))
+	late = append(late, fmt.Sprintf(`python3 -c "import json,urllib.request;z=urllib.request.Request('%s',data=json.dumps({'status':'ok','detail':'autoinstall finished'}).encode(),headers={'Content-Type':'application/json'});urllib.request.urlopen(z,timeout=10)"`, in.CompleteURL))
 
 	// pre_install scripts map to early-commands (installer environment).
 	var early []string
@@ -75,14 +86,16 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			"layout": "us",
 		},
 		"ssh": map[string]any{
-			"install-server":  true,
-			"allow-pw":        true,
-			"authorized-keys": in.SSHPublicKeys,
+			"install-server": true,
+			"allow-pw":       true,
 		},
 		"storage": storage,
 		"late-commands": append([]string{
 			fmt.Sprintf("curtin in-target -- hostnamectl set-hostname %s", in.Hostname),
 		}, late...),
+		// Without this subiquity stalls after curtin instead of rebooting
+		// into the freshly installed system (real-hardware lesson).
+		"shutdown": "reboot",
 	}
 	if len(early) > 0 {
 		auto["early-commands"] = early
@@ -93,16 +106,6 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 
 	userData := map[string]any{
 		"autoinstall": auto,
-	}
-	// Access: root password (per-task random when generate) rides in the
-	// seed like the kickstart rootpw; ssh keys go through autoinstall.ssh.
-	if in.RootPassword != "" {
-		userData["chpasswd"] = map[string]any{
-			"expire": false,
-			"users": []map[string]string{
-				{"name": "root", "password": in.RootPassword, "type": "text"},
-			},
-		}
 	}
 
 	meta := "" // nocloud meta-data must exist (empty ok)

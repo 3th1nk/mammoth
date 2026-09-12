@@ -11,7 +11,7 @@ import (
 // between Mammoth and Anaconda — regressions here are install failures on
 // real hardware.
 func TestRenderWipeStorageAndBond(t *testing.T) {
-	d := New()
+	d := New("rocky9")
 	in := render.InstallInputs{
 		TaskToken:     "tok123",
 		MachineID:     "mch_x",
@@ -105,7 +105,7 @@ func TestRenderWipeStorageAndBond(t *testing.T) {
 }
 
 func TestRenderStaticAddressAndCIDR(t *testing.T) {
-	d := New()
+	d := New("rocky9")
 	in := render.InstallInputs{
 		AnswerBaseURL: "https://m/render/t", CompleteURL: "https://m/render/t/complete",
 		ImageSource: "https://mirror.example/rocky9",
@@ -128,7 +128,7 @@ func TestRenderStaticAddressAndCIDR(t *testing.T) {
 }
 
 func TestRenderRejectsUnrenderableInputs(t *testing.T) {
-	d := New()
+	d := New("rocky9")
 	cases := []struct {
 		name string
 		in   render.InstallInputs
@@ -187,7 +187,7 @@ func TestPrefixToMask(t *testing.T) {
 
 // M4: keep semantics + %pre drift guard (docs/09-roadmap.md M4, docs/06 §4).
 func TestRenderKeepPartitionsAndDriftGuard(t *testing.T) {
-	d := New()
+	d := New("rocky9")
 	in := render.InstallInputs{
 		AnswerBaseURL: "https://m/render/t", CompleteURL: "https://m/render/t/complete",
 		ImageSource: "https://mirror.example/rocky9",
@@ -252,7 +252,7 @@ func TestRenderKeepPartitionsAndDriftGuard(t *testing.T) {
 }
 
 func TestRenderKeepDiskUntouched(t *testing.T) {
-	d := New()
+	d := New("rocky9")
 	in := render.InstallInputs{
 		AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i", DriftCheck: true,
 		Disks: []render.ResolvedDisk{
@@ -272,7 +272,7 @@ func TestRenderKeepDiskUntouched(t *testing.T) {
 }
 
 func TestRenderDriftCheckToggle(t *testing.T) {
-	d := New()
+	d := New("rocky9")
 	in := render.InstallInputs{
 		AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i", DriftCheck: false,
 		Disks: []render.ResolvedDisk{
@@ -297,7 +297,7 @@ func TestRenderDriftCheckToggle(t *testing.T) {
 
 // M6: declarative software RAID renders anaconda raid lines (docs/09 M6).
 func TestRenderSoftwareRaid(t *testing.T) {
-	d := New()
+	d := New("rocky9")
 	in := render.InstallInputs{
 		AnswerBaseURL: "https://m/render/t", CompleteURL: "https://m/render/t/complete",
 		ImageSource: "i", BootDrive: "sda",
@@ -331,7 +331,7 @@ func TestRenderSoftwareRaid(t *testing.T) {
 
 // M6: software raid with multiple partitions is rejected (LVM later).
 func TestRenderSoftwareRaidSinglePartition(t *testing.T) {
-	d := New()
+	d := New("rocky9")
 	in := render.InstallInputs{
 		AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i",
 		Raid: []render.ResolvedRaid{
@@ -351,7 +351,7 @@ func TestRenderSoftwareRaidSinglePartition(t *testing.T) {
 // the remote kickstart fetch needs network before anaconda runs (real-hardware
 // finding: without ip= the installer never fetched the answer file).
 func TestEarlyNetworkArgsFromSpec(t *testing.T) {
-	d := New()
+	d := New("rocky9")
 	in := render.InstallInputs{
 		AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i",
 		Network: []render.NetworkEntry{
@@ -378,7 +378,7 @@ func TestEarlyNetworkArgsFromSpec(t *testing.T) {
 // required) — an HTTP ISO file is not a valid repo (anaconda fetches only
 // unpacked trees over HTTP; real-hardware finding).
 func TestNFSSourceRendersNFSIsoRepo(t *testing.T) {
-	d := New()
+	d := New("rocky9")
 	in := render.InstallInputs{
 		AnswerBaseURL: "u", CompleteURL: "c",
 		ImageSource: "nfs://198.51.100.248/data/os_iso/Rocky-9.7-x86_64-minimal.iso",
@@ -398,7 +398,7 @@ func TestNFSSourceRendersNFSIsoRepo(t *testing.T) {
 // the real device by size/serial (real-hardware finding: clearpart aborted
 // with "Disk LogicalDrive1 does not exist").
 func TestDynamicStorageResolution(t *testing.T) {
-	d := New()
+	d := New("rocky9")
 	in := render.InstallInputs{
 		AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i",
 		BootDrive: "LogicalDrive1",
@@ -440,7 +440,7 @@ func TestDynamicStorageResolution(t *testing.T) {
 // from the %post chroot (real-hardware finding: hostname stayed
 // localhost.localdomain).
 func TestHostnameRendered(t *testing.T) {
-	d := New()
+	d := New("rocky9")
 	in := render.InstallInputs{
 		AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i", Hostname: "hw-real",
 	}
@@ -460,7 +460,7 @@ func TestHostnameRendered(t *testing.T) {
 // %pre/%post failures must reach the completion endpoint with the failing
 // phase — the task error then shows the reason, not an opaque timeout.
 func TestFailTrapRendered(t *testing.T) {
-	d := New()
+	d := New("rocky9")
 	in := render.InstallInputs{
 		AnswerBaseURL: "http://m/render/tok", CompleteURL: "http://m/render/tok/complete",
 		ImageSource: "i", Hostname: "hw",
@@ -506,7 +506,7 @@ func TestRenderGrowMaxsizeAndHostnameOnStanza(t *testing.T) {
 				Addresses: []string{"198.51.100.170/24"}},
 		},
 	}
-	answers, _, err := New().RenderAnswers(in, render.MachineView{})
+	answers, _, err := New("rocky9").RenderAnswers(in, render.MachineView{})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}

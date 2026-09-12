@@ -166,16 +166,16 @@ func serve(args []string) error {
 	}
 
 	// Distro drivers register here; adding a distro never touches the
-	// orchestration layer (docs/06-install-pipeline.md §5). The debian
-	// preseed driver registers once per dialect member — "uniontechos" is
-	// the UOS Server V20 d-i derivative, experimental until real-hardware
-	// pass (docs/compat/distros.md).
+	// orchestration layer (docs/06-install-pipeline.md §5). "uniontechos"
+	// (UOS Server V20) is anaconda-based with an RHEL-style install tree —
+	// it belongs to the kickstart dialect, NOT preseed (ISO inspected:
+	// AppStream/BaseOS/isolinux, no debian-installer layout).
 	renderReg := render.NewRegistry()
 	for _, d := range []render.OSDriver{
-		rocky9.New(),
+		rocky9.New("rocky9"),
+		rocky9.New("uniontechos"),
 		ubuntu22.New(),
 		debian.New("debian12"),
-		debian.New("uniontechos"),
 	} {
 		if err := renderReg.Register(d); err != nil {
 			return err

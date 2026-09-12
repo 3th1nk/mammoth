@@ -1,7 +1,7 @@
 // Package store holds the persistence layer: goose SQL migrations, the
-// resource repos, and the task queue. PostgreSQL is the authoritative store;
-// repos here target PostgreSQL (the SQLite path is the task-queue test
-// implementation in internal/store/queue).
+// resource repos, and the task queue. PostgreSQL is the only store —
+// migrations, repos, and the table queue share one database (docs/08,
+// docs/10-tech-stack.md D2/D3).
 package store
 
 import (

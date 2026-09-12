@@ -4,8 +4,9 @@
 //
 // Interface discipline: no implementation-specific concept leaks through —
 // callers see only queue names and opaque message bytes. PostgreSQL
-// (SKIP LOCKED) is the production default; SQLite backs unit tests and the
-// future minimal deployment.
+// (SKIP LOCKED) is the implementation: the queue lives in the same database
+// as task state, so dequeue and state transitions share one transaction
+// (docs/10-tech-stack.md D3).
 package queue
 
 import (

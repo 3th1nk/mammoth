@@ -16,9 +16,9 @@ package provision
 
 import (
 	"context"
-	"syscall"
 	"encoding/json"
 	"strings"
+	"syscall"
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/bmc"
@@ -109,10 +109,10 @@ func PlanInstall(ctx context.Context, specJSON json.RawMessage, hw *bmc.Hardware
 		serial := rd.Serial
 		keep := rd.KeepDisk
 		disks = append(disks, gen.InstallPlanDisk{
-			Device:     rd.Device,
-			Serial:     &serial,
-			SizeBytes:  rd.SizeBytes,
-			Keep:       &keep,
+			Device:            rd.Device,
+			Serial:            &serial,
+			SizeBytes:         rd.SizeBytes,
+			Keep:              &keep,
 			PlannedPartitions: planPartitions(rd.Partitions),
 		})
 	}
@@ -222,8 +222,8 @@ func planResolveDisks(disks []storageDiskView, hw *bmc.HardwareView) ([]render.R
 	return resolved, nil
 }
 
-func boolPtr(b bool) *bool     { return &b }
-func intPtr(i int) *int        { return &i }
+func boolPtr(b bool) *bool { return &b }
+func intPtr(i int) *int    { return &i }
 
 // freeMB reports the available space (MB) on the filesystem holding path.
 // ok=false when the platform stat is unavailable (best-effort precheck).

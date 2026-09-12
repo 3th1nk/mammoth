@@ -2,8 +2,9 @@
 
 > **当前状态(2026-09)**:M0~M5 全部交付;M6 主体交付(SSE、审计/事件查询、
 > cobra CLI、goreleaser、Webhook 签名投递、软/硬 RAID 声明式配置、运维与安全文档)。
-> M6 余项:SQLite 最小部署模式、task_logs 表与检索 API、ramdisk 探针(真机路径 V0
-> 进行中,PXE 未做)。三方言(rocky9 / ubuntu22 / debian12)已真机端到端闭环,
+> M6 余项:task_logs 表与检索 API、ramdisk 探针(真机路径 V0 进行中,PXE 未做)。
+> SQLite 最小部署形态已评估并放弃(见 10 §D2),存储收敛为 PostgreSQL-only。
+> 三方言(rocky9 / ubuntu22 / debian12)已真机端到端闭环,
 > uniontechos blocked(见 compat/distros.md)。
 
 里程碑按"每阶段交付物独立可用"的依赖关系排序。M1 之前没有任何东西能对用户产生价值,
@@ -16,7 +17,7 @@
 - 容器发布:多阶段构建出 `mammoth` / `mammoth-builder` 双镜像,docker compose 一键拉起
 - BMC 驱动接口 + Redfish/IPMI 两个实现:电源、引导设备、虚拟介质、KVM URL
 - `credential` / `machine` 注册,`POST /machines/{id}/actions` 全量动作
-- job/task 最小状态机(表队列;同一 TaskQueue 接口以 SQLite 实现跑单元测试),心跳 + interrupted 判定
+- job/task 最小状态机(表队列,契约测试套件于 CI 的 PG 集成作业执行),心跳 + interrupted 判定
 
 **验收**:纯 API 完成一批机器的开关机/重启/挂载介质,进程重启后 running 任务被正确
 标记 interrupted 且可重试。
@@ -73,7 +74,6 @@
 - ✅ CLI(cobra + goreleaser 分发):批量注册、盘查、安装提交、进度跟踪
 - ✅ install-plan 试算端点(只读解析 V1,`POST /machines/{id}/install-plan`)
 - ✅ docs/operations.md(备份恢复)、docs/security-baseline.md(安全基线)
-- ⬜ 最小部署模式:SQLite 后端(store repo 的 SQLite 方言补齐;表队列已有 SQLite 实现)
 - ⬜ Prometheus 指标全集余项:task_logs 表与检索 API(stage 耗时直方图已埋)
 - ⬜ ramdisk 探针补全(qemu 迭代引导结构 → 上报端点 → discover 集成)
 

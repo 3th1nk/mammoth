@@ -3,14 +3,13 @@ package queue
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 )
 
 // runSuites executes the shared contract suite against a queue implementation.
-// Both implementations must satisfy identical semantics (docs/10-tech-stack.md
-// D3: the abstraction boundary is the spec).
+// The suite defines the semantics any implementation must satisfy
+// (docs/10-tech-stack.md D3: the abstraction boundary is the spec).
 func runSuites(t *testing.T, name string, newQ func(t *testing.T) TaskQueue) {
 	// Each subtest gets a distinct queue name: implementations share one
 	// table/file, and leftover messages from earlier subtests (e.g. forged
@@ -192,24 +191,9 @@ func must(t *testing.T, err error) {
 	}
 }
 
-// TestSQLiteQueue runs the full contract suite on the SQLite implementation.
-// This is the M0 unit-test path: no external services (docs/09-roadmap.md M0).
-func TestSQLiteQueue(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "queue.db")
-	runSuites(t, "sqlite", func(t *testing.T) TaskQueue {
-		q, err := OpenSQLite(dbPath, Options{MaxReceiveCount: 3, RetryBackoff: 10 * time.Millisecond})
-		if err != nil {
-			t.Fatalf("open sqlite queue: %v", err)
-		}
-		t.Cleanup(func() { _ = q.db.Close() })
-		return q
-	})
-}
-
-// TestPGQueue runs the same suite against PostgreSQL when
-// MAMMOTH_TEST_PG_DSN points at a disposable database; it is skipped
-// otherwise so `go test ./...` stays dependency-free.
+// TestPGQueue runs the contract suite against PostgreSQL when
+// MAMMOTH_TEST_PG_DSN points at a disposable database (`make test-pg`,
+// CI's integration job); it is skipped otherwise.
 func TestPGQueue(t *testing.T) {
 	dsn := testPGDSN()
 	if dsn == "" {

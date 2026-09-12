@@ -152,7 +152,7 @@ Content-Type: application/problem+json
 示例:`SCHEMA_INVALID_STORAGE`、`BMC_UNREACHABLE`、`BMC_AUTH_FAILED`、
 `LAYOUT_DRIFT`、`LAYOUT_DISK_NOT_FOUND`、`INSTALL_TIMEOUT`、`MEDIA_MOUNT_FAILED`。
 
-### install-plan 试算(提案,未实现)
+### install-plan 试算(已实现 V1)
 
 业务层(UI/编排方)的典型交互是:**采集机器信息 → 展示给用户 → 用户配置
 Install Spec → 确认后安装**。当前 spec 校验只发生在 `POST /jobs` 提交时

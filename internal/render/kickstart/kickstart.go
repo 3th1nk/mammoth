@@ -228,7 +228,9 @@ func hasExt4RootGrow(disks []render.ResolvedDisk) bool {
 // Failure-tolerant: the install is unaffected.
 func growRootScript() string {
 	return `root_src=$(findmnt -nro SOURCE /mnt/sysimage) && root_disk=$(lsblk -nro PKNAME "$root_src") && root_num=${root_src##*[a-z]} || exit 0
-echo ", +" | sfdisk --no-reread --force -N "$root_num" "/dev/$root_disk" && resize2fs "$root_src" || echo "grow root extension skipped (non-fatal)"`
+echo ", +" | sfdisk --no-reread --force -N "$root_num" "/dev/$root_disk"
+partprobe "/dev/$root_disk" 2>/dev/null || partx -u "/dev/$root_disk"
+resize2fs "$root_src" || echo "grow root extension skipped (non-fatal)"`
 }
 
 // networkShell emits the sh snippet executed in %pre: resolve MAC → interface

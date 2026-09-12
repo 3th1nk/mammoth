@@ -51,8 +51,16 @@ type Executor struct {
 	// need none.
 	MediaUploader MediaUploader
 	// RamdiskEnabled declares the optional ramdisk probe feature
-	// (docs/05-inventory.md §4 — requires the PXE boot infrastructure).
+	// (docs/05-inventory.md §4 — virtual media carrier, V1 alpine).
 	RamdiskEnabled bool
+	// ProbeAlpineISO is the alpine standard ISO (local path or URL) the
+	// probe medium is built from — the lts kernel+modloop carry the
+	// real-server storage drivers the probe exists to see.
+	ProbeAlpineISO string
+	// ProbeWait bounds the ramdisk discover's wait for the machine's report
+	// (boot + scan + report ≈ 1 minute in qemu; real BMC virtual media is
+	// slower). Zero applies the default (10m).
+	ProbeWait time.Duration
 
 	// LayoutKeep is the per-machine snapshot retention (docs/08-data-model.md).
 	LayoutKeep int
@@ -243,10 +251,9 @@ func (e *Executor) runDiscover(ctx context.Context, task *store.Task, job *store
 	if probeKind == "ramdisk" {
 		if !e.RamdiskEnabled {
 			return classifiedErr("BMC_UNSUPPORTED", false,
-				"ramdisk probe is optional and disabled (set MAMMOTH_RAMDISK_ENABLED); it requires the PXE boot infrastructure")
+				"ramdisk probe is optional and disabled (set MAMMOTH_RAMDISK_ENABLED); it also needs the alpine carrier ISO (MAMMOTH_PROBE_ALPINE_ISO)")
 		}
-		return classifiedErr("BMC_UNSUPPORTED", false,
-			"ramdisk probe requires the PXE boot infrastructure (hardware validation phase); see docs/05-inventory.md §4")
+		return e.probeRamdisk(ctx, task)
 	}
 	if probeKind != "auto" && probeKind != "redfish" {
 		return classifiedErr("SCHEMA_INVALID_ACTION", false, "unknown probe kind %s", probeKind)

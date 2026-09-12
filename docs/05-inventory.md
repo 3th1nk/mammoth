@@ -9,7 +9,7 @@
 |------|------|------|------|------|
 | `redfish` | BMC HTTPS(带外) | 硬件规格:盘/RAID 卷/网卡/CPU/内存/序列号/固件 | 机器支持 Redfish(2015 年后主流机型基本具备) | **默认**;同时验证 BMC 凭证与连通性 |
 | `inband_ssh` | SSH 到现存系统(带内) | **分区布局**:分区表/文件系统/挂载点 | 用户提供了 SSH 凭证且带内可达 | **"复用已有分区"意图的数据基础** |
-| `ramdisk`(可选,`MAMMOTH_RAMDISK_ENABLED` 门控) | 通用内存系统,引导一次 | 分区布局 | 引导通道(PXE 或虚拟介质) | SSH 凭证拿不到时的兜底;**V0 原型进行中**(卡点见 compat/huawei.md),显式请求报 `BMC_UNSUPPORTED` |
+| `ramdisk`(可选,`MAMMOTH_RAMDISK_ENABLED` 门控) | alpine 微型 live 环境,引导一次 | 分区布局 | BMC 虚拟介质(V1 已通;PXE 后续) | SSH 凭证拿不到时的兜底;载体 ISO 由 `MAMMOTH_PROBE_ALPINE_ISO` 声明 |
 
 `probe: auto` 策略下的组合逻辑:
 
@@ -68,11 +68,23 @@ ssh <machine> — 执行只读命令集(单次连接,超时短):
 
 ## 4. ramdisk 探针(可选启用)
 
-- 通用内存系统,**按架构常驻两份**(amd64/arm64),不为机器定制;
-- 个性化(回传地址、任务标识)经内核启动参数注入;
-- 引导通道优先 PXE;无 PXE 环境时退化为"发行版安装器本身"(见 §6 与
-  [06-install-pipeline.md](06-install-pipeline.md) 的 %pre 校验,二者共享校验逻辑);
-- 采集完成回报后立即断电,不留驻。
+- **V1 载体 = alpine standard 虚拟介质**(2026-09-13,qemu BIOS+UEFI 双模式
+  闭环,复盘见 compat/huawei.md):任务级 `probe-<token>.iso`,builder 全量
+  重打包 alpine 载体(与安装介质同机制),探针逻辑以 apkovl 覆盖层注入
+  (local.d:纯 /sys 扫描 → 逐网口 udhcpc → wget 上报 → poweroff,
+  引导到上报 ~1 分钟);
+- 上报端点 `POST /render/{token}/probe-report`(机器面,token 即凭证),内容
+  原样落库为 layout 快照(source=ramdisk,与 inband_ssh 快照同形);discover
+  任务轮询快照水位,收到即弹出介质并断电(补偿);等待预算
+  `MAMMOTH_PROBE_WAIT`(默认 10m),特性整体由 `MAMMOTH_RAMDISK_ENABLED` 门控;
+- 个性化(上报 URL 内嵌任务 token)构建期烘入,无运行时配置;
+- 载体 ISO 经 `MAMMOTH_PROBE_ALPINE_ISO` 声明(本地路径或 URL):**须 lts
+  内核的 standard 版**——lts + modloop 才带全量真机存储驱动(megaraid_sas
+  等);virt 内核/40MB 级 flavor 缺驱动,真机看不到盘;
+- PXE 形态("通用内存系统按架构常驻")保留为后续演进:虚拟介质按任务构建
+  已满足当前盘查需求;无 PXE 环境时的另一兜底是"发行版安装器本身"
+  (见 §6 与 [06-install-pipeline.md](06-install-pipeline.md) 的 %pre 校验,
+  二者共享校验逻辑)。
 
 ## 5. 快照生命周期
 

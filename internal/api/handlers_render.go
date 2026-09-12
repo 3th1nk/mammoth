@@ -71,4 +71,27 @@ func (s *Server) ReportInstallComplete(ctx context.Context, request gen.ReportIn
 	return gen.ReportInstallComplete204Response{}, nil
 }
 
+// ReportProbeFindings records the ramdisk probe's /sys scan: the body lands
+// verbatim as a layout snapshot (source=ramdisk) and the event notifies any
+// waiting discover task (docs/05-inventory.md §4).
+func (s *Server) ReportProbeFindings(ctx context.Context, request gen.ReportProbeFindingsRequestObject) (gen.ReportProbeFindingsResponseObject, error) {
+	task, err := s.Jobs.GetTaskByToken(ctx, request.Token)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(request.Body)
+	if err != nil {
+		return nil, verr("SCHEMA_INVALID_PROBE_REPORT", "probe report is not valid JSON content")
+	}
+	if _, err := s.Machines.SaveLayout(ctx, task.MachineID, "ramdisk", raw, 0); err != nil {
+		return nil, err
+	}
+	s.Events.Append(ctx, "machine", task.MachineID, "machine.probe_reported", map[string]any{
+		"task_id": task.ID,
+	})
+	obs.FromContext(ctx).InfoContext(ctx, "ramdisk probe report recorded",
+		obs.FieldTaskID, task.ID, obs.FieldMachineID, task.MachineID)
+	return gen.ReportProbeFindings204Response{}, nil
+}
+
 var _ = store.ErrNotFound

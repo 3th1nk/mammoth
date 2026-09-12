@@ -289,6 +289,8 @@ func serve(args []string) error {
 			VerifyReadyWait: cfg.VerifyReadyWait,
 			MediaUploader:   mediaUploader,
 			RamdiskEnabled:  cfg.RamdiskEnabled,
+			ProbeAlpineISO:  cfg.ProbeAlpineISO,
+			ProbeWait:       cfg.ProbeWait,
 			LayoutKeep:      cfg.LayoutRetention,
 		}
 		runner := provision.NewRunner(tq, jobRepo, eventRepo, exec, metrics, provision.RunnerOptions{

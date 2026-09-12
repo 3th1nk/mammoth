@@ -60,7 +60,7 @@ func TestRenderWipeStorageAndBond(t *testing.T) {
 		"clearpart --drives=nvme0n1,nvme1n1 --initlabel --all",
 		"part /boot/efi --fstype=efi --ondisk=nvme0n1 --size=512",
 		"part / --fstype=xfs --ondisk=nvme0n1 --grow",
-		"bootloader --location=mbr --boot-drive=nvme0n1",
+		"bootloader --boot-drive=nvme0n1",
 		"rootpw --plaintext s3creT-pw",
 		`sshkey --username=root "ssh-ed25519 AAA k@h"`,
 		"url --url=https://mirror.example/rocky9",
@@ -417,7 +417,7 @@ func TestDynamicStorageResolution(t *testing.T) {
 		"D0=$(resolve 3997823926272 '' '')",
 		"clearpart --drives=$D0 --initlabel --all",
 		"--ondisk=$D0",
-		"bootloader --location=mbr --boot-drive=$D0",
+		"bootloader --boot-drive=$D0",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dynamic storage missing %q", want)
@@ -427,7 +427,7 @@ func TestDynamicStorageResolution(t *testing.T) {
 	if strings.Contains(body, "LogicalDrive1") {
 		t.Errorf("static ks leaks Redfish device name")
 	}
-	if strings.Count(body, "bootloader --location=mbr") != 1 {
+	if strings.Count(body, "bootloader --boot-drive") != 1 {
 		t.Errorf("bootloader must appear exactly once (in the include)")
 	}
 	if boot.AnswerURL == "" {

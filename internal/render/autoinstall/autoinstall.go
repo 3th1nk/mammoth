@@ -1,5 +1,5 @@
-// Package ubuntu22 implements the OSDriver for Ubuntu Server autoinstall
-// (subiquity) — the second supported distro (docs/06-install-pipeline.md §5).
+// Package autoinstall implements the OSDriver for Ubuntu Server autoinstall
+// (subiquity) — docs/06-install-pipeline.md §5.
 // Mechanics: the installer fetches a nocloud seed (meta-data + user-data)
 // from Mammoth via `ds=nocloud-net;s=<task-token URL>/`; network stanzas use
 // netplan (cloud-init network-config v2) whose `match.macaddress` is the

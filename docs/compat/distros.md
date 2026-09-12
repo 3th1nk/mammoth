@@ -8,8 +8,8 @@
 |--------|------|--------|----------|----------|----------------|------|
 | Rocky/RHEL 系(Rocky 9/Alma 9) | `rocky9` | Anaconda | kickstart(`inst.ks=`) | **full**:`%pre` 漂移守卫 + `--onpart/--noformat` | MAC → 接口名在 `%pre` 安装期解析 | ✅ v0.1 |
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
-| Debian 12 | `debian12` | debian-installer | preseed(`file=/cdrom/preseed.cfg`) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | 无(netcfg 不按 MAC 选口,单接口) | 真机联调中 |
-| 统信服务器 V20(UOS) | `uniontechos` | debian-installer 定制 | preseed(同 `debian12` 方言) | **partial**(同 `debian12`) | 同 `debian12` | experimental,待真机验证 |
+| Debian 12 | `debian12` | debian-installer | preseed(`file=/cdrom/preseed.cfg`) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | 无(netcfg 不按 MAC 选口,单接口) | ✅ 真机跑通 |
+| 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,待真机复核) | MAC → 接口名在 %pre 安装期解析 | experimental,真机联调中 |
 | Windows | — | Setup | unattend | full(目标) | — | 未开始 |
 
 ## 保留分区支持语义(SupportLevel)

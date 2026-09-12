@@ -221,13 +221,14 @@ func hasExt4RootGrow(disks []render.ResolvedDisk) bool {
 // volumes (real-hardware: 3.6T disk, root stopped at 2TiB) — anaconda also
 // ignores --maxsize there, so the extension happens in %post instead.
 //
-// The %post runs chrooted INTO the target: / there IS the target root, so
-// findmnt resolves its source device directly. resize2fs then grows the
-// mounted ext4 online. Failure-tolerant: the install is unaffected.
+// The %post runs with --nochroot, against anaconda's target mount
+// /mnt/sysimage. parted refuses to resizepart a mounted partition (script
+// mode answers its warning with No), so the extension uses sfdisk — the same
+// mechanism as cloud-utils-growpart — followed by an online resize2fs.
+// Failure-tolerant: the install is unaffected.
 func growRootScript() string {
-	return `root_src=$(findmnt -nro SOURCE /mnt/sysimage) && root_disk=$(lsblk -nro PKNAME "$root_src") && root_num=$(printf %s "$root_src" | grep -o '[0-9]\+$') && \
-  parted -s "/dev/$root_disk" resizepart "$root_num" 100% && \
-  resize2fs "$root_src" || echo "grow root extension skipped (non-fatal)"`
+	return `root_src=$(findmnt -nro SOURCE /mnt/sysimage) && root_disk=$(lsblk -nro PKNAME "$root_src") && root_num=${root_src##*[a-z]} || exit 0
+echo ", +" | sfdisk --no-reread --force -N "$root_num" "/dev/$root_disk" && resize2fs "$root_src" || echo "grow root extension skipped (non-fatal)"`
 }
 
 // networkShell emits the sh snippet executed in %pre: resolve MAC → interface

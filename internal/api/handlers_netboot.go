@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/netboot"
@@ -43,19 +44,22 @@ func (s *Server) GetNetbootScript(ctx context.Context, request gen.GetNetbootScr
 	return gen.GetNetbootScript200TextResponse(netboot.RenderScript(e, s.ExternalURL)), nil
 }
 
-// FetchNetbootFile serves the per-task boot tree (kernel/initrd/aux files).
-// Only names registered on the entry are servable — flat names, no path
-// separators, so traversal is structurally impossible.
+// FetchNetbootFile serves the per-task boot tree. Two grant shapes live in
+// the entry: flat file names (kernel/initrd) and subtree grants
+// (Extra value "dir:apks" → everything under tree/apks/, for the probe's
+// apk repository). Paths are cleaned and confined to the granted subtree —
+// traversal is structurally impossible.
 func (s *Server) FetchNetbootFile(ctx context.Context, request gen.FetchNetbootFileRequestObject) (gen.FetchNetbootFileResponseObject, error) {
 	e, err := s.NetbootRepo.ByToken(ctx, request.Token)
 	if err != nil {
 		return nil, err
 	}
-	if !entryServes(e, request.File) {
+	rel, ok := entryGrants(e, request.File)
+	if !ok {
 		return nil, verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
 			"file %q is not part of this boot tree", request.File)
 	}
-	path := filepath.Join(s.MediaDir, "netboot", e.Token, request.File)
+	path := filepath.Join(s.MediaDir, "netboot", e.Token, rel)
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
@@ -77,16 +81,27 @@ func (s *Server) FetchNetbootFile(ctx context.Context, request gen.FetchNetbootF
 	}, nil
 }
 
-// entryServes is the file allowlist: the entry's kernel, initrd, and any
-// auxiliary files registered in extra (e.g. the alpine modloop).
-func entryServes(e *store.NetbootEntry, name string) bool {
-	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
-		return false
-	}
-	for _, n := range e.AllowlistedFiles() {
-		if n == name {
-			return true
+// entryGrants resolves a requested file to its on-disk path relative to the
+// boot tree: flat allowlisted names map directly; "dir:<name>" extra grants
+// map anything under that subtree. ok=false for anything ungranted or that
+// tries to escape (.., absolute, separators above the granted depth).
+func entryGrants(e *store.NetbootEntry, name string) (string, bool) {
+	if name != "" && name != "." && name != ".." && filepath.Base(name) == name {
+		for _, n := range e.AllowlistedFiles() {
+			if n == name {
+				return name, true
+			}
 		}
 	}
-	return false
+	if strings.Contains(name, "..") {
+		return "", false
+	}
+	clean := filepath.Clean("/" + name) // strips leading ../ chains
+	rel := strings.TrimPrefix(clean, "/")
+	for _, g := range e.GrantedSubtrees() {
+		if rel == g || strings.HasPrefix(rel, g+"/") {
+			return rel, true
+		}
+	}
+	return "", false
 }

@@ -109,17 +109,31 @@ func (e *Executor) probeRamdisk(ctx context.Context, task *store.Task, usePXE bo
 	mediaURI := ""
 	var pxeMACs []string
 	if usePXE {
-		carrierISO, err := builder.EnsureISO(ctx, e.ProbeAlpineISO, e.MediaWorkDir)
+		if e.ProbeAlpineNetboot == "" {
+			return classifiedErr("BMC_UNSUPPORTED", false,
+				"probe boot=pxe needs the alpine NETBOOT tarball (set MAMMOTH_PROBE_ALPINE_NETBOOT) — the standard-ISO initramfs usually lacks the machine room's NIC drivers, and without them the modloop can never be fetched")
+		}
+		carrier, err := builder.EnsureISO(ctx, e.ProbeAlpineNetboot, e.MediaWorkDir)
 		if err != nil {
-			return classifiedErr("PROBE_MEDIA_FAILED", true, "carrier ISO unavailable: %s", err.Error())
+			return classifiedErr("PROBE_MEDIA_FAILED", true, "netboot tarball unavailable: %s", err.Error())
+		}
+		carrierISO := ""
+		if e.ProbeAlpineISO != "" {
+			var ierr error
+			carrierISO, ierr = builder.EnsureISO(ctx, e.ProbeAlpineISO, e.MediaWorkDir)
+			if ierr != nil {
+				return classifiedErr("PROBE_MEDIA_FAILED", true, "carrier ISO unavailable: %s", ierr.Error())
+			}
 		}
 		tree, err := builder.BuildProbeNetboot(ctx, builder.ProbeNetbootOptions{
-			ISOPath:       carrierISO,
+			TarballPath:   carrier,
+			ApksISOPath:   carrierISO,
 			DestDir:       filepath.Join(e.BootTreeDir, pctx.Token),
 			ReportURL:     e.ExternalURL + "/render/" + pctx.Token + "/probe-report",
 			StaticCIDR:    staticCIDR,
 			StaticGateway: gateway,
 			ModloopURL:    strings.TrimSuffix(e.ExternalURL, "/") + "/netboot/files/" + pctx.Token + "/modloop",
+			ApksURL:       strings.TrimSuffix(e.ExternalURL, "/") + "/netboot/files/" + pctx.Token + "/apks",
 		})
 		if err != nil {
 			return classifiedErr("PROBE_MEDIA_FAILED", true, "probe boot tree build failed: %s", err.Error())

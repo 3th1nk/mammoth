@@ -24,8 +24,8 @@ func nbpFor(a Arch) string {
 }
 
 // handle is the pure decision core of the proxyDHCP responder: given a
-// request datagram received on dhcpPort or proxyPort, return the reply to
-// send back to its source, or nil to stay silent. Staying silent is the
+// request datagram received on dhcpPort or proxyPort, return the reply and
+// the address to send it to, or nil to stay silent. Staying silent is the
 // normal behavior for everything that is not our business (site DHCP
 // clients, other vendors' PXE, unknown architectures) — the firmware then
 // falls through to its next boot device on its own.
@@ -34,13 +34,13 @@ func nbpFor(a Arch) string {
 // address; we only tell PXE clients where the next boot program lives.
 // yiaddr stays 0.0.0.0 in every reply, and we never ACK a REQUEST that
 // selected a different server identifier.
-func (s *Server) handle(req []byte, port int) []byte {
+func (s *Server) handle(req []byte, port int, src *net.UDPAddr) ([]byte, *net.UDPAddr) {
 	p, err := parse(req)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	if p.op != opRequest || !p.isPXEClient() {
-		return nil
+		return nil, nil
 	}
 	switch p.messageType() {
 	case msgDiscover:
@@ -50,13 +50,34 @@ func (s *Server) handle(req []byte, port int) []byte {
 			// On the DHCP port a REQUEST that selected another server (the
 			// site DHCP, by server identifier) is not ours to answer.
 			if sid, ok := p.options[optServerID]; ok && !equalIP(sid, s.opts.NextServer) {
-				return nil
+				return nil, nil
 			}
 		}
 	default:
-		return nil // RELEASE/INFORM/DECLINE: never our business
+		return nil, nil // RELEASE/INFORM/DECLINE: never our business
 	}
-	return s.reply(p)
+	reply := s.reply(p)
+	if reply == nil {
+		return nil, nil
+	}
+	return reply, bootReplyAddr(p, src)
+}
+
+// bootReplyAddr selects where a reply goes (RFC 2131 §4.1): a boot ROM has
+// no address yet — it broadcasts from 0.0.0.0 and (with the broadcast flag
+// set) can only receive broadcast replies. Replying to the packet's source
+// address there would send the offer to 0.0.0.0, which the kernel quietly
+// delivers to loopback — the offer vanishes without a single error log
+// (the 2288H real-hardware finding that cost the first PXE boot attempt).
+func bootReplyAddr(p *packet, src *net.UDPAddr) *net.UDPAddr {
+	port := 68
+	if src != nil && src.Port != 0 {
+		port = src.Port
+	}
+	if src == nil || src.IP == nil || src.IP.IsUnspecified() || p.flags&0x8000 != 0 {
+		return &net.UDPAddr{IP: net.IPv4bcast, Port: port}
+	}
+	return src
 }
 
 // reply builds the boot-information reply for one PXE client.
@@ -77,6 +98,10 @@ func (s *Server) reply(p *packet) []byte {
 	}
 	next := s.opts.NextServer.To4()
 
+	// siaddr (the BOOTP field) carries the next-server IP for ROMs that
+	// read only the field and never the options.
+	copy(p.siaddr[:], next)
+
 	// iPXE identifies itself and accepts a full URL in the bootfile slot:
 	// straight to the per-MAC script over HTTP, skipping the TFTP hop.
 	if p.isIPXE() {
@@ -91,8 +116,7 @@ func (s *Server) reply(p *packet) []byte {
 		return nil
 	}
 	// Plain PXE ROMs want a bare file name plus the TFTP server address;
-	// option 66 is a string by spec, siaddr (the BOOTP field) carries the
-	// same IP numerically for ROMs that only read that.
+	// option 66 is a string by spec, siaddr carries the same IP numerically.
 	return p.bytes(msgType, name,
 		option{optServerID, next},
 		option{optTFTPServer, []byte(s.opts.NextServer.String())},

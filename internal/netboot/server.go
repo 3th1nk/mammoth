@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/net/ipv4"
 	"golang.org/x/sys/unix"
 )
 
@@ -85,7 +86,7 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 		dhcpConn.Close()
 		return nil, fmt.Errorf("netboot: bind pxe :%d: %w", opts.ProxyPort, err)
 	}
-	tftpConn, err := net.ListenUDP("udp", &net.UDPAddr{Port: opts.TFTPPort})
+	tftpConn, err := net.ListenUDP("udp4", &net.UDPAddr{Port: opts.TFTPPort})
 	if err != nil {
 		dhcpConn.Close()
 		proxyConn.Close()
@@ -150,20 +151,31 @@ func (s *Server) serveProxy(ctx context.Context, conn *net.UDPConn, done chan<- 
 }
 
 func (s *Server) serveUDP(ctx context.Context, conn *net.UDPConn, port int) {
+	// ipv4.PacketConn gives per-datagram interface knowledge: replies (in
+	// particular the broadcast ones a boot ROM can only receive) leave
+	// through the interface the request arrived on, not whatever the
+	// routing table picks for 255.255.255.255.
+	pc := ipv4.NewPacketConn(conn)
+	_ = pc.SetControlMessage(ipv4.FlagInterface, true)
 	buf := make([]byte, 1500)
 	for {
-		n, addr, err := conn.ReadFromUDP(buf)
+		n, cm, addr, err := pc.ReadFrom(buf)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
 			continue
 		}
-		reply := s.handle(buf[:n], port)
-		if reply != nil {
-			if _, err := conn.WriteToUDP(reply, addr); err != nil {
-				s.logf("dhcp: reply to %s: %v", addr, err)
-			}
+		reply, to := s.handle(buf[:n], port, addr.(*net.UDPAddr))
+		if reply == nil {
+			continue
+		}
+		wcm := &ipv4.ControlMessage{}
+		if cm != nil {
+			wcm.IfIndex = cm.IfIndex
+		}
+		if _, err := pc.WriteTo(reply, wcm, to); err != nil {
+			s.logf("dhcp: reply to %s: %v", to, err)
 		}
 	}
 }
@@ -181,20 +193,25 @@ func (s *Server) hasNBP(name string) bool {
 }
 
 // listenReuse binds a UDP port with SO_REUSEADDR (rebind after restart
-// without TIME_LATENCY style wait).
+// without TIME_LATENCY style wait) and SO_BROADCAST (the boot ROM's DISCOVER
+// arrives with the broadcast flag set, and RFC 2131 replies to it go to
+// 255.255.255.255).
 func listenReuse(port int) (*net.UDPConn, error) {
 	lc := net.ListenConfig{}
 	lc.Control = func(_, _ string, c syscall.RawConn) error {
 		var serr error
 		err := c.Control(func(fd uintptr) {
 			serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
+			if serr == nil {
+				serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_BROADCAST, 1)
+			}
 		})
 		if err != nil {
 			return err
 		}
 		return serr
 	}
-	pc, err := lc.ListenPacket(context.Background(), "udp", fmt.Sprintf(":%d", port))
+	pc, err := lc.ListenPacket(context.Background(), "udp4", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return nil, err
 	}

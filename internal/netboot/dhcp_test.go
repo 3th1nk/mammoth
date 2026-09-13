@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"io"
+	"net"
 	"log/slog"
 	"testing"
 )
@@ -34,6 +35,15 @@ func discover(xid uint32, mac [6]byte, opts ...option) []byte {
 		put(o.code, o.data)
 	}
 	return append(out, optEnd)
+}
+
+// testSrc mimics a unicast probe client (pxeprobe): a real address, no
+// broadcast flag — replies go back to the source.
+var testSrc = &net.UDPAddr{IP: net.IPv4(192, 168, 77, 50), Port: 40001}
+
+// setBroadcastFlag turns on DHCP flag 0x8000 (the boot ROM's signature).
+func setBroadcastFlag(b []byte) {
+	b[10] |= 0x80
 }
 
 func u16opt(v uint16) []byte {
@@ -179,9 +189,14 @@ func TestReplyGolden(t *testing.T) {
 			option{optVendorClass, []byte("PXEClient:Arch:00000:UNDI:002001")},
 			option{optArch, u16opt(0)},
 		)
-		reply := s.handle(req, 67)
+		reply, to := s.handle(req, 67, testSrc)
 		if reply == nil {
 			t.Fatal("want a reply")
+		}
+		// Unicast probe client (no broadcast flag): the reply goes to the
+		// source address.
+		if to == nil || !to.IP.Equal(testSrc.IP) || to.Port != testSrc.Port {
+			t.Fatalf("reply addr = %v, want the probe source", to)
 		}
 		p, err := parse(reply)
 		if err != nil {
@@ -209,6 +224,10 @@ func TestReplyGolden(t *testing.T) {
 		if string(p.yiaddr[:]) != "\x00\x00\x00\x00" {
 			t.Error("proxyDHCP must never assign an address")
 		}
+		// siaddr carries the next-server IP for ROMs that never read options.
+		if net.IP(p.siaddr[:]).String() != "192.168.77.1" {
+			t.Errorf("siaddr = %v", net.IP(p.siaddr[:]))
+		}
 	})
 
 	t.Run("ipxe client gets script url", func(t *testing.T) {
@@ -216,7 +235,7 @@ func TestReplyGolden(t *testing.T) {
 			option{optVendorClass, []byte("PXEClient:Arch:00007:UNDI:003019")},
 			option{optUserClass, []byte{4, 'i', 'P', 'X', 'E'}},
 		)
-		reply := s.handle(req, 67)
+		reply, _ := s.handle(req, 67, testSrc)
 		p, _ := parse(reply)
 		if bf := string(p.options[optBootfile]); bf != "http://192.168.77.1:8080/netboot/script?mac=52:54:00:12:34:56&arch=uefi-x64" {
 			t.Errorf("bootfile = %q", bf)
@@ -241,21 +260,35 @@ func TestHandleSilence(t *testing.T) {
 	req2 := discover(1, mac, option{optVendorClass, []byte("PXEClient:Arch:00000:UNDI")},
 		option{optMessageType, []byte{msgRequest}},
 		option{optServerID, []byte{10, 0, 0, 254}})
-	if s.handle(req2, 67) != nil {
+	setBroadcastFlag(req2) // the boot ROM's signature — reply must go to broadcast
+	if r, _ := s.handle(req2, 67, testSrc); r != nil {
 		t.Error("REQUEST for another server id must not be answered on :67")
 	}
-	if s.handle(req2, 4011) == nil {
+	if r, to := s.handle(req2, 4011, testSrc); r == nil {
 		t.Error("REQUEST on :4011 is boot-server discovery — must be answered")
+	} else if to == nil || !to.IP.Equal(net.IPv4bcast) {
+		t.Errorf("broadcast-flag client must get a 255.255.255.255 reply, got %v", to)
+	}
+	// The same REQUEST from an address-less client (source 0.0.0.0, the real
+	// firmware shape on the wire) also lands on broadcast — the 2288H
+	// finding: replying to the source sends the offer to loopback.
+	req2b := discover(1, mac, option{optVendorClass, []byte("PXEClient:Arch:00000:UNDI")},
+		option{optMessageType, []byte{msgRequest}})
+	setBroadcastFlag(req2b)
+	if r, to := s.handle(req2b, 4011, &net.UDPAddr{IP: net.IPv4zero, Port: 68}); r == nil {
+		t.Error("address-less REQUEST must be answered")
+	} else if to == nil || !to.IP.Equal(net.IPv4bcast) || to.Port != 68 {
+		t.Errorf("0.0.0.0 source must broadcast to :68, got %v", to)
 	}
 	// Non-PXE client: silence.
 	req3 := discover(1, mac)
-	if s.handle(req3, 67) != nil {
+	if r, _ := s.handle(req3, 67, testSrc); r != nil {
 		t.Error("plain DHCP client must not be answered")
 	}
 	// Unrecognized arch: silence (firmware falls through).
 	req4 := discover(1, mac, option{optVendorClass, []byte("PXEClient:Arch:00099:UNDI")},
 		option{optArch, u16opt(99)})
-	if s.handle(req4, 67) != nil {
+	if r, _ := s.handle(req4, 67, testSrc); r != nil {
 		t.Error("unknown architecture must not be answered")
 	}
 	_ = req

@@ -9,6 +9,8 @@
 | Rocky/RHEL 系(Rocky 9/Alma 9) | `rocky9` | Anaconda | kickstart(`inst.ks=`) | **full**:`%pre` 漂移守卫 + `--onpart/--noformat` | MAC → 接口名在 `%pre` 安装期解析 | ✅ v0.1 |
 | **Rocky 10 / RHEL 10 系** | `rocky10` | Anaconda(**UEFI-only**,上游移除 Legacy BIOS) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,机制同源) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H) |
 | **CentOS 7** | `centos7` | Anaconda 19.31(python2 世代) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H;大盘需独立 /boot,见注记) |
+| **银河麒麟 V11**(Server V11 2503) | `kylinv11` | Anaconda(现代代际) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,机制同源) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H;中文 NFS 路径全链路验证) |
+| **银河麒麟 V10**(Server V10 SP3 2403) | `kylinv10` | Anaconda(RHEL8 代际 + NM 1.18) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`) | MAC(渲染层带 NM 修复段) | ⚠️ 受限:静态网络自动化卡死在 NM(见注记);**中文 NFS 路径经 anaconda 层已验证可用** |
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
 | Debian 12 | `debian12` | debian-installer | preseed(`file=/cdrom/preseed.cfg`) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | 无(netcfg 不按 MAC 选口,单接口) | ✅ 真机跑通 |
 | 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,待真机复核) | MAC → 接口名在 %pre 安装期解析 | **blocked**(见下) |
@@ -78,6 +80,25 @@ anaconda 19.31(python2 世代)+ util-linux 2.23 的四处方言差异,均已内�
   位于前 2TiB——`/` 直接占满整盘会被拒(storage checks 退交互),
   **需声明独立 /boot(1G 级)+ / rest**;ESP 用 `--fstype=efi`(渲染层
   已自动映射)。
+
+### kylin(银河麒麟服务器)
+
+**V11 2503(✅ 真机闭环,2288H)**:现代代际 anaconda + 新版 NM,走标准路径
+(early `ip=` 内核参数 + MAC 解析接口名,零 workaround),六阶段一次闭环。
+**中文 NFS 路径全链路验证通过**:`inst.repo` 内核参数与 kickstart `nfs`
+命令中的 UTF-8 中文目录(grub/isolinux 配置透传 → dracut → anaconda NFS
+挂载)均正常,安装源正确识别——中文目录本身不构成障碍。
+
+**V10 SP3 2403(⚠️ 静态网络自动化受限)**:V10 的 NM 为 1.18 世代,对
+"initramfs 已配置过的设备"打 `platform-init` 硬性 unmanaged 标记
+(`nmcli device set managed yes` 无法覆盖),而其 payload 又以 NM 状态为
+网络判据——**死锁**:自动安装永远停在 text 概要的 Network spoke。
+渲染层的 netRepair 段(%pre 修复 anaconda 写坏的 ifcfg:`HWADDR50:…` 缺
+`=`、UUID 段错位,再重新托管)不足以解除该标记。裸 `ip=dhcp` 回退则死在
+更早:dracut 阶段挂中文 NFS 路径失败(emergency shell)。
+**当前交付形态**:V10 SP3 需一次 TTY2 干预(按上序修 ifcfg 后
+`nmcli con reload && nmcli device connect <iface>`,回装界面按 b);
+或使用 V11 镜像(推荐,全链路验证)。
 
 ### ubuntu22(autoinstall)
 

@@ -33,6 +33,11 @@ type Options struct {
 	BaseURL string
 	// NBPs is the filesystem of network boot programs (embedded assets).
 	NBPs fs.FS
+	// DHCP, when set, turns the responder into a full DHCP server for PXE
+	// clients (option 60) on DHCP-less provisioning L2s — a boot ROM needs
+	// an IP lease before it will fetch anything. nil keeps the pure proxy
+	// model (the site DHCP owns addresses). See DHCPPool.
+	DHCP *DHCPPool
 	// Log receives service diagnostics; nil defaults to slog.Default().
 	Log *slog.Logger
 }

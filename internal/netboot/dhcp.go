@@ -22,20 +22,23 @@ const (
 	htypeEthernet = 1
 	hlenEthernet  = 6
 
-	optPad         = 0
-	optEnd         = 255
-	optSubnetMask  = 1
-	optRouter      = 3
-	optMessageType = 53 // DHCP message type
-	optServerID    = 54
-	optLeaseTime   = 51
-	optClientID    = 61
-	optVendorClass = 60
-	optTFTPServer  = 66
-	optBootfile    = 67
-	optUserClass   = 77
-	optArch        = 93  // client system architecture (RFC 4578)
-	optFeatures    = 175 // Etherboot/iPXE feature indicators
+	optPad            = 0
+	optEnd            = 255
+	optSubnetMask     = 1
+	optRouter         = 3
+	optMessageType    = 53 // DHCP message type
+	optServerID       = 54
+	optLeaseTime      = 51
+	optRenewalTime    = 58 // T1 (RFC 2132)
+	optRebindingTime  = 59 // T2
+	optClientID       = 61
+	optVendorClass    = 60
+	optTFTPServer     = 66
+	optBootfile       = 67
+	optUserClass      = 77
+	optClientArchGUID = 97  // client machine identifier (RFC 4578)
+	optArch           = 93  // client system architecture (RFC 4578)
+	optFeatures       = 175 // Etherboot/iPXE feature indicators
 
 	msgDiscover = 1
 	msgOffer    = 2

@@ -8,7 +8,7 @@
 
 | 层 | 选型 | 版本基线 | 用途 |
 |----|------|---------|------|
-| 主语言 | Go | ≥1.24 | 全部服务端与 CLI |
+| 主语言 | Go | ≥1.26 | 全部服务端与 CLI |
 | API 框架 | Gin + oapi-codegen(gin 生成模式) | gin ≥1.9 | 契约优先:OpenAPI 3.1 生成 gin 路由与强类型 handler 绑定,业务实现在手写层 |
 | 主存储 | PostgreSQL | ≥14 | 唯一权威存储:资源、契约、任务状态、事件 |
 | 任务队列 | 数据库表队列(`SELECT … FOR UPDATE SKIP LOCKED`) | — | job/task 指令分发;状态与消息同库 |

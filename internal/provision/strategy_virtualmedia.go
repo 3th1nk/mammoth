@@ -141,7 +141,7 @@ func (s *virtualMediaStrategy) arm(ctx context.Context, b *bootSession) error {
 	}); err != nil {
 		return err
 	}
-	return powerIntoInstaller(ctx, e, task)
+	return powerIntoInstaller(ctx, e, task, true)
 }
 
 // release reclaims the media: on the completed path eject FIRST (the
@@ -157,8 +157,9 @@ func (s *virtualMediaStrategy) release(ctx context.Context, b *bootSession, reas
 }
 
 // powerIntoInstaller is the shared tail of every arm: cycle if on,
-// power-on if off, then record booted_at.
-func powerIntoInstaller(ctx context.Context, e *Executor, task *store.Task) error {
+// power-on if off, then (install flow only — the probe context carries no
+// install record) record booted_at.
+func powerIntoInstaller(ctx context.Context, e *Executor, task *store.Task, recordProgress bool) error {
 	cred, addr, proto, ok := e.outOfBand(ctx, task)
 	if !ok {
 		return classifiedErr("CREDENTIAL_UNAVAILABLE", true, "machine or credential unavailable")
@@ -175,9 +176,11 @@ func powerIntoInstaller(ctx context.Context, e *Executor, task *store.Task) erro
 	}); err != nil {
 		return err
 	}
-	now := time.Now().UTC()
-	if err := e.Jobs.RecordInstallProgress(ctx, task.ID, map[string]any{"booted_at": now}); err != nil {
-		return err
+	if recordProgress {
+		now := time.Now().UTC()
+		if err := e.Jobs.RecordInstallProgress(ctx, task.ID, map[string]any{"booted_at": now}); err != nil {
+			return err
+		}
 	}
 	obs.FromContext(ctx).InfoContext(ctx, "machine booted into installer",
 		"action", string(action))

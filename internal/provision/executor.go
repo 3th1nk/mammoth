@@ -274,7 +274,25 @@ func (e *Executor) runDiscover(ctx context.Context, task *store.Task, job *store
 			return classifiedErr("BMC_UNSUPPORTED", false,
 				"ramdisk probe is optional and disabled (set MAMMOTH_RAMDISK_ENABLED); it also needs the alpine carrier ISO (MAMMOTH_PROBE_ALPINE_ISO)")
 		}
-		return e.probeRamdisk(ctx, task)
+		var boot string
+		if a, aerr := decodeAction(job.Action); aerr == nil {
+			boot = a.Boot
+		}
+		usePXE := false
+		switch boot {
+		case "pxe":
+			usePXE = true
+		case "", "virtual_media":
+			usePXE = e.BootStrategyDefault == "pxe" // deployment default
+		default:
+			return classifiedErr("SCHEMA_INVALID_ACTION", false,
+				"discover boot %q is not one of pxe|virtual_media", boot)
+		}
+		if usePXE && e.Netboot == nil {
+			return classifiedErr("NETBOOT_UNAVAILABLE", false,
+				"probe boot=pxe needs the netboot service (MAMMOTH_PXE_ENABLED) on this runner")
+		}
+		return e.probeRamdisk(ctx, task, usePXE)
 	}
 	if probeKind != "auto" && probeKind != "redfish" {
 		return classifiedErr("SCHEMA_INVALID_ACTION", false, "unknown probe kind %s", probeKind)

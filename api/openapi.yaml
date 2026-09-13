@@ -1364,7 +1364,10 @@ components:
     # ── actions ────────────────────────────────────────────────────────────
     ProbeKind:
       type: string
-      enum: [auto, redfish, inband_ssh]
+      enum: [auto, redfish, inband_ssh, ramdisk]
+      description: |
+        ramdisk is optional (docs/05-inventory.md §4) and requires the
+        alpine carrier (MAMMOTH_PROBE_ALPINE_ISO) with MAMMOTH_RAMDISK_ENABLED.
 
     ActionRequest:
       oneOf:
@@ -1401,6 +1404,8 @@ components:
           enum: [discover]
         probe:
           $ref: '#/components/schemas/ProbeKind'
+        boot:
+          $ref: '#/components/schemas/BootSpec'
 
     ActionPowerOn:
       type: object

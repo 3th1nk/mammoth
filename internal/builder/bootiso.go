@@ -59,6 +59,7 @@ const (
 	layoutCasper   isoLayout = "casper"    // Ubuntu live-server (/casper)
 	layoutDebianDI isoLayout = "debian-di" // debian-installer (/install.amd | /install)
 	layoutAlpine   isoLayout = "alpine"    // alpine standard (/boot, syslinux.cfg; probe media)
+	layoutRHEL10   isoLayout = "rhel10"    // RHEL10-lineage UEFI-only (no isolinux; /images/eltorito.img)
 )
 
 // BuildBootISO assembles a bootable ISO whose bootloader carries the given
@@ -93,6 +94,16 @@ func BuildBootISO(ctx context.Context, opt BootMediaOptions, kernelArgs string) 
 		defer func() { <-buildSem }()
 		return rebuildPatchedISO(ctx, opt, kernelArgs, layoutDebianDI, dir)
 	}
+	// RHEL10-lineage: Legacy BIOS boot is removed — no isolinux, the El
+	// Torito BIOS entry is a stub and UEFI comes from an appended ESP
+	// partition. Full repack (the as_mkisofs intervals reference the source
+	// image, which lives on this host by the time a build runs); both grub
+	// configs get the mammoth entry.
+	if rhel10Layout(ctx, opt.XorrisoPath, opt.ISOPath) {
+		buildSem <- struct{}{}
+		defer func() { <-buildSem }()
+		return rebuildPatchedISO(ctx, opt, kernelArgs, layoutRHEL10, "")
+	}
 
 	work := opt.WorkDir
 	if work == "" {
@@ -109,17 +120,22 @@ func BuildBootISO(ctx context.Context, opt BootMediaOptions, kernelArgs string) 
 	}
 
 	// Extract the distribution's boot files (xorriso osirrox; no mounts, no root).
+	// isolinux.bin / efiboot.img / the kernel pair are the load-bearing set;
+	// the .c32 syslinux modules are OPTIONAL — syslinux 4.x (CentOS 7 era)
+	// keeps ldlinux inside isolinux.bin and ships no modules at all, and the
+	// plain config here uses no menu modules either.
 	xorriso := opt.XorrisoPath
 	if xorriso == "" {
 		xorriso = "xorriso"
 	}
-	for _, rel := range []string{
-		"images/pxeboot/vmlinuz",
-		"images/pxeboot/initrd.img",
-		"isolinux/isolinux.bin",
-		"isolinux/ldlinux.c32",
-		"images/efiboot.img",
-	} {
+	extracts := map[string]bool{
+		"images/pxeboot/vmlinuz":    true,
+		"images/pxeboot/initrd.img": true,
+		"isolinux/isolinux.bin":     true,
+		"isolinux/ldlinux.c32":      false,
+		"images/efiboot.img":        true,
+	}
+	for rel, required := range extracts {
 		dest := filepath.Join(work, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return "", err
@@ -128,6 +144,10 @@ func BuildBootISO(ctx context.Context, opt BootMediaOptions, kernelArgs string) 
 			"-extract", "/"+rel, dest)
 		out, err := x.CombinedOutput()
 		if err != nil {
+			if !required {
+				_ = os.Remove(dest)
+				continue // older layouts simply don't ship it
+			}
 			return "", fmt.Errorf("extract %s: %w: %s", rel, err, tail(out, 300))
 		}
 	}
@@ -148,8 +168,8 @@ label mammoth
 	grubCfg := fmt.Sprintf(`set default=0
 set timeout=1
 menuentry 'mammoth' {
-  linux /images/pxeboot/vmlinuz %s
-  initrd /images/pxeboot/initrd.img
+  linuxefi /images/pxeboot/vmlinuz %s
+  initrdefi /images/pxeboot/initrd.img
 }
 `, kernelArgs)
 	if err := os.WriteFile(filepath.Join(work, "EFI", "BOOT", "grub.cfg"), []byte(grubCfg), 0o644); err != nil {
@@ -185,6 +205,22 @@ func tail(b []byte, n int) string {
 		b = b[len(b)-n:]
 	}
 	return string(b)
+}
+
+// uriPath extracts the path part of a scheme://host/path URI ("/path");
+// empty when the shape doesn't match.
+func uriPath(u string) string {
+	rest, ok := strings.CutPrefix(u, "nfs://")
+	if !ok {
+		rest, ok = strings.CutPrefix(u, "cifs://")
+	}
+	if !ok {
+		return ""
+	}
+	if i := strings.Index(rest, "/"); i >= 0 {
+		return rest[i:]
+	}
+	return ""
 }
 
 // EnsureISO makes the distribution ISO available locally. sourceURL may be
@@ -226,6 +262,14 @@ func EnsureISO(ctx context.Context, sourceURL, cacheDir string) (string, error) 
 	}
 
 	if !isHTTP {
+		// Same-host export: mammoth colocated with the NFS server (the
+		// common single-node deployment) — the URI's path resolves on this
+		// filesystem directly, no copy into the cache needed.
+		if p := uriPath(sourceURL); p != "" {
+			if fi, serr := os.Stat(p); serr == nil && fi.Mode().IsRegular() {
+				return p, nil
+			}
+		}
 		return "", fmt.Errorf("builder: %q is not an HTTP URL and no local cache exists at %s", sourceURL, dest)
 	}
 
@@ -273,6 +317,20 @@ func isoHasCasper(ctx context.Context, iso, xorrisoOverride string) bool {
 	}
 	out, err := exec.CommandContext(ctx, xorriso, "-indev", iso, "-find", "/casper", "-type", "d").CombinedOutput()
 	return err == nil && strings.Contains(string(out), "/casper")
+}
+
+// rhel10Layout reports the RHEL10-lineage UEFI-only shape: the El Torito
+// stub image exists and isolinux is gone (Legacy BIOS boot removed).
+func rhel10Layout(ctx context.Context, xorrisoOverride, iso string) bool {
+	xorriso := xorrisoOverride
+	if xorriso == "" {
+		xorriso = "xorriso"
+	}
+	probe := func(rel string) bool {
+		out, err := exec.CommandContext(ctx, xorriso, "-indev", iso, "-find", rel).CombinedOutput()
+		return err == nil && strings.Contains(string(out), rel)
+	}
+	return probe("/images/eltorito.img") && !probe("/isolinux/isolinux.bin")
 }
 
 // debianInstallDir returns the d-i kernel directory name ("install.amd" on
@@ -456,6 +514,25 @@ menuentry 'mammoth' {
 		return map[string]string{
 			"boot/grub/grub.cfg": grubCfg,
 			"EFI/boot/grub.cfg":  grubCfg,
+		}
+	case layoutRHEL10:
+		// RHEL10 UEFI-only: both grub configs (the UEFI one under EFI/BOOT
+		// is the live chain; boot/grub2/grub.cfg is the secondary copy) get
+		// the single mammoth entry. The embedded grub in efiboot.img finds
+		// the config by the volume label it searches — preserved verbatim
+		// by the reproduced as_mkisofs parameters. The native `linuxefi/
+		// initrdefi` command pair is kept (matches the distro's own menu).
+		grub := fmt.Sprintf(`set default="0"
+set timeout=5
+
+menuentry 'mammoth' --class fedora --class gnu-linux --class gnu --class os {
+	linuxefi /images/pxeboot/vmlinuz %s
+	initrdefi /images/pxeboot/initrd.img
+}
+`, grubArgs)
+		return map[string]string{
+			"EFI/BOOT/grub.cfg":   grub,
+			"boot/grub2/grub.cfg": grub,
 		}
 	case layoutAlpine:
 		// Alpine keeps its BIOS config at /boot/syslinux/syslinux.cfg and

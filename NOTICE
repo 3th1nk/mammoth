@@ -7,3 +7,14 @@ Version 2.0.
 
 The mammoth gopher brand assets in assets/brand/ are a derivative of the
 original Go gopher, created by Renée French, licensed under CC BY 3.0.
+
+This product includes prebuilt iPXE network boot programs in assets/pxe/
+(undionly.kpxe, ipxe-amd64.efi, ipxe-arm64.efi), taken from the Debian
+`ipxe` package (2.0.0+dfsg-5, DFSG-clean source tree). iPXE is
+Copyright 2004-2025 Michael Brown and contributors, licensed under the
+GNU GPL version 2 or later, with the iPXE binary distribution permission:
+"the entire resulting derived work" may be distributed as a binary image
+without source, under the condition that the distribution terms otherwise
+comply with the GPL. The full GPL-2.0 text and the iPXE permission notice
+ship in assets/pxe/LICENSE-ipxe.txt; source, version pinning and rebuild
+instructions are in assets/pxe/PROVENANCE.md.

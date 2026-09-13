@@ -43,7 +43,14 @@ func (s *Server) handle(req []byte, port int, src *net.UDPAddr) ([]byte, *net.UD
 	if err != nil {
 		return nil, nil
 	}
-	if p.op != opRequest || !p.isPXEClient() {
+	if p.op != opRequest {
+		return nil, nil
+	}
+	// Proxy mode answers PXE clients only. Pool mode is the address
+	// authority for the whole L2 (docs/operations.md §4.5): the installer
+	// kernel's own DHCP (dracut ip=dhcp) carries no option 60 and must be
+	// served too — it retries forever otherwise (2288H finding).
+	if !p.isPXEClient() && s.opts.DHCP == nil {
 		return nil, nil
 	}
 	switch p.messageType() {
@@ -51,8 +58,8 @@ func (s *Server) handle(req []byte, port int, src *net.UDPAddr) ([]byte, *net.UD
 		// proceed
 	case msgRequest:
 		if port == s.opts.DHCPPort {
-			// On the DHCP port a REQUEST that selected another server (the
-			// site DHCP, by server identifier) is not ours to answer.
+			// A REQUEST that selected another server (by server identifier)
+			// is not ours to answer.
 			if sid, ok := p.options[optServerID]; ok && !equalIP(sid, s.opts.NextServer) {
 				return nil, nil
 			}
@@ -90,12 +97,6 @@ func (s *Server) reply(p *packet) []byte {
 	if mac == "" {
 		return nil
 	}
-	arch, ok := p.arch()
-	if !ok {
-		s.logf("dhcp: pxe client without recognizable arch (mac %s) — silent", mac)
-		return nil
-	}
-
 	msgType := byte(msgOffer)
 	if p.messageType() == msgRequest {
 		msgType = msgAck
@@ -107,8 +108,9 @@ func (s *Server) reply(p *packet) []byte {
 	copy(p.siaddr[:], next)
 
 	// Pool mode (MAMMOTH_PXE_DHCP_POOL): the ROM needs an IP lease before
-	// it will fetch anything — without one it silently falls to disk. Only
-	// PXE clients get leases; ordinary hosts stay with the site DHCP.
+	// it will fetch anything, and the installer kernel's dracut re-requests
+	// one without any PXE options. Every client gets a lease; boot
+	// parameters go only to PXE clients.
 	var leaseOpts []option
 	if s.opts.DHCP != nil {
 		if ip := s.opts.DHCP.lease(mac); ip != nil {
@@ -128,6 +130,18 @@ func (s *Server) reply(p *packet) []byte {
 			s.logf("dhcp: address pool exhausted (mac %s) — silent", mac)
 			return nil
 		}
+	}
+
+	if !p.isPXEClient() {
+		// Plain host (installer kernel renewing its address): lease only —
+		// never boot parameters, or random devices would chainload iPXE.
+		return p.bytes(msgType, "", append(leaseOpts, option{optServerID, next})...)
+	}
+
+	arch, ok := p.arch()
+	if !ok {
+		s.logf("dhcp: pxe client without recognizable arch (mac %s) — silent", mac)
+		return nil
 	}
 
 	// Options the boot ROM checks before it will accept the offer: the

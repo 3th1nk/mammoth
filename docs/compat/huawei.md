@@ -483,3 +483,25 @@ runner 将 claim 时快照贯穿全部 stage,其余读 context 的 stage 均在
 - **对流水线的影响**:无。verify_layout 在 boot stage 之前完成盘解析;装机中的
   anaconda 走本地控制器视角,不依赖 iBMC 的存储页;
 - **运维口径**:装机后引导介质改回硬盘即可;无需人工干预 RAID。
+
+### PXE 通路真机闭环(2026-09-13,与三个真机修复)
+
+**结局**:BIOS 启用 UEFI 网络引导后,`boot.strategy=pxe` rocky9 装机六阶段
+全绿(DISCOVER→OFFER(池租约+NBP)→TFTP iPXE→HTTP 脚本→kernel/initrd 200
+→dracut 租约→anaconda NFS 装机→完成回调→verify_ready SSH 命中)。
+
+真机暴露并已修复的三个缺陷(全部由 wire 抓包定位):
+
+1. **广播 OFFER 丢失**:固件 DISCOVER 广播自 `0.0.0.0:68`、广播标志置位,
+   按源地址回包 = 发往 0.0.0.0(内核静默投递到回环,零错误日志)。修复:
+   RFC 2131 §4.1——无地址/广播标志客户端回 `255.255.255.255:68`,经
+   `ipv4.PacketConn` 从收包网口发出(c82b2cd);
+2. **ROM 拒收 OFFER**:缺 opt60 "PXEClient" 回带与 opt97 GUID 原样回显
+   (Intel UEFI PXE 视为非 PXE 服务器),补齐 + T1/T2(218e261);
+3. **kernel/initrd 500**:文件 handler `defer f.Close()` 在响应读取前关闭
+   (`file already closed`),文件所有权移交生成的 visitor(d0d1644)。
+
+**环境结论**:该机房无站点 DHCP(多台设备静默 DISCOVER 佐证)→ 需要
+`MAMMOTH_PXE_DHCP_POOL` 池模式;装机内核 dracut 的 `ip=dhcp` 不带 option 60,
+池模式必须服务所有客户端(否则 dracut 无限期重试,装机卡死)——普通设备
+只给租约不给引导参数。BIOS 前置 + logicDrive 怪癖见上文两条。

@@ -286,3 +286,7 @@ func normalizeMAC(s string) string {
 	}
 	return b.String()
 }
+
+// NormalizeMAC is the canonical MAC spelling for API boundaries: queries on
+// the machine face and store rows all use the same lowercase colon form.
+func NormalizeMAC(s string) string { return normalizeMAC(s) }

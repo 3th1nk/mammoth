@@ -588,6 +588,90 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /netboot/script:
+    get:
+      operationId: getNetbootScript
+      tags: [netboot]
+      security: []
+      summary: iPXE boot script for a client MAC
+      description: |
+        Machine-facing endpoint (docs/06-install-pipeline.md §3.3): iPXE
+        fetches its boot script here after chaining from the NBP. The MAC is
+        only a routing key — the script content is what the runner armed for
+        that machine, and unknown MACs get a script that exits back to the
+        firmware boot order (no address assignment ever happens; the site
+        DHCP owns that). Public by contract (security: []).
+      parameters:
+        - name: mac
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: '^([0-9A-Fa-f]{2}[:.-]?){5}[0-9A-Fa-f]{2}$'
+        - name: arch
+          in: query
+          required: false
+          description: Firmware architecture the client booted with (from DHCP
+            option 93); informational.
+          schema:
+            type: string
+            enum: [bios, ia32, uefi-x64, uefi-arm64]
+      responses:
+        '200':
+          description: |
+            The iPXE script for a pending boot entry, or a fallback script
+            that exits when no entry is pending (200 on purpose: a 404 would
+            strand iPXE in its shell instead of falling through to disk).
+          content:
+            text/plain:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/Unprocessable'
+
+  /netboot/files/{token}/{file}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+          maxLength: 128
+      - name: file
+        in: path
+        required: true
+        description: >-
+          Bare file name registered in the boot entry (kernel, initrd,
+          modloop); no path separators — traversal is structurally impossible
+          and non-registered names 404.
+        schema:
+          type: string
+          maxLength: 128
+    get:
+      operationId: fetchNetbootFile
+      tags: [netboot]
+      security: []
+      summary: Fetch a network boot tree file by task token
+      description: |
+        Machine-facing endpoint for the PXE boot path: serves the per-task
+        boot tree (kernel/initrd/aux files extracted from the distro media)
+        that the iPXE script references. The unguessable task token in the
+        path is the credential, mirroring /render/{token}/{file}.
+      responses:
+        '200':
+          description: Boot artifact content
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Unknown token or file not in the entry's allowlist
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
   /api/v1/jobs/{id}/events:
     parameters:
       - $ref: '#/components/parameters/jobId'
@@ -892,7 +976,16 @@ components:
           description: Distro drivers registered on this instance with their
             keep-partition support level (docs/06-install-pipeline.md §5).
           items:
-            $ref: '#/components/schemas/DistroSupport' 
+            $ref: '#/components/schemas/DistroSupport'
+        boot_strategy_default:
+          type: string
+          description: Boot carrier strategy used when a job spec does not
+            name one (docs/06-install-pipeline.md §3).
+          enum: [virtual_media, pxe]
+        netboot_enabled:
+          type: boolean
+          description: Whether the netboot service (proxyDHCP/TFTP/iPXE) runs
+            on this instance; pxe boot requests require it.
 
     DistroSupport:
       type: object
@@ -902,6 +995,11 @@ components:
           type: string
         keep_partition_support:
           type: string
+          enum: [full, partial, none]
+        pxe_support:
+          type: string
+          description: Network boot (PXE/iPXE) support level for install
+            submissions with boot.strategy=pxe (docs/06-install-pipeline.md §6).
           enum: [full, partial, none]
 
     Problem:

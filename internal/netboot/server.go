@@ -201,12 +201,13 @@ func listenReuse(port int) (*net.UDPConn, error) {
 	return pc.(*net.UDPConn), nil
 }
 
-// cachedResolver absorbs the PXE retry storm: firmware re-DISCOVERs several
-// times per boot and re-boots repeat the question; the store answer is
-// stable on these timescales. Negative results are cached too, so machines
-// without entries cost nothing — the TTL bounds how late a freshly
-// registered entry is noticed (entries are registered well before boot).
-type cachedResolver struct {
+// CachedResolver wraps any Resolver with a small TTL cache. It absorbs the
+// PXE retry storm: firmware re-asks several times per boot and re-boots
+// repeat the question; the store answer is stable on these timescales.
+// Negative results are cached too, so machines without entries cost nothing
+// — the TTL bounds how late a freshly registered entry is noticed (entries
+// are registered well before boot).
+type CachedResolver struct {
 	inner Resolver
 	ttl   time.Duration
 	mu    sync.Mutex
@@ -221,11 +222,13 @@ type cacheRec struct {
 
 const cacheLimit = 4096
 
-func newCachedResolver(inner Resolver, ttl time.Duration) *cachedResolver {
-	return &cachedResolver{inner: inner, ttl: ttl, cache: map[string]cacheRec{}}
+// NewCachedResolver wraps inner with the given positive TTL.
+func NewCachedResolver(inner Resolver, ttl time.Duration) *CachedResolver {
+	return &CachedResolver{inner: inner, ttl: ttl, cache: map[string]cacheRec{}}
 }
 
-func (c *cachedResolver) Entry(ctx context.Context, mac string) (*Entry, error) {
+// Entry resolves through the cache.
+func (c *CachedResolver) Entry(ctx context.Context, mac string) (*Entry, error) {
 	c.mu.Lock()
 	rec, ok := c.cache[mac]
 	c.mu.Unlock()

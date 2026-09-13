@@ -40,9 +40,10 @@ func BearerAuth(token string) gin.HandlerFunc {
 		case c.FullPath() == "/healthz", c.FullPath() == "/readyz":
 			c.Next()
 			return
-		case strings.HasPrefix(c.FullPath(), "/render/"):
+		case strings.HasPrefix(c.FullPath(), "/render/"),
+			strings.HasPrefix(c.FullPath(), "/netboot/"):
 			// Machine-facing surface: the task token in the path is the
-			// credential (docs/06-install-pipeline.md §2.1).
+			// credential (docs/06-install-pipeline.md §2.1, §3.3).
 			c.Next()
 			return
 		}

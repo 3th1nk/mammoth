@@ -3,6 +3,8 @@ package provision
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/3th1nk/mammoth/internal/obs"
@@ -15,6 +17,13 @@ type ReaperOptions struct {
 	HeartbeatLimit time.Duration // running + silent this long → interrupted
 	IdempotencyTTL time.Duration
 	TaskLogsTTL    time.Duration // task_logs retention (90d default)
+	// NetbootTTL bounds the orphan sweep for netboot_entries whose task
+	// reached a terminal state (crashed runner leftovers). Zero = 1h —
+	// deliberately much longer than the release path, which runs in-line.
+	NetbootTTL time.Duration
+	// BootTreeDir is the netboot boot-tree root to sweep alongside the
+	// rows (MediaDir/netboot). Empty disables the directory removal.
+	BootTreeDir string
 }
 
 // Reaper converts lost heartbeats into retryable interrupted tasks. It is a
@@ -25,6 +34,7 @@ type Reaper struct {
 	Jobs     *store.JobRepo
 	Events   *store.EventRepo
 	TaskLogs *store.TaskLogRepo
+	Netboot  *store.NetbootRepo
 	Opts     ReaperOptions
 	Logger   *slog.Logger
 	Metrics  *obs.Metrics
@@ -68,7 +78,33 @@ func (r *Reaper) Run(ctx context.Context) error {
 					r.Logger.DebugContext(ctx, "expired task logs", "count", n)
 				}
 			}
+			r.sweepNetboot(ctx)
 		}
+	}
+}
+
+// sweepNetboot removes boot entries orphaned by a crashed runner: the task
+// is terminal but the row (and its boot tree) survived. Best-effort — the
+// row costs one line and the tree some disk until the next pass.
+func (r *Reaper) sweepNetboot(ctx context.Context) {
+	if r.Netboot == nil {
+		return
+	}
+	ttl := r.Opts.NetbootTTL
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	deleted, err := r.Netboot.DeleteTerminated(ctx, ttl)
+	if err != nil {
+		r.Logger.DebugContext(ctx, "netboot orphan sweep failed", "err", err.Error())
+		return
+	}
+	for _, d := range deleted {
+		if r.Opts.BootTreeDir != "" && d.Token != "" {
+			_ = os.RemoveAll(filepath.Join(r.Opts.BootTreeDir, d.Token))
+		}
+		r.Logger.InfoContext(ctx, "removed orphaned netboot entry",
+			"mac", d.MAC, "token", d.Token)
 	}
 }
 

@@ -84,6 +84,25 @@ mammoth serve --mode=all
 | 死信 | 队列消息超过 `MAMMOTH_QUEUE_MAX_RECEIVE_COUNT` 次投递进入死信(不再投递);对应任务已终态失败,排障后显式重试 |
 | 演示/评估 | 注册 `protocol: fake` 的机器即可全流程演练,无需真实 BMC |
 
+## 4.4 API token 轮换
+
+`MAMMOTH_API_TOKEN` 是静态 bearer token,无在线轮换。轮换 = 生成新 token
+→ 更新 env → 重启进程(旧 token 随重启立即失效):
+
+```bash
+mammoth token generate
+```
+
+把输出写入 env 文件(或 systemd `EnvironmentFile=`、compose `env_file:`),
+即 `MAMMOTH_API_TOKEN=<输出>`,然后重启进程,最后验证:
+
+```bash
+curl -H "Authorization: Bearer $MAMMOTH_API_TOKEN" http://localhost:8080/api/v1/machines
+```
+
+token 由部署方持有与备份,与数据库分域(同 `MAMMOTH_MASTER_KEY`);轮换无
+宽限期,新旧客户端需在切换窗口内同步。
+
 ## 4.5 PXE 网络引导部署前提(M7)
 
 `boot.strategy=pxe` 依赖机器面之外的一组网络服务(proxyDHCP / TFTP /
@@ -120,6 +139,24 @@ iPXE 脚本),默认关闭。启用清单:
    PXE 提示符:先确认 `GET /api/v1` 的 `netboot_enabled` 与任务事件的
    `task.netboot_registered`,再抓 DHCP(DISCOVER 是否到达、OFFER 是否
    回出)。
+
+## 4.6 HTTPS 终止(生产)
+
+mammoth 自身监听 HTTP(distroless 内无证书管理),生产要求 HTTPS 在反向代理
+终止(docs/security-baseline.md §2)。附带的 Caddy 样例把 TLS 终止在
+mammoth 之前:
+
+```bash
+MAMMOTH_TLS_HOST=bmc.example.com \
+docker compose -f deploy/compose.all-in-one.yml -f deploy/compose.tls.yml up -d
+```
+
+- `MAMMOTH_TLS_HOST` 填公网域名时,Caddy 自动申请 Let's Encrypt 证书
+  (需 80 端口可达做 HTTP-01 校验);填 IP 字面量则用自签证书(仅测试);
+- 生产应把 all-in-one 里 `8080:8080` 的端口映射移除或防火墙隔离,使
+  API 仅经 Caddy 的 443 可达;
+- 机器面 `/render/*`、`/netboot/*` 与 BMC 的 NFS 挂载不走 HTTPS(装机
+  内核/anaconda 不校验 TLS),仍按 06-install-pipeline 的链路访问。
 
 ## 5. 升级
 

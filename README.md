@@ -1,12 +1,14 @@
-# Mammoth
-
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/brand/logo-dark.svg">
   <img src="assets/brand/logo.svg" alt="mammoth logo" width="140" align="right">
 </picture>
 
+# Mammoth
+
 > A self-contained bare-metal provisioning engine.
 > Send in an address and a credential, get back a machine that runs.
+
+[**中文**](README.zh-CN.md)
 
 Mammoth takes over machines through their out-of-band controllers (BMC),
 inventories hardware and disk layout, and installs/reinstalls operating
@@ -16,11 +18,13 @@ no built-in UI.**
 
 - Design documents: [docs/README.md](docs/README.md)
 - API contract (single source of truth): [api/openapi.yaml](api/openapi.yaml)
-- Status: **M0** — skeleton + generic out-of-band capability ([roadmap](docs/09-roadmap.md))
+- Status: **v1.0 ready** — M0~M6 delivered (contract frozen); three distros
+  (rocky9 / ubuntu22 / debian12) closed-loop on real hardware; M7 PXE/iPXE
+  network boot delivered and closed-loop on real hardware. ([roadmap](docs/09-roadmap.md))
 
 ## Quick start (all-in-one)
 
-Requirements: Go ≥ 1.24, Docker (for PostgreSQL).
+Requirements: Go ≥ 1.26, Docker (for PostgreSQL).
 
 ```bash
 docker run -d --name mammoth-pg -e POSTGRES_USER=mammoth -e POSTGRES_PASSWORD=mammoth \
@@ -74,8 +78,8 @@ python3 scripts/acceptance.py --api http://localhost:8080 --token devtoken \
 ```
 client ──▶ api (control plane, stateless)      ──┐
             runner (executes tasks via BMC)    ──┼──▶ PostgreSQL (state + table queue)
-            builder (media assembly, M3)       ──┤
-            prober (in-band probes, M2)        ──┘
+            builder (media assembly)           ──┤
+            prober (in-band probes)            ──┘
 ```
 
 - Single binary, multiple facets: `serve --mode=all|api|runner|builder|prober`
@@ -93,7 +97,7 @@ client ──▶ api (control plane, stateless)      ──┐
 | Image | Base | Modes | Notes |
 |-------|------|-------|-------|
 | `mammoth` | distroless (static) | all / api / runner / prober | no external tools |
-| `mammoth-builder` | alpine + xorriso | builder | privileged, M3 |
+| `mammoth-builder` | alpine + xorriso | builder | privileged |
 
 ```bash
 docker compose -f deploy/compose.all-in-one.yml up -d   # 1×all + PG
@@ -110,7 +114,7 @@ make build        # bin/mammoth
 make test         # unit tests (no external services)
 make test-pg      # queue/store contract suites against a disposable PG
 make generate     # regenerate from api/openapi.yaml (contract drift fails CI)
-make acceptance   # full M0 acceptance flow against a local all-in-one
+make acceptance   # full scripted acceptance flow against a local all-in-one
 ```
 
 Observability: JSON logs with standard fields (`task_id` `machine_id` `job_id`

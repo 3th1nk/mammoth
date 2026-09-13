@@ -2,7 +2,7 @@
 
 > **当前状态(2026-09)**:M0~M6 全部交付(契约冻结 = v1.0);M7 PXE/iPXE
 > 网络引导通路已交付并**真机闭环**(2288H V5:boot.strategy=pxe rocky9 六阶段
-> 全绿,含可选 DHCP 池模式;ramdisk 探针 PXE 待回归)。SQLite 最小部署形态已评估并放弃
+> 全绿,含可选 DHCP 池模式;ramdisk 探针 PXE 已 succeeded 但 disks=0 遗留,见 M7 余项)。SQLite 最小部署形态已评估并放弃
 > (见 10 §D2),存储收敛为 PostgreSQL-only。余项:uniontechos(见
 > compat/distros.md)、ubuntu 24.04 验证、PXE 真机矩阵(见 M7 余项)。
 > 三方言(rocky9 / ubuntu22 / debian12)已真机端到端闭环。
@@ -67,7 +67,7 @@
   alpine 虚拟介质载体,LSI RAID 卷可见,discover 端到端 succeeded;
   PXE 通路属真实网络环境阶段
 
-## M6 · 运营完备(主体已交付,余项如下)
+## M6 · 运营完备 ✅(v1.0)
 
 - ✅ Webhook 事件投递(HMAC-SHA256 签名、类型过滤、退避重试)
 - ✅ 审计/事件查询 API(resource/type 过滤 + 游标)+ 事件 SSE(job 级 + 全局)
@@ -106,16 +106,17 @@
 - ✅ `netboot_entries` 注册表 + 引导项生命周期(注册/宽限注销/孤儿清扫),
   `MAMMOTH_PXE_ENABLED`(默认关,启用时 bind 失败即退出)、
   `MAMMOTH_PXE_NEXT_SERVER`、`MAMMOTH_BOOT_STRATEGY`;
-- 余项(不阻塞):UefiHttp(Redfish HTTP Boot,厂商 OEM URI 各异)、
-  shim+grubnet 链(Secure Boot 场景)、ubuntu casper/debian d-i 的 PXE 形态
-  (需新的安装源策略)、rocky10-lineage BIOS PXE 真机确认、外部 DHCP+TFTP
-  逃生门。
+- 余项(不阻塞):ramdisk 探针 PXE disks>0 真机重跑(首次 succeeded 但
+  logicDrive 掉卷致 disks=0,与 PXE 链路无关)、UefiHttp(Redfish HTTP Boot,
+  厂商 OEM URI 各异)、shim+grubnet 链(Secure Boot 场景)、ubuntu casper/
+  debian d-i 的 PXE 形态(需新的安装源策略)、rocky10-lineage BIOS PXE
+  真机确认、外部 DHCP+TFTP 逃生门。
 
 ## 长期方向(不承诺排期)
 
 - Windows 驱动(unattend)
-- IPAM/资产系统的官方适配器(以可选 provider 形式,不进核心依赖)
-- 多机 Raid/LVM 拓扑编排、固件基线校验
+- 多机 Raid/LVM 拓扑编排、固件基线校验(BiosSetter / FirmwareInventory
+  能力接口,见 related-work)
 - gRPC 内部面间协议(当前为队列 + DB,足够)
 
 ## 版本策略

@@ -138,10 +138,13 @@ type Config struct {
 	PXEDHCPPort   int    // proxyDHCP listen (default 67)
 	PXETFTPPort   int    // NBP transfer (default 69)
 	PXEProxyPort  int    // PXE boot-server discovery (default 4011)
-	// PXEDHCPPool ("start,end", optional) turns the responder into a full
-	// DHCP for PXE clients — for provisioning L2s WITHOUT a site DHCP,
-	// where a boot ROM otherwise never gets an IP lease. Only PXE clients
-	// (option 60) are served. Leave empty when a site DHCP exists.
+	// PXEDHCPPool (optional) turns the responder into a full DHCP for PXE
+	// clients — for provisioning L2s WITHOUT a site DHCP, where a boot ROM
+	// otherwise never gets an IP lease. Two syntaxes: dash range
+	// ("10.0.0.10-10.0.0.50" or "10.0.0.10-50") or comma list of individual
+	// addresses ("10.0.0.10,10.0.0.20"). The installer kernel's DHCP is
+	// served too; ordinary L2 hosts are not. Leave empty when a site DHCP
+	// exists.
 	PXEDHCPPool   string
 	PXEDHCPRouter string // optional lease router; defaults to PXENextServer
 	// BootStrategyDefault is the carrier used when a job spec does not name

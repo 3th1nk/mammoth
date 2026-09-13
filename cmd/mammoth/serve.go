@@ -224,16 +224,11 @@ func serve(args []string) error {
 		nextServer := net.ParseIP(cfg.PXENextServer)
 		var pool *netboot.DHCPPool
 		if cfg.PXEDHCPPool != "" {
-			parts := strings.Split(cfg.PXEDHCPPool, ",")
-			if len(parts) != 2 {
-				return fmt.Errorf("netboot: MAMMOTH_PXE_DHCP_POOL %q is not \"start,end\"", cfg.PXEDHCPPool)
-			}
 			router := net.ParseIP(cfg.PXEDHCPRouter)
 			if router == nil {
 				router = nextServer
 			}
-			pool, err = netboot.NewDHCPPool(net.ParseIP(strings.TrimSpace(parts[0])),
-				net.ParseIP(strings.TrimSpace(parts[1])), nil, router)
+			pool, err = netboot.ParseDHCPPool(cfg.PXEDHCPPool, router)
 			if err != nil {
 				return fmt.Errorf("netboot: MAMMOTH_PXE_DHCP_POOL: %w", err)
 			}

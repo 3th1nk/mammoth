@@ -454,3 +454,23 @@ runner 将 claim 时快照贯穿全部 stage,其余读 context 的 stage 均在
 运维注记:**轮换 MAMMOTH_MASTER_KEY 后存量凭证全部失效**
 (`cipher: message authentication failed` → CREDENTIAL_UNAVAILABLE),
 须重建凭证并更新机器引用。
+
+### Pxe 一次性引导被静默跳过(PXE 通路前置,2026-09-13)
+
+- **现象**:`set_boot_device(BootPXE, once=true)` 经 Redfish PATCH 被 iBMC 6.41
+  接受(202)且确实被消费(下次读取 target 回 None/Disabled),机器重启后
+  **固件零网络引导尝试**(LOM 有链路;抓包 POST 期间无任何 DHCP 包),直接
+  落盘。Legacy 模式(`BootSourceOverrideMode=Legacy`)同样静默跳过。
+- **根因**:BIOS Setup 中 UEFI 网络引导(PXE)未启用——iBMC 的 Pxe override
+  只能"指到"引导列表里已有的网络项,列表里没有该项时静默跳到下一引导设备。
+  **没有任何带外 API 能远程打开固件的 PXE 开关**(它是 BIOS Setup 设置项,
+  不是引导顺序项)——这是 Ironic/Metal3/Pixiecore 共同的文档化前置条件
+  ("hardware that supports booting from network" / "must be configured to
+  boot UEFI with network/PXE device")。
+- **解法(远程可行)**:`set_boot_device(bios, once)` 进 BIOS Setup + iBMC
+  Web KVM → 启用 UEFI 网络引导/PXE 并保存 → 之后 Pxe 一次性引导即可用。
+- **产品沉淀**:① operations.md §4.5 的部署前提已有此条,补"启用指引";
+  ② related-work 已列 **BiosSetter**(Redfish BiosRegistry 远程改 BIOS 设置)
+  为未来能力——Ironic 用同机制做远程 BIOS 配置,是这类问题的根治路径;
+  ③ 新机器走 PXE 前先跑一次 `pxeprobe -server <mammoth>`?不行——探针验证
+  的是服务侧;前置检查只能靠 BIOS 侧确认或首次实测观察 POST 是否发包。

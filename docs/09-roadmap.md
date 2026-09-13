@@ -1,8 +1,8 @@
 # 09 · 演进路线
 
 > **当前状态(2026-09)**:M0~M6 全部交付(契约冻结 = v1.0);M7 PXE/iPXE
-> 网络引导通路已交付(proxyDHCP + TFTP + iPXE 内置,RHEL 系安装与 ramdisk
-> 探针双通路,qemu 闭环、真机验证进行中)。SQLite 最小部署形态已评估并放弃
+> 网络引导通路已交付并**真机闭环**(2288H V5:boot.strategy=pxe rocky9 六阶段
+> 全绿,含可选 DHCP 池模式;ramdisk 探针 PXE 待回归)。SQLite 最小部署形态已评估并放弃
 > (见 10 §D2),存储收敛为 PostgreSQL-only。余项:uniontechos(见
 > compat/distros.md)、ubuntu 24.04 验证、PXE 真机矩阵(见 M7 余项)。
 > 三方言(rocky9 / ubuntu22 / debian12)已真机端到端闭环。
@@ -94,6 +94,12 @@
   脚本回固件引导序)+ `/netboot/files/{token}/{file}`(引导树,allowlist);
 - ✅ RHEL 系安装走 PXE(`inst.repo=nfs:` 复用 nfsx 导出,零新增安装源工作);
   ubuntu22/debian12 提交即拒(PXESupport none 门禁);
+- ✅ 可选 DHCP 池(`MAMMOTH_PXE_DHCP_POOL`):无站点 DHCP 的机房,UEFI PXE ROM
+  拿不到租约就不会走网络引导——mammoth 对 PXE 客户端与装机内核兼做全量
+  DHCP(租约内存态);有站点 DHCP 时保持纯 proxy 模式;
+- ✅ **真机闭环(2026-09-13,2288H V5)**:四跳(DISCOVER 广播 OFFER→TFTP
+  ipxe-amd64.efi→HTTP 脚本→kernel/initrd 200)→ dracut 池租约 → anaconda
+  NFS 装机 → 完成回调 → verify_ready SSH 命中,六阶段全绿;
 - ✅ ramdisk 探针 PXE 化(`probe=ramdisk boot=pxe`):alpine 引导树 + overlay
   第二段 cpio 追加进 initramfs,modloop 走 HTTP——M5 遗留的"PXE 通路"余项
   就此关闭;

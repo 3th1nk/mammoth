@@ -116,3 +116,44 @@ func TestPoolModeReply(t *testing.T) {
 	}
 	_ = context.Background
 }
+
+// TestPoolModeServesInstallerKernel pins the dracut case: the installer's
+// own DHCP carries no option 60 and must get a lease (no boot parameters —
+// a plain host lease), or the install stalls forever (2288H finding).
+func TestPoolModeServesInstallerKernel(t *testing.T) {
+	pool, _ := NewDHCPPool(net.IPv4(192, 168, 77, 200), net.IPv4(192, 168, 77, 201), nil, net.IPv4(192, 168, 77, 1))
+	s := testServer(t, Options{
+		NextServer: []byte{192, 168, 77, 1},
+		BaseURL:    "http://192.168.77.1:8080",
+		DHCP:       pool,
+	})
+	var mac [6]byte
+	copy(mac[:], []byte{0x50, 0x1d, 0x93, 0xd8, 0xc6, 0x97})
+
+	// Plain DISCOVER (no option 60): proxy mode would stay silent, pool
+	// mode answers with a bare lease.
+	req := discover(0x2222, mac, option{optMessageType, []byte{msgDiscover}})
+	setBroadcastFlag(req)
+	reply, to := s.handle(req, 67, &net.UDPAddr{IP: net.IPv4zero, Port: 68})
+	if reply == nil || to == nil || !to.IP.Equal(net.IPv4bcast) {
+		t.Fatalf("pool mode must lease plain hosts: reply=%v to=%v", reply != nil, to)
+	}
+	p, _ := parse(reply)
+	if got := net.IP(p.yiaddr[:]).String(); got != "192.168.77.200" {
+		t.Fatalf("yiaddr = %v", got)
+	}
+	if f := hexClean(p.file[:]); f != "" {
+		t.Fatalf("plain host must not receive a bootfile, got %q", f)
+	}
+	if _, ok := p.options[optBootfile]; ok {
+		t.Error("opt67 must be absent for plain hosts")
+	}
+	if string(p.yiaddr[:]) == "" {
+		t.Error("unreachable")
+	}
+	// Proxy mode without a pool stays silent for the same request.
+	s2 := testServer(t, Options{NextServer: []byte{192, 168, 77, 1}, BaseURL: "http://x"})
+	if r, _ := s2.handle(req, 67, &net.UDPAddr{IP: net.IPv4zero, Port: 68}); r != nil {
+		t.Error("proxy mode must not answer non-PXE clients")
+	}
+}

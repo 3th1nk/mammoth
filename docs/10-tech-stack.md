@@ -112,6 +112,21 @@ type TaskQueue interface {
     默认 no-op exporter(零开销、零依赖);配置启用 OTLP 导出后才引入 SDK 传输依赖;
   - trace 关联:task 的 span 上下文随队列消息载荷透传,跨进程面不断链。
 
+### D7 · iPXE 二进制随仓库分发(go:embed)+ proxyDHCP/TFTP 纯 Go 自研(M7)
+
+- **自包含优先**:PXE 引导链需要 NBP 二进制(iPXE,GPL-2.0+);随仓库
+  分发(assets/pxe + go:embed)让单二进制承诺在 PXE 通路下依然成立——
+  运维提供目录或运行时下载都会引入"装机现场的外部前置";
+- **合规**:GPL-2.0+ 与 Apache-2.0 主项目共存依赖 iPXE 的二进制分发例外
+  ("entire resulting derived work" 条款);来源钉死 Debian `ipxe`
+  2.0.0+dfsg-5(DFSG 纯净源码树,剥离无源固件驱动),.deb 与 orig tarball
+  的 sha256、重建脚本(scripts/fetch-pxe-bins.sh)与许可全文在
+  assets/pxe/PROVENANCE.md 与 LICENSE-ipxe.txt;
+- **协议自研**:proxyDHCP(应答子集)与 TFTP(RRQ-only + tsize/blksize)
+  各约 300 行纯 Go,与 D5(IPMI 纯 Go)同一哲学——协议面窄、表驱动可测,
+  不为 5% 的边角引入依赖;DHCP 应答从不分配地址(yiaddr=0),与站点
+  DHCP 的权责边界由协议语义保证而非配置约束。
+
 ## 3. 依赖树
 
 ```

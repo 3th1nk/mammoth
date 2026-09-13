@@ -10,13 +10,16 @@ Tinkerbell 换用 agent 工作流哲学,Pixiecore 只做引导层。
 | Ironic | OpenStack BMS 组件 | OpenStack 全栈 | IPA agent + deploy steps | 同域,重平台 |
 | Metal3/BMO | K8s BMH 控制器 | K8s + Ironic | IPA(同 Ironic) | 同域,K8s 生态 |
 | Tinkerbell | 工作流引擎 | 多组件 | osie hook 镜像 | 同域,agent 哲学 |
-| Pixiecore | PXE 引导器 | 无 | 无(引导层) | M6 PXE 的实现参考 |
+| Pixiecore | PXE 引导器 | 无 | 无(引导层) | ✅ 已吸收(M7 netboot 服务) |
 
 ## 借鉴清单(按 roadmap 对应)
 
-1. **M6 PXE**:Pixiecore(Apache-2.0,Go)的 **proxyDHCP** 模式——不抢占
-   现有 DHCP,旁路应答 PXE 客户端;其 "boot from API" 动态引导与 mammoth
-   的 task-token URL 同构。
+1. **M7 PXE(已落地)**:Pixiecore(Apache-2.0,Go)的 **proxyDHCP** 模式
+   ——不抢占现有 DHCP,旁路应答 PXE 客户端;"boot from API" 动态引导与
+   mammoth 的 task-token URL 同构。实现差异:引导项注册在 PG
+   (`netboot_entries`,跨 facet 一致)而非进程内存;NBP 全走 HTTP 后仅
+   iPXE 二段链交由 TFTP;引导项按任务生命周期显式注册/注销(宽限/孤儿
+   清扫),而非 Pixiecore 的会话内 TTL。
 2. **ramdisk 探针**:Tinkerbell osie(内存 OS)与 IPA 的 hardware
    collection——dmidecode/lsblk/ipmitool 输出的结构化 schema 可直接对照;
    osie 还能刷固件/配 RAID,是探针的激进版形态。

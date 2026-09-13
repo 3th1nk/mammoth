@@ -28,9 +28,14 @@ verify_layout → configure_raid → prepare_media → boot → install_os → v
   分区 `--grow`,每卷单挂载点;多分区需 LVM,后续);
 - 成员选择器与 `disks[]` 共用同一解析器,重叠即 `SCHEMA_INVALID_STORAGE`。
 
-## 3. prepare_media(介质准备,builder 面执行)
+## 3. prepare_media(载荷准备,builder 面执行)
 
-### 3.1 介质策略:发行版原盘重打包为任务引导介质
+prepare_media 的后半段按**引导策略(boot strategy)**分派——"把安装器送到机器
+面前"是策略,前半段的渲染是策略无关的纯函数。策略在提交时声明
+(`spec.boot.strategy`,缺省取部署默认 `MAMMOTH_BOOT_STRATEGY`),task context
+记录 `boot_strategy` 标记,所有清理路径按标记分派。
+
+### 3.1 virtual_media 策略:发行版原盘重打包为任务引导介质(默认)
 
 发行版原盘只读引用、永不修改(仍是包源);builder 从原盘**产出本任务的引导 ISO**
 (`boot-<token>.iso`,token 为机器面凭证),应答文件与安装器内核参数全部烘入:
@@ -62,12 +67,52 @@ verify_layout → configure_raid → prepare_media → boot → install_os → v
 - 渲染层不做任何外部调用(不查快照、不连 BMC),保证可测试性与确定性;
 - 模板按发行版方言组织,由发行版驱动提供(见 §6)。
 
+### 3.3 pxe 策略:网络引导(proxyDHCP + iPXE,M7)
+
+借鉴 Pixiecore 的 proxyDHCP 模型:**mammoth 永不分配地址**(站点 DHCP 拥有
+地址权),只在旁路应答 PXE 客户端"下一级引导程序在哪"。链路与职责:
+
+```
+PXE ROM ──DHCP DISCOVER(opt 60=PXEClient)──▶ proxyDHCP(UDP 67/4011,旁路应答)
+        ◀──OFFER: yiaddr=0 + opt66/67(NBP 文件名,TFTP 服务器=mammoth)
+PXE ROM ──TFTP RRQ──▶ undionly.kpxe(BIOS)/ ipxe-<arch>.efi(UEFI,go:embed 内置)
+iPXE    ──HTTP GET /netboot/script?mac=…──▶ 按 MAC 渲染的 iPXE 脚本
+iPXE    ──HTTP GET /netboot/files/<token>/…──▶ kernel/initrd(+modloop)
+内核    ──inst.ks=<ExternalURL>/render/<token>/ks.cfg + inst.repo=nfs:…──▶ 安装
+```
+
+- **载荷构建**(`builder.ExtractBootFiles`):从发行版原盘提取引导文件
+  (kernel/initrd/alpine modloop,与 ISO 装配共用同一份"各形态引导文件在哪"
+  的事实),归一化为平面文件名落 `MediaDir/netboot/<token>/`;
+- **引导项注册**:机器库存里的**全部 NIC MAC**(叠加 spec 网络声明的
+  match.mac)写入 `netboot_entries`(`UNIQUE(mac)`,prepare 重试幂等覆盖);
+  固件从哪个口引导是固件的事,全注册;
+- **无条目回退**:脚本端点对未知 MAC 返回 200 + `exit` 脚本(绝不 404——
+  404 会把 iPXE 留在自己的 shell;`exit` 回固件引导序自然落盘),顺带无害化
+  "安装后固件再次 PXE"的竞态;
+- **kernel args 与 ISO 通路零差异**:`inst.ks=` 本就是绝对 HTTP URL、
+  `inst.repo=nfs:` 本就是网络安装源、无静态网声明时 earlynet 自动 `ip=dhcp`
+  ——RHEL 系是唯一零新增安装源工作的家族(矩阵见 §6);
+- **ramdisk 探针同链路**:`probe=ramdisk` + `boot=pxe` 时,探针环境以同一
+  引导通路进入内存(overlay 以第二段 cpio 追加进 initramfs,modloop 走
+  HTTP),见 docs/05-inventory.md §4;
+- **补偿**:注册/注销与介质生命周期同构(完成回调 → 3 分钟宽限 → 注销 +
+  删引导树;终态失败/取消/重试 → 即时注销),孤儿由 reaper 按任务终态清扫;
+- **部署前提**(docs/operations.md):机器 L2 可达、UDP 67/69/4011 开放、
+  Secure Boot 关(iPXE 未签名;shim+grubnet 列后续)、单 L2 单应答者、
+  `MAMMOTH_PXE_NEXT_SERVER`(ExternalURL host 是 IP 字面量时自动派生)。
+
 ## 4. boot(引导)
 
-1. BMC 挂载 `boot-<token>.iso` + 设置一次性引导(`boot_device once`);
-   经中转分发的部署可配 `MAMMOTH_BOOT_SETTLE_DELAY`(挂载与上电之间的等待——
-   BMC 挂载校验只读镜像头部,残缺镜像会静默引导失败);
-2. 断电→上电(或 reset),进入安装环境;
+按 prepare_media 选定的策略分派(接口 `bootStrategy{prepare,arm,release}`):
+
+- **virtual_media**:BMC 挂载 `boot-<token>.iso` + 设置一次性引导
+  (`boot_device once`);经中转分发的部署可配 `MAMMOTH_BOOT_SETTLE_DELAY`
+  (挂载与上电之间的等待——BMC 挂载校验只读镜像头部,残缺镜像会静默引导
+  失败);
+- **pxe**:`set_boot_device(BootPXE, once)` + 上电——无挂载、无 settle
+  (引导树已在本地盘,不存在带外传输尾巴);
+- 断电→上电(或 reset),进入安装环境;
 3. 等待策略:等待安装器的完成回调(`POST /render/{token}/complete`);
    自重启安装器(anaconda/subiquity)自行重启,d-i 停在完成确认屏,由流水线在
    介质释放后补发 power cycle(`BootParams.InstallerAutoReboot` 按方言声明);
@@ -122,18 +167,21 @@ type OSDriver interface {
   ubuntu22、debian12);
 - `KeepPartitionSupport()` 进入发行版支持矩阵(`GET /api/v1` 导出),**不支持分区级
   保留的发行版在提交时即拒绝 `keep: partitions`**,而不是装到一半失败;
+- 可选能力 `PXEDriver{PXESupport() SupportLevel}`:声明网络引导支持级
+  (未实现的驱动按 none),`boot.strategy=pxe` 的提交按此门禁
+  (`SCHEMA_UNSUPPORTED_BOOT_STRATEGY`),与 keep 门禁同型;
 - 应答文件名归驱动(rocky9:ks.cfg;ubuntu22:user-data;debian12:preseed.cfg +
   脚本),编排层不硬编码。
 
 ### 发行版支持矩阵(实现态;运行时事实源 `GET /api/v1`)
 
-| 发行版 | 安装器 | 应答文件 | 保留分区 | 状态 |
-|--------|--------|---------|---------|------|
-| RHEL 系(Rocky/Alma) | Anaconda | kickstart | **full**(`%pre` + `--onpart/--noformat`) | ✅ 真机闭环(Huawei 2288H V5) |
-| Ubuntu Server 22.04 | subiquity | autoinstall | partial(keep: disk) | ✅ 真机闭环 |
-| Debian 12 | debian-installer | preseed | partial(keep: disk) | ✅ 真机闭环 |
-| 统信服务器 V20(UOS) | anaconda 定制 | kickstart(同 rocky9 方言) | full(同 rocky9) | **blocked**(Finish 阶段崩溃,见 distros.md) |
-| Windows | Setup | unattend | full | 未开始 |
+| 发行版 | 安装器 | 应答文件 | 保留分区 | PXE | 状态 |
+|--------|--------|---------|---------|-----|------|
+| RHEL 系(Rocky/Alma) | Anaconda | kickstart | **full**(`%pre` + `--onpart/--noformat`) | full(`inst.repo=nfs:` 网络装机现成;rocky10 BIOS 待真机) | ✅ 真机闭环(Huawei 2288H V5) |
+| Ubuntu Server 22.04 | subiquity | autoinstall | partial(keep: disk) | none(casper 需整 ISO 进内存) | ✅ 真机闭环 |
+| Debian 12 | debian-installer | preseed | partial(keep: disk) | none(d-i 需网络镜像源) | ✅ 真机闭环 |
+| 统信服务器 V20(UOS) | anaconda 定制 | kickstart(同 rocky9 方言) | full(同 rocky9) | full(同 rocky9) | **blocked**(Finish 阶段崩溃,见 distros.md) |
+| Windows | Setup | unattend | full | 未开始 | 未开始 |
 
 各方言能力差异(bond/vlan/软件 RAID/多安装盘/xfs 等)见
 [compat/distros.md](compat/distros.md) 实现注记与

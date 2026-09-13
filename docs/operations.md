@@ -84,6 +84,32 @@ mammoth serve --mode=all
 | 死信 | 队列消息超过 `MAMMOTH_QUEUE_MAX_RECEIVE_COUNT` 次投递进入死信(不再投递);对应任务已终态失败,排障后显式重试 |
 | 演示/评估 | 注册 `protocol: fake` 的机器即可全流程演练,无需真实 BMC |
 
+## 4.5 PXE 网络引导部署前提(M7)
+
+`boot.strategy=pxe` 依赖机器面之外的一组网络服务(proxyDHCP / TFTP /
+iPXE 脚本),默认关闭。启用清单:
+
+1. **网络位置**:mammoth(netboot facet)须驻留目标机器的装机 L2——
+   proxyDHCP 靠广播工作。**同一 L2 只能有一个应答者**,与站点 DHCP 的共存
+   是"跨主机"共存(proxyDHCP 只应答 PXEClient,站点 DHCP 继续拥有地址
+   分配);**同机不可共存**:DHCP 服务的 UDP 67 是排他的,把 mammoth 与
+   站点 DHCP 放同一台机器会绑定失败(启用态下属 fatal,设计如此)。
+2. **端口与权限**:UDP 67(proxyDHCP)、4011(PXE boot-server discovery)、
+   69(TFTP)是特权端口——容器部署需 `network_mode: host`(或 macvlan)+
+   `CAP_NET_BIND_SERVICE`;裸机部署可用 `setcap cap_net_bind_service=+ep`。
+   kernel/initrd 走 API 的 8080(机器面已需可达,无新增 TCP 端口)。
+3. **地址声明**:`MAMMOTH_PXE_NEXT_SERVER`(mammoth 在装机 L2 的 IPv4);
+   `MAMMOTH_EXTERNAL_URL` 的 host 是 IP 字面量时自动派生,否则必填。
+4. **固件前提**:Secure Boot 关闭(iPXE 未参与签名链;shim+grubnet 在
+   roadmap M7 余项)。目标机 BIOS/UEFI 的 PXE/网络引导需在固件中可用。
+5. **镜像形态**:distroless 主镜像已内嵌 iPXE 二进制(assets/pxe,来源与
+   重建见 `assets/pxe/PROVENANCE.md`),无需额外包。
+6. **运维**:引导项孤儿(进程崩溃残留)由 reaper 按任务终态清扫(默认
+   1h);`MediaDir/netboot/<token>/` 引导树随注销删除。排查机器停在
+   PXE 提示符:先确认 `GET /api/v1` 的 `netboot_enabled` 与任务事件的
+   `task.netboot_registered`,再抓 DHCP(DISCOVER 是否到达、OFFER 是否
+   回出)。
+
 ## 5. 升级
 
 1. 备份数据库(§2);

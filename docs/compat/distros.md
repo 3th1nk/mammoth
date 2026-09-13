@@ -182,3 +182,27 @@ mini.iso)提供驱动支持。
 
 实现 `render.OSDriver`(六个方法)+ 注册一行,编排层零改动:
 `Registry.For(distro)` 路由、`KeepPartitionSupport()` 进入提交门禁与矩阵导出。
+
+### PXE 网络引导(M7,boot.strategy=pxe)
+
+| 发行版 | PXE 支持级 | 说明 |
+|--------|-----------|------|
+| rocky9 / centos7 / kylinv10 / kylinv11 / uniontechos | full | anaconda/dracut 内核对网络引导原生;`inst.repo=nfs:` 安装源复用 nfsx 导出,`inst.ks=` 走 HTTP,与 ISO 通路零差异 |
+| rocky10(UEFI-only 媒体) | partial(待真机) | 引导文件同为 `images/pxeboot/*`;BIOS 固件的 PXE 行为待真机确认(UEFI 侧无虞) |
+| ubuntu22 | none | casper 需把整张 ISO 拉进内存或 http root,需新的安装源策略后再排期 |
+| debian12 | none | d-i netboot 后包必须走网络镜像源,破坏离线安装语义,同上 |
+
+实现注记:
+
+- 引导项按机器**全部 NIC MAC** 注册(spec 网络声明的 match.mac 叠加);
+  固件从哪个口引导属固件行为;
+- iPXE 二段链:undionly.kpxe(BIOS,依赖网卡 UNDI)/ ipxe-<arch>.efi
+  (UEFI);Secure Boot 机器当前不可用(文档化前提,shim+grubnet 列 M7
+  余项);
+- ramdisk 探针(`probe=ramdisk boot=pxe`):alpine 引导树 + probe overlay
+  以第二段 cpio 追加进 initramfs(kernel 支持串联 cpio 段,同 early
+  microcode 机制);modloop 经 `modloop=<http-url>` 提供——该参数与拼接段
+  在 qemu harness(scripts/pxe-dev)验证,真机矩阵待 2288H 回归;
+- qemu 与 `netdev user` 的内建 DHCP 不可用于 proxyDHCP 验证(slirp 的
+  DHCP 在 qemu 进程内,宿主收不到广播)——harness 用 Linux bridge +
+  dnsmasq 作真 DHCP(只分地址,不配 dhcp-boot),见 scripts/pxe-dev/README。

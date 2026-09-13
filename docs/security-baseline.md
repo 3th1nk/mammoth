@@ -13,8 +13,9 @@
 | 外部 IdP | 预留适配点(中间件单点替换);v1.0 未实现 | docs/03-api.md §4 |
 | 多租户 | 无;单部署单信任域,RAID 级隔离属于部署方 | — |
 
-**余项**:token 生命周期管理(轮换/吊销)目前依赖部署方(重启进程换 token);
-rate limiting 依赖反向代理。
+**余项**:rate limiting 依赖反向代理;token 轮换已有生成工具
+(`mammoth token generate` + 重启,见 operations.md §4.4),在线轮换/吊销
+留作增强。
 
 ## 2. 凭证与机密
 
@@ -51,6 +52,6 @@ rate limiting 依赖反向代理。
 - [x] task token 熵与任务级隔离
 - [x] SQL/命令注入面清点
 - [x] 备份恢复文档(含主密钥关键性)
-- [ ] HTTPS 终止样例( compose + 反向代理示例)
-- [ ] 依赖漏洞扫描进 CI(govulncheck)
-- [ ] token 轮换工具
+- [x] HTTPS 终止样例( compose + 反向代理示例)
+- [x] 依赖漏洞扫描进 CI(govulncheck)
+- [x] token 轮换工具

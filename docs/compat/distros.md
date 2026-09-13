@@ -28,10 +28,14 @@
 
 ```json
 {
-  "version": "0.1.0",
-  "resources": ["credentials", "machines", "jobs", "tasks"],
+  "version": "1.0.0",
+  "resources": ["credentials", "machines", "jobs", "tasks", "layout", "events"],
   "distros": [
-    {"name": "rocky9",  "keep_partition_support": "full"},
+    {"name": "rocky9",   "keep_partition_support": "full"},
+    {"name": "rocky10",  "keep_partition_support": "full"},
+    {"name": "centos7",  "keep_partition_support": "full"},
+    {"name": "kylinv10", "keep_partition_support": "full"},
+    {"name": "kylinv11", "keep_partition_support": "full"},
     {"name": "ubuntu22", "keep_partition_support": "partial"},
     {"name": "debian12", "keep_partition_support": "partial"},
     {"name": "uniontechos", "keep_partition_support": "full"}
@@ -202,7 +206,8 @@ mini.iso)提供驱动支持。
 - ramdisk 探针(`probe=ramdisk boot=pxe`):alpine 引导树 + probe overlay
   以第二段 cpio 追加进 initramfs(kernel 支持串联 cpio 段,同 early
   microcode 机制);modloop 经 `modloop=<http-url>` 提供——该参数与拼接段
-  在 qemu harness(scripts/pxe-dev)验证,真机矩阵待 2288H 回归;
+  在 qemu harness(scripts/pxe-dev)验证,真机已 succeeded(disks=0 遗留,
+  logicDrive 掉卷),disks>0 重跑待做;
 - qemu 与 `netdev user` 的内建 DHCP 不可用于 proxyDHCP 验证(slirp 的
   DHCP 在 qemu 进程内,宿主收不到广播)——harness 用 Linux bridge +
   dnsmasq 作真 DHCP(只分地址,不配 dhcp-boot),见 scripts/pxe-dev/README。

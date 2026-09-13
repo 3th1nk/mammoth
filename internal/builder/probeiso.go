@@ -121,6 +121,16 @@ func alpineKernel(ctx context.Context, xorriso, iso string) (string, error) {
 	return "", fmt.Errorf("builder: %s carries no alpine /boot/vmlinuz-* — not an alpine ISO", iso)
 }
 
+// cpioEntry is one file in a "newc"-format cpio archive — the initramfs
+// overlay form for the network-boot probe (directories carry a trailing
+// slash; symlinks carry Link). The apkovl tar form shares the same entries.
+type cpioEntry struct {
+	Name string
+	Mode int64
+	Link string
+	Body []byte
+}
+
 // probeOverlayEntries is the overlay content shared by both carriers: the
 // tar.gz apkovl (virtual media) and the appended initramfs cpio segment
 // (network boot). With an overlay present, the initramfs skips its default

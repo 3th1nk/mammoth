@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -34,9 +35,9 @@ type NetbootEntry struct {
 	UpdatedAt  time.Time         `json:"updated_at"`
 }
 
-// AllowlistedFiles lists the file names servable for this entry: kernel,
-// initrd, and any auxiliary files in extra (the HTTP file handler's
-// allowlist — nothing else leaves the boot tree directory).
+// AllowlistedFiles lists the flat file names servable for this entry:
+// kernel, initrd, and plain auxiliary files from extra. Values carrying the
+// "dir:" prefix are subtree grants (see GrantedSubtrees), not file names.
 func (e *NetbootEntry) AllowlistedFiles() []string {
 	names := make([]string, 0, 2+len(e.Extra))
 	for _, n := range []string{e.Kernel, e.Initrd} {
@@ -45,11 +46,23 @@ func (e *NetbootEntry) AllowlistedFiles() []string {
 		}
 	}
 	for _, n := range e.Extra {
-		if n != "" {
+		if n != "" && !strings.HasPrefix(n, "dir:") {
 			names = append(names, n)
 		}
 	}
 	return names
+}
+
+// GrantedSubtrees lists the boot tree subdirectories servable under the
+// token (extra values shaped "dir:<name>" — e.g. the probe's apk repo).
+func (e *NetbootEntry) GrantedSubtrees() []string {
+	var out []string
+	for _, n := range e.Extra {
+		if g, ok := strings.CutPrefix(n, "dir:"); ok && g != "" {
+			out = append(out, g)
+		}
+	}
+	return out
 }
 
 // Upsert arms (or re-arms) the machine: prepare_media retries overwrite the

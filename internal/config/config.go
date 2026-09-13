@@ -88,12 +88,13 @@ type Config struct {
 	InbandTimeout      time.Duration // whole inband_ssh collection bound
 
 	// Ramdisk probe (docs/05-inventory.md §4; alpine virtual-media carrier).
-	RamdiskEnabled  bool
-	ProbeAlpineISO  string // alpine standard ISO (path/URL) the probe medium is built from
-	ProbeStaticCIDR string // DHCP fallback for machines without ssh.address
-	ProbePrefix     int    // prefix length for a bare ssh.address fallback CIDR (default 24)
-	ProbeGateway    string // fallback default route (cross-subnet report targets)
-	ProbeWait       time.Duration
+	RamdiskEnabled     bool
+	ProbeAlpineISO     string // alpine standard ISO (path/URL) the probe medium is built from
+	ProbeAlpineNetboot string // alpine NETBOOT tarball (path/URL) for the probe's PXE carrier (network drivers included)
+	ProbeStaticCIDR    string // DHCP fallback for machines without ssh.address
+	ProbePrefix        int    // prefix length for a bare ssh.address fallback CIDR (default 24)
+	ProbeGateway       string // fallback default route (cross-subnet report targets)
+	ProbeWait          time.Duration
 
 	MediaDir        string // local media repository (boot ISOs)
 	MediaWorkDir    string // scratch dir for media builds (default: beside the output)
@@ -221,6 +222,7 @@ func FromEnv() (Config, error) {
 	applyString(&c.LogFormat, "MAMMOTH_LOG_FORMAT", &errs)
 	applyString(&c.IPMIInterface, "MAMMOTH_IPMI_INTERFACE", &errs)
 	applyString(&c.ProbeAlpineISO, "MAMMOTH_PROBE_ALPINE_ISO", &errs)
+	applyString(&c.ProbeAlpineNetboot, "MAMMOTH_PROBE_ALPINE_NETBOOT", &errs)
 	applyString(&c.ProbeStaticCIDR, "MAMMOTH_PROBE_STATIC_CIDR", &errs)
 	applyString(&c.ProbeGateway, "MAMMOTH_PROBE_GATEWAY", &errs)
 	applyString(&c.MediaDir, "MAMMOTH_MEDIA_DIR", &errs)

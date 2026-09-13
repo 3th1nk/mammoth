@@ -57,6 +57,12 @@ type Executor struct {
 	// probe medium is built from — the lts kernel+modloop carry the
 	// real-server storage drivers the probe exists to see.
 	ProbeAlpineISO string
+	// ProbeAlpineNetboot, when set, is the alpine NETBOOT tarball
+	// (vmlinuz+initramfs+modloop) used as the probe's PXE payload source —
+	// the netboot initramfs carries the network drivers the standard-ISO
+	// initramfs lacks (real hardware needs them to fetch the modloop at
+	// all). Optional; ISO extraction is the fallback.
+	ProbeAlpineNetboot string
 	// ProbeStaticCIDR, when set, is the probe's DHCP fallback address for
 	// machines WITHOUT ssh.address ("198.51.100.75/24") — machine rooms
 	// without DHCP. Empty disables the fallback.

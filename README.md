@@ -84,6 +84,9 @@ client ──▶ api (control plane, stateless)      ──┐
 - Every task has a heartbeat; a reaper marks lost tasks `interrupted` (retryable) —
   a crashed runner never leaves a task suspended forever
 - Redfish first, IPMI fallback; `fake` driver for development and CI
+- Two boot carriers per install: BMC virtual media (default) or PXE/iPXE
+  network boot (built-in proxyDHCP + TFTP, Pixiecore-style; opt-in via
+  `MAMMOTH_PXE_ENABLED` — docs/operations.md §4.5)
 
 ## Delivery
 

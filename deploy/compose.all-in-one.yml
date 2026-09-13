@@ -36,6 +36,12 @@ services:
       MAMMOTH_MEDIA_DIR: /media
       MAMMOTH_MEDIA_BASE_URI: nfs://${MAMMOTH_HOST_IP:?set MAMMOTH_HOST_IP (BMC-reachable address)}/media
       MAMMOTH_BMC_TLS_INSECURE: ${MAMMOTH_BMC_TLS_INSECURE:-false}
+      # PXE network boot (optional, docs/operations.md §4.5): needs the
+      # container ON the provisioning L2 (host or macvlan networking — the
+      # bridge port mapping below cannot carry DHCP broadcasts) and
+      # CAP_NET_BIND_SERVICE for the privileged UDP ports. Off by default.
+      MAMMOTH_PXE_ENABLED: ${MAMMOTH_PXE_ENABLED:-false}
+      MAMMOTH_PXE_NEXT_SERVER: ${MAMMOTH_PXE_NEXT_SERVER:-}
     ports:
       - "8080:8080"
       - "2049:2049" # built-in NFS media export (BMC mounts nfs://$MAMMOTH_HOST_IP/media)

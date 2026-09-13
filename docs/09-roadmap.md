@@ -1,10 +1,10 @@
 # 09 · 演进路线
 
-> **当前状态(2026-09)**:M0~M5 全部交付;M6 主体交付(SSE、审计/事件查询、
-> cobra CLI、goreleaser、Webhook 签名投递、软/硬 RAID 声明式配置、运维与安全文档、
-> task_logs 检索 API、ramdisk 探针 V1)。SQLite 最小部署形态已评估并放弃
-> (见 10 §D2),存储收敛为 PostgreSQL-only。M6 余项:ramdisk 真机验证
-> (华为 2288H)、uniontechos(见 compat/distros.md)、ubuntu 24.04 验证。
+> **当前状态(2026-09)**:M0~M6 全部交付(契约冻结 = v1.0);M7 PXE/iPXE
+> 网络引导通路已交付(proxyDHCP + TFTP + iPXE 内置,RHEL 系安装与 ramdisk
+> 探针双通路,qemu 闭环、真机验证进行中)。SQLite 最小部署形态已评估并放弃
+> (见 10 §D2),存储收敛为 PostgreSQL-only。余项:uniontechos(见
+> compat/distros.md)、ubuntu 24.04 验证、PXE 真机矩阵(见 M7 余项)。
 > 三方言(rocky9 / ubuntu22 / debian12)已真机端到端闭环。
 
 里程碑按"每阶段交付物独立可用"的依赖关系排序。M1 之前没有任何东西能对用户产生价值,
@@ -80,6 +80,30 @@
 - ✅ ramdisk 探针(alpine 虚拟介质载体,`POST /render/{token}/probe-report`
   + discover `probe=ramdisk` 集成;qemu BIOS+UEFI 双模式闭环 + 2288H 真机
   端到端 succeeded)
+
+## M7 · PXE/iPXE 网络引导通路 ✅(2026-09)
+
+- ✅ 引导策略抽象:`spec.boot.strategy`(virtual_media | pxe,提交时声明,
+  部署默认 `MAMMOTH_BOOT_STRATEGY`);`bootStrategy{prepare,arm,release}` 在
+  provision 层切开,virtual_media 原样包裹既有序列,bootStage 与 probeRamdisk
+  的重复引导序列随之收敛;
+- ✅ netboot 服务(借鉴 Pixiecore proxyDHCP):proxyDHCP(UDP 67/4011,旁路
+  应答,永不分配地址)+ 最小 TFTP(仅 NBP)+ iPXE 二段链(BIOS/UEFI;二进制
+  go:embed 内置,PROVENANCE 全程可溯,Debian ipxe 2.0.0+dfsg-5);
+- ✅ 机器面 `/netboot/script?mac=`(按 MAC 渲染 iPXE 脚本;无条目回 `exit`
+  脚本回固件引导序)+ `/netboot/files/{token}/{file}`(引导树,allowlist);
+- ✅ RHEL 系安装走 PXE(`inst.repo=nfs:` 复用 nfsx 导出,零新增安装源工作);
+  ubuntu22/debian12 提交即拒(PXESupport none 门禁);
+- ✅ ramdisk 探针 PXE 化(`probe=ramdisk boot=pxe`):alpine 引导树 + overlay
+  第二段 cpio 追加进 initramfs,modloop 走 HTTP——M5 遗留的"PXE 通路"余项
+  就此关闭;
+- ✅ `netboot_entries` 注册表 + 引导项生命周期(注册/宽限注销/孤儿清扫),
+  `MAMMOTH_PXE_ENABLED`(默认关,启用时 bind 失败即退出)、
+  `MAMMOTH_PXE_NEXT_SERVER`、`MAMMOTH_BOOT_STRATEGY`;
+- 余项(不阻塞):UefiHttp(Redfish HTTP Boot,厂商 OEM URI 各异)、
+  shim+grubnet 链(Secure Boot 场景)、ubuntu casper/debian d-i 的 PXE 形态
+  (需新的安装源策略)、rocky10-lineage BIOS PXE 真机确认、外部 DHCP+TFTP
+  逃生门。
 
 ## 长期方向(不承诺排期)
 

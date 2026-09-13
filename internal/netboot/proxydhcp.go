@@ -117,6 +117,8 @@ func (s *Server) reply(p *packet) []byte {
 			binary.BigEndian.PutUint32(lb, uint32(dhcpLeaseTTL/time.Second))
 			leaseOpts = append(leaseOpts,
 				option{optLeaseTime, lb},
+				option{optRenewalTime, lb2(uint32(dhcpLeaseTTL / (2 * time.Second)))},
+				option{optRebindingTime, lb2(uint32(dhcpLeaseTTL * 7 / (8 * time.Second)))},
 				option{optSubnetMask, s.opts.DHCP.Mask().To4()},
 			)
 			if r := s.opts.DHCP.Router(); len(r.To4()) == 4 {
@@ -128,11 +130,24 @@ func (s *Server) reply(p *packet) []byte {
 		}
 	}
 
+	// Options the boot ROM checks before it will accept the offer: the
+	// PXEClient vendor class marks a PXE-capable server, and the client
+	// machine identifier (opt 97 GUID, RFC 4578) must be echoed verbatim —
+	// Intel UEFI PXE treats a mismatched or missing echo as a non-PXE server.
+	// (Real-hardware: the 2288H's UEFI PXE silently dropped offers without
+	// these and fell through to disk.)
+	opts := append(leaseOpts,
+		option{optVendorClass, []byte("PXEClient")},
+		option{optServerID, next},
+	)
+	if guid, ok := p.options[optClientArchGUID]; ok {
+		opts = append(opts, option{optClientArchGUID, guid})
+	}
+
 	// iPXE identifies itself and accepts a full URL in the bootfile slot:
 	// straight to the per-MAC script over HTTP, skipping the TFTP hop.
 	if p.isIPXE() {
-		return p.bytes(msgType, scriptURLFor(s.opts.BaseURL, mac, arch),
-			append(leaseOpts, option{optServerID, next})...)
+		return p.bytes(msgType, scriptURLFor(s.opts.BaseURL, mac, arch), opts...)
 	}
 
 	name := nbpFor(arch)
@@ -142,11 +157,16 @@ func (s *Server) reply(p *packet) []byte {
 	}
 	// Plain PXE ROMs want a bare file name plus the TFTP server address;
 	// option 66 is a string by spec, siaddr carries the same IP numerically.
-	return p.bytes(msgType, name,
-		append(leaseOpts,
-			option{optServerID, next},
-			option{optTFTPServer, []byte(s.opts.NextServer.String())},
-		)...)
+	return p.bytes(msgType, name, append(opts,
+		option{optTFTPServer, []byte(s.opts.NextServer.String())},
+	)...)
+}
+
+// lb2 packs a uint32 DHCP option value.
+func lb2(v uint32) []byte {
+	b := make([]byte, 4)
+	binary.BigEndian.PutUint32(b, v)
+	return b
 }
 
 // equalIP compares an option payload against a 4-byte IPv4 address.

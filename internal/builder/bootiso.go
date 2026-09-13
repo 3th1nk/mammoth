@@ -62,6 +62,36 @@ const (
 	layoutRHEL10   isoLayout = "rhel10"    // RHEL10-lineage UEFI-only (no isolinux; /images/eltorito.img)
 )
 
+// Layout is the exported handle for a boot-layout family (media-space
+// budgeting and caller introspection).
+type Layout = isoLayout
+
+// DetectLayout classifies a distribution ISO into its boot-layout family.
+// Exported for the media-space precheck: full-repack families need ~2x the
+// ISO transiently, selective assemblies only the boot files.
+func DetectLayout(ctx context.Context, xorrisoPath, isoPath string) (Layout, string, error) {
+	if isoHasCasper(ctx, isoPath, xorrisoPath) {
+		return layoutCasper, "", nil
+	}
+	if dir := debianInstallDir(ctx, isoPath, xorrisoPath); dir != "" {
+		return layoutDebianDI, dir, nil
+	}
+	if rhel10Layout(ctx, xorrisoPath, isoPath) {
+		return layoutRHEL10, "", nil
+	}
+	return "", "", nil
+}
+
+// FullRepack reports whether the family rebuilds as a full patched image
+// (as opposed to a selective boot-media assembly).
+func (l Layout) FullRepack() bool {
+	switch l {
+	case layoutCasper, layoutDebianDI, layoutRHEL10:
+		return true
+	}
+	return false
+}
+
 // BuildBootISO assembles a bootable ISO whose bootloader carries the given
 // kernel arguments (they must include inst.ks / inst.repo — the driver's
 // BootParams). Three layouts are understood: casper (Ubuntu live-server) and
@@ -79,30 +109,14 @@ func BuildBootISO(ctx context.Context, opt BootMediaOptions, kernelArgs string) 
 		return "", ctx.Err()
 	}
 
-	// Ubuntu live-server ISOs carry the installer in /casper with a
-	// grub-only boot chain (no isolinux, no images/pxeboot) — they rebuild
-	// as a full patched image instead of a selective boot-media assembly.
-	if isoHasCasper(ctx, opt.ISOPath, opt.XorrisoPath) {
-		buildSem <- struct{}{}
-		defer func() { <-buildSem }()
-		return rebuildPatchedISO(ctx, opt, kernelArgs, layoutCasper, "")
+	layout, installDir, err := DetectLayout(ctx, opt.XorrisoPath, opt.ISOPath)
+	if err != nil {
+		return "", err
 	}
-	// debian-installer ISOs must be probed AFTER casper: Ubuntu live-server
-	// also ships an /install/ directory, but no netinst kernel layout.
-	if dir := debianInstallDir(ctx, opt.ISOPath, opt.XorrisoPath); dir != "" {
+	if layout.FullRepack() {
 		buildSem <- struct{}{}
 		defer func() { <-buildSem }()
-		return rebuildPatchedISO(ctx, opt, kernelArgs, layoutDebianDI, dir)
-	}
-	// RHEL10-lineage: Legacy BIOS boot is removed — no isolinux, the El
-	// Torito BIOS entry is a stub and UEFI comes from an appended ESP
-	// partition. Full repack (the as_mkisofs intervals reference the source
-	// image, which lives on this host by the time a build runs); both grub
-	// configs get the mammoth entry.
-	if rhel10Layout(ctx, opt.XorrisoPath, opt.ISOPath) {
-		buildSem <- struct{}{}
-		defer func() { <-buildSem }()
-		return rebuildPatchedISO(ctx, opt, kernelArgs, layoutRHEL10, "")
+		return rebuildPatchedISO(ctx, opt, kernelArgs, layout, installDir)
 	}
 
 	work := opt.WorkDir

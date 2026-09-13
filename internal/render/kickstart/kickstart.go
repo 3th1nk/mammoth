@@ -69,6 +69,13 @@ func (d *Driver) SupportedArchs() []render.Arch {
 // wires the %pre drift machinery; M3 rejects keep at submit time.
 func (d *Driver) KeepPartitionSupport() render.SupportLevel { return render.SupportFull }
 
+// PXESupport: the anaconda/dracut kernel pair is network-boot native — the
+// same images/pxeboot files boot from HTTP (iPXE) and the already-network
+// inst.repo=nfs:/url: carries the packages, so no install-source work is
+// PXE-specific. BIOS boot of the rhel10-lineage (UEFI-only media) is the
+// one caveat pending real-hardware confirmation (docs/compat/distros.md).
+func (d *Driver) PXESupport() render.SupportLevel { return render.SupportFull }
+
 // dialect carries the installer-generation deltas between distro members of
 // the kickstart package. Every version-specific behaviour branches here —
 // one declarative place to extend when a new distro lands (kylinv11 etc.

@@ -75,6 +75,17 @@ type Executor struct {
 	// LayoutKeep is the per-machine snapshot retention (docs/08-data-model.md).
 	LayoutKeep int
 
+	// Netboot is the network-boot registry behind the pxe boot strategy
+	// (docs/06-install-pipeline.md §3.3). Nil disables pxe — a pxe task on
+	// a runner without the service fails fast with NETBOOT_UNAVAILABLE.
+	Netboot *store.NetbootRepo
+	// BootTreeDir is the per-task netboot payload root (MediaDir/netboot):
+	// ExtractBootFiles writes trees here, the netboot service serves them.
+	BootTreeDir string
+	// BootStrategyDefault names the carrier used when a spec does not
+	// declare boot.strategy ("virtual_media" unless the deployment opts in).
+	BootStrategyDefault string
+
 	// VerifyReadyWait bounds verify_ready's in-band poll for the new system
 	// after the completion report (reboot + POST + sshd takes minutes —
 	// real-hardware finding; task-level retries cover only ~30s). Zero
@@ -97,11 +108,11 @@ func (e *Executor) ExecuteStage(ctx context.Context, task *store.Task, job *stor
 	case FlowInstall:
 		stage := StageNames(task.FlowName)[seq]
 		err := e.runInstallStage(ctx, task, job, seq)
-		// Terminal failure after the media was produced: reclaim the boot
-		// ISO now (retryable failures deliberately keep it — the retry's
+		// Terminal failure after the payload was produced: reclaim it now
+		// (retryable failures deliberately keep it — the retry's
 		// prepare_media rebuilds it anyway).
 		if err != nil && installMediaProduced(stage) && !Classified(err).Retryable {
-			e.cleanupBootMedia(ctx, task, "terminal failure")
+			e.releaseBootPayload(ctx, task, parseInstallContext(task), "terminal failure")
 		}
 		return err
 	default:

@@ -139,9 +139,11 @@ func (s *Server) GetCapabilities(ctx context.Context, _ gen.GetCapabilitiesReque
 	// Distro support matrix surface (docs/06-install-pipeline.md §5).
 	for _, name := range s.Render.Distros() {
 		if d, err := s.Render.For(name); err == nil {
+			pxe := render.PXESupport(d)
 			distros = append(distros, gen.DistroSupport{
 				Name:                 name,
 				KeepPartitionSupport: gen.DistroSupportKeepPartitionSupport(d.KeepPartitionSupport()),
+				PxeSupport:           (*gen.DistroSupportPxeSupport)(&pxe),
 			})
 		}
 	}

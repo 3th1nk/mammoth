@@ -2,7 +2,7 @@
 # Needs external tools (xorriso for media assembly, M3) and loop-mount
 # privileges, so it stays on alpine rather than distroless
 # (docs/02-architecture.md §5.3).
-FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 # Restricted networks: --build-arg GOPROXY=https://goproxy.cn,direct
 ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=${GOPROXY}

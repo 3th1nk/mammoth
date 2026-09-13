@@ -13,7 +13,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.26"
 
       - name: Checks (contract drift, fmt, vet, tests, build)
         run: |
@@ -22,6 +22,9 @@ jobs:
           make vet
           make test
           make build
+
+      - name: Vulnerability scan (govulncheck)
+        run: make vuln-check
 
   integration:
     runs-on: ubuntu-latest
@@ -40,7 +43,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.26"
 
       - name: PG queue contract suite
         run: make test-pg

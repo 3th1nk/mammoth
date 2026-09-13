@@ -1,0 +1,9 @@
+# Caddyfile for the TLS termination example (deploy/compose.tls.yml).
+# Caddy terminates HTTPS in front of mammoth, which keeps serving plain HTTP
+# on an internal network. The host comes from MAMMOTH_TLS_HOST: use a public
+# hostname for an automatic Let's Encrypt cert (production) or an IP literal
+# for a self-signed cert (development/testing).
+
+{$MAMMOTH_TLS_HOST:localhost} {
+	reverse_proxy mammoth:8080
+}

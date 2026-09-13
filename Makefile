@@ -3,7 +3,7 @@ SHELL := /bin/bash
 BIN := bin/mammoth
 DSN ?= postgres://mammoth:mammoth@localhost:5432/mammoth?sslmode=disable
 
-.PHONY: all build test test-pg generate lint fmt fmt-check vet acceptance compose-up compose-down clean
+.PHONY: all build test test-pg generate lint fmt fmt-check vet vuln-check acceptance compose-up compose-down clean
 
 all: fmt generate build test
 
@@ -36,6 +36,11 @@ test-pg:
 	MAMMOTH_TEST_PG_DSN='$(DSN)' go test ./internal/store/... -count=1
 
 lint: fmt vet
+
+# Dependency vulnerability scan (govulncheck); wired into CI.
+# Version pinned (latest at time of writing, requires go >= 1.26).
+vuln-check:
+	go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
 # Full acceptance against a local all-in-one (expects PG on 5432 and the
 # binary built). See scripts/acceptance.py for the exact flow.

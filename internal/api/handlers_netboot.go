@@ -61,12 +61,16 @@ func (s *Server) FetchNetbootFile(ctx context.Context, request gen.FetchNetbootF
 		return nil, verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
 			"file %q is not available yet", request.File)
 	}
-	defer f.Close()
 	st, err := f.Stat()
 	if err != nil || !st.Mode().IsRegular() {
+		f.Close()
 		return nil, verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
 			"file %q is not available", request.File)
 	}
+	// File ownership transfers to the generated response visitor: it is
+	// read (and closed, being an io.ReadCloser) only after this handler
+	// returns — deferring Close here truncated every transfer with
+	// "file already closed" (2288H real-hardware finding).
 	return gen.FetchNetbootFile200ApplicationoctetStreamResponse{
 		Body:          f,
 		ContentLength: st.Size(),

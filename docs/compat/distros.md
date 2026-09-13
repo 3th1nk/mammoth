@@ -7,6 +7,8 @@
 | 发行版 | 驱动 | 安装器 | 应答文件 | 保留分区 | 网络稳定选择器 | 状态 |
 |--------|------|--------|----------|----------|----------------|------|
 | Rocky/RHEL 系(Rocky 9/Alma 9) | `rocky9` | Anaconda | kickstart(`inst.ks=`) | **full**:`%pre` 漂移守卫 + `--onpart/--noformat` | MAC → 接口名在 `%pre` 安装期解析 | ✅ v0.1 |
+| **Rocky 10 / RHEL 10 系** | `rocky10` | Anaconda(**UEFI-only**,上游移除 Legacy BIOS) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,机制同源) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H) |
+| **CentOS 7** | `centos7` | Anaconda 19.31(python2 世代) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H;大盘需独立 /boot,见注记) |
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
 | Debian 12 | `debian12` | debian-installer | preseed(`file=/cdrom/preseed.cfg`) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | 无(netcfg 不按 MAC 选口,单接口) | ✅ 真机跑通 |
 | 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,待真机复核) | MAC → 接口名在 %pre 安装期解析 | **blocked**(见下) |
@@ -44,6 +46,38 @@
 - 保留分区:`%pre` 漂移守卫逐分区比对 sysfs start/size 扇区与 blkid UUID,
   漂移即回报 `LAYOUT_DRIFT` 并终止安装;preserve 分区 `--onpart --noformat`;
 - 完成回报:`%post` 末尾 curl 完成回调。
+
+### rocky10(kickstart,UEFI-only)
+
+- **介质形态**:RHEL10 上游移除 Legacy BIOS——ISO 无 isolinux,El Torito 的
+  BIOS 项为占位(`images/eltorito.img`),UEFI 走 appended ESP 分区;
+  `builder` 新增 rhel10 布局族:**全量重打包**(as_mkisofs 的 interval 引用
+  源 ISO,构建时源在本机即可复现),grub 条目用原生 `linuxefi/initrdefi`,
+  卷标原样保留(efiboot.img 的 grub 按卷标搜索配置);
+- **BIOS 机器不可装**(上游立场一致):该机型只有 UEFI 固件时无影响;
+- EnsureISO:`nfs://` 等 URI 的路径在本机文件系统存在时直接使用
+  (单机部署 mammoth 与 NFS 导出同机的零拷贝路径);
+- 其余(kickstart 语法/keep/网络)与 rocky9 同源。
+
+### centos7(kickstart,老 anaconda)
+
+anaconda 19.31(python2 世代)+ util-linux 2.23 的四处方言差异,均已内建:
+
+- **grub 命令**:UEFI 的 grub 2.02 无 `linux` 命令——selective 布局的
+  grub.cfg 统一用 `linuxefi/initrdefi`(Rocky 9/10 原生配置同款,
+  BIOS 链的 isolinux.cfg 不受影响);
+- **syslinux 模块**:syslinux 4.x 无 `.c32` 模块(isolinux.bin 自含 ldlinux),
+  选择性提取时 `.c32` 为可选件,缺失即跳过;
+- **hostname**:`network --hostname=` 不渲染(解析器世代风险,且 rocky9
+  真机已证不可靠),主机名由无条件的 %post `/etc/hostname` 直写承载;
+- **根分区在线扩容安全网不渲染**(`RootExtensionSupported=false`):
+  util-linux 2.23 的 sfdisk 不能操作 GPT,一段注定失败的脚本会把装完的
+  系统拖成 fatal——渲染期显式 size 已精确建满盘,512MB 余量留在盘尾
+  (无害);
+- **大盘布局要求(提交侧注意)**:>2TiB 卷上 blivet 强制 boot 文件系统
+  位于前 2TiB——`/` 直接占满整盘会被拒(storage checks 退交互),
+  **需声明独立 /boot(1G 级)+ / rest**;ESP 用 `--fstype=efi`(渲染层
+  已自动映射)。
 
 ### ubuntu22(autoinstall)
 

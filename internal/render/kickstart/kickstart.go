@@ -69,21 +69,74 @@ func (d *Driver) SupportedArchs() []render.Arch {
 // wires the %pre drift machinery; M3 rejects keep at submit time.
 func (d *Driver) KeepPartitionSupport() render.SupportLevel { return render.SupportFull }
 
+// dialect carries the installer-generation deltas between distro members of
+// the kickstart package. Every version-specific behaviour branches here —
+// one declarative place to extend when a new distro lands (kylinv11 etc.
+// inherit via the prefix match).
+type dialect struct {
+	// hostnameViaNetworkCmd: the `network --hostname=` kickstart command is
+	// the hostname carrier. CentOS 7 (anaconda 19.31) predates the option's
+	// parser guarantees and rocky9 ignores the command on real hardware
+	// anyway — both carry the hostname through the unconditional %post
+	// write of /etc/hostname instead.
+	hostnameViaNetworkCmd bool
+	// rootExtensionSupported: the %post sfdisk safety net can resize GPT.
+	// util-linux 2.23 (CentOS 7 era) cannot — and there is no in-distro
+	// alternative on GPT-only large volumes, so a doomed script must not be
+	// rendered at all (its failure would abort a finished install).
+	rootExtensionSupported bool
+	// netRepair: the %pre hook additionally repairs the anaconda-written
+	// ifcfg (kylin's writer emits `HWADDR50:…` without the '=' and a
+	// malformed UUID) and re-manages the NIC through NM — without this, NM
+	// marks the dracut-configured device strictly unmanaged and the text
+	// install blocks at the network spoke forever (V10 SP3 2403, real
+	// machine).
+	netRepair bool
+	// deviceByMAC: the kickstart `network --device=` selector uses the MAC
+	// literal instead of a %pre-resolved interface name (paired with
+	// netRepair; the mangled writer path is the resolved-name form).
+	deviceByMAC bool
+}
+
+// dialect resolves the installer-generation deltas for this distro. Each
+// generation gets an explicit case — no family-prefix inheritance: the V10
+// workarounds must not silently apply to V11 (different NM generation,
+// different anaconda).
+func (d *Driver) dialect() dialect {
+	switch d.distro {
+	case "kylinv10":
+		// Kylin V10 (RHEL8-generation anaconda, NM 1.18-era quirks).
+		return dialect{
+			hostnameViaNetworkCmd:  true,
+			rootExtensionSupported: true,
+			netRepair:              true,
+			deviceByMAC:            true,
+		}
+	case "centos7":
+		// CentOS 7: python2-era anaconda, util-linux 2.23.
+		return dialect{
+			hostnameViaNetworkCmd:  false,
+			rootExtensionSupported: false,
+			deviceByMAC:            false,
+		}
+	default:
+		// rocky9/rocky10/kylinv11/uniontechos — current-generation lineage:
+		// standard everything.
+		return dialect{
+			hostnameViaNetworkCmd:  true,
+			rootExtensionSupported: true,
+			deviceByMAC:            false,
+		}
+	}
+}
+
 // HostnameViaNetworkCmd reports whether the `network --hostname=` kickstart
-// command is the hostname carrier. CentOS 7 (anaconda 19.31) predates the
-// option's parser guarantees and rocky9 ignores the command on real
-// hardware anyway — both carry the hostname through the unconditional %post
-// write of /etc/hostname instead.
-func (d *Driver) HostnameViaNetworkCmd() bool { return d.distro != "centos7" }
+// command is the hostname carrier (see dialect).
+func (d *Driver) HostnameViaNetworkCmd() bool { return d.dialect().hostnameViaNetworkCmd }
 
 // RootExtensionSupported reports whether the %post root-extension safety net
-// can work at all: it resizes GPT with sfdisk, which util-linux 2.23
-// (CentOS 7 era) cannot do — and on GPT-only large volumes there is no
-// in-distro alternative. Those distros get no extension script; the
-// render-time explicit size already fills the disk, the 512MB margin simply
-// stays (a %post failure there is fatal, so a doomed script must not be
-// rendered in the first place).
-func (d *Driver) RootExtensionSupported() bool { return d.distro != "centos7" }
+// can work at all (see dialect).
+func (d *Driver) RootExtensionSupported() bool { return d.dialect().rootExtensionSupported }
 
 // ksTemplate is the kickstart dialect. Dynamic pieces:
 //   - network: %pre resolves MAC→iface names and writes an include file
@@ -235,6 +288,44 @@ func hasExt4RootGrow(disks []render.ResolvedDisk) bool {
 	return false
 }
 
+// networkMACs lists the MACs a network entry binds (the interface selector
+// and, for bonds, the slaves).
+func networkMACs(n render.NetworkEntry) []string {
+	var out []string
+	if n.Match != nil && n.Match.MAC != "" {
+		out = append(out, strings.ToLower(n.Match.MAC))
+	}
+	if n.Bond != nil {
+		for _, m := range n.Bond.SlavesMACs {
+			out = append(out, strings.ToLower(m))
+		}
+	}
+	return out
+}
+
+// kylinNetRepairScript repairs the anaconda-written ifcfg profiles (the
+// kylin writer emits `HWADDR50:…` without '=' and a malformed UUID — NM
+// refuses to load them and marks the devices strictly unmanaged, which
+// blocks the text install at the network spoke) and re-manages each NIC
+// through NM. Every step is tolerated: a failed repair leaves the install
+// at the interactive summary it would reach anyway.
+func kylinNetRepairScript(macs []string) string {
+	return `# kylin: repair anaconda's malformed ifcfg profiles and re-manage the NIC
+iface_by_mac() { for d in /sys/class/net/*; do [ "$(cat "$d/address")" = "$1" ] && basename "$d" && return 0; done; return 1; }
+nmcli general reload 2>/dev/null || true
+for f in /etc/sysconfig/network-scripts/ifcfg-*; do
+  [ -f "$f" ] || continue
+  sed -i 's/^HWADDR\([^=]\)/HWADDR=\1/' "$f"
+  sed -i '/^UUID=/d' "$f"
+done
+nmcli general reload 2>/dev/null || true
+for mac in ` + strings.Join(macs, " ") + `; do
+  dev=$(iface_by_mac "$mac") || continue
+  nmcli device set ifname "$dev" managed yes 2>/dev/null || true
+  nmcli device connect "$dev" 2>/dev/null || true
+done`
+}
+
 // growRootExtension returns the %post --nochroot extension script, or ""
 // when the distro's tooling cannot perform it (RootExtensionSupported) —
 // the template skips the whole %post block for the empty script.
@@ -270,10 +361,21 @@ resize2fs "$root_src" 2>/dev/null || echo "grow root extension skipped (non-fata
 // name (batch-stable selector), then produce network stanzas — static, bond,
 // vlan — using the resolved names (docs/04-install-spec.md §5.2: mac is the
 // primary selector; Mammoth never allocates addresses).
-func networkShell(entries []render.NetworkEntry, hostname string) (string, error) {
+func (d *Driver) networkShell(entries []render.NetworkEntry, hostname string) (string, error) {
 	var b strings.Builder
 	b.WriteString("# MAC-resolved network stanzas, produced by mammoth\n")
-	b.WriteString("iface_by_mac() { for d in /sys/class/net/*; do [ \"$(cat \"$d/address\")\" = \"$1\" ] && basename \"$d\" && return 0; done; return 1; }\n")
+	// kylin: pass the MAC as the device selector (see dialect.deviceByMAC).
+	deviceByMAC := d.dialect().deviceByMAC
+	deviceRef := func(mac string) string {
+		mac = strings.ToLower(mac)
+		if deviceByMAC {
+			return mac
+		}
+		return fmt.Sprintf("$(iface_by_mac %s)", mac)
+	}
+	if !deviceByMAC {
+		b.WriteString("iface_by_mac() { for d in /sys/class/net/*; do [ \"$(cat \"$d/address\")\" = \"$1\" ] && basename \"$d\" && return 0; done; return 1; }\n")
+	}
 	for i, e := range entries {
 		switch {
 		case e.Bond != nil:
@@ -320,7 +422,7 @@ func networkShell(entries []render.NetworkEntry, hostname string) (string, error
 			selector := e.Match.Name
 			shellRef := selector
 			if e.Match.MAC != "" {
-				shellRef = fmt.Sprintf("$(iface_by_mac %s)", strings.ToLower(e.Match.MAC))
+				shellRef = deviceRef(e.Match.MAC)
 				_ = selector
 			}
 			if len(e.Addresses) == 0 {
@@ -564,6 +666,24 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	}
 
 	var preScripts, postScripts []string
+	if d.dialect().netRepair {
+		// The %pre scripts run after kickstart parsing (the anaconda-written
+		// ifcfg exists by then) and before network activation — the only
+		// hook where the broken profiles can be repaired and NM re-managed.
+		var macs []string
+		seen := map[string]bool{}
+		for _, n := range in.Network {
+			for _, m := range networkMACs(n) {
+				if !seen[m] {
+					seen[m] = true
+					macs = append(macs, m)
+				}
+			}
+		}
+		if len(macs) > 0 {
+			preScripts = append([]string{kylinNetRepairScript(macs)}, preScripts...)
+		}
+	}
 	for _, s := range in.Scripts {
 		switch s.Stage {
 		case "pre_install":
@@ -576,7 +696,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	}
 	netPre := ""
 	if len(in.Network) > 0 {
-		shell, err := networkShell(in.Network, in.Hostname)
+		shell, err := d.networkShell(in.Network, in.Hostname)
 		if err != nil {
 			return nil, render.BootParams{}, err
 		}
@@ -683,9 +803,13 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if early == "" {
 		early = "ip=dhcp"
 	}
+	kernelArgs := fmt.Sprintf("inst.ks=%s inst.repo=%s inst.text", primaryURL, repo)
+	if early != "" {
+		kernelArgs = early + " " + kernelArgs
+	}
 	boot := render.BootParams{
 		AnswerURL:           primaryURL,
-		KernelArgs:          fmt.Sprintf("%s inst.ks=%s inst.repo=%s inst.text", early, primaryURL, repo),
+		KernelArgs:          kernelArgs,
 		InstallerAutoReboot: true, // kickstart's reboot command
 	}
 	return answers, boot, nil
@@ -828,7 +952,14 @@ func (d *Driver) newPartLine(p render.ResolvedPartition, device string, growMB i
 	if hasFlag(p.Flags, "esp") {
 		fs = "efi"
 	}
-	line := fmt.Sprintf("part %s --fstype=%s --ondisk=%s", p.Mount, fs, device)
+	// The kickstart `part` command requires a mountpoint; swap partitions
+	// carry the literal "swap" (a filesystem with no mountpoint renders as
+	// `part --fstype=swap`, which anaconda rejects as a missing <mntpoint>).
+	mount := p.Mount
+	if mount == "" && (fs == "swap" || p.Mount == "swap") {
+		mount = "swap"
+	}
+	line := fmt.Sprintf("part %s --fstype=%s --ondisk=%s", mount, fs, device)
 	switch {
 	case p.Grow && growMB > 0:
 		// explicit render-time size (growSizeMB): anaconda creates the

@@ -182,6 +182,8 @@ func serve(args []string) error {
 		kickstart.New("rocky9"),
 		kickstart.New("rocky10"),
 		kickstart.New("centos7"),
+		kickstart.New("kylinv10"),
+		kickstart.New("kylinv11"),
 		kickstart.New("uniontechos"),
 		autoinstall.New("ubuntu22"),
 		preseed.New("debian12"),

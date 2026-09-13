@@ -753,7 +753,14 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	if err != nil {
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true, "distro ISO missing: %s", err.Error())
 	}
+	// Budget by the layout family: full-repack families extract + reassemble
+	// the whole image (~2x transiently); selective assemblies pull only the
+	// boot files (kernel+initrd+bootloader images — bounded at ~2.5G, the
+	// largest initrds observed are a few hundred MB) and repackage a small ISO.
 	needMB := isoStat.Size()/1048576*2 + 512 // extract + assemble + headroom
+	if layout, _, lerr := builder.DetectLayout(ctx, "", distroISO); lerr == nil && !layout.FullRepack() {
+		needMB = 2560
+	}
 	outputPath := filepath.Join(e.MediaDir, filepath.Base(mediaFile))
 	buildWork := ""
 	buildDir := e.MediaWorkDir

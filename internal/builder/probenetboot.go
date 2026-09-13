@@ -20,7 +20,7 @@ type ProbeNetbootOptions struct {
 	ReportURL string
 	// StaticCIDR / StaticGateway are the probe's DHCP fallbacks (same
 	// semantics as the virtual-media carrier).
-	StaticCIDR   string
+	StaticCIDR    string
 	StaticGateway string
 	// ModloopURL, when set, is served as the kernel's modloop= parameter —
 	// over the network there is no boot media for the initramfs to find the

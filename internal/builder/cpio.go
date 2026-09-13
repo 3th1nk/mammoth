@@ -91,19 +91,19 @@ func writeCpioHeader(w *bytes.Buffer, e cpioEntry) error {
 		}
 		b.Write(s[:])
 	}
-	put(0)            // ino (untracked — the base archive owns inode space)
+	put(0)             // ino (untracked — the base archive owns inode space)
 	put(int64(e.Mode)) // mode
-	put(0)            // uid
-	put(0)            // gid
-	put(1)            // nlink
-	put(0)            // mtime
-	put(size)         // filesize
-	put(0)            // devmajor
-	put(0)            // devminor
-	put(0)            // rdevmajor
-	put(0)            // rdevminor
-	put(namesize)     // namesize (incl. NUL)
-	put(0)            // check
+	put(0)             // uid
+	put(0)             // gid
+	put(1)             // nlink
+	put(0)             // mtime
+	put(size)          // filesize
+	put(0)             // devmajor
+	put(0)             // devminor
+	put(0)             // rdevmajor
+	put(0)             // rdevminor
+	put(namesize)      // namesize (incl. NUL)
+	put(0)             // check
 	if b.Len() != 104 {
 		return fmt.Errorf("builder: cpio header is %d bytes, want 104", b.Len())
 	}

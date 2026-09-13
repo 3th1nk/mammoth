@@ -134,3 +134,23 @@ jobs 1 ──── n tasks 1 ──── n task_stages
 2. **快照不可变**:layout 快照只追加;安装 spec 解析时绑定具体版本;
 3. **心跳即所有权**:`owner_runner + heartbeat_at` 双字段判定任务归属,
    reaper 仅在心跳超时后转移(`interrupted`),原 runner 恢复后因乐观锁无法继续推进。
+
+## 4. 时钟权威:一条判定只有一个时钟源
+
+时间语义按归属分治,**两类时间永不互比**:
+
+- **系统时间(判定权在库)**:所有库内的时间判定——TTL 过期
+  (`ExpireTaskLogs` / `ExpireIdempotencyKeys` / netboot 孤儿清扫)、心跳超时
+  (`InterruptStaleTasks`)——一律在 SQL 内用 `now()` 完成,与 `created_at` /
+  `updated_at` 的 `DEFAULT now()` 同源;时长参数传 `Duration.Seconds()` 进
+  `make_interval`(仓库既有先例),**不在 app 侧预计算 cutoff 传入**——多副本
+  控制面下 app 时钟互有偏差,列时间线与判定时钟必须同一个权威;
+- **业务时间(随数据走)**:域事实的时间戳由其发生方产生、随数据持久化——
+  `install.booted_at` / `completed_at`(机器上报)、事件 payload、审计的
+  who/when——供人复盘与下游消费,**永不作为库内判定的比较对象**;
+- app 侧 `time.Now()` 只用于纯进程内语义(stage 超时、重试退避、宽限
+  sleep),不与库里的列比较。
+
+反例即 bug:行由 app 钟写入、判定却比 DB 的 `now()`,NTP 偏差或容器时钟
+跳变直接改写 TTL 结论。新增时间相关查询时先问一句:**这次比较的两端是否
+同一个钟?** 列默认值是 `now()`,判定就必须是 `now()`。

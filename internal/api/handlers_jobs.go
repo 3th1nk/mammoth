@@ -113,6 +113,9 @@ func (s *Server) CreateJob(ctx context.Context, request gen.CreateJobRequestObje
 		if err := validateInstallSpec(body.Spec); err != nil {
 			return nil, err
 		}
+		if err := s.validateBootStrategy(specRaw); err != nil {
+			return nil, err
+		}
 	default:
 		return nil, verr("SCHEMA_INVALID_JOB", "unknown job type %q", body.Type)
 	}
@@ -254,6 +257,13 @@ func (s *Server) createJobRecord(ctx context.Context, in createJobRecord) (*gen.
 			}
 			init := store.TaskInit{}
 			if verr := s.validateDistroKeepSupport(effective); verr != nil {
+				init.State = "failed"
+				init.Error = &store.ErrorInfo{
+					Code:      appErrCode(verr),
+					Message:   verr.Error(),
+					Retryable: false,
+				}
+			} else if verr := s.validateBootStrategy(effective); verr != nil {
 				init.State = "failed"
 				init.Error = &store.ErrorInfo{
 					Code:      appErrCode(verr),
@@ -721,6 +731,50 @@ func (s *Server) validateSnapshotBinding(ctx context.Context, machineID string, 
 			return verr("LAYOUT_SNAPSHOT_REQUIRED",
 				"storage.disks[%d]: selector does not match any disk in machine %s snapshot", i, machineID)
 		}
+	}
+	return nil
+}
+
+// validateBootStrategy gates boot.strategy=pxe submissions: the distro must
+// declare network-boot support and this deployment must run the netboot
+// service (docs/06-install-pipeline.md §3.3, §6 — 拒绝在提交时,而不是装到
+// 一半停在 PXE 提示符). Unknown strategies are rejected here too.
+func (s *Server) validateBootStrategy(specRaw json.RawMessage) error {
+	var spec struct {
+		Boot *struct {
+			Strategy string `json:"strategy"`
+		} `json:"boot"`
+		Image struct {
+			Distro string `json:"distro"`
+		} `json:"image"`
+	}
+	if err := json.Unmarshal(specRaw, &spec); err != nil {
+		return nil // structural errors surface via the schema validation path
+	}
+	if spec.Boot == nil {
+		return nil
+	}
+	switch spec.Boot.Strategy {
+	case "", "virtual_media":
+		return nil
+	case "pxe":
+		// fall through to the capability checks
+	default:
+		return verr("SCHEMA_INVALID_BOOT_STRATEGY",
+			"boot.strategy %q is not one of virtual_media|pxe", spec.Boot.Strategy)
+	}
+	if !s.NetbootEnabled {
+		return verr("SCHEMA_UNSUPPORTED_BOOT_STRATEGY",
+			"boot.strategy=pxe needs the netboot service enabled on this deployment (MAMMOTH_PXE_ENABLED)")
+	}
+	driver, err := s.Render.For(spec.Image.Distro)
+	if err != nil {
+		return nil // unknown distro surfaces at execution with SCHEMA_UNKNOWN_DISTRO
+	}
+	if pxe := render.PXESupport(driver); pxe != render.SupportFull {
+		return verr("SCHEMA_UNSUPPORTED_BOOT_STRATEGY",
+			"distro %s declares %q PXE support: only the RHEL-lineage installers boot over the network today",
+			spec.Image.Distro, pxe)
 	}
 	return nil
 }

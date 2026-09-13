@@ -138,6 +138,10 @@ type Config struct {
 	PXEDHCPPort   int    // proxyDHCP listen (default 67)
 	PXETFTPPort   int    // NBP transfer (default 69)
 	PXEProxyPort  int    // PXE boot-server discovery (default 4011)
+	// BootStrategyDefault is the carrier used when a job spec does not name
+	// one (MAMMOTH_BOOT_STRATEGY: virtual_media | pxe). pxe additionally
+	// requires PXEEnabled on the deployment.
+	BootStrategyDefault string
 }
 
 // Load reads MAMMOTH_ENV_FILE (when set), then builds the Config from the
@@ -244,6 +248,7 @@ func FromEnv() (Config, error) {
 	applyBool(&c.NFSExportEnabled, "MAMMOTH_NFS_EXPORT", &errs)
 	applyBool(&c.PXEEnabled, "MAMMOTH_PXE_ENABLED", &errs)
 	applyString(&c.PXENextServer, "MAMMOTH_PXE_NEXT_SERVER", &errs)
+	applyString(&c.BootStrategyDefault, "MAMMOTH_BOOT_STRATEGY", &errs)
 
 	if err := errors.Join(errs...); err != nil {
 		return c, err
@@ -267,6 +272,17 @@ func FromEnv() (Config, error) {
 		if net.ParseIP(c.PXENextServer) == nil || net.ParseIP(c.PXENextServer).To4() == nil {
 			return c, fmt.Errorf("config: MAMMOTH_PXE_ENABLED requires MAMMOTH_PXE_NEXT_SERVER (an IPv4 address on the provisioning L2); ExternalURL host %q is not an IPv4 literal", c.PXENextServer)
 		}
+	}
+	switch c.BootStrategyDefault {
+	case "":
+		c.BootStrategyDefault = "virtual_media"
+	case "virtual_media":
+	case "pxe":
+		if !c.PXEEnabled {
+			return c, fmt.Errorf("config: MAMMOTH_BOOT_STRATEGY=pxe requires MAMMOTH_PXE_ENABLED (the netboot service must run somewhere)")
+		}
+	default:
+		return c, fmt.Errorf("config: MAMMOTH_BOOT_STRATEGY %q is not one of virtual_media|pxe", c.BootStrategyDefault)
 	}
 	return c, nil
 }

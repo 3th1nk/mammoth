@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/3th1nk/mammoth/internal/bmc"
-	"github.com/3th1nk/mammoth/internal/builder"
 	"github.com/3th1nk/mammoth/internal/inventory/inbandssh"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/render"
@@ -31,8 +30,14 @@ type installTaskContext struct {
 	Boot     render.BootParams   `json:"boot,omitempty"`
 	// MediaURI is the BMC-accessible URI of the assembled boot ISO
 	// (nfs://host/export/boot-<token>.iso for NFS-served media repos).
+	// Empty under the pxe boot strategy (the payload is the boot tree).
 	MediaURI string `json:"media_uri,omitempty"`
-	Resolved struct {
+	// BootStrategy records which carrier produced the payload (docs/06 §3).
+	// Absent on tasks armed before strategies existed — they were
+	// virtual_media by definition, and release treats empty that way.
+	BootStrategy string         `json:"boot_strategy,omitempty"`
+	Netboot      *netbootRecord `json:"netboot,omitempty"`
+	Resolved     struct {
 		Disks []render.ResolvedDisk `json:"disks"`
 		Raid  []render.ResolvedRaid `json:"raid,omitempty"`
 	} `json:"resolved,omitempty"`
@@ -90,6 +95,9 @@ type installSpecView struct {
 		Checksum string `json:"checksum"`
 		Distro   string `json:"distro"`
 	} `json:"image"`
+	Boot struct {
+		Strategy string `json:"strategy"`
+	} `json:"boot"`
 	Storage struct {
 		Disks []storageDiskView `json:"disks"`
 		Raid  []raidSpecView    `json:"raid"`
@@ -632,10 +640,11 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	if ictx.Token == "" {
 		return classifiedErr("JOB_CONTEXT_CORRUPT", false, "task token missing (install jobs only)")
 	}
-	// Self-heal a retry: a previous prepare_media pass (or a stranded build)
-	// may have left an ISO with this token behind — remove it so the rebuild
-	// starts clean instead of accumulating copies in the media export.
-	e.cleanupBootMedia(ctx, task, "prepare_media retry rebuild")
+	// Self-heal a retry: a previous prepare_media pass may have left a boot
+	// ISO or a netboot registration with this token behind — release the old
+	// payload so the rebuild starts clean instead of accumulating copies in
+	// the media export or stale rows in the registry.
+	e.releaseBootPayload(ctx, task, &ictx, "retry")
 	if len(ictx.Resolved.Disks) == 0 && len(ictx.Resolved.Raid) == 0 {
 		return classifiedErr("JOB_STAGE_ORDER", false, "layout not resolved; verify_layout must run first")
 	}
@@ -722,93 +731,29 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		return classifiedErr("RENDER_FAILED", false, "%s", err.Error())
 	}
 
-	// Assemble the per-task boot media (media B): bootloader carries
-	// inst.ks=<token URL>; packages come from inst.repo over the network
-	// (docs/06-install-pipeline.md §2.1). The ISO lands in the media repo
-	// and is exposed to the BMC through the NFS base URI.
-	mediaFile := fmt.Sprintf("boot-%s.iso", ictx.Token)
-	mediaURI := mediaURIFor(e.MediaBaseURI, filepath.Base(mediaFile))
-	distroISO, err := builder.EnsureISO(ctx, spec.Image.Source, e.MediaDir)
+	// Hand the render output to the boot carrier: virtual_media assembles
+	// boot-<token>.iso for the BMC, pxe extracts the HTTP boot tree and
+	// arms the registry (docs/06-install-pipeline.md §3).
+	strategy, err := e.bootStrategyFor(spec)
 	if err != nil {
-		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
-			"distro ISO fetch failed: %s", err.Error())
+		return err
 	}
-	// Seed from THIS stage's render output: ictx.Answers is the value patched
-	// by the previous prepare_media pass (empty on the first pass), so
-	// building from it produced a seed-less ISO — ubuntu22 autoinstall then
-	// fell back to interactive mode and stalled at the language prompt on
-	// real hardware. The context copy below stays for audit and the
-	// boot-stage order guard.
-	seed := map[string]string{}
-	for _, a := range answers {
-		seed[a.Name] = a.Content
-	}
-	// Build in the scratch space when configured (the media repo may be a
-	// size-limited share — the extract+assemble needs ~2x the image size
-	// transiently), then move the finished image into the repo. Precheck the
-	// space and fail fast with real numbers: a mid-write ENOSPC surfaces as
-	// an opaque xorriso SORRY/excess-space error instead (real-hardware: an
-	// 18G disk filled by accumulated media produced opaque build failures).
-	isoStat, err := os.Stat(distroISO)
-	if err != nil {
-		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true, "distro ISO missing: %s", err.Error())
-	}
-	// Budget by the layout family: full-repack families extract + reassemble
-	// the whole image (~2x transiently); selective assemblies pull only the
-	// boot files (kernel+initrd+bootloader images — bounded at ~2.5G, the
-	// largest initrds observed are a few hundred MB) and repackage a small ISO.
-	needMB := isoStat.Size()/1048576*2 + 512 // extract + assemble + headroom
-	if layout, _, lerr := builder.DetectLayout(ctx, "", distroISO); lerr == nil && !layout.FullRepack() {
-		needMB = 2560
-	}
-	outputPath := filepath.Join(e.MediaDir, filepath.Base(mediaFile))
-	buildWork := ""
-	buildDir := e.MediaWorkDir
-	if buildDir == "" {
-		buildDir = filepath.Dir(outputPath)
-	}
-	if e.MediaWorkDir != "" {
-		buildWork = filepath.Join(e.MediaWorkDir, filepath.Base(mediaFile)+".build")
-		outputPath = filepath.Join(e.MediaWorkDir, filepath.Base(mediaFile))
-	}
-	if avail, ok := freeMB(buildDir); ok && avail < needMB {
-		return classifiedErr("MEDIA_NO_SPACE", true,
-			"media build needs ~%d MB free in %s, %d MB available: clear old ISOs or extend the volume",
-			needMB, buildDir, avail)
-	}
-	if avail, ok := freeMB(e.MediaDir); ok && avail < int64(isoStat.Size()/1048576) {
-		return classifiedErr("MEDIA_NO_SPACE", true,
-			"media repo %s needs ~%d MB free for the boot ISO, %d MB available",
-			e.MediaDir, isoStat.Size()/1048576, avail/1048576)
-	}
-	if berr := buildBootISO(ctx, distroISO, outputPath, boot.KernelArgs, seed, buildWork); berr != nil {
-		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
-			"boot media build failed: %s", berr.Error())
-	}
-	if buildWork != "" {
-		if merr := moveFile(outputPath, filepath.Join(e.MediaDir, filepath.Base(mediaFile))); merr != nil {
-			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
-				"boot media move into repo failed: %s", merr.Error())
-		}
-	}
-	// Relay deployment: the BMC mounts the media from the remote export —
-	// the file must be complete there BEFORE the boot stage mounts it. The
-	// push is synchronous and atomic (temp name + rename), which is what
-	// makes the boot-stage race structurally impossible; the settle delay
-	// above remains for deployments that still push out-of-band.
-	if e.MediaUploader != nil {
-		if _, perr := e.MediaUploader.Push(ctx, filepath.Join(e.MediaDir, filepath.Base(mediaFile))); perr != nil {
-			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
-				"boot media relay push failed: %s", perr.Error())
-		}
-		obs.FromContext(ctx).InfoContext(ctx, "boot media relayed", "file", filepath.Base(mediaFile))
+	session := &bootSession{Task: task, Job: job, Spec: spec, Ictx: &ictx, Answers: answers, Boot: boot}
+	if err := strategy.prepare(ctx, session); err != nil {
+		return err
 	}
 
 	raw, _ := json.Marshal(ictx.Install)
 	patch := map[string]any{
 		"answers":   answers,
 		"boot":      boot,
-		"media_uri": mediaURI,
+		"media_uri": ictx.MediaURI,
+	}
+	if ictx.BootStrategy != "" {
+		patch["boot_strategy"] = ictx.BootStrategy
+	}
+	if ictx.Netboot != nil {
+		patch["netboot"] = ictx.Netboot
 	}
 	if raw != nil && string(raw) != "null" {
 		patch["install"] = json.RawMessage(raw)
@@ -816,8 +761,9 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	if err := e.Jobs.PatchTaskContext(ctx, task.ID, task.StageIndex, patch); err != nil {
 		return err
 	}
-	obs.FromContext(ctx).InfoContext(ctx, "answers rendered, boot media built",
-		"files", len(answers), "distro", spec.Image.Distro, "media_uri", mediaURI)
+	obs.FromContext(ctx).InfoContext(ctx, "answers rendered, boot payload prepared",
+		"files", len(answers), "distro", spec.Image.Distro,
+		"strategy", strategy.name(), "media_uri", ictx.MediaURI)
 	return nil
 }
 
@@ -827,7 +773,7 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 const bootMediaReleaseGrace = 3 * time.Minute
 
 // reclaimBootMediaFiles removes the repo, relay and build-scratch copies of
-// the task's boot ISO (the file-level half of the deferred release).
+// the task's boot ISO (the file-level half of the virtual-media release).
 func (e *Executor) reclaimBootMediaFiles(ctx context.Context, ictx *installTaskContext) {
 	if ictx.Token == "" {
 		return
@@ -918,79 +864,33 @@ func randomPassword() (string, error) {
 
 // ── stage 3: boot (docs/06-install-pipeline.md §3) ──────────────────────────
 
+// bootStage points the firmware at the payload prepare_media produced and
+// powers the machine — the carrier-specific sequence lives in the strategy.
 func (e *Executor) bootStage(ctx context.Context, task *store.Task, job *store.Job, seq int) error {
 	fresh, ferr := e.Jobs.GetTask(ctx, task.ID)
 	if ferr != nil {
 		return ferr
 	}
 	task = fresh
-	var ictx installTaskContext
-	if err := json.Unmarshal(task.Context, &ictx); err != nil {
+	ictx := parseInstallContext(task)
+	if ictx == nil {
 		return classifiedErr("JOB_CONTEXT_CORRUPT", false, "task context unreadable")
 	}
 	if len(ictx.Answers) == 0 {
 		return classifiedErr("JOB_STAGE_ORDER", false, "answers not rendered; prepare_media must run first")
 	}
-	cred, addr, proto, ok := e.outOfBand(ctx, task)
-	if !ok {
-		return classifiedErr("CREDENTIAL_UNAVAILABLE", true, "machine or credential unavailable")
-	}
+	// The strategy was fixed at prepare time (ictx.BootStrategy): arm with
+	// the carrier that actually produced the payload.
+	strategy := e.strategyForArmed(ictx)
+	return strategy.arm(ctx, &bootSession{Task: task, Job: job, Ictx: ictx})
+}
 
-	// Mount the builder's boot ISO (media B) — the BMC fetches it via NFS.
-	// Eject any existing media first (the slot may be occupied from a
-	// previous task or mount_media action).
-	bootMedia := bmc.MediaImage{URL: ictx.MediaURI, Kind: bmc.MediaBoot}
-	if bootMedia.URL == "" {
-		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,
-			"boot ISO URI is empty; prepare_media must run first")
+// strategyForArmed resolves the carrier that armed an already-prepared task.
+func (e *Executor) strategyForArmed(ictx *installTaskContext) bootStrategy {
+	if bootStrategyName(ictx.BootStrategy) == strategyPXE {
+		return e.pxe()
 	}
-	_, _ = e.BMC.Do(ctx, addr, cred, proto, "eject_media", func(ctx context.Context, d bmc.Driver) (any, error) {
-		return nil, d.EjectMedia(ctx, addr, cred, bootMedia)
-	})
-	if _, err := e.BMC.Do(ctx, addr, cred, proto, "mount_media", func(ctx context.Context, d bmc.Driver) (any, error) {
-		return nil, d.MountMedia(ctx, addr, cred, bootMedia)
-	}); err != nil {
-		return err
-	}
-	// Media settle delay: BMC virtual-media mounts can succeed while the
-	// backing file is still arriving (NFS relay deployments — the mount only
-	// validates the image header; the firmware reads the payload much later,
-	// and a partial read means a dead CD boot). Wait out the transfer.
-	if settle := e.BootSettleDelay; settle > 0 {
-		obs.FromContext(ctx).InfoContext(ctx, "waiting for boot media to settle",
-			"delay", settle.String())
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(settle):
-		}
-	}
-	if _, err := e.BMC.Do(ctx, addr, cred, proto, "set_boot_device", func(ctx context.Context, d bmc.Driver) (any, error) {
-		return nil, d.SetBootDevice(ctx, addr, cred, bmc.BootCDROM, true)
-	}); err != nil {
-		return err
-	}
-	// Power: cycle if on, otherwise plain power-on.
-	ps, err := e.BMC.Do(ctx, addr, cred, proto, "power_state", func(ctx context.Context, d bmc.Driver) (any, error) {
-		return d.PowerState(ctx, addr, cred)
-	})
-	action := bmc.PowerOn
-	if err == nil && ps.(bmc.PowerState) == bmc.PowerStateOn {
-		action = bmc.Cycle
-	}
-	if _, err := e.BMC.Do(ctx, addr, cred, proto, "set_power", func(ctx context.Context, d bmc.Driver) (any, error) {
-		return nil, d.SetPower(ctx, addr, cred, action)
-	}); err != nil {
-		return err
-	}
-
-	now := time.Now().UTC()
-	if err := e.Jobs.RecordInstallProgress(ctx, task.ID, map[string]any{"booted_at": now}); err != nil {
-		return err
-	}
-	obs.FromContext(ctx).InfoContext(ctx, "machine booted into installer",
-		"action", string(action))
-	return nil
+	return e.virtualMedia()
 }
 
 // ── stage 4: install_os (wait for the machine's completion report) ──────────
@@ -1027,19 +927,18 @@ func (e *Executor) installOSStage(ctx context.Context, task *store.Task, job *st
 		var ictx2 installTaskContext
 		_ = json.Unmarshal(fresh.Context, &ictx2)
 		if ictx2.Install != nil && ictx2.Install.CompletedAt != nil {
-			// Completion reported: the media must NOT be released right away.
-			// d-i keeps reading the CD for minutes AFTER late_command (its
-			// finish stage re-mounts the cdrom) — ejecting or deleting the
-			// ISO now wedges the installer in a "media change" loop on a
+			// Completion reported: the payload must NOT be released right
+			// away. d-i keeps reading the CD for minutes AFTER late_command
+			// (its finish stage re-mounts the cdrom) — ejecting or deleting
+			// the ISO now wedges the installer in a "media change" loop on a
 			// disconnected virtual drive (real-hardware). Release in the
 			// background after a grace period; the pipeline must not block
-			// on it. The delayed eject still precedes the installer's own
-			// reboot-with-one-shot-CD expiry in every observed run.
+			// on it. PXE has no such tail — its release is registry rows +
+			// a directory — but it rides the same grace for uniformity.
 			go func(ictx2 installTaskContext) {
 				dctx := context.WithoutCancel(ctx)
 				time.Sleep(bootMediaReleaseGrace)
-				e.ejectBootMediaBestEffort(dctx, task, &ictx2)
-				e.reclaimBootMediaFiles(dctx, &ictx2)
+				e.releaseBootPayload(dctx, task, &ictx2, reasonCompleted)
 				// Installers that stall on a completion dialog (d-i's
 				// "Installation complete — remove the media") need the
 				// pipeline to reboot them; self-rebooting installers

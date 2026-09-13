@@ -1846,6 +1846,23 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ScriptSpec'
+        boot:
+          $ref: '#/components/schemas/BootSpec'
+
+    BootSpec:
+      type: object
+      description: Boot carrier strategy (docs/06-install-pipeline.md §3).
+        Absent → the server default (capabilities.boot_strategy_default).
+      properties:
+        strategy:
+          type: string
+          enum: [virtual_media, pxe]
+          default: virtual_media
+          description: |
+            virtual_media: the builder repacks the distro ISO into a
+            per-task boot ISO the BMC mounts. pxe: the machine boots the
+            installer over the LAN (proxyDHCP + iPXE); requires the netboot
+            service enabled and a distro declaring pxe_support.
 
     Policy:
       type: object

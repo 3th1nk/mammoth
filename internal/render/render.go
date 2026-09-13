@@ -214,6 +214,22 @@ type OSDriver interface {
 	KeepPartitionSupport() SupportLevel
 }
 
+// PXEDriver is the optional capability declaring a distro's network-boot
+// (PXE/iPXE) support level for install submissions with boot.strategy=pxe
+// (docs/06-install-pipeline.md §3.3, §6). Drivers that do not implement it
+// are treated as SupportNone — third-party drivers keep compiling unchanged.
+type PXEDriver interface {
+	PXESupport() SupportLevel
+}
+
+// PXESupport reports a driver's network-boot support level.
+func PXESupport(d OSDriver) SupportLevel {
+	if p, ok := d.(PXEDriver); ok {
+		return p.PXESupport()
+	}
+	return SupportNone
+}
+
 // Registry routes specs to drivers by distro.
 type Registry struct {
 	mu      sync.RWMutex

@@ -1,0 +1,26 @@
+# TLS termination overlay (production) for the all-in-one topology.
+# Caddy sits in front of mammoth and terminates HTTPS; mammoth keeps listening
+# on plain HTTP, which should not be exposed publicly. Use with:
+#   docker compose -f deploy/compose.all-in-one.yml -f deploy/compose.tls.yml up -d
+#
+# In production, drop the "8080:8080" mapping from the all-in-one file (or
+# firewall it) so the API is reachable only through Caddy's 443.
+services:
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - mammoth
+    environment:
+      # Public hostname (auto Let's Encrypt) or IP literal (self-signed).
+      MAMMOTH_TLS_HOST: ${MAMMOTH_TLS_HOST:?set MAMMOTH_TLS_HOST}
+    ports:
+      - "443:443"
+      - "80:80"   # Let's Encrypt HTTP-01 challenge (not needed for self-signed)
+    volumes:
+      - caddydata:/data
+      - caddyconfig:/config
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+
+volumes:
+  caddydata:
+  caddyconfig:

@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -34,7 +36,7 @@ API access: --api / --token flags or MAMMOTH_API_URL / MAMMOTH_API_TOKEN.`,
 
 	newClient := func() *Client { return NewClient(apiURL, token) }
 
-	root.AddCommand(serve, versionCmd())
+	root.AddCommand(serve, versionCmd(), tokenCmd())
 	root.AddCommand(credentialsCmd(newClient))
 	root.AddCommand(machinesCmd(newClient))
 	root.AddCommand(installCmd(newClient))
@@ -52,6 +54,35 @@ func versionCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// tokenCmd generates API bearer tokens. It is a purely local operation (no
+// HTTP client), so it also works when the API is down or unconfigured — the
+// first step of a token rotation (docs/operations.md §4.4).
+func tokenCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "token",
+		Short: "Generate API bearer tokens",
+	}
+	generate := &cobra.Command{
+		Use:   "generate",
+		Short: "Generate a new API bearer token (crypto-random, base64)",
+		Long: `Generate a new value for MAMMOTH_API_TOKEN: 256 bits of crypto/rand
+entropy, base64-encoded (same shape as MAMMOTH_MASTER_KEY).
+
+To rotate: set the printed value as MAMMOTH_API_TOKEN and restart the
+process — the old token stops working immediately. See docs/operations.md.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var b [32]byte
+			if _, err := rand.Read(b[:]); err != nil {
+				return fmt.Errorf("generate token: %w", err)
+			}
+			cmd.Println(base64.StdEncoding.EncodeToString(b[:]))
+			return nil
+		},
+	}
+	cmd.AddCommand(generate)
+	return cmd
 }
 
 func credentialsCmd(newClient func() *Client) *cobra.Command {

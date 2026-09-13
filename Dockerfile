@@ -6,7 +6,7 @@
 # Global build arg so the FROM line below can consume it.
 ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
 
-FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 # Restricted networks: --build-arg GOPROXY=https://goproxy.cn,direct
 ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=${GOPROXY}

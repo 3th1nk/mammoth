@@ -157,3 +157,51 @@ func TestPoolModeServesInstallerKernel(t *testing.T) {
 		t.Error("proxy mode must not answer non-PXE clients")
 	}
 }
+
+func TestParseDHCPPool(t *testing.T) {
+	r := net.IPv4(10, 0, 0, 1).To4()
+
+	// Full dash range.
+	p, err := ParseDHCPPool("10.0.0.10-10.0.0.12", r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.lease("aa:00:00:00:00:01").To4(); !bytes.Equal(got, []byte{10, 0, 0, 10}) {
+		t.Fatalf("range start = %v", got)
+	}
+
+	// Last-octet shorthand.
+	p, err = ParseDHCPPool("10.0.0.10-12", r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.lease("aa:00:00:00:00:01").To4(); !bytes.Equal(got, []byte{10, 0, 0, 10}) {
+		t.Fatalf("shorthand start = %v", got)
+	}
+
+	// Comma list: only the named addresses, in order.
+	p, err = ParseDHCPPool("10.0.0.30, 10.0.0.20", r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.lease("aa:00:00:00:00:01").To4(); !bytes.Equal(got, []byte{10, 0, 0, 30}) {
+		t.Fatalf("list first = %v", got)
+	}
+	if got := p.lease("aa:00:00:00:00:02").To4(); !bytes.Equal(got, []byte{10, 0, 0, 20}) {
+		t.Fatalf("list second = %v", got)
+	}
+	if got := p.lease("aa:00:00:00:00:03"); got != nil {
+		t.Fatalf("list exhausted but leased %v", got)
+	}
+
+	// Rejections.
+	for _, bad := range []string{
+		"198.51.100.180,199", // shorthand on the wrong side of a comma
+		"10.0.0.10-",        // missing end
+		"nonsense-nonsense", // not IPs
+	} {
+		if _, err := ParseDHCPPool(bad, r); err == nil {
+			t.Errorf("ParseDHCPPool(%q) accepted", bad)
+		}
+	}
+}

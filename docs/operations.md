@@ -101,11 +101,14 @@ iPXE 脚本),默认关闭。启用清单:
 3. **地址来源(二选一)**:
    - **站点 DHCP 存在** → 什么都不用配(proxy 模式:mammoth 只应答 PXEClient,
      地址分配仍归站点 DHCP);
-   - **机房无 DHCP(常见)** → `MAMMOTH_PXE_DHCP_POOL="起始IP,结束IP"`:mammoth
-     对 **PXE 客户端(带 option 60)兼做全量 DHCP**(OFFER/ACK 租约,默认
-     /24 掩码、路由器默认取 `MAMMOTH_PXE_NEXT_SERVER`,可用
-     `MAMMOTH_PXE_DHCP_ROUTER` 覆盖);普通主机的 DHCP 请求依然被忽略。
-     租约内存态,覆盖引导+装机窗口足够。**有站点 DHCP 时勿开**,避免双 ACK。
+   - **机房无 DHCP(常见)** → `MAMMOTH_PXE_DHCP_POOL`:mammoth 兼做全量
+     DHCP(OFFER/ACK 租约,默认 /24 掩码、路由器默认取
+     `MAMMOTH_PXE_NEXT_SERVER`,可用 `MAMMOTH_PXE_DHCP_ROUTER` 覆盖)。
+     两种语法:**连字符范围**(`198.51.100.180-198.51.100.199` 或末段简写
+     `198.51.100.180-199`)或**逗号独立地址列表**(`198.51.100.10,198.51.100.20`
+     ——只租列出的这几个)。装机内核(dracut)的 DHCP 一并服务;非 PXE 的
+     普通主机只给租约不给引导参数。租约内存态,覆盖引导+装机窗口足够。
+     **有站点 DHCP 时勿开**,避免双 ACK。
 4. **next-server 声明**:`MAMMOTH_PXE_NEXT_SERVER`(mammoth 在装机 L2 的 IPv4);
    `MAMMOTH_EXTERNAL_URL` 的 host 是 IP 字面量时自动派生,否则必填。
 5. **固件前提**:Secure Boot 关闭(iPXE 未参与签名链;shim+grubnet 在

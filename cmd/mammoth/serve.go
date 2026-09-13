@@ -8,8 +8,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/3th1nk/mammoth/assets/pxe"
 	"github.com/3th1nk/mammoth/internal/api"
 	"github.com/3th1nk/mammoth/internal/bmc"
 	bmccompat "github.com/3th1nk/mammoth/internal/bmc/compat"
@@ -19,6 +22,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/config"
 	"github.com/3th1nk/mammoth/internal/inventory/inbandssh"
 	"github.com/3th1nk/mammoth/internal/mediarelay"
+	"github.com/3th1nk/mammoth/internal/netboot"
 	"github.com/3th1nk/mammoth/internal/nfsx"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/provision"
@@ -94,6 +98,7 @@ func serve(args []string) error {
 	eventRepo := store.NewEventRepo(db)
 	webhookRepo := store.NewWebhookRepo(db)
 	logsRepo := store.NewTaskLogRepo(db)
+	netbootRepo := store.NewNetbootRepo(db)
 
 	// Log dual-write (docs/02-architecture.md §5.2): from here on, every log
 	// line that carries task_id is also persisted for API retrieval; lines
@@ -209,6 +214,50 @@ func serve(args []string) error {
 		}
 	}
 
+	// PXE network boot services (M7): proxyDHCP + TFTP are opt-in, bind
+	// privileged ports, and must co-locate with the machine face (script
+	// URLs point at this host). Unlike the NFS export there is no external
+	// escape hatch — a silent downgrade would strand machines at the PXE
+	// prompt — so a bind failure is fatal when explicitly enabled.
+	var nbResolver netboot.Resolver
+	if cfg.PXEEnabled && cfg.Mode.RunsNetboot() {
+		nextServer := net.ParseIP(cfg.PXENextServer)
+		nb, nerr := netboot.Start(ctx, netboot.Options{
+			DHCPPort:   cfg.PXEDHCPPort,
+			ProxyPort:  cfg.PXEProxyPort,
+			TFTPPort:   cfg.PXETFTPPort,
+			NextServer: nextServer,
+			BaseURL:    strings.TrimSuffix(cfg.ExternalURL, "/"),
+			NBPs:       pxe.Files,
+			Log:        logger,
+		})
+		if nerr != nil {
+			return fmt.Errorf("netboot: %w", nerr)
+		}
+		go func() {
+			if serr := nb.Wait(); serr != nil {
+				logger.Warn("netboot service stopped", "err", serr.Error())
+			}
+		}()
+		// MAC → entry lookups for the script endpoint: store answer with a
+		// small cache (firmware re-asks several times per boot).
+		nbResolver = netboot.NewCachedResolver(
+			netboot.ResolverFunc(func(ctx context.Context, mac string) (*netboot.Entry, error) {
+				e, err := netbootRepo.ByMAC(ctx, mac)
+				if errors.Is(err, store.ErrNotFound) {
+					return nil, nil
+				}
+				if err != nil {
+					return nil, err
+				}
+				return &netboot.Entry{
+					MAC: e.MAC, TaskID: e.TaskID, Kind: e.Kind, Token: e.Token,
+					Kernel: e.Kernel, Initrd: e.Initrd, KernelArgs: e.KernelArgs,
+					Extra: e.Extra,
+				}, nil
+			}), 15*time.Second)
+	}
+
 	deps := api.Deps{
 		Credentials: credRepo,
 		Machines:    machineRepo,
@@ -223,6 +272,13 @@ func serve(args []string) error {
 		Metrics:     metrics,
 		Logger:      logger,
 		Visibility:  cfg.VisibilityTimeout,
+
+		Netboot:             nbResolver,
+		NetbootRepo:         netbootRepo,
+		MediaDir:            cfg.MediaDir,
+		ExternalURL:         strings.TrimSuffix(cfg.ExternalURL, "/"),
+		BootStrategyDefault: "virtual_media",
+		NetbootEnabled:      cfg.PXEEnabled && cfg.Mode.RunsNetboot(),
 	}
 
 	errCh := make(chan error, 4)
@@ -252,11 +308,13 @@ func serve(args []string) error {
 			Jobs:     jobRepo,
 			Events:   eventRepo,
 			TaskLogs: logsRepo,
+			Netboot:  netbootRepo,
 			Opts: provision.ReaperOptions{
 				Interval:       cfg.ReaperInterval,
 				HeartbeatLimit: cfg.HeartbeatTimeout,
 				IdempotencyTTL: cfg.IdempotencyTTL,
 				TaskLogsTTL:    cfg.TaskLogsTTL,
+				BootTreeDir:    filepath.Join(cfg.MediaDir, "netboot"),
 			},
 			Logger: logger,
 		}

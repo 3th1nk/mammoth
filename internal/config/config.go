@@ -9,6 +9,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -37,6 +39,12 @@ func (m Mode) Valid() bool {
 func (m Mode) RunsAPI() bool    { return m == ModeAll || m == ModeAPI }
 func (m Mode) RunsRunner() bool { return m == ModeAll || m == ModeRunner }
 func (m Mode) RunsReaper() bool { return m == ModeAll || m == ModeAPI }
+
+// RunsNetboot reports whether the facet hosts the PXE network boot services
+// (proxyDHCP + TFTP): they must run beside the machine-face HTTP endpoints
+// (script URLs point at this host), and a provisioning L2 has exactly one
+// responder — the same "one per deployment" assumption as the API facet.
+func (m Mode) RunsNetboot() bool { return m == ModeAll || m == ModeAPI }
 
 // Config is the full runtime configuration. Every facet reads the same struct;
 // modes only decide which components are started.
@@ -120,6 +128,16 @@ type Config struct {
 	// ExternalURL is the base address machines reach for answer files
 	// (docs/06-install-pipeline.md §2.1: inst.ks target).
 	ExternalURL string
+
+	// PXE network boot services (docs/06-install-pipeline.md §3.3, M7).
+	// PXEEnabled turns on proxyDHCP + TFTP (MAMMOTH_PXE_ENABLED); binding
+	// privileged ports and sharing the provisioning L2 with the site DHCP
+	// are deployment concerns — see docs/operations.md.
+	PXEEnabled    bool
+	PXENextServer string // mammoth's IPv4 on the provisioning L2 (DHCP next-server); derived from ExternalURL when it is an IP literal
+	PXEDHCPPort   int    // proxyDHCP listen (default 67)
+	PXETFTPPort   int    // NBP transfer (default 69)
+	PXEProxyPort  int    // PXE boot-server discovery (default 4011)
 }
 
 // Load reads MAMMOTH_ENV_FILE (when set), then builds the Config from the
@@ -169,6 +187,9 @@ func FromEnv() (Config, error) {
 		BootSettleDelay:       0,
 		VerifyReadyWait:       10 * time.Minute,
 		ExternalURL:           "http://127.0.0.1:8080",
+		PXEDHCPPort:           67,
+		PXETFTPPort:           69,
+		PXEProxyPort:          4011,
 	}
 
 	var errs []error
@@ -198,6 +219,9 @@ func FromEnv() (Config, error) {
 	applyInt(&c.LayoutRetention, "MAMMOTH_LAYOUT_RETENTION", &errs)
 	applyInt(&c.NFSExportPort, "MAMMOTH_NFS_EXPORT_PORT", &errs)
 	applyInt(&c.ProbePrefix, "MAMMOTH_PROBE_PREFIX", &errs)
+	applyInt(&c.PXEDHCPPort, "MAMMOTH_PXE_DHCP_PORT", &errs)
+	applyInt(&c.PXETFTPPort, "MAMMOTH_PXE_TFTP_PORT", &errs)
+	applyInt(&c.PXEProxyPort, "MAMMOTH_PXE_PROXY_PORT", &errs)
 
 	applyDuration(&c.HeartbeatInterval, "MAMMOTH_HEARTBEAT_INTERVAL", &errs)
 	applyDuration(&c.VisibilityTimeout, "MAMMOTH_VISIBILITY_TIMEOUT", &errs)
@@ -218,6 +242,8 @@ func FromEnv() (Config, error) {
 	applyBool(&c.BMCTLSInsecure, "MAMMOTH_BMC_TLS_INSECURE", &errs)
 	applyBool(&c.RamdiskEnabled, "MAMMOTH_RAMDISK_ENABLED", &errs)
 	applyBool(&c.NFSExportEnabled, "MAMMOTH_NFS_EXPORT", &errs)
+	applyBool(&c.PXEEnabled, "MAMMOTH_PXE_ENABLED", &errs)
+	applyString(&c.PXENextServer, "MAMMOTH_PXE_NEXT_SERVER", &errs)
 
 	if err := errors.Join(errs...); err != nil {
 		return c, err
@@ -227,6 +253,20 @@ func FromEnv() (Config, error) {
 	}
 	if c.DatabaseURL == "" {
 		return c, fmt.Errorf("config: MAMMOTH_DATABASE_URL is required")
+	}
+	// PXE needs an IPv4 next-server for the DHCP replies. Derive it from
+	// ExternalURL when that is an IP literal; otherwise require it — a
+	// hostname cannot go into siaddr/option 66, and failing at configure
+	// time beats failing on the first PXE boot.
+	if c.PXEEnabled && c.PXENextServer == "" {
+		if host, _, splitErr := net.SplitHostPort(strings.TrimSuffix(c.ExternalURL, "/")); splitErr == nil {
+			c.PXENextServer = host
+		} else if u, uerr := url.Parse(c.ExternalURL); uerr == nil {
+			c.PXENextServer = u.Hostname()
+		}
+		if net.ParseIP(c.PXENextServer) == nil || net.ParseIP(c.PXENextServer).To4() == nil {
+			return c, fmt.Errorf("config: MAMMOTH_PXE_ENABLED requires MAMMOTH_PXE_NEXT_SERVER (an IPv4 address on the provisioning L2); ExternalURL host %q is not an IPv4 literal", c.PXENextServer)
+		}
 	}
 	return c, nil
 }

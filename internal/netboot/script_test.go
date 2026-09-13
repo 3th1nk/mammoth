@@ -68,7 +68,7 @@ func TestCachedResolver(t *testing.T) {
 		}
 		return &Entry{MAC: mac}, nil
 	})
-	c := newCachedResolver(inner, time.Minute)
+	c := NewCachedResolver(inner, time.Minute)
 
 	for range 5 {
 		e, err := c.Entry(context.Background(), "52:54:00:12:34:56")
@@ -96,7 +96,7 @@ func TestCachedResolverTTLExpiry(t *testing.T) {
 		calls++
 		return nil, nil
 	})
-	c := newCachedResolver(inner, 10*time.Millisecond)
+	c := NewCachedResolver(inner, 10*time.Millisecond)
 	_, _ = c.Entry(context.Background(), "a")
 	time.Sleep(15 * time.Millisecond)
 	_, _ = c.Entry(context.Background(), "a")

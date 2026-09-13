@@ -13,6 +13,7 @@ import (
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/bmc"
+	"github.com/3th1nk/mammoth/internal/netboot"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/provision"
 	"github.com/3th1nk/mammoth/internal/render"
@@ -36,6 +37,20 @@ type Deps struct {
 	Queue       queue.TaskQueue
 	Metrics     *obs.Metrics
 	Logger      *slog.Logger
+
+	// Netboot resolves pending boot entries for the machine-face script
+	// endpoint (nil-safe: the endpoint degrades to the exit fallback).
+	Netboot netboot.Resolver
+	// NetbootRepo is the direct registry access for the file endpoint.
+	NetbootRepo *store.NetbootRepo
+	// MediaDir hosts the per-task netboot boot trees (MediaDir/netboot).
+	MediaDir string
+	// ExternalURL is the base machines reach this server on (script URLs).
+	ExternalURL string
+	// BootStrategyDefault / NetbootEnabled report the boot carrier surface
+	// in capabilities (empty/false when the netboot path is not configured).
+	BootStrategyDefault string
+	NetbootEnabled      bool
 
 	// Visibility is the lease window used when re-enqueueing retried tasks.
 	Visibility time.Duration
@@ -131,6 +146,14 @@ func (s *Server) GetCapabilities(ctx context.Context, _ gen.GetCapabilitiesReque
 		}
 	}
 	out.Distros = &distros
+	// Boot carrier surface (docs/06-install-pipeline.md §3): only reported
+	// when set — an older runner pair stays contract-compatible.
+	if s.BootStrategyDefault != "" {
+		out.BootStrategyDefault = (*gen.CapabilitiesBootStrategyDefault)(&s.BootStrategyDefault)
+	}
+	if s.NetbootEnabled {
+		out.NetbootEnabled = &s.NetbootEnabled
+	}
 	return gen.GetCapabilities200JSONResponse(out), nil
 }
 

@@ -108,15 +108,14 @@
   `MAMMOTH_PXE_NEXT_SERVER`、`MAMMOTH_BOOT_STRATEGY`;
 - 余项(不阻塞):UefiHttp(Redfish HTTP Boot,厂商 OEM URI 各异)、
   shim+grubnet 链(Secure Boot 场景)、ubuntu casper/debian d-i 的 PXE 形态
-  (需新的安装源策略)、rocky10-lineage BIOS PXE 真机确认、外部 DHCP+TFTP
-  逃生门。
+  (需新的安装源策略)、外部 DHCP+TFTP 逃生门。
 
 ## 下一阶段(v1.0 后,按优先级)
 
 > 2026-09 确认执行顺序;v1.0 tag 延后至 PXE 增强 + BiosSetter 完成后。
 
-1. **PXE 增强**:rocky10 BIOS PXE 真机确认 → shim+grubnet(Secure Boot)→
-   UefiHttp、ubuntu/debian PXE 化、外部 DHCP+TFTP 逃生门
+1. **PXE 增强**:shim+grubnet(Secure Boot)→ UefiHttp、ubuntu/debian PXE 化、
+   外部 DHCP+TFTP 逃生门
 2. **BMC 能力接口**:BiosSetter(根治 BIOS 前置)→ FirmwareInventory(固件
    基线核对)→ NIST 800-88 擦盘合规(见 related-work)
 3. **发行版扩展**:ubuntu 24.04 验证(预计现有驱动直接可用)→ uniontechos

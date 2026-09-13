@@ -195,6 +195,8 @@ NFS ISO 装包源,静态网络)。全链路打通过程中固化下来的事实:
 | rocky9(kickstart) | Rocky 9.7 minimal(1.7G) | ~10 min | anaconda 按包装,数据量小 |
 | ubuntu22(autoinstall) | live-server 22.04.4(2.1G) | ~3 h | squashfs 复制型,慢在虚拟光驱带宽 |
 | debian12(preseed) | netinst 13.6(792M) | **6 min** | 修复 standard 任务集后全自动闭环 |
+| rocky10(kickstart) | Rocky 10.1 minimal(1.5G) | **~20 min** | UEFI-only 全量重打包介质;六阶段一次闭环(2026-09-13) |
+| centos7(kickstart) | CentOS 7.9 minimal(1.0G) | ~9 min | 四处老 anaconda 方言差异已内建;大盘需独立 /boot(2026-09-13) |
 
 ### 回归暴露的 rocky9 驱动缺陷(均已修复)
 

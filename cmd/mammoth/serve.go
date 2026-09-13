@@ -180,6 +180,8 @@ func serve(args []string) error {
 	renderReg := render.NewRegistry()
 	for _, d := range []render.OSDriver{
 		kickstart.New("rocky9"),
+		kickstart.New("rocky10"),
+		kickstart.New("centos7"),
 		kickstart.New("uniontechos"),
 		autoinstall.New("ubuntu22"),
 		preseed.New("debian12"),

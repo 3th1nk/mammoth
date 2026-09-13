@@ -69,6 +69,22 @@ func (d *Driver) SupportedArchs() []render.Arch {
 // wires the %pre drift machinery; M3 rejects keep at submit time.
 func (d *Driver) KeepPartitionSupport() render.SupportLevel { return render.SupportFull }
 
+// HostnameViaNetworkCmd reports whether the `network --hostname=` kickstart
+// command is the hostname carrier. CentOS 7 (anaconda 19.31) predates the
+// option's parser guarantees and rocky9 ignores the command on real
+// hardware anyway — both carry the hostname through the unconditional %post
+// write of /etc/hostname instead.
+func (d *Driver) HostnameViaNetworkCmd() bool { return d.distro != "centos7" }
+
+// RootExtensionSupported reports whether the %post root-extension safety net
+// can work at all: it resizes GPT with sfdisk, which util-linux 2.23
+// (CentOS 7 era) cannot do — and on GPT-only large volumes there is no
+// in-distro alternative. Those distros get no extension script; the
+// render-time explicit size already fills the disk, the 512MB margin simply
+// stays (a %post failure there is fatal, so a doomed script must not be
+// rendered in the first place).
+func (d *Driver) RootExtensionSupported() bool { return d.distro != "centos7" }
+
 // ksTemplate is the kickstart dialect. Dynamic pieces:
 //   - network: %pre resolves MAC→iface names and writes an include file
 //     (bond slaves reference MACs — names are not stable across distros);
@@ -123,7 +139,7 @@ sh /run/install/mammoth/network.sh > /run/install/mammoth/90-network.ks
 
 network --bootproto=dhcp --activate
 {{- end}}
-{{- if .Hostname}}
+{{- if and .Hostname .HostnameViaNetworkCmd}}
 
 network --hostname={{.Hostname}}
 {{- end}}
@@ -169,10 +185,13 @@ openssh-server
 curl
 %end
 
+{{- if .GrowRootScript}}
+
 %post --nochroot --erroronfail
 set -e
 {{.GrowRootScript}}
 %end
+{{- end}}
 
 %pre --erroronfail
 set -e
@@ -216,6 +235,16 @@ func hasExt4RootGrow(disks []render.ResolvedDisk) bool {
 	return false
 }
 
+// growRootExtension returns the %post --nochroot extension script, or ""
+// when the distro's tooling cannot perform it (RootExtensionSupported) —
+// the template skips the whole %post block for the empty script.
+func (d *Driver) growRootExtension() string {
+	if !d.RootExtensionSupported() {
+		return ""
+	}
+	return growRootScript()
+}
+
 // growRootScript extends the root partition to disk end and grows the
 // filesystem. Grow partitions normally carry an explicit render-time size
 // (growSizeMB), so this mostly reclaims the safety margin — it stays as the
@@ -227,12 +256,14 @@ func hasExt4RootGrow(disks []render.ResolvedDisk) bool {
 // /mnt/sysimage. parted refuses to resizepart a mounted partition (script
 // mode answers its warning with No), so the extension uses sfdisk — the same
 // mechanism as cloud-utils-growpart — followed by an online resize2fs.
-// Failure-tolerant: the install is unaffected.
+// util-linux 2.23 (CentOS 7) sfdisk cannot resize GPT at all: every failure
+// path is tolerated, because the render-time explicit size already filled
+// the disk and this script only reclaims the 512MB safety margin.
 func growRootScript() string {
 	return `root_src=$(findmnt -nro SOURCE /mnt/sysimage) && root_disk=$(lsblk -nro PKNAME "$root_src") && root_num=${root_src##*[a-z]} || exit 0
-echo ", +" | sfdisk --no-reread --force -N "$root_num" "/dev/$root_disk"
-partprobe "/dev/$root_disk" 2>/dev/null || partx -u "/dev/$root_disk"
-resize2fs "$root_src" || echo "grow root extension skipped (non-fatal)"`
+echo ", +" | sfdisk --no-reread --force -N "$root_num" "/dev/$root_disk" 2>/dev/null || echo "grow root extension skipped (old sfdisk / GPT)"
+partprobe "/dev/$root_disk" 2>/dev/null || partx -u "/dev/$root_disk" 2>/dev/null || true
+resize2fs "$root_src" 2>/dev/null || echo "grow root extension skipped (non-fatal)"`
 }
 
 // networkShell emits the sh snippet executed in %pre: resolve MAC → interface
@@ -575,33 +606,34 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	}
 
 	data := map[string]any{
-		"TaskToken":       in.TaskToken,
-		"MachineID":       in.MachineID,
-		"Hostname":        in.Hostname,
-		"RootPassword":    in.RootPassword,
-		"SSHPublicKeys":   in.SSHPublicKeys,
-		"ImageSource":     in.ImageSource,
-		"BootDrive":       bootDrive,
-		"WipeDrives":      strings.Join(wipe, ","),
-		"RemoveParts":     strings.Join(removeList, ","),
-		"PartLines":       partLines,
-		"RaidMemberLines": raidMemberLines,
-		"RaidLines":       raidLines,
-		"DriftScript":     drift,
-		"NetworkPre":      netPre != "",
-		"NetworkShell":    netPre,
-		"StoragePre":      storageShellText != "",
-		"RepoCmd":         repoCmd,
-		"DialectExtras":   d.dialectExtras(),
-		"StorageShell":    storageShellText,
-		"PreScripts":      preScripts,
-		"PostScripts":     postScripts,
-		"CompleteURL":     in.CompleteURL,
+		"TaskToken":             in.TaskToken,
+		"MachineID":             in.MachineID,
+		"Hostname":              in.Hostname,
+		"HostnameViaNetworkCmd": d.HostnameViaNetworkCmd(),
+		"RootPassword":          in.RootPassword,
+		"SSHPublicKeys":         in.SSHPublicKeys,
+		"ImageSource":           in.ImageSource,
+		"BootDrive":             bootDrive,
+		"WipeDrives":            strings.Join(wipe, ","),
+		"RemoveParts":           strings.Join(removeList, ","),
+		"PartLines":             partLines,
+		"RaidMemberLines":       raidMemberLines,
+		"RaidLines":             raidLines,
+		"DriftScript":           drift,
+		"NetworkPre":            netPre != "",
+		"NetworkShell":          netPre,
+		"StoragePre":            storageShellText != "",
+		"RepoCmd":               repoCmd,
+		"DialectExtras":         d.dialectExtras(),
+		"StorageShell":          storageShellText,
+		"PreScripts":            preScripts,
+		"PostScripts":           postScripts,
+		"CompleteURL":           in.CompleteURL,
 		// grow lines carry explicit render-time sizes (growSizeMB); this
 		// %post --nochroot extension remains the safety net for the --grow
 		// fallback (unknown inventory size) and reclaims the safety margin.
 		"GrowRootExtension": hasExt4RootGrow(in.Disks),
-		"GrowRootScript":    growRootScript(),
+		"GrowRootScript":    d.growRootExtension(),
 	}
 	if in.Hostname != "" {
 		// kickstart sets hostname via the network command or a %post; the

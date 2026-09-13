@@ -474,3 +474,12 @@ runner 将 claim 时快照贯穿全部 stage,其余读 context 的 stage 均在
   为未来能力——Ironic 用同机制做远程 BIOS 配置,是这类问题的根治路径;
   ③ 新机器走 PXE 前先跑一次 `pxeprobe -server <mammoth>`?不行——探针验证
   的是服务侧;前置检查只能靠 BIOS 侧确认或首次实测观察 POST 是否发包。
+
+### iBMC 引导介质切换时存储视图丢 logicDrive(运维已知项,2026-09-13)
+
+- **触发**:iBMC Web(系统管理 → BIOS 配置 → 引导介质)切到非"硬盘"(如 PXE)
+  时,存储设置页的 logicDrive 消失;**改回"硬盘"即恢复**——现场确认为该机的
+  老毛病,属 iBMC 显示层的控制器枚举怪癖,卷实际未被删除(系统照常引导);
+- **对流水线的影响**:无。verify_layout 在 boot stage 之前完成盘解析;装机中的
+  anaconda 走本地控制器视角,不依赖 iBMC 的存储页;
+- **运维口径**:装机后引导介质改回硬盘即可;无需人工干预 RAID。

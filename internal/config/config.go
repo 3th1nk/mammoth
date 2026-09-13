@@ -138,6 +138,12 @@ type Config struct {
 	PXEDHCPPort   int    // proxyDHCP listen (default 67)
 	PXETFTPPort   int    // NBP transfer (default 69)
 	PXEProxyPort  int    // PXE boot-server discovery (default 4011)
+	// PXEDHCPPool ("start,end", optional) turns the responder into a full
+	// DHCP for PXE clients — for provisioning L2s WITHOUT a site DHCP,
+	// where a boot ROM otherwise never gets an IP lease. Only PXE clients
+	// (option 60) are served. Leave empty when a site DHCP exists.
+	PXEDHCPPool   string
+	PXEDHCPRouter string // optional lease router; defaults to PXENextServer
 	// BootStrategyDefault is the carrier used when a job spec does not name
 	// one (MAMMOTH_BOOT_STRATEGY: virtual_media | pxe). pxe additionally
 	// requires PXEEnabled on the deployment.
@@ -248,6 +254,8 @@ func FromEnv() (Config, error) {
 	applyBool(&c.NFSExportEnabled, "MAMMOTH_NFS_EXPORT", &errs)
 	applyBool(&c.PXEEnabled, "MAMMOTH_PXE_ENABLED", &errs)
 	applyString(&c.PXENextServer, "MAMMOTH_PXE_NEXT_SERVER", &errs)
+	applyString(&c.PXEDHCPPool, "MAMMOTH_PXE_DHCP_POOL", &errs)
+	applyString(&c.PXEDHCPRouter, "MAMMOTH_PXE_DHCP_ROUTER", &errs)
 	applyString(&c.BootStrategyDefault, "MAMMOTH_BOOT_STRATEGY", &errs)
 
 	if err := errors.Join(errs...); err != nil {

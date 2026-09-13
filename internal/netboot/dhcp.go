@@ -24,8 +24,11 @@ const (
 
 	optPad         = 0
 	optEnd         = 255
+	optSubnetMask  = 1
+	optRouter      = 3
 	optMessageType = 53 // DHCP message type
 	optServerID    = 54
+	optLeaseTime   = 51
 	optClientID    = 61
 	optVendorClass = 60
 	optTFTPServer  = 66
@@ -183,6 +186,7 @@ func (p *packet) bytes(msgType byte, file string, opts ...option) []byte {
 	binary.BigEndian.PutUint32(out[4:8], p.xid)
 	binary.BigEndian.PutUint16(out[10:12], p.flags)
 	copy(out[12:16], p.ciaddr[:])
+	copy(out[16:20], p.yiaddr[:]) // leased address, set in pool mode
 	copy(out[20:24], p.siaddr[:]) // next-server, set by the responder
 	copy(out[24:28], p.giaddr[:])
 	copy(out[28:44], p.chaddr[:])

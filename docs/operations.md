@@ -98,13 +98,21 @@ iPXE 脚本),默认关闭。启用清单:
    69(TFTP)是特权端口——容器部署需 `network_mode: host`(或 macvlan)+
    `CAP_NET_BIND_SERVICE`;裸机部署可用 `setcap cap_net_bind_service=+ep`。
    kernel/initrd 走 API 的 8080(机器面已需可达,无新增 TCP 端口)。
-3. **地址声明**:`MAMMOTH_PXE_NEXT_SERVER`(mammoth 在装机 L2 的 IPv4);
+3. **地址来源(二选一)**:
+   - **站点 DHCP 存在** → 什么都不用配(proxy 模式:mammoth 只应答 PXEClient,
+     地址分配仍归站点 DHCP);
+   - **机房无 DHCP(常见)** → `MAMMOTH_PXE_DHCP_POOL="起始IP,结束IP"`:mammoth
+     对 **PXE 客户端(带 option 60)兼做全量 DHCP**(OFFER/ACK 租约,默认
+     /24 掩码、路由器默认取 `MAMMOTH_PXE_NEXT_SERVER`,可用
+     `MAMMOTH_PXE_DHCP_ROUTER` 覆盖);普通主机的 DHCP 请求依然被忽略。
+     租约内存态,覆盖引导+装机窗口足够。**有站点 DHCP 时勿开**,避免双 ACK。
+4. **next-server 声明**:`MAMMOTH_PXE_NEXT_SERVER`(mammoth 在装机 L2 的 IPv4);
    `MAMMOTH_EXTERNAL_URL` 的 host 是 IP 字面量时自动派生,否则必填。
-4. **固件前提**:Secure Boot 关闭(iPXE 未参与签名链;shim+grubnet 在
+5. **固件前提**:Secure Boot 关闭(iPXE 未参与签名链;shim+grubnet 在
    roadmap M7 余项)。目标机 BIOS/UEFI 的 PXE/网络引导需在固件中可用。
-5. **镜像形态**:distroless 主镜像已内嵌 iPXE 二进制(assets/pxe,来源与
+6. **镜像形态**:distroless 主镜像已内嵌 iPXE 二进制(assets/pxe,来源与
    重建见 `assets/pxe/PROVENANCE.md`),无需额外包。
-6. **运维**:引导项孤儿(进程崩溃残留)由 reaper 按任务终态清扫(默认
+7. **运维**:引导项孤儿(进程崩溃残留)由 reaper 按任务终态清扫(默认
    1h);`MediaDir/netboot/<token>/` 引导树随注销删除。排查机器停在
    PXE 提示符:先确认 `GET /api/v1` 的 `netboot_enabled` 与任务事件的
    `task.netboot_registered`,再抓 DHCP(DISCOVER 是否到达、OFFER 是否

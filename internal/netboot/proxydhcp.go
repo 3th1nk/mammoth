@@ -1,6 +1,10 @@
 package netboot
 
-import "net"
+import (
+	"encoding/binary"
+	"net"
+	"time"
+)
 
 // NBP file names inside the embedded NBPs filesystem (assets/pxe).
 const (
@@ -102,12 +106,33 @@ func (s *Server) reply(p *packet) []byte {
 	// read only the field and never the options.
 	copy(p.siaddr[:], next)
 
+	// Pool mode (MAMMOTH_PXE_DHCP_POOL): the ROM needs an IP lease before
+	// it will fetch anything — without one it silently falls to disk. Only
+	// PXE clients get leases; ordinary hosts stay with the site DHCP.
+	var leaseOpts []option
+	if s.opts.DHCP != nil {
+		if ip := s.opts.DHCP.lease(mac); ip != nil {
+			copy(p.yiaddr[:], ip.To4())
+			lb := make([]byte, 4)
+			binary.BigEndian.PutUint32(lb, uint32(dhcpLeaseTTL/time.Second))
+			leaseOpts = append(leaseOpts,
+				option{optLeaseTime, lb},
+				option{optSubnetMask, s.opts.DHCP.Mask().To4()},
+			)
+			if r := s.opts.DHCP.Router(); len(r.To4()) == 4 {
+				leaseOpts = append(leaseOpts, option{optRouter, r.To4()})
+			}
+		} else {
+			s.logf("dhcp: address pool exhausted (mac %s) — silent", mac)
+			return nil
+		}
+	}
+
 	// iPXE identifies itself and accepts a full URL in the bootfile slot:
 	// straight to the per-MAC script over HTTP, skipping the TFTP hop.
 	if p.isIPXE() {
 		return p.bytes(msgType, scriptURLFor(s.opts.BaseURL, mac, arch),
-			option{optServerID, next},
-		)
+			append(leaseOpts, option{optServerID, next})...)
 	}
 
 	name := nbpFor(arch)
@@ -118,9 +143,10 @@ func (s *Server) reply(p *packet) []byte {
 	// Plain PXE ROMs want a bare file name plus the TFTP server address;
 	// option 66 is a string by spec, siaddr carries the same IP numerically.
 	return p.bytes(msgType, name,
-		option{optServerID, next},
-		option{optTFTPServer, []byte(s.opts.NextServer.String())},
-	)
+		append(leaseOpts,
+			option{optServerID, next},
+			option{optTFTPServer, []byte(s.opts.NextServer.String())},
+		)...)
 }
 
 // equalIP compares an option payload against a 4-byte IPv4 address.

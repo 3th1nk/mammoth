@@ -121,6 +121,21 @@ func alpineKernel(ctx context.Context, xorriso, iso string) (string, error) {
 	return "", fmt.Errorf("builder: %s carries no alpine /boot/vmlinuz-* — not an alpine ISO", iso)
 }
 
+// probeOverlayEntries is the overlay content shared by both carriers: the
+// tar.gz apkovl (virtual media) and the appended initramfs cpio segment
+// (network boot). With an overlay present, the initramfs skips its default
+// boot services (init: `-f .default_boot_services -o ! -f "$ovl"`) — the
+// marker restores sysinit/boot/shutdown so hardware, modloop and console
+// services run.
+func probeOverlayEntries(script string) []cpioEntry {
+	return []cpioEntry{
+		{Name: "etc/.default_boot_services", Mode: 0o100644, Body: []byte{}},
+		{Name: "etc/local.d/", Mode: 0o040755},
+		{Name: "etc/local.d/mammoth-probe.start", Mode: 0o100755, Body: []byte(script)},
+		{Name: "etc/runlevels/default/local", Mode: 0o120777, Link: "/etc/init.d/local"},
+	}
+}
+
 // probeOverlay builds the apkovl tar.gz: the probe script under
 // etc/local.d/ plus the runlevel symlink that makes openrc execute it.
 func probeOverlay(reportURL, staticCIDR, staticGateway, kernel string) ([]byte, error) {
@@ -129,37 +144,23 @@ func probeOverlay(reportURL, staticCIDR, staticGateway, kernel string) ([]byte, 
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 
-	files := []struct {
-		name string
-		mode int64
-		link string
-		body []byte
-	}{
-		// With an overlay present, the initramfs skips its default boot
-		// services (init: `-f .default_boot_services -o ! -f "$ovl"`) — the
-		// marker restores sysinit/boot/shutdown so hardware, modloop and
-		// console services run.
-		{name: "etc/.default_boot_services", mode: 0o644, body: []byte{}},
-		{name: "etc/local.d/", mode: 0o755},
-		{name: "etc/local.d/mammoth-probe.start", mode: 0o755, body: []byte(script)},
-		{name: "etc/runlevels/default/local", mode: 0, link: "/etc/init.d/local"},
-	}
-	for _, f := range files {
-		hdr := &tar.Header{Name: f.name, Mode: f.mode}
-		if strings.HasSuffix(f.name, "/") {
+	for _, f := range probeOverlayEntries(script) {
+		hdr := &tar.Header{Name: f.Name, Mode: f.Mode}
+		switch {
+		case strings.HasSuffix(f.Name, "/"):
 			hdr.Typeflag = tar.TypeDir
-		} else if f.link != "" {
+		case f.Link != "":
 			hdr.Typeflag = tar.TypeSymlink
-			hdr.Linkname = f.link
-		} else {
+			hdr.Linkname = f.Link
+		default:
 			hdr.Typeflag = tar.TypeReg
-			hdr.Size = int64(len(f.body))
+			hdr.Size = int64(len(f.Body))
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
 			return nil, err
 		}
-		if f.body != nil {
-			if _, err := tw.Write(f.body); err != nil {
+		if f.Body != nil && f.Link == "" {
+			if _, err := tw.Write(f.Body); err != nil {
 				return nil, err
 			}
 		}

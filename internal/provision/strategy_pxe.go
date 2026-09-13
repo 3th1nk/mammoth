@@ -90,7 +90,7 @@ func (s *pxeStrategy) arm(ctx context.Context, b *bootSession) error {
 	}); err != nil {
 		return err
 	}
-	return powerIntoInstaller(ctx, e, task)
+	return powerIntoInstaller(ctx, e, task, true)
 }
 
 // release disarms the registry rows and removes the boot tree.

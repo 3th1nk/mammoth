@@ -24,6 +24,11 @@ type BootTree struct {
 	// Extra lists auxiliary files the kernel args reference by absolute URL
 	// (e.g. the alpine modloop). They join the HTTP file allowlist.
 	Extra map[string]string
+	// KernelArgs, when non-empty, carries payload-derived boot arguments the
+	// registry entry must merge after the driver's args (probe netboot:
+	// ip=dhcp + modloop=). Install trees leave it empty — args come from the
+	// distro driver's BootParams.
+	KernelArgs string
 }
 
 // ExtractBootFiles pulls the network-boot payload out of a distribution ISO

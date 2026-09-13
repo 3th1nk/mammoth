@@ -56,6 +56,9 @@ type action struct {
 	ImageURL   string `json:"image_url,omitempty"`
 	EjectAfter bool   `json:"eject_after,omitempty"`
 	Probe      string `json:"probe,omitempty"`
+	// Boot names the ramdisk probe's carrier (pxe | virtual_media); empty
+	// follows the deployment default (docs/06-install-pipeline.md §3.3).
+	Boot string `json:"boot,omitempty"`
 }
 
 func decodeAction(raw json.RawMessage) (action, error) {

@@ -19,16 +19,16 @@ import (
 )
 
 const (
-	opRequest, opReply  = 1, 2
-	optMessageType      = 53
-	optVendorClass      = 60
-	optTFTPServer       = 66
-	optBootfile         = 67
-	optUserClass        = 77
-	optArch             = 93
-	optFeatures         = 175
-	msgDiscover         = 1
-	cookie              = "\x63\x82\x53\x63"
+	opRequest, opReply = 1, 2
+	optMessageType     = 53
+	optVendorClass     = 60
+	optTFTPServer      = 66
+	optBootfile        = 67
+	optUserClass       = 77
+	optArch            = 93
+	optFeatures        = 175
+	msgDiscover        = 1
+	cookie             = "\x63\x82\x53\x63"
 )
 
 func main() {

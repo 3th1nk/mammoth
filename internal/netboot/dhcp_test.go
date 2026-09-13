@@ -4,8 +4,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"io"
-	"net"
 	"log/slog"
+	"net"
 	"testing"
 )
 

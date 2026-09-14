@@ -200,9 +200,9 @@ mini.iso)提供驱动支持。
 
 - 引导项按机器**全部 NIC MAC** 注册(spec 网络声明的 match.mac 叠加);
   固件从哪个口引导属固件行为;
-- iPXE 二段链:undionly.kpxe(BIOS,依赖网卡 UNDI)/ ipxe-<arch>.efi
-  (UEFI);Secure Boot 机器当前不可用(文档化前提,shim+grubnet 列 M7
-  余项);
+- 引导链:undionly.kpxe(BIOS,依赖网卡 UNDI)/ UEFI x64 走 shim+grubnet
+  (shimx64.efi → grubx64.efi,Microsoft/Debian 签名,**Secure Boot 已支持**);
+  UEFI arm64 仍用 ipxe-arm64.efi(未签名,Secure Boot 待后续);
 - ramdisk 探针(`probe=ramdisk boot=pxe`):alpine 引导树 + probe overlay
   以第二段 cpio 追加进 initramfs(kernel 支持串联 cpio 段,同 early
   microcode 机制);modloop 经 `modloop=<http-url>` 提供——该参数与拼接段

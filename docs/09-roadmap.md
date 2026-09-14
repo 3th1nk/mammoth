@@ -103,19 +103,22 @@
 - ✅ ramdisk 探针 PXE 化(`probe=ramdisk boot=pxe`):alpine 引导树 + overlay
   第二段 cpio 追加进 initramfs,modloop 走 HTTP——M5 遗留的"PXE 通路"余项
   就此关闭;
+- ✅ UEFI x64 Secure Boot 链(shim+grubnet):shimx64.efi(Microsoft 签名)
+  → grubx64.efi(Debian 签名 grubnet)→ TFTP 动态渲染 grub.cfg-01-<mac>
+  → HTTP 拉 kernel/initrd;x64 NBP 从 ipxe-amd64.efi 切到 shim 链
+  (DHCP 无法区分 Secure Boot,UEFI x64 统一走 shim);
 - ✅ `netboot_entries` 注册表 + 引导项生命周期(注册/宽限注销/孤儿清扫),
   `MAMMOTH_PXE_ENABLED`(默认关,启用时 bind 失败即退出)、
   `MAMMOTH_PXE_NEXT_SERVER`、`MAMMOTH_BOOT_STRATEGY`;
 - 余项(不阻塞):UefiHttp(Redfish HTTP Boot,厂商 OEM URI 各异)、
-  shim+grubnet 链(Secure Boot 场景)、ubuntu casper/debian d-i 的 PXE 形态
-  (需新的安装源策略)、外部 DHCP+TFTP 逃生门。
+  ubuntu casper/debian d-i 的 PXE 形态(需新的安装源策略)、外部
+  DHCP+TFTP 逃生门、arm64 shim+grubnet(无真机,后续)。
 
 ## 下一阶段(v1.0 后,按优先级)
 
 > 2026-09 确认执行顺序;v1.0 tag 延后至 PXE 增强 + BiosSetter 完成后。
 
-1. **PXE 增强**:shim+grubnet(Secure Boot)→ UefiHttp、ubuntu/debian PXE 化、
-   外部 DHCP+TFTP 逃生门
+1. **PXE 增强**:UefiHttp、ubuntu/debian PXE 化、外部 DHCP+TFTP 逃生门
 2. **BMC 能力接口**:BiosSetter(根治 BIOS 前置)→ FirmwareInventory(固件
    基线核对)→ NIST 800-88 擦盘合规(见 related-work)
 3. **发行版扩展**:ubuntu 24.04 验证(预计现有驱动直接可用)→ uniontechos

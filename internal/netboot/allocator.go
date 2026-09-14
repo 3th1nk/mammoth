@@ -217,6 +217,30 @@ func (p *DHCPPool) lease(mac string) net.IP {
 	}
 }
 
+// macFor returns the MAC holding a live lease for ip, or "" if none. It is
+// the reverse of lease: the TFTP grub.cfg renderer resolves a client by its
+// lease IP, because Debian grubnet requests the fixed path /grub/grub.cfg
+// (proxyDHCP leaves net_default_server empty, so the per-MAC filename
+// variants are never tried).
+func (p *DHCPPool) macFor(ip net.IP) string {
+	if p == nil || ip == nil {
+		return ""
+	}
+	v4 := ip.To4()
+	if v4 == nil {
+		return ""
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now()
+	for mac, l := range p.leases {
+		if l.ip.Equal(v4) && now.Before(l.expires) {
+			return mac
+		}
+	}
+	return ""
+}
+
 // Mask and Router are the lease parameters handed to clients.
 func (p *DHCPPool) Mask() net.IP {
 	if p == nil {

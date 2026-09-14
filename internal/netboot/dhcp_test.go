@@ -307,7 +307,7 @@ func testServer(t *testing.T, opts Options) *Server {
 	s := &Server{
 		opts:  opts,
 		log:   discardLogger(),
-		nbpOK: map[string]bool{"undionly.kpxe": true, "ipxe-amd64.efi": true, "ipxe-arm64.efi": true},
+		nbpOK: map[string]bool{"undionly.kpxe": true, "shimx64.efi": true, "ipxe-arm64.efi": true},
 		done:  make(chan error, 1),
 	}
 	return s

@@ -233,26 +233,10 @@ func serve(args []string) error {
 				return fmt.Errorf("netboot: MAMMOTH_PXE_DHCP_POOL: %w", err)
 			}
 		}
-		nb, nerr := netboot.Start(ctx, netboot.Options{
-			DHCPPort:   cfg.PXEDHCPPort,
-			ProxyPort:  cfg.PXEProxyPort,
-			TFTPPort:   cfg.PXETFTPPort,
-			NextServer: nextServer,
-			BaseURL:    strings.TrimSuffix(cfg.ExternalURL, "/"),
-			NBPs:       pxe.Files,
-			DHCP:       pool,
-			Log:        logger,
-		})
-		if nerr != nil {
-			return fmt.Errorf("netboot: %w", nerr)
-		}
-		go func() {
-			if serr := nb.Wait(); serr != nil {
-				logger.Warn("netboot service stopped", "err", serr.Error())
-			}
-		}()
-		// MAC → entry lookups for the script endpoint: store answer with a
-		// small cache (firmware re-asks several times per boot).
+		// MAC → entry lookups for the script endpoint and the TFTP grub.cfg
+		// rendering: store answer with a small cache (firmware re-asks several
+		// times per boot). Built before Start so the netboot service can render
+		// the per-MAC grub.cfg the Secure Boot chain requests over TFTP.
 		nbResolver = netboot.NewCachedResolver(
 			netboot.ResolverFunc(func(ctx context.Context, mac string) (*netboot.Entry, error) {
 				e, err := netbootRepo.ByMAC(ctx, mac)
@@ -268,6 +252,25 @@ func serve(args []string) error {
 					Extra: e.Extra,
 				}, nil
 			}), 15*time.Second)
+		nb, nerr := netboot.Start(ctx, netboot.Options{
+			DHCPPort:   cfg.PXEDHCPPort,
+			ProxyPort:  cfg.PXEProxyPort,
+			TFTPPort:   cfg.PXETFTPPort,
+			NextServer: nextServer,
+			BaseURL:    strings.TrimSuffix(cfg.ExternalURL, "/"),
+			NBPs:       pxe.Files,
+			Resolver:   nbResolver,
+			DHCP:       pool,
+			Log:        logger,
+		})
+		if nerr != nil {
+			return fmt.Errorf("netboot: %w", nerr)
+		}
+		go func() {
+			if serr := nb.Wait(); serr != nil {
+				logger.Warn("netboot service stopped", "err", serr.Error())
+			}
+		}()
 	}
 
 	deps := api.Deps{

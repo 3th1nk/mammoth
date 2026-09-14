@@ -121,4 +121,62 @@ func TestNBPPresenceGate(t *testing.T) {
 	if nbpFor(ArchIA32) != "" {
 		t.Error("ia32 must have no NBP (falls through)")
 	}
+	if nbpFor(ArchX64) != "shimx64.efi" {
+		t.Errorf("x64 NBP = %q, want the shim chain", nbpFor(ArchX64))
+	}
+}
+
+func TestRenderGRUB(t *testing.T) {
+	e := &Entry{
+		MAC:        "52:54:00:12:34:56",
+		TaskID:     "tsk_1",
+		Kind:       "install",
+		Token:      "tok9",
+		Kernel:     "vmlinuz",
+		Initrd:     "initrd.img",
+		KernelArgs: "inst.ks=http://192.168.77.1:8080/render/tok9/ks.cfg ip=dhcp",
+	}
+	got := RenderGRUB(e, "http://192.168.77.1:8080/")
+	for _, want := range []string{
+		"linux (http,192.168.77.1:8080)/netboot/files/tok9/vmlinuz inst.ks=http://192.168.77.1:8080/render/tok9/ks.cfg ip=dhcp",
+		"initrd (http,192.168.77.1:8080)/netboot/files/tok9/initrd.img",
+		"boot",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("grub.cfg missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestNoEntryGRUBExits(t *testing.T) {
+	s := NoEntryGRUB("52:54:00:12:34:56")
+	if !strings.Contains(s, "exit") {
+		t.Fatalf("fallback must exit back to firmware: %q", s)
+	}
+}
+
+func TestGRUBConfigMAC(t *testing.T) {
+	if mac, ok := grubConfigMAC("grub.cfg-01-52:54:00:12:34:56"); !ok || mac != "52:54:00:12:34:56" {
+		t.Errorf("grub.cfg-01-MAC: %q %v", mac, ok)
+	}
+	// Mixed-case / alternate separators normalize to the canonical lowercase
+	// colon form (the key the resolver expects).
+	if mac, ok := grubConfigMAC("grub.cfg-01-52-54-00-12-34-56"); !ok || mac != "52:54:00:12:34:56" {
+		t.Errorf("normalize: %q %v", mac, ok)
+	}
+	if _, ok := grubConfigMAC("undionly.kpxe"); ok {
+		t.Error("non-grub filename must not match")
+	}
+	if _, ok := grubConfigMAC("grub.cfg"); ok {
+		t.Error("bare grub.cfg must not match the per-MAC pattern")
+	}
+}
+
+func TestGRUBHTTPHost(t *testing.T) {
+	if h := grubHTTPHost("http://192.168.77.1:8080"); h != "192.168.77.1:8080" {
+		t.Errorf("host with port = %q", h)
+	}
+	if h := grubHTTPHost("http://192.168.77.1/"); h != "192.168.77.1" {
+		t.Errorf("host without port = %q", h)
+	}
 }

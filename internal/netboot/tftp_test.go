@@ -15,7 +15,7 @@ import (
 func discardUDPLog(string, ...any) {}
 
 // startTestTFTP serves files on an ephemeral loopback port.
-func startTestTFTP(t *testing.T, files fs.FS) *net.UDPAddr {
+func startTestTFTP(t *testing.T, files fs.FS, render func(string, net.IP) []byte) *net.UDPAddr {
 	t.Helper()
 	loopback := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}
 	conn, err := net.ListenUDP("udp", loopback)
@@ -24,7 +24,7 @@ func startTestTFTP(t *testing.T, files fs.FS) *net.UDPAddr {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() { cancel(); conn.Close() })
-	go serveTFTP(ctx, conn, files, discardUDPLog)
+	go serveTFTP(ctx, conn, files, render, discardUDPLog)
 	return conn.LocalAddr().(*net.UDPAddr)
 }
 
@@ -105,7 +105,7 @@ func TestTFTPRoundTrip(t *testing.T) {
 		"undionly.kpxe":  &fstest.MapFile{Data: bytesN(2048)},
 		"ipxe-amd64.efi": &fstest.MapFile{Data: bytesN(1)},
 	}
-	addr := startTestTFTP(t, files)
+	addr := startTestTFTP(t, files, nil)
 
 	t.Run("classic 512-byte blocks", func(t *testing.T) {
 		got := startClient(t).fetch(addr, "undionly.kpxe")
@@ -182,6 +182,22 @@ func TestParseRRQ(t *testing.T) {
 	}
 	if _, _, err := parseRRQ([]byte{0, tftpACK, 0, 1}); err == nil {
 		t.Fatal("ACK must not parse as RRQ")
+	}
+}
+
+func TestTFTPGRUBConfigRendering(t *testing.T) {
+	render := func(name string, remoteIP net.IP) []byte {
+		mac, ok := grubConfigMAC(name)
+		if !ok {
+			return nil
+		}
+		return []byte(NoEntryGRUB(mac))
+	}
+	addr := startTestTFTP(t, fstest.MapFS{}, render)
+
+	got := string(startClient(t).fetch(addr, "grub.cfg-01-52:54:00:12:34:56"))
+	if !strings.Contains(got, "exit") || !strings.Contains(got, "52:54:00:12:34:56") {
+		t.Fatalf("dynamic grub.cfg not rendered: %q", got)
 	}
 }
 

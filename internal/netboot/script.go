@@ -3,6 +3,7 @@ package netboot
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -93,4 +94,66 @@ func NoEntryScript(mac string) string {
 // against accidental newlines breaking the script.
 func sanitizeArgs(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// RenderGRUB renders the GRUB config for an entry (UEFI Secure Boot chain:
+// shim → grubnet → grub.cfg). grubnet fetches its config from TFTP before its
+// network stack is fully up, so kernel/initrd ride HTTP via grub's
+// (http,host:port) device syntax — the host:port is baked in from baseURL.
+// The port matters: mammoth serves the machine face on a non-standard port
+// (default 8080), which grub must be told explicitly.
+//
+// The config is a bare command sequence (linux → initrd → boot), not a
+// menuentry: under Secure Boot grubnet cannot load its terminal/font modules,
+// which sends it into the interactive menu and stalls at the menu instead of
+// auto-booting a timeout=0 entry. A top-level boot command never enters the
+// menu at all.
+func RenderGRUB(e *Entry, baseURL string) string {
+	host := grubHTTPHost(baseURL)
+	var b strings.Builder
+	fmt.Fprintf(&b, "# mammoth boot entry mac=%s task=%s kind=%s\n", e.MAC, e.TaskID, e.Kind)
+	// grubnet already brought up efinet to fetch this file over TFTP; a
+	// net_bootp here would re-DHCP every interface and fail on the second NIC
+	// (efinet1), which aborts the config. The kernel/initrd ride grub's
+	// (http,server:port) device syntax — NOT http:// URLs, which grub's
+	// loader treats as a bare TFTP filename.
+	fmt.Fprintf(&b, "linux (http,%s)/netboot/files/%s/%s %s\n",
+		host, e.Token, e.Kernel, sanitizeArgs(e.KernelArgs))
+	fmt.Fprintf(&b, "initrd (http,%s)/netboot/files/%s/%s\n", host, e.Token, e.Initrd)
+	b.WriteString("boot\n")
+	return b.String()
+}
+
+// NoEntryGRUB is served when a MAC has no pending boot entry. GRUB's exit
+// returns control to the firmware, which falls through to the next boot
+// device (the local disk) — the same post-install race neutralization as the
+// iPXE path.
+func NoEntryGRUB(mac string) string {
+	return fmt.Sprintf("# mammoth: no pending boot entry for %s\nexit\n", mac)
+}
+
+// grubHTTPHost extracts host[:port] from a base URL for grub's
+// (http,host:port) device syntax.
+func grubHTTPHost(baseURL string) string {
+	if u, err := url.Parse(baseURL); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return strings.TrimPrefix(strings.TrimPrefix(baseURL, "http://"), "https://")
+}
+
+// grubConfigMAC parses the per-MAC GRUB config filename grubnet requests —
+// "grub.cfg-01-<mac>" with the mac in lowercase colon form — and returns the
+// normalized mac. grubnet falls back to "grub.cfg-<hex-ip>" then "grub.cfg"
+// when the per-MAC file is absent; those fallbacks are static and never hit
+// this path.
+func grubConfigMAC(name string) (string, bool) {
+	const prefix = "grub.cfg-01-"
+	if !strings.HasPrefix(name, prefix) {
+		return "", false
+	}
+	mac := strings.TrimSpace(name[len(prefix):])
+	if mac == "" {
+		return "", false
+	}
+	return normalizeMAC(mac), true
 }

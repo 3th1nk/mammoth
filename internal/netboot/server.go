@@ -33,6 +33,10 @@ type Options struct {
 	BaseURL string
 	// NBPs is the filesystem of network boot programs (embedded assets).
 	NBPs fs.FS
+	// Resolver answers boot lookups by MAC for the TFTP grub.cfg rendering
+	// (Secure Boot chain). nil disables dynamic rendering — the TFTP service
+	// then serves only the static NBP binaries.
+	Resolver Resolver
 	// DHCP, when set, turns the responder into a full DHCP server for PXE
 	// clients (option 60) on DHCP-less provisioning L2s — a boot ROM needs
 	// an IP lease before it will fetch anything. nil keeps the pure proxy
@@ -106,9 +110,36 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 	tftpDone := make(chan struct{})
 	go s.serveDHCP(ctx, dhcpConn, dhcpDone)
 	go s.serveProxy(ctx, proxyConn, proxyDone)
+	// Dynamic TFTP rendering: grubnet fetches its config over TFTP before its
+	// network stack is fully up. Debian grubnet's prefix is (tftp)/grub/ and —
+	// under proxyDHCP, where net_default_server stays empty — it falls straight
+	// to the fixed path /grub/grub.cfg rather than trying grub.cfg-01-<mac>.
+	// The client is therefore resolved by its lease IP (reverse of the DHCP
+	// pool's MAC→IP assignment). Everything else stays static.
+	render := func(name string, remoteIP net.IP) []byte {
+		if opts.Resolver == nil {
+			return nil
+		}
+		mac := ""
+		if m, ok := grubConfigMAC(name); ok {
+			mac = m
+		} else if name == "grub/grub.cfg" {
+			if opts.DHCP != nil {
+				mac = opts.DHCP.macFor(remoteIP)
+			}
+		}
+		if mac == "" {
+			return nil
+		}
+		e, err := opts.Resolver.Entry(ctx, mac)
+		if err != nil || e == nil {
+			return []byte(NoEntryGRUB(mac))
+		}
+		return []byte(RenderGRUB(e, opts.BaseURL))
+	}
 	go func() {
 		defer close(tftpDone)
-		serveTFTP(ctx, tftpConn, opts.NBPs, udpLog)
+		serveTFTP(ctx, tftpConn, opts.NBPs, render, udpLog)
 	}()
 	go func() {
 		<-ctx.Done()

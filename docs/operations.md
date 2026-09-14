@@ -130,8 +130,9 @@ iPXE 脚本),默认关闭。启用清单:
      **有站点 DHCP 时勿开**,避免双 ACK。
 4. **next-server 声明**:`MAMMOTH_PXE_NEXT_SERVER`(mammoth 在装机 L2 的 IPv4);
    `MAMMOTH_EXTERNAL_URL` 的 host 是 IP 字面量时自动派生,否则必填。
-5. **固件前提**:Secure Boot 关闭(iPXE 未参与签名链;shim+grubnet 在
-   roadmap M7 余项)。目标机 BIOS/UEFI 的 PXE/网络引导需在固件中可用。
+5. **固件前提**:UEFI x64 的 Secure Boot **已支持**(shim+grubnet 链,
+   shimx64.efi → grubx64.efi,来源见 assets/pxe/PROVENANCE.md);arm64 仍须
+   关闭 Secure Boot。目标机 BIOS/UEFI 的 PXE/网络引导需在固件中可用。
 6. **镜像形态**:distroless 主镜像已内嵌 iPXE 二进制(assets/pxe,来源与
    重建见 `assets/pxe/PROVENANCE.md`),无需额外包。
 7. **运维**:引导项孤儿(进程崩溃残留)由 reaper 按任务终态清扫(默认

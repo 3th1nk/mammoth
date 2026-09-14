@@ -18,3 +18,12 @@ without source, under the condition that the distribution terms otherwise
 comply with the GPL. The full GPL-2.0 text and the iPXE permission notice
 ship in assets/pxe/LICENSE-ipxe.txt; source, version pinning and rebuild
 instructions are in assets/pxe/PROVENANCE.md.
+
+This product includes prebuilt Secure Boot network boot programs in
+assets/pxe/ (shimx64.efi, grubx64.efi), taken from the Debian
+`shim-signed` (1.51~1+deb13u1+16.1-2~deb13u1) and `grub-efi-amd64-signed`
+(1+2.12+9+deb13u2) packages. shim is licensed under the GNU GPL version 2
+(Copyright Red Hat, Inc. and contributors); GRUB is licensed under the GNU
+GPL version 3 or later (Copyright Free Software Foundation, Inc. and
+contributors). Source, version pinning, hashes and rebuild instructions are
+in assets/pxe/PROVENANCE.md.

@@ -937,7 +937,17 @@ func (e *Executor) installOSStage(ctx context.Context, task *store.Task, job *st
 			// a directory — but it rides the same grace for uniformity.
 			go func(ictx2 installTaskContext) {
 				dctx := context.WithoutCancel(ctx)
-				time.Sleep(bootMediaReleaseGrace)
+				grace := bootMediaReleaseGrace
+				if bootStrategyName(ictx2.BootStrategy) == strategyPXE {
+					// PXE has no CD tail: kernel/initrd were fully loaded at
+					// boot, and the installer pulls packages over inst.repo,
+					// never the boot tree. Release immediately so the
+					// post-install reboot finds an empty registry and grub.cfg
+					// falls through to `exit` (boot from disk) instead of
+					// re-entering the installer.
+					grace = 0
+				}
+				time.Sleep(grace)
 				e.releaseBootPayload(dctx, task, &ictx2, reasonCompleted)
 				// Installers that stall on a completion dialog (d-i's
 				// "Installation complete — remove the media") need the
@@ -1037,7 +1047,7 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 					PrivateKey string `json:"private_key"`
 				}
 				if json.Unmarshal(plain, &secret) == nil {
-					res, perr := e.waitForNewSystem(ctx, m.SSHAddress, inbandssh.Credentials{
+					res, degraded, perr := e.waitForNewSystem(ctx, m.SSHAddress, inbandssh.Credentials{
 						Username: secret.Username, Password: secret.Password,
 						PrivateKey: secret.PrivateKey,
 					})
@@ -1045,16 +1055,29 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 						return classifiedErr("INSTALL_NOT_REACHABLE", true,
 							"new system did not answer in-band: %s", perr.Error())
 					}
-					// Post-install refresh: the freshly installed system is the
-					// best source for the layout snapshot (device names + serials
-					// exactly as the installer saw them), so the NEXT reinstall's
-					// selectors and bindings match reality without manual steps.
-					if version, verr := e.Machines.SaveLayout(ctx, task.MachineID, res.Layout.Source,
-						marshalJSON(res.Layout), e.LayoutKeep); verr == nil {
-						obs.FromContext(ctx).InfoContext(ctx, "post-install layout snapshot captured",
-							"version", version, "disks", len(res.Layout.Disks))
+					if degraded {
+						// The system answered sshd but rejected authentication:
+						// root ssh is intentionally left to the operator's post
+						// script (docs/security-baseline.md), so this is an
+						// expected state, not a failed install. The completion
+						// report is the verification surface; surface it clearly.
+						obs.FromContext(ctx).WarnContext(ctx, "verify_ready degraded: system reachable but in-band auth not configured",
+							"machine", task.MachineID, "ssh_address", m.SSHAddress)
+						e.Events.Append(ctx, "task", task.ID, "task.verify_ready_degraded", map[string]any{
+							"reason": "in-band auth not configured; completion report is the verification surface",
+						})
 					} else {
-						obs.FromContext(ctx).WarnContext(ctx, "post-install snapshot save failed", "err", verr.Error())
+						// Post-install refresh: the freshly installed system is the
+						// best source for the layout snapshot (device names + serials
+						// exactly as the installer saw them), so the NEXT reinstall's
+						// selectors and bindings match reality without manual steps.
+						if version, verr := e.Machines.SaveLayout(ctx, task.MachineID, res.Layout.Source,
+							marshalJSON(res.Layout), e.LayoutKeep); verr == nil {
+							obs.FromContext(ctx).InfoContext(ctx, "post-install layout snapshot captured",
+								"version", version, "disks", len(res.Layout.Disks))
+						} else {
+							obs.FromContext(ctx).WarnContext(ctx, "post-install snapshot save failed", "err", verr.Error())
+						}
 					}
 				}
 			}
@@ -1091,7 +1114,7 @@ func (e *Executor) verifyReadyWait() time.Duration {
 // false positive out, and the loop keeps polling until the real system
 // shows up. Auth rejections surface immediately: waiting cannot heal them
 // (the installer env accepts passwords the provisioned system refuses).
-func (e *Executor) waitForNewSystem(ctx context.Context, addr string, cred inbandssh.Credentials) (*inbandssh.Result, error) {
+func (e *Executor) waitForNewSystem(ctx context.Context, addr string, cred inbandssh.Credentials) (*inbandssh.Result, bool, error) {
 	wait := e.verifyReadyWait()
 	deadline := time.Now().Add(wait)
 	for {
@@ -1099,23 +1122,29 @@ func (e *Executor) waitForNewSystem(ctx context.Context, addr string, cred inban
 		res, err := e.Inband.Collect(probeCtx, addr, cred)
 		cancel()
 		if err == nil && !res.InstallerEnv {
-			return res, nil
+			return res, false, nil
 		}
 		var ie *inbandssh.Error
 		if err != nil && errors.As(err, &ie) && ie.Code == "CREDENTIAL_AUTH_FAILED" {
-			return nil, err
+			// The handshake reached authentication, so the system is up and
+			// sshd is answering — only the login is not configured (the
+			// security posture leaves root ssh to the operator's post script).
+			// Degrade rather than fail: "reachable but unauthenticated" is an
+			// expected state, and the completion report remains the
+			// verification surface.
+			return nil, true, nil
 		}
 		if time.Now().After(deadline) {
 			if err == nil {
-				return nil, fmt.Errorf("installer environment still finishing after %s wait", wait)
+				return nil, false, fmt.Errorf("installer environment still finishing after %s wait", wait)
 			}
-			return nil, err
+			return nil, false, err
 		}
 		obs.FromContext(ctx).InfoContext(ctx, "verify_ready waiting for the new system",
 			"installer_env", err == nil, "err", errString(err))
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, false, ctx.Err()
 		case <-time.After(10 * time.Second):
 		}
 	}

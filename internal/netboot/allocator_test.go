@@ -59,6 +59,23 @@ func TestNewDHCPPoolRejectsGarbage(t *testing.T) {
 	}
 }
 
+func TestDHCPPoolMacFor(t *testing.T) {
+	pool, _ := NewDHCPPool(net.IPv4(192, 168, 77, 200), net.IPv4(192, 168, 77, 203), nil, net.IPv4(192, 168, 77, 1))
+	ip := pool.lease("52:54:00:00:00:01")
+	if ip == nil {
+		t.Fatal("lease failed")
+	}
+	if got := pool.macFor(ip); got != "52:54:00:00:00:01" {
+		t.Errorf("macFor(%v) = %q, want the leasing MAC", ip, got)
+	}
+	if got := pool.macFor(net.IPv4(192, 168, 77, 250)); got != "" {
+		t.Errorf("macFor(unleased) = %q, want empty", got)
+	}
+	if got := pool.macFor(net.IPv6loopback); got != "" {
+		t.Errorf("macFor(non-v4) = %q, want empty", got)
+	}
+}
+
 // TestPoolModeReply pins the full-DHCP reply shape: yiaddr from the pool,
 // lease time, mask and router options — the OFFER a bare-L2 boot ROM needs.
 func TestPoolModeReply(t *testing.T) {

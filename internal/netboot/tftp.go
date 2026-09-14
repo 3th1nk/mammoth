@@ -1,6 +1,7 @@
 package netboot
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -33,7 +34,7 @@ const (
 // ctx ends. One datagram socket is shared for RRQ reception; each transfer
 // moves to its own ephemeral socket — the client locks onto the source port
 // of the first reply, so sessions never interleave.
-func serveTFTP(ctx context.Context, conn *net.UDPConn, files fs.FS, log func(format string, args ...any)) {
+func serveTFTP(ctx context.Context, conn *net.UDPConn, files fs.FS, render func(string, net.IP) []byte, log func(format string, args ...any)) {
 	// Session sockets bind the same local address as the listener — on a
 	// multi-addressed host an unbound socket can pick a source the client's
 	// RPF drops, and it also pins the source family (no v4-vs-[::] drift).
@@ -51,13 +52,16 @@ func serveTFTP(ctx context.Context, conn *net.UDPConn, files fs.FS, log func(for
 		if perr != nil {
 			continue // garbage: drop, the client retries
 		}
+		// grubnet requests paths rooted at its (tftp)/grub/ prefix with a
+		// leading slash; the embedded FS is slash-less.
+		name = strings.TrimPrefix(name, "/")
 		c, cerr := net.ListenUDP("udp", &net.UDPAddr{IP: local})
 		if cerr != nil {
 			continue
 		}
 		go func() {
 			defer c.Close()
-			transferTFTP(c, addr, files, name, opts, log)
+			transferTFTP(c, addr, files, render, name, opts, log)
 		}()
 	}
 }
@@ -98,26 +102,46 @@ func parseRRQ(b []byte) (string, rrqOptions, error) {
 }
 
 // transferTFTP streams one file to one client: OACK when options were
-// requested, then lockstep DATA/ACK with retransmit on timeout.
-func transferTFTP(c *net.UDPConn, addr *net.UDPAddr, files fs.FS, name string, opts rrqOptions, log func(string, ...any)) {
-	f, err := files.Open(name)
-	if err != nil {
-		// No error datagram: an unknown file usually means the client asked
-		// for another PXE vendor's payload; silence falls through.
-		log("tftp: no such file %q (client %s)", name, addr.IP)
-		return
-	}
-	defer f.Close()
+// requested, then lockstep DATA/ACK with retransmit on timeout. A name the
+// render hook answers (the per-MAC grub.cfg) is served from memory; anything
+// else comes from the static embedded FS.
+func transferTFTP(c *net.UDPConn, addr *net.UDPAddr, files fs.FS, render func(string, net.IP) []byte, name string, opts rrqOptions, log func(string, ...any)) {
+	var r io.Reader
 	var size int64
 	var knowsSize bool
-	if rs, ok := f.(io.ReadSeeker); ok {
-		if s, serr := rs.Seek(0, io.SeekEnd); serr == nil {
-			size, knowsSize = s, true
-			if _, err := rs.Seek(0, io.SeekStart); err != nil {
-				knowsSize = false
-			}
+	var closer io.Closer
+
+	if render != nil {
+		if content := render(name, addr.IP); content != nil {
+			r = bytes.NewReader(content)
+			size = int64(len(content))
+			knowsSize = true
 		}
 	}
+	if r == nil {
+		f, err := files.Open(name)
+		if err != nil {
+			// No error datagram: an unknown file usually means the client asked
+			// for another PXE vendor's payload; silence falls through.
+			log("tftp: no such file %q (client %s)", name, addr.IP)
+			return
+		}
+		closer = f
+		if rs, ok := f.(io.ReadSeeker); ok {
+			if s, serr := rs.Seek(0, io.SeekEnd); serr == nil {
+				size, knowsSize = s, true
+				if _, err := rs.Seek(0, io.SeekStart); err != nil {
+					knowsSize = false
+				}
+			}
+		}
+		r = f
+	}
+	defer func() {
+		if closer != nil {
+			closer.Close()
+		}
+	}()
 
 	if opts.tsize || opts.blksize != tftpBlockSize {
 		var oack []byte
@@ -136,7 +160,7 @@ func transferTFTP(c *net.UDPConn, addr *net.UDPAddr, files fs.FS, name string, o
 			return
 		}
 	}
-	if err := sendFile(c, addr, f, opts.blksize); err != nil {
+	if err := sendFile(c, addr, r, opts.blksize); err != nil {
 		log("tftp: transfer of %q to %s failed: %v", name, addr.IP, err)
 	}
 }

@@ -203,6 +203,9 @@ mini.iso)提供驱动支持。
 - 引导链:undionly.kpxe(BIOS,依赖网卡 UNDI)/ UEFI x64 走 shim+grubnet
   (shimx64.efi → grubx64.efi,Microsoft/Debian 签名,**Secure Boot 已支持**);
   UEFI arm64 仍用 ipxe-arm64.efi(未签名,Secure Boot 待后续);
+- Secure Boot 签名信任:RHEL 系(rocky9/rocky10/centos7)kernel 签名已被
+  Debian shim 信任(真机 2288H 闭环实证);kylin/uniontechos 国产发行版
+  待验证(签名证书可能不在 Debian shim 信任列表);
 - ramdisk 探针(`probe=ramdisk boot=pxe`):alpine 引导树 + probe overlay
   以第二段 cpio 追加进 initramfs(kernel 支持串联 cpio 段,同 early
   microcode 机制);modloop 经 `modloop=<http-url>` 提供——该参数与拼接段

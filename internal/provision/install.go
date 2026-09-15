@@ -720,6 +720,17 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	}
 	in.Raid = raidInputs
 
+	// PXE install-source inputs (docs/06-install-pipeline.md §3.3): the
+	// strategy is known before rendering (spec declaration or deployment
+	// default — the same resolution bootStrategyFor performs), so the driver
+	// can render its netboot-shaped args/seed up front.
+	if name, _ := effectiveStrategyName(e, spec); name == strategyPXE {
+		in.Netboot = &render.NetbootInputs{
+			PoolURL:    fmt.Sprintf("%s/netboot/files/%s", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
+			NFSRootURL: nfsRootFor(e.MediaNFSBase, ictx.Token),
+		}
+	}
+
 	driver, err := e.Render.For(spec.Image.Distro)
 	if err != nil {
 		return classifiedErr("SCHEMA_UNKNOWN_DISTRO", false, "%s", err.Error())

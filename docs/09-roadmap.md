@@ -111,7 +111,8 @@
   `MAMMOTH_PXE_ENABLED`(默认关,启用时 bind 失败即退出)、
   `MAMMOTH_PXE_NEXT_SERVER`、`MAMMOTH_BOOT_STRATEGY`;
 - 余项(不阻塞):UefiHttp(Redfish HTTP Boot,厂商 OEM URI 各异)、
-  ubuntu casper/debian d-i 的 PXE 形态(需新的安装源策略)、外部
+  **ubuntu/debian PXE 真机验证**(通路已实现:casper NFS squashfs 源 +
+  d-i netboot 载体 + HTTP 池,qemu 验证与真机回归待跑)、外部
   DHCP+TFTP 逃生门、**真机 relay 回归**(跨 VLAN:应答回 giaddr:67 已实现
   并有单测,带 relay 的真机/qemu 拓扑未跑,见 11-pxe-walkthrough §4)、
   arm64 PXE 引导链(ipxe-aa64.efi / shim+grubnet aa64,

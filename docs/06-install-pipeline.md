@@ -101,7 +101,8 @@ iPXE    ──HTTP GET /netboot/files/<token>/…──▶ kernel/initrd(+modloo
   docs/08-data-model.md);
 - **kernel args 与 ISO 通路零差异**:`inst.ks=` 本就是绝对 HTTP URL、
   `inst.repo=nfs:` 本就是网络安装源、无静态网声明时 earlynet 自动 `ip=dhcp`
-  ——RHEL 系是唯一零新增安装源工作的家族(矩阵见 §6);
+  ——RHEL 系与 ISO 通路零差异;ubuntu(debian)的 PXE 源为 NFS 树(HTTP 池),
+  载体/源形态由驱动 `NetbootInstallDriver` 声明、prepare 按声明执行(矩阵见 §6);
 - **ramdisk 探针同链路**:`probe=ramdisk` + `boot=pxe` 时,探针环境以同一
   引导通路进入内存(overlay 以第二段 cpio 追加进 initramfs,modloop 走
   HTTP),见 docs/05-inventory.md §4;
@@ -197,8 +198,8 @@ type OSDriver interface {
 | 发行版 | 安装器 | 应答文件 | 保留分区 | PXE | 状态 |
 |--------|--------|---------|---------|-----|------|
 | RHEL 系(Rocky/Alma) | Anaconda | kickstart | **full**(`%pre` + `--onpart/--noformat`) | full(`inst.repo=nfs:` 网络装机现成;rocky10 BIOS 待真机) | ✅ 真机闭环(Huawei 2288H V5) |
-| Ubuntu Server 22.04 | subiquity | autoinstall | partial(keep: disk) | none(casper 需整 ISO 进内存) | ✅ 真机闭环 |
-| Debian 12 | debian-installer | preseed | partial(keep: disk) | none(d-i 需网络镜像源) | ✅ 真机闭环 |
+| Ubuntu Server 22.04 | subiquity | autoinstall | partial(keep: disk) | full(casper NFS squashfs 源:ISO 解包引导树,`netboot=nfs` 挂 live root,不做整 ISO 进内存;PXE 阶段仅 DHCP)——qemu 待验证 | ✅ 真机闭环(ISO 通路) |
+| Debian 12 | debian-installer | preseed | partial(keep: disk) | full(载体 = d-i netboot.tar.gz `MAMMOTH_PXE_DEBIAN12_NETBOOT`;安装源 = ISO 解包 HTTP 池,离线语义保持)——qemu 待验证 | ✅ 真机闭环(ISO 通路) |
 | 统信服务器 V20(UOS) | anaconda 定制 | kickstart(同 rocky9 方言) | full(同 rocky9) | full(同 rocky9) | **blocked**(Finish 阶段崩溃,见 distros.md) |
 | Windows | Setup | unattend | full | 未开始 | 未开始 |
 

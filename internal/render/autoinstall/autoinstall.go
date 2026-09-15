@@ -40,6 +40,31 @@ func (d *Driver) SupportedArchs() []render.Arch {
 // declared partial; keep: partitions is rejected at submit and at render.
 func (d *Driver) KeepPartitionSupport() render.SupportLevel { return render.SupportPartial }
 
+// PXESupport: full via the casper path — boot files extract from the ISO and
+// the live root (squashfs) mounts over NFS from the unpacked tree, so the
+// whole-ISO-into-RAM trap (docs/compat/distros.md, the 4 GB casper lesson)
+// never triggers (docs/06-install-pipeline.md §3.3, §6).
+func (d *Driver) PXESupport() render.SupportLevel { return render.SupportFull }
+
+// NetbootCarrier: the casper kernel/initrd extract from the distro ISO.
+func (d *Driver) NetbootCarrier() render.NetbootCarrier { return render.NetbootCarrierISO }
+
+// NetbootPool: casper mounts its squashfs root from the unpacked tree over
+// NFS (netboot=nfs) — subiquity then installs from that same live source.
+func (d *Driver) NetbootPool() render.NetbootPool { return render.NetbootPoolNFS }
+
+// networkIsDHCP reports whether every entry leaves addressing to DHCP — the
+// only form usable before casper's NFS root is up (netplan applies later,
+// inside the installer).
+func networkIsDHCP(entries []render.NetworkEntry) bool {
+	for _, e := range entries {
+		if len(e.Addresses) > 0 || e.Bond != nil || e.VLAN != nil {
+			return false
+		}
+	}
+	return true
+}
+
 // RenderAnswers produces the nocloud seed files and boot parameters.
 func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([]render.AnswerFile, render.BootParams, error) {
 	if in.AnswerBaseURL == "" || in.CompleteURL == "" {
@@ -146,6 +171,19 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		AnswerURL:           primaryURL,
 		KernelArgs:          "autoinstall ds=nocloud-net;s=file:///cdrom/",
 		InstallerAutoReboot: true, // shutdown: reboot
+	}
+	// PXE: no boot medium to mount at /cdrom — the nocloud seed rides HTTP
+	// (the seed URL is already absolute) and the live root mounts from the
+	// unpacked tree over NFS. casper needs early networking for the NFS hop;
+	// static-net declarations cannot be honoured at that stage (netplan only
+	// applies later, inside the installer) so DHCP is the netboot contract.
+	if in.Netboot != nil {
+		if len(in.Network) > 0 && !networkIsDHCP(in.Network) {
+			return nil, render.BootParams{}, fmt.Errorf("%s: PXE installs boot the live system over DHCP only — drop the static network declaration or use the virtual-media carrier", d.distro)
+		}
+		boot.NetbootKernelArgs = fmt.Sprintf(
+			"autoinstall ds=nocloud-net;s=%s/ ip=dhcp boot=casper netboot=nfs nfsroot=%s",
+			strings.TrimSuffix(in.AnswerBaseURL, "/"), in.Netboot.NFSRootURL)
 	}
 	return answers, boot, nil
 }

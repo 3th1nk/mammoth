@@ -193,7 +193,7 @@ mini.iso)提供驱动支持。
 |--------|-----------|------|
 | rocky9 / centos7 / kylinv10 / kylinv11 / uniontechos | full | anaconda/dracut 内核对网络引导原生;`inst.repo=nfs:` 安装源复用 nfsx 导出,`inst.ks=` 走 HTTP,与 ISO 通路零差异 |
 | rocky10(UEFI-only 媒体) | full | 引导文件同为 `images/pxeboot/*`,UEFI 侧无虞;BIOS 引导上游已移除(镜像 UEFI-only),不做 BIOS PXE |
-| ubuntu22 | none | casper 需把整张 ISO 拉进内存或 http root,需新的安装源策略后再排期 |
+| ubuntu22 | none | casper 需把整张 ISO 拉进内存或 http root,需新的安装源策略后再排期;实测参考:低内存机器(4GB 级)整盘载入会 tmpfs 写满而失败——PXE 化设计须走 kernel+initrd+网络源,不做整 ISO 进内存 |
 | debian12 | none | d-i netboot 后包必须走网络镜像源,破坏离线安装语义,同上 |
 
 实现注记:

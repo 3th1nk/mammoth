@@ -45,6 +45,12 @@ jobs 1 ──── n tasks 1 ──── n task_stages
 
 索引:`uk(machines.bmc_address)`;`gin(machines.labels)`。
 
+> **规划(下一阶段,见 roadmap):PXE 观测字段**——最近一次 PXE 引导观测到的
+> 固件类型(DHCP option 93:BIOS / UEFI x64 / ARM64)、客户端 IP 与时间,
+> 以带内观测列追加。刻意保持**观测而非身份键**(IP 易变不作关联——身份锚
+> 仍是 BMC 地址,网络面锚是 NIC MAC);用途:boot 策略门禁(提交期拒绝
+> 固件与引导链不匹配的任务,如 Secure Boot 派给 BIOS 机器)与排障输入。
+
 ### layout_snapshots
 
 | 字段 | 类型 | 说明 |

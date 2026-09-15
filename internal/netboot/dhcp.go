@@ -69,13 +69,17 @@ const (
 
 // archNumbers maps RFC 4578 processor architecture codes to Arch. Unknown
 // codes stay unknown — the responder then stays silent and the firmware
-// falls through to its next boot device.
+// falls through to its next boot device. Codes 7 (EFI BC) and 9 (EFI
+// x86-64) are both x64 UEFI PXE; 11 (0x000B) is AArch64 — handing an arm64
+// NBP to a code-9 client black-screens it, and modern x64 NICs commonly
+// announce 9.
 var archNumbers = map[uint16]Arch{
-	0: ArchBIOS,
-	2: ArchIA32,
-	6: ArchIA32,
-	7: ArchX64,
-	9: ArchARM64,
+	0:  ArchBIOS,
+	2:  ArchIA32,
+	6:  ArchIA32,
+	7:  ArchX64,
+	9:  ArchX64,
+	11: ArchARM64,
 }
 
 // archFromBytes decodes option 93 (a list of big-endian uint16 codes) by

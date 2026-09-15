@@ -262,6 +262,22 @@ func serve(args []string) error {
 			Resolver:   nbResolver,
 			DHCP:       pool,
 			Log:        logger,
+			// Persist firmware observations (DHCP option 93) into the machine
+			// record — docs/08-data-model.md machines, roadmap next phase.
+			// Inline on the DHCP read path: short timeout, never blocks long.
+			OnObserve: func(mac string, arch netboot.Arch) {
+				octx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				hit, err := machineRepo.ObservePXE(octx, mac, string(arch))
+				switch {
+				case err != nil:
+					logger.Warn("pxe observation persist failed", "mac", mac, "arch", arch, "err", err)
+				case hit:
+					logger.Debug("pxe observation recorded", "mac", mac, "arch", arch)
+				default:
+					logger.Debug("pxe sighting of unregistered mac", "mac", mac, "arch", arch)
+				}
+			},
 		})
 		if nerr != nil {
 			return fmt.Errorf("netboot: %w", nerr)

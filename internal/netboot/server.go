@@ -37,6 +37,13 @@ type Options struct {
 	// (Secure Boot chain). nil disables dynamic rendering — the TFTP service
 	// then serves only the static NBP binaries.
 	Resolver Resolver
+	// OnObserve, when set, is called for every PXE client whose architecture
+	// the responder resolved (option 93 / vendor class): the hook the serve
+	// wiring uses to persist firmware observations into the machine record
+	// (docs/08-data-model.md machines). Called inline on the DHCP read path
+	// — keep it fast and non-blocking. nil keeps the responder
+	// observation-free.
+	OnObserve func(mac string, arch Arch)
 	// DHCP, when set, turns the responder into a full DHCP server for PXE
 	// clients (option 60) on DHCP-less provisioning L2s — a boot ROM needs
 	// an IP lease before it will fetch anything. nil keeps the pure proxy

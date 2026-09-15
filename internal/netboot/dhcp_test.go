@@ -110,7 +110,8 @@ func TestArchDecoding(t *testing.T) {
 		{"bios", u16opt(0), ArchBIOS, true},
 		{"ia32", u16opt(6), ArchIA32, true},
 		{"x64", u16opt(7), ArchX64, true},
-		{"arm64", u16opt(9), ArchARM64, true},
+		{"x64 via code 9 (EFI x86-64)", u16opt(9), ArchX64, true},
+		{"arm64", u16opt(11), ArchARM64, true},
 		{"first recognized wins", append(u16opt(0), u16opt(9)...), ArchBIOS, true},
 		{"unknown code", u16opt(99), "", false},
 		{"empty", nil, "", false},
@@ -126,7 +127,8 @@ func TestArchDecoding(t *testing.T) {
 	for class, want := range map[string]Arch{
 		"PXEClient:Arch:00000:UNDI:002001": ArchBIOS,
 		"PXEClient:Arch:00007:UNDI:003016": ArchX64,
-		"PXEClient:Arch:00009:UNDI":        ArchARM64,
+		"PXEClient:Arch:00009:UNDI":        ArchX64,
+		"PXEClient:Arch:0000B:UNDI":        ArchARM64,
 	} {
 		a, ok := archFromVendorClass(class)
 		if !ok || a != want {
@@ -292,6 +294,35 @@ func TestHandleSilence(t *testing.T) {
 		t.Error("unknown architecture must not be answered")
 	}
 	_ = req
+}
+
+// TestReplyObservesArch checks the OnObserve hook: one sighting per
+// PXE client with a resolvable architecture, none for plain DHCP clients
+// or unresolvable ones (docs/08-data-model.md, machines.pxe_firmware).
+func TestReplyObservesArch(t *testing.T) {
+	var seen []string
+	s := testServer(t, Options{
+		NextServer: []byte{192, 168, 77, 1},
+		BaseURL:    "http://192.168.77.1:8080",
+		OnObserve:  func(mac string, arch Arch) { seen = append(seen, mac+"="+string(arch)) },
+	})
+	var mac [6]byte
+	copy(mac[:], []byte{0x52, 0x54, 0x00, 0x12, 0x34, 0x56})
+
+	s.handle(discover(1, mac,
+		option{optVendorClass, []byte("PXEClient:Arch:00007:UNDI")},
+		option{optArch, u16opt(7)}), 67, testSrc)
+	s.handle(discover(2, mac,
+		option{optVendorClass, []byte("PXEClient:Arch:0000B:UNDI")},
+		option{optArch, u16opt(11)}), 67, testSrc)
+	s.handle(discover(3, mac), 67, testSrc) // plain DHCP: no arch, no sighting
+	s.handle(discover(4, mac,
+		option{optVendorClass, []byte("PXEClient:Arch:00099:UNDI")},
+		option{optArch, u16opt(99)}), 67, testSrc) // unresolvable
+
+	if len(seen) != 2 || seen[0] != "52:54:00:12:34:56=uefi-x64" || seen[1] != "52:54:00:12:34:56=uefi-arm64" {
+		t.Errorf("observations = %v, want uefi-x64 + uefi-arm64 sightings", seen)
+	}
 }
 
 // testServer builds a Server with the NBP filesystem present so reply

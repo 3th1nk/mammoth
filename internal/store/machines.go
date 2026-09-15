@@ -371,3 +371,17 @@ func (r *MachineRepo) ObservePXE(ctx context.Context, mac, firmware string) (boo
 	n, err := res.RowsAffected()
 	return n > 0, err
 }
+
+// SetPXEObservation seeds the PXE observation columns directly, by machine
+// id — the claim path (docs/09-roadmap.md): a freshly registered machine
+// has no hardware view yet, so the pending sighting's facts are attached
+// explicitly. NULL arguments leave the existing value untouched.
+func (r *MachineRepo) SetPXEObservation(ctx context.Context, id string, firmware *string, seen *time.Time) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE machines
+		SET pxe_firmware = COALESCE($2, pxe_firmware),
+		    pxe_last_seen_at = COALESCE($3, pxe_last_seen_at),
+		    updated_at = now()
+		WHERE id = $1`, id, firmware, seen)
+	return err
+}

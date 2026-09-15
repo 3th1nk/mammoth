@@ -124,12 +124,13 @@
 > 2026-09 确认执行顺序;v1.0 tag 延后至 PXE 增强 + BiosSetter 完成后。
 
 1. **PXE 增强**:UefiHttp、ubuntu/debian PXE 化、外部 DHCP+TFTP 逃生门
-2. **零注册入门与设备档案**:✅ 主体已交付(2026-09-15)——option 93 固件
+2. **零注册入门与设备档案**:✅ 主体已交付(2026-09-15/16)——option 93 固件
    观测入机器档案(machines.pxe_firmware/pxe_last_seen_at,b3f75ee)+ 未知
    MAC 零注册入门(enroll 共享探针树 → pending_machines 台账,含
-   `GET /api/v1/pending-machines` 与 `POST /netboot/enroll/{token}`);
-   剩余:boot 策略门禁(Secure Boot 任务误派 BIOS 机器在提交期拒绝)与
-   claim(待认领机器升格为注册机器,带 BMC 凭证采集);
+   `GET /api/v1/pending-machines` 与 `POST /netboot/enroll/{token}`)+
+   claim(待认领升格注册:`POST /pending-machines/{mac}/claim`,观测迁入
+   机器、/sys 报告迁为首份 layout 快照,台账消费);
+   剩余:boot 策略门禁(Secure Boot 任务误派 BIOS 机器在提交期拒绝);
 3. **BMC 能力接口**:BiosSetter(根治 BIOS 前置)→ FirmwareInventory(固件
    基线核对)→ NIST 800-88 擦盘合规(见 related-work);高危动作引入
    **两段式确认契约**(请求显式确认标志 + 服务端二次校验),做成 API 策略

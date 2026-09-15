@@ -672,6 +672,132 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
 
+  /netboot/enroll/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+          maxLength: 128
+      - name: mac
+        in: query
+        required: true
+        description: >-
+          MAC of the NIC the client booted from (the enrollment script passes
+          it to the probe via kernel args); the report is keyed by it.
+        schema:
+          type: string
+          pattern: '^([0-9A-Fa-f]{2}[:.-]?){5}[0-9A-Fa-f]{2}$'
+    post:
+      operationId: reportEnrollment
+      tags: [netboot]
+      security: []
+      summary: Submit zero-registration enrollment findings
+      description: |
+        Machine-facing endpoint for the enrollment probe (docs/09-roadmap.md,
+        zero-registration entry): an unknown MAC was offered the shared
+        enrollment payload, scanned /sys and reports here. The configured
+        enrollment token in the path is the credential (a mismatching token
+        is indistinguishable from an unknown one); the report lands in
+        pending_machines keyed by the query MAC.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProbeReport'
+      responses:
+        '204':
+          description: Recorded
+        '404':
+          description: Unknown enrollment token
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /netboot/enroll-file/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        description: >-
+          Bare file name of the shared enrollment boot tree (kernel,
+          initramfs, apkovl overlay, modloop); no path separators.
+        schema:
+          type: string
+          maxLength: 128
+    get:
+      operationId: fetchNetbootEnrollFile
+      tags: [netboot]
+      security: []
+      summary: Fetch a shared enrollment boot tree file
+      description: |
+        Machine-facing endpoint serving the shared enrollment payload (docs/
+        09-roadmap.md, zero-registration entry): one boot tree for every
+        unknown MAC, built once at startup when MAMMOTH_PXE_ENROLL is on.
+        The tree carries the enrollment token in its overlay — the same
+        provisioning-L2 trust model as the per-task boot trees. 404 when
+        enrollment is disabled or the name is not in the fixed allowlist.
+      responses:
+        '200':
+          description: Boot artifact content
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Enrollment disabled or unknown file
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /api/v1/pending-machines:
+    get:
+      operationId: listPendingMachines
+      tags: [machines]
+      summary: List zero-registration PXE sightings
+      description: |
+        Machines that announced themselves over PXE but are not registered
+        yet (docs/09-roadmap.md, zero-registration entry): firmware
+        observations arrive from the PXE responder (DHCP option 93), the
+        hardware report from the enrollment probe when it has booted.
+        Promotion to a registered machine (claim) is a follow-up operation.
+      responses:
+        '200':
+          description: Sightings ordered by first sight
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingMachineList'
+
+  /api/v1/pending-machines/{mac}:
+    parameters:
+      - name: mac
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^([0-9A-Fa-f]{2}[:.-]?){5}[0-9A-Fa-f]{2}$'
+    get:
+      operationId: getPendingMachine
+      tags: [machines]
+      summary: One zero-registration sighting by MAC
+      responses:
+        '200':
+          description: The sighting
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingMachine'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /api/v1/jobs/{id}/events:
     parameters:
       - $ref: '#/components/parameters/jobId'
@@ -1299,6 +1425,43 @@ components:
         next_cursor:
           type: string
           nullable: true
+
+    # ── pending machines (zero-registration sightings) ────────────────────
+    PendingMachine:
+      type: object
+      description: |
+        A machine that announced itself over PXE but is not registered yet
+        (docs/09-roadmap.md, zero-registration entry). firmware comes from
+        the PXE responder (DHCP option 93); report from the enrollment
+        probe's /sys scan when it has booted. Not a machine resource —
+        promotion (claim) is a follow-up operation.
+      required: [mac, first_seen_at, last_seen_at]
+      properties:
+        mac:
+          type: string
+          description: Normalized lowercase colon form of the booting NIC.
+        firmware:
+          type: string
+          nullable: true
+          description: Firmware architecture last announced (option 93 label).
+        report:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: The enrollment probe's /sys scan, persisted verbatim.
+        first_seen_at:
+          $ref: '#/components/schemas/Timestamp'
+        last_seen_at:
+          $ref: '#/components/schemas/Timestamp'
+
+    PendingMachineList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PendingMachine'
 
     # ── layout snapshot ────────────────────────────────────────────────────
     Layout:

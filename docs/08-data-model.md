@@ -45,11 +45,27 @@ jobs 1 ──── n tasks 1 ──── n task_stages
 
 索引:`uk(machines.bmc_address)`;`gin(machines.labels)`。
 
-> **规划(下一阶段,见 roadmap):PXE 观测字段**——最近一次 PXE 引导观测到的
-> 固件类型(DHCP option 93:BIOS / UEFI x64 / ARM64)、客户端 IP 与时间,
-> 以带内观测列追加。刻意保持**观测而非身份键**(IP 易变不作关联——身份锚
-> 仍是 BMC 地址,网络面锚是 NIC MAC);用途:boot 策略门禁(提交期拒绝
-> 固件与引导链不匹配的任务,如 Secure Boot 派给 BIOS 机器)与排障输入。
+**PXE 观测字段(已交付,2026-09-15,迁移 00006)**:`pxe_firmware text` /
+`pxe_last_seen_at timestamptz`——responder 对已注册机器的 option 93 观测
+(`MachineRepo.ObservePXE`,按 `hardware->'nics'` 的 MAC 归一化匹配)。
+刻意保持**观测而非身份键**(IP 易变不作关联——身份锚仍是 BMC 地址,网络面
+锚是 NIC MAC);boot 策略门禁(Secure Boot 任务误派 BIOS 机器提交期拒绝)
+为后续工作。
+
+### pending_machines
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| mac | text PK | 归一化小写冒号形;待认领机器的自然键 |
+| firmware | text,nullable | responder 最近一次观测的 option 93 标签 |
+| report | jsonb,nullable | enroll 探针的 /sys 扫描,原样落库 |
+| first_seen_at / last_seen_at | timestamptz | 首见钉死,后续观测只刷 last_seen |
+
+零注册入门的台账(迁移 00007,docs/09-roadmap.md):两个供源汇合同一行——
+responder 对未知 MAC 的 option 93 观测(`TouchByMAC`,只需 PXE 一次即留痕)
+与 enroll 探针的 /sys 报告(`SaveReport`)。刻意**不是 machines 行**:
+待认领机器没有 BMC 凭证,而 machines 以 `bmc_credential_id NOT NULL` 锚定;
+claim(升格注册)是后续操作。
 
 ### layout_snapshots
 

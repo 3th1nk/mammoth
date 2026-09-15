@@ -90,6 +90,15 @@ func bootReplyAddr(p *packet, src *net.UDPAddr) *net.UDPAddr {
 	if src != nil && src.Port != 0 {
 		port = src.Port
 	}
+	// Relayed request (giaddr set, RFC 2131 §4.1): the reply goes to the
+	// relay agent at giaddr:67, which forwards it onto the client's L2.
+	// Without this branch a relayed DISCOVER carrying the broadcast flag
+	// would be answered on mammoth's own L2 — the relay never sees it and
+	// the client strands. Single-L2 deployments have giaddr zero and never
+	// take this branch.
+	if g := net.IP(p.giaddr[:]).To4(); g != nil && !g.IsUnspecified() {
+		return &net.UDPAddr{IP: g, Port: 67}
+	}
 	if src == nil || src.IP == nil || src.IP.IsUnspecified() || p.flags&0x8000 != 0 {
 		return &net.UDPAddr{IP: net.IPv4bcast, Port: port}
 	}

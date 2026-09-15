@@ -10,7 +10,6 @@ import (
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/netboot"
 	"github.com/3th1nk/mammoth/internal/obs"
-	"github.com/3th1nk/mammoth/internal/store"
 )
 
 // ── machine-facing netboot surface (docs/06-install-pipeline.md §3.3) ──────
@@ -34,6 +33,17 @@ func (s *Server) GetNetbootScript(ctx context.Context, request gen.GetNetbootScr
 		return nil, err
 	}
 	if e == nil {
+		// Zero-registration entry (docs/09-roadmap.md): when enrollment is
+		// on, an unknown MAC is offered the shared probe payload and reports
+		// itself into pending_machines; otherwise fall through to disk.
+		if s.Enroll != nil {
+			// pending resource dimension — the MAC is not a machine id yet.
+			s.Events.Append(ctx, "pending", mac, "pending.enroll_served", map[string]any{
+				"mac": mac,
+			})
+			obs.FromContext(ctx).InfoContext(ctx, "enroll script served", "mac", mac)
+			return gen.GetNetbootScript200TextResponse(netboot.RenderEnrollScript(s.Enroll.Tree, s.ExternalURL, mac)), nil
+		}
 		return gen.GetNetbootScript200TextResponse(netboot.NoEntryScript(mac)), nil
 	}
 	s.Events.Append(ctx, "task", e.TaskID, "task.netboot_script_served", map[string]any{
@@ -84,8 +94,12 @@ func (s *Server) FetchNetbootFile(ctx context.Context, request gen.FetchNetbootF
 // entryGrants resolves a requested file to its on-disk path relative to the
 // boot tree: flat allowlisted names map directly; "dir:<name>" extra grants
 // map anything under that subtree. ok=false for anything ungranted or that
-// tries to escape (.., absolute, separators above the granted depth).
-func entryGrants(e *store.NetbootEntry, name string) (string, bool) {
+// tries to escape (.., absolute, separators above the granted depth). Both
+// the store row and the machine-face projection satisfy the interface.
+func entryGrants(e interface {
+	AllowlistedFiles() []string
+	GrantedSubtrees() []string
+}, name string) (string, bool) {
 	if name != "" && name != "." && name != ".." && filepath.Base(name) == name {
 		for _, n := range e.AllowlistedFiles() {
 			if n == name {

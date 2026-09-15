@@ -148,6 +148,16 @@ type Config struct {
 	// exists.
 	PXEDHCPPool   string
 	PXEDHCPRouter string // optional lease router; defaults to PXENextServer
+	// PXEEnroll turns on the zero-registration entry (MAMMOTH_PXE_ENROLL,
+	// docs/09-roadmap.md): unknown MACs are offered the shared enrollment
+	// payload — an alpine probe environment that scans /sys and reports
+	// into pending_machines. Needs the alpine NETBOOT tarball
+	// (MAMMOTH_PROBE_ALPINE_NETBOOT); usually enabled alongside PXEEnabled.
+	PXEEnroll bool
+	// PXEEnrollToken is the enrollment endpoint's credential
+	// (MAMMOTH_PXE_ENROLL_TOKEN) — required when PXEEnroll is on, a mismatch
+	// is indistinguishable from enrollment being off.
+	PXEEnrollToken string
 	// BootStrategyDefault is the carrier used when a job spec does not name
 	// one (MAMMOTH_BOOT_STRATEGY: virtual_media | pxe). pxe additionally
 	// requires PXEEnabled on the deployment.
@@ -261,6 +271,8 @@ func FromEnv() (Config, error) {
 	applyString(&c.PXENextServer, "MAMMOTH_PXE_NEXT_SERVER", &errs)
 	applyString(&c.PXEDHCPPool, "MAMMOTH_PXE_DHCP_POOL", &errs)
 	applyString(&c.PXEDHCPRouter, "MAMMOTH_PXE_DHCP_ROUTER", &errs)
+	applyBool(&c.PXEEnroll, "MAMMOTH_PXE_ENROLL", &errs)
+	applyString(&c.PXEEnrollToken, "MAMMOTH_PXE_ENROLL_TOKEN", &errs)
 	applyString(&c.BootStrategyDefault, "MAMMOTH_BOOT_STRATEGY", &errs)
 
 	if err := errors.Join(errs...); err != nil {
@@ -296,6 +308,13 @@ func FromEnv() (Config, error) {
 		}
 	default:
 		return c, fmt.Errorf("config: MAMMOTH_BOOT_STRATEGY %q is not one of virtual_media|pxe", c.BootStrategyDefault)
+	}
+	// The enrollment payload without a token would let anyone on the L2
+	// inject pending sightings; requiring it at configure time keeps the
+	// feature explicit (a missing token is indistinguishable from enrollment
+	// being off — and that ambiguity is worth avoiding).
+	if c.PXEEnroll && c.PXEEnrollToken == "" {
+		return c, fmt.Errorf("config: MAMMOTH_PXE_ENROLL requires MAMMOTH_PXE_ENROLL_TOKEN (the enrollment endpoint's credential)")
 	}
 	return c, nil
 }

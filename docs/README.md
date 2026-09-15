@@ -23,6 +23,7 @@ Mammoth 是一个自包含的裸金属服务器安装/重装引擎:以 `{带外�
 | [08-data-model.md](08-data-model.md) | 内部数据模型:表结构、索引、保留策略 |
 | [09-roadmap.md](09-roadmap.md) | 演进路线:里程碑划分、当前状态与各阶段验收标准 |
 | [10-tech-stack.md](10-tech-stack.md) | 技术栈选型、决策记录、依赖树与仓库布局约定 |
+| [11-pxe-walkthrough.md](11-pxe-walkthrough.md) | PXE 导览:两条入门路径对比、完整引导接力链、零注册入门、跨网段/Relay |
 | [operations.md](operations.md) | 运维手册:备份恢复、介质服务形态、部署注意 |
 | [security-baseline.md](security-baseline.md) | 安全基线:鉴权、凭证加密、介质生命周期、审查余项 |
 | [related-work.md](related-work.md) | 与 Ironic/Metal3/Tinkerbell/Pixiecore 的对照与借鉴 |

@@ -87,12 +87,15 @@ ssh <machine> — 执行只读命令集(单次连接,超时短):
   `MAMMOTH_PROBE_PREFIX` 补前缀,默认 /24),无 ssh.address 的机器退到
   全局 `MAMMOTH_PROBE_STATIC_CIDR`;上报目标跨网段时由
   `MAMMOTH_PROBE_GATEWAY` 提供默认路由(同网段可空);
-- PXE 形态保留两个演进方向:①"通用内存系统按架构常驻"——虚拟介质按任务
-  构建已满足当前盘查需求;②**零注册入门**——未知机器(未注册 MAC)经默认
-  探针脚本进入同一内存环境,probe-report 直接建"待认领机器"(规格 + 布局
-  一并沉淀),把探针从任务内动作提升为机器入门通道(见 roadmap 下一阶段,
-  与 06 §3.3 的 `exit` 回退并存、按配置门控)。无 PXE 环境时的另一兜底是
-  "发行版安装器本身"(见 §6 与
+- PXE 形态的两个方向:①"通用内存系统按架构常驻"——虚拟介质按任务构建
+  已满足当前盘查需求(仍为演进方向);②**零注册入门(已实现,
+  `MAMMOTH_PXE_ENROLL` 门控)**——未知机器(未注册 MAC)由 enroll 脚本引入
+  同一内存环境(共享树,启动时构建一次;`enroll_mac=` 内核参数传递引导
+  口 MAC),/sys 扫描上报 `POST /netboot/enroll/{token}`,落
+  `pending_machines` 台账(报告与 PXE 观测汇合同一行);claim(升格为注册
+  机器)是后续操作。更早一步:未开 enroll 时,responder 的 option 93 观测
+  也会把未知 MAC 记入台账(firmware + last_seen)。无 PXE 环境时的另一兜底
+  是"发行版安装器本身"(见 §6 与
   [06-install-pipeline.md](06-install-pipeline.md) 的 %pre 校验,
   二者共享校验逻辑)。
 

@@ -69,6 +69,9 @@ prepare_media 的后半段按**引导策略(boot strategy)**分派——"把安�
 
 ### 3.3 pxe 策略:网络引导(proxyDHCP + iPXE,M7)
 
+> 场景与全链路导览(两条入门路径对比、引导接力链、跨网段/Relay)见
+> [11-pxe-walkthrough.md](11-pxe-walkthrough.md);本节是机制与实现约定。
+
 借鉴 Pixiecore 的 proxyDHCP 模型:**mammoth 永不分配地址**(站点 DHCP 拥有
 地址权),只在旁路应答 PXE 客户端"下一级引导程序在哪"。链路与职责:
 
@@ -89,10 +92,13 @@ iPXE    ──HTTP GET /netboot/files/<token>/…──▶ kernel/initrd(+modloo
   固件从哪个口引导是固件的事,全注册;
 - **无条目回退**:脚本端点对未知 MAC 返回 200 + `exit` 脚本(绝不 404——
   404 会把 iPXE 留在自己的 shell;`exit` 回固件引导序自然落盘),顺带无害化
-  "安装后固件再次 PXE"的竞态。演进方向:未知 MAC 可选渲染**默认探针脚本**
-  ——引导进 ramdisk 探针环境自动上报规格与布局,注册为待认领机器
-  (零注册入门,见 docs/05-inventory.md §4 与 roadmap 下一阶段),与
-  `exit` 回退并存、按配置门控;
+  "安装后固件再次 PXE"的竞态。**零注册入门(已实现)**:`MAMMOTH_PXE_ENROLL`
+  开启时,未知 MAC 改渲染 **enroll 脚本**——引导进共享探针树
+  (`MediaDir/netboot/enroll`,启动时构建一次,`MAMMOTH_PROBE_ALPINE_NETBOOT`
+  为载体),`enroll_mac=<mac>` 走内核参数、共享 overlay 运行时读
+  /proc/cmdline 拼进上报 URL,`POST /netboot/enroll/{token}` 落
+  `pending_machines` 台账(见 docs/05-inventory.md §4 与
+  docs/08-data-model.md);
 - **kernel args 与 ISO 通路零差异**:`inst.ks=` 本就是绝对 HTTP URL、
   `inst.repo=nfs:` 本就是网络安装源、无静态网声明时 earlynet 自动 `ip=dhcp`
   ——RHEL 系是唯一零新增安装源工作的家族(矩阵见 §6);

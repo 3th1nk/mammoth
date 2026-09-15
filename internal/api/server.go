@@ -43,6 +43,14 @@ type Deps struct {
 	Netboot netboot.Resolver
 	// NetbootRepo is the direct registry access for the file endpoint.
 	NetbootRepo *store.NetbootRepo
+	// Pending feeds the zero-registration sightings surface (nil-safe: the
+	// endpoints degrade to empty/404).
+	Pending *store.PendingRepo
+	// Enroll carries the zero-registration enrollment surface (nil when
+	// MAMMOTH_PXE_ENROLL is off): the shared boot tree descriptor for the
+	// script branch and the file endpoint, and the token the report
+	// endpoint expects (a mismatch is indistinguishable from off).
+	Enroll *Enrollment
 	// MediaDir hosts the per-task netboot boot trees (MediaDir/netboot).
 	MediaDir string
 	// ExternalURL is the base machines reach this server on (script URLs).
@@ -59,6 +67,15 @@ type Deps struct {
 // Server implements gen.StrictServerInterface.
 type Server struct {
 	Deps
+}
+
+// Enrollment is the zero-registration surface (docs/09-roadmap.md): the
+// shared boot tree descriptor (Token fixed "enroll"; Extra carries the file
+// grants the enroll-file endpoint serves) plus the token the report
+// endpoint expects.
+type Enrollment struct {
+	Token string
+	Tree  *netboot.Entry
 }
 
 // New builds the gin engine: observability middleware, /metrics, then the

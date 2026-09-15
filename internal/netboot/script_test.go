@@ -46,10 +46,42 @@ func TestNoEntryScriptExits(t *testing.T) {
 	}
 }
 
+func TestRenderEnrollScript(t *testing.T) {
+	e := &Entry{Token: "enroll", Kind: "probe", Kernel: "vmlinuz", Initrd: "initrd.img",
+		KernelArgs: "modules=loop,squashfs ip=dhcp modloop=http://m:8080/netboot/enroll-file/modloop",
+		Extra:      map[string]string{"modloop": "modloop"}}
+	s := RenderEnrollScript(e, "http://10.0.0.1:8080", "52:54:00:12:34:56")
+	if !strings.HasPrefix(s, "#!ipxe") {
+		t.Fatalf("not an iPXE script: %q", s)
+	}
+	// The enroll MAC rides the kernel line — the shared overlay reads it off
+	// /proc/cmdline and keys the report with it.
+	if !strings.Contains(s, "enroll_mac=52:54:00:12:34:56") {
+		t.Errorf("script missing enroll_mac: %q", s)
+	}
+	// Files come from the shared tree endpoint, not a per-task token dir.
+	if !strings.Contains(s, "/netboot/enroll-file/vmlinuz") ||
+		!strings.Contains(s, "/netboot/enroll-file/initrd.img") {
+		t.Errorf("script must fetch from the enroll tree: %q", s)
+	}
+	if strings.Contains(s, "\n\n") || strings.Count(s, "\n") > 6 {
+		t.Errorf("script shape drifted: %q", s)
+	}
+}
+
+func TestGrantedSubtrees(t *testing.T) {
+	e := &Entry{Kernel: "vmlinuz", Initrd: "initrd", Extra: map[string]string{
+		"modloop": "modloop", "apks": "dir:apks", "empty": "dir:",
+	}}
+	if got := e.GrantedSubtrees(); len(got) != 1 || got[0] != "apks" {
+		t.Errorf("granted subtrees = %v, want [apks]", got)
+	}
+}
+
 func TestFileNamesAllowlist(t *testing.T) {
 	e := &Entry{Kernel: "vmlinuz", Initrd: "initrd", Extra: map[string]string{"modloop": "modloop-lts"}}
 	names := map[string]bool{}
-	for _, n := range e.FileNames() {
+	for _, n := range e.AllowlistedFiles() {
 		names[n] = true
 	}
 	for _, want := range []string{"vmlinuz", "initrd", "modloop-lts"} {

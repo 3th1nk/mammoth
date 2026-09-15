@@ -296,6 +296,43 @@ func TestHandleSilence(t *testing.T) {
 	_ = req
 }
 
+// TestReplyToRelay pins the cross-L2 answer path (RFC 2131 §4.1): a
+// relayed request arrives single-cast from the relay with giaddr set — the
+// reply must go back to giaddr:67 for the relay to forward, even when the
+// original client set the broadcast flag. Without the giaddr branch the
+// reply went to mammoth's own L2 and the relayed client stranded.
+func TestReplyToRelay(t *testing.T) {
+	s := testServer(t, Options{
+		NextServer: []byte{192, 168, 77, 1},
+		BaseURL:    "http://192.168.77.1:8080",
+	})
+	var mac [6]byte
+	copy(mac[:], []byte{0x52, 0x54, 0x00, 0xaa, 0xbb, 0xcc})
+
+	req := discover(1, mac, option{optVendorClass, []byte("PXEClient:Arch:00007:UNDI")})
+	// Relay shape: the request lands single-cast from the relay's :67 with
+	// giaddr = the relay's client-facing interface, broadcast flag kept.
+	setBroadcastFlag(req)
+	relayIP := net.IPv4(10, 20, 30, 4).To4()
+	copy(req[24:28], relayIP) // BOOTP giaddr field
+
+	r, to := s.handle(req, 67, &net.UDPAddr{IP: relayIP, Port: 67})
+	if r == nil {
+		t.Fatal("relayed PXE DISCOVER must be answered")
+	}
+	if to == nil || !to.IP.Equal(relayIP) || to.Port != 67 {
+		t.Fatalf("reply addr = %v, want %s:67 (the relay)", to, relayIP)
+	}
+	// giaddr is echoed verbatim (RFC 2131 §4.3.1).
+	p, err := parse(r)
+	if err != nil {
+		t.Fatalf("reply does not parse: %v", err)
+	}
+	if net.IP(p.giaddr[:]).To4().String() != relayIP.String() {
+		t.Errorf("giaddr = %v, want %v", net.IP(p.giaddr[:]), relayIP)
+	}
+}
+
 // TestReplyObservesArch checks the OnObserve hook: one sighting per
 // PXE client with a resolvable architecture, none for plain DHCP clients
 // or unresolvable ones (docs/08-data-model.md, machines.pxe_firmware).

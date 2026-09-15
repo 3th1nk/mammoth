@@ -112,7 +112,9 @@
   `MAMMOTH_PXE_NEXT_SERVER`、`MAMMOTH_BOOT_STRATEGY`;
 - 余项(不阻塞):UefiHttp(Redfish HTTP Boot,厂商 OEM URI 各异)、
   ubuntu casper/debian d-i 的 PXE 形态(需新的安装源策略)、外部
-  DHCP+TFTP 逃生门、arm64 PXE 引导链(ipxe-aa64.efi / shim+grubnet aa64,
+  DHCP+TFTP 逃生门、**真机 relay 回归**(跨 VLAN:应答回 giaddr:67 已实现
+  并有单测,带 relay 的真机/qemu 拓扑未跑,见 11-pxe-walkthrough §4)、
+  arm64 PXE 引导链(ipxe-aa64.efi / shim+grubnet aa64,
   opt 93 = 0x000B;无真机,后续——信创混合机群 x86_64/ARM64 混部的刚需,
   与 kylin/uniontechos 矩阵绑定排期;option 93 固件观测入档案可先行,
   见下一阶段 2)。
@@ -122,13 +124,12 @@
 > 2026-09 确认执行顺序;v1.0 tag 延后至 PXE 增强 + BiosSetter 完成后。
 
 1. **PXE 增强**:UefiHttp、ubuntu/debian PXE 化、外部 DHCP+TFTP 逃生门
-2. **零注册入门与设备档案**:未知 MAC 的默认引导从"回退 `exit`"演进为可选
-   引导进 ramdisk 探针环境——自动上报规格与布局,注册为**待认领机器**
-   (探针数据随机器沉淀,无 BMC 凭证也能入门);DHCP option 93 固件观测
-   (BIOS / UEFI x64 / ARM64)与最近一次 PXE 观测(客户端 IP/时间)作为
-   带内**观测字段**入机器档案(刻意不作身份键——IP 易变,身份锚仍是 BMC
-   地址、网络面锚是 NIC MAC),用于 boot 策略门禁(Secure Boot 任务误派
-   BIOS 机器在提交期拒绝)与排障输入;
+2. **零注册入门与设备档案**:✅ 主体已交付(2026-09-15)——option 93 固件
+   观测入机器档案(machines.pxe_firmware/pxe_last_seen_at,b3f75ee)+ 未知
+   MAC 零注册入门(enroll 共享探针树 → pending_machines 台账,含
+   `GET /api/v1/pending-machines` 与 `POST /netboot/enroll/{token}`);
+   剩余:boot 策略门禁(Secure Boot 任务误派 BIOS 机器在提交期拒绝)与
+   claim(待认领机器升格为注册机器,带 BMC 凭证采集);
 3. **BMC 能力接口**:BiosSetter(根治 BIOS 前置)→ FirmwareInventory(固件
    基线核对)→ NIST 800-88 擦盘合规(见 related-work);高危动作引入
    **两段式确认契约**(请求显式确认标志 + 服务端二次校验),做成 API 策略

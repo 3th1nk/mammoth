@@ -19,6 +19,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/bmc/fake"
 	ipmidrv "github.com/3th1nk/mammoth/internal/bmc/ipmi"
 	"github.com/3th1nk/mammoth/internal/bmc/redfish"
+	"github.com/3th1nk/mammoth/internal/builder"
 	"github.com/3th1nk/mammoth/internal/config"
 	"github.com/3th1nk/mammoth/internal/inventory/inbandssh"
 	"github.com/3th1nk/mammoth/internal/mediarelay"
@@ -99,6 +100,7 @@ func serve(args []string) error {
 	webhookRepo := store.NewWebhookRepo(db)
 	logsRepo := store.NewTaskLogRepo(db)
 	netbootRepo := store.NewNetbootRepo(db)
+	pendingRepo := store.NewPendingRepo(db)
 
 	// Log dual-write (docs/02-architecture.md §5.2): from here on, every log
 	// line that carries task_id is also persisted for API retrieval; lines
@@ -275,7 +277,15 @@ func serve(args []string) error {
 				case hit:
 					logger.Debug("pxe observation recorded", "mac", mac, "arch", arch)
 				default:
-					logger.Debug("pxe sighting of unregistered mac", "mac", mac, "arch", arch)
+					// Unknown MAC: the sighting itself is the machine's first
+					// trace — pending_machines is the zero-registration ledger
+					// (docs/09-roadmap.md). Firmware accumulates even before
+					// the enrollment probe has ever booted.
+					if terr := pendingRepo.TouchByMAC(octx, mac, string(arch)); terr != nil {
+						logger.Warn("pending sighting persist failed", "mac", mac, "err", terr)
+					} else {
+						logger.Debug("pending sighting recorded", "mac", mac, "arch", arch)
+					}
 				}
 			},
 		})
@@ -287,6 +297,22 @@ func serve(args []string) error {
 				logger.Warn("netboot service stopped", "err", serr.Error())
 			}
 		}()
+	}
+
+	// Zero-registration enrollment (docs/09-roadmap.md): one shared alpine
+	// probe tree for every unknown MAC, built at startup when enabled.
+	// Building is synchronous and failures are fatal — a half-built tree
+	// would strand machines inside a probe they can never report from, and
+	// the feature is explicitly configured (same philosophy as the netboot
+	// bind above).
+	var enroll *api.Enrollment
+	if cfg.PXEEnroll && cfg.Mode.RunsNetboot() {
+		tree, terr := buildEnrollTree(ctx, &cfg)
+		if terr != nil {
+			return fmt.Errorf("netboot enroll: %w", terr)
+		}
+		enroll = &api.Enrollment{Token: cfg.PXEEnrollToken, Tree: tree}
+		logger.InfoContext(ctx, "enrollment tree built", "dir", filepath.Join(cfg.MediaDir, "netboot", "enroll"))
 	}
 
 	deps := api.Deps{
@@ -306,6 +332,8 @@ func serve(args []string) error {
 
 		Netboot:             nbResolver,
 		NetbootRepo:         netbootRepo,
+		Pending:             pendingRepo,
+		Enroll:              enroll,
 		MediaDir:            cfg.MediaDir,
 		ExternalURL:         strings.TrimSuffix(cfg.ExternalURL, "/"),
 		BootStrategyDefault: cfg.BootStrategyDefault,
@@ -423,4 +451,44 @@ func serve(args []string) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// buildEnrollTree assembles the shared zero-registration payload: the alpine
+// probe environment with its report URL pointed at the enrollment endpoint
+// (the per-MAC script adds enroll_mac=<mac> as a kernel arg; the shared
+// overlay reads it off /proc/cmdline at runtime). Same carrier rules as the
+// task probe — the NETBOOT tarball is required (network drivers), the
+// standard ISO supplies the apk repository when configured.
+func buildEnrollTree(ctx context.Context, cfg *config.Config) (*netboot.Entry, error) {
+	if cfg.ProbeAlpineNetboot == "" {
+		return nil, fmt.Errorf("MAMMOTH_PXE_ENROLL needs the alpine NETBOOT tarball (set MAMMOTH_PROBE_ALPINE_NETBOOT) — the standard-ISO initramfs usually lacks the machine room's NIC drivers")
+	}
+	carrier, err := builder.EnsureISO(ctx, cfg.ProbeAlpineNetboot, cfg.MediaWorkDir)
+	if err != nil {
+		return nil, fmt.Errorf("netboot tarball unavailable: %w", err)
+	}
+	carrierISO := ""
+	if cfg.ProbeAlpineISO != "" {
+		carrierISO, err = builder.EnsureISO(ctx, cfg.ProbeAlpineISO, cfg.MediaWorkDir)
+		if err != nil {
+			return nil, fmt.Errorf("carrier ISO unavailable: %w", err)
+		}
+	}
+	base := strings.TrimSuffix(cfg.ExternalURL, "/")
+	tree, err := builder.BuildProbeNetboot(ctx, builder.ProbeNetbootOptions{
+		TarballPath: carrier,
+		ApksISOPath: carrierISO,
+		DestDir:     filepath.Join(cfg.MediaDir, "netboot", "enroll"),
+		ReportURL:   base + "/netboot/enroll/" + cfg.PXEEnrollToken,
+		ModloopURL:  base + "/netboot/enroll-file/modloop",
+		ApksURL:     base + "/netboot/enroll-file/apks",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("boot tree build failed: %w", err)
+	}
+	return &netboot.Entry{
+		Token: "enroll", Kind: "probe",
+		Kernel: tree.Kernel, Initrd: tree.Initrd,
+		KernelArgs: tree.KernelArgs, Extra: tree.Extra,
+	}, nil
 }

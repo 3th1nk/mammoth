@@ -108,11 +108,16 @@ token 由部署方持有与备份,与数据库分域(同 `MAMMOTH_MASTER_KEY`);�
 `boot.strategy=pxe` 依赖机器面之外的一组网络服务(proxyDHCP / TFTP /
 iPXE 脚本),默认关闭。启用清单:
 
-1. **网络位置**:mammoth(netboot facet)须驻留目标机器的装机 L2——
-   proxyDHCP 靠广播工作。**同一 L2 只能有一个应答者**,与站点 DHCP 的共存
-   是"跨主机"共存(proxyDHCP 只应答 PXEClient,站点 DHCP 继续拥有地址
-   分配);**同机不可共存**:DHCP 服务的 UDP 67 是排他的,把 mammoth 与
-   站点 DHCP 放同一台机器会绑定失败(启用态下属 fatal,设计如此)。
+1. **网络位置**:mammoth(netboot facet)驻留目标机器的装机 L2 时零配置
+   ——proxyDHCP 靠广播工作,**同一 L2 只能有一个应答者**,与站点 DHCP 的
+   共存是"跨主机"共存(proxyDHCP 只应答 PXEClient,站点 DHCP 继续拥有
+   地址分配);**同机不可共存**:DHCP 服务的 UDP 67 是排他的,把 mammoth
+   与站点 DHCP 放同一台机器会绑定失败(启用态下属 fatal,设计如此)。
+   **跨网段(跨 VLAN)**:relay 的 ip helper 加一项指向 mammoth:67,
+   mammoth 按 RFC 2131 §4.1 将应答发回 giaddr:67 由 relay 转回(单 L2
+   不受影响);单播环节(NBP/脚本/kernel)路由可达即可。真机 relay 回归
+   未完成,见 [11-pxe-walkthrough.md](11-pxe-walkthrough.md) §4;当前最稳
+   拓扑是 mammoth 每个装机 VLAN 一条腿(服务监听全接口,天然多 L2)。
 2. **端口与权限**:UDP 67(proxyDHCP)、4011(PXE boot-server discovery)、
    69(TFTP)是特权端口——容器部署需 `network_mode: host`(或 macvlan)+
    `CAP_NET_BIND_SERVICE`;裸机部署可用 `setcap cap_net_bind_service=+ep`。
@@ -133,7 +138,14 @@ iPXE 脚本),默认关闭。启用清单:
      **有站点 DHCP 时勿开**,避免双 ACK。
 4. **next-server 声明**:`MAMMOTH_PXE_NEXT_SERVER`(mammoth 在装机 L2 的 IPv4);
    `MAMMOTH_EXTERNAL_URL` 的 host 是 IP 字面量时自动派生,否则必填。
-5. **固件前提**:UEFI x64 的 Secure Boot **已支持**(shim+grubnet 链,
+5. **零注册入门(可选)**:`MAMMOTH_PXE_ENROLL` + `MAMMOTH_PXE_ENROLL_TOKEN`
+   (必配,缺失启动即败)。开启后未知 MAC 会拿到共享 enroll 探针
+   (需 `MAMMOTH_PROBE_ALPINE_NETBOOT`;`MAMMOTH_PROBE_ALPINE_ISO` 可选,
+   提供 apk 仓),/sys 扫描落 `pending_machines` 台账——见
+   docs/05-inventory.md §4。威胁模型与任务引导树一致:token 在 overlay 与
+   脚本内核参数里,拿到装机 L2 的人可伪造 pending 条目(低危:只污染台账,
+   不触碰机器)。
+6. **固件前提**:UEFI x64 的 Secure Boot **已支持**(shim+grubnet 链,
    shimx64.efi → grubx64.efi,来源见 assets/pxe/PROVENANCE.md);arm64 仍须
    关闭 Secure Boot。目标机 BIOS/UEFI 的 PXE/网络引导需在固件中可用。
 6. **镜像形态**:distroless 主镜像已内嵌 iPXE 二进制(assets/pxe,来源与

@@ -193,6 +193,12 @@ func probeScript(reportURL, staticCIDR, staticGateway, kernel string) string {
 	return `#!/bin/sh
 # mammoth ramdisk probe — /sys scan + report + poweroff (docs/05-inventory.md §4)
 URL="` + reportURL + `"
+# Enrollment payload (zero-registration entry): the report is keyed by the
+# MAC the client booted from, which the per-MAC enroll script passes as a
+# kernel arg — the shared overlay cannot know it at build time. Task probes
+# have no enroll_mac on the command line and keep the URL untouched.
+ENROLL_MAC="$(sed -n 's/.*enroll_mac=\([^ ]*\).*/\1/p' /proc/cmdline)"
+[ -n "$ENROLL_MAC" ] && URL="$URL?mac=$ENROLL_MAC"
 STATIC_CIDR="` + staticCIDR + `"
 STATIC_GW="` + staticGateway + `"
 KERN="` + kernel + `"

@@ -27,7 +27,7 @@ type Entry struct {
 }
 
 // FileNames returns the allowlist of files servable for this entry.
-func (e *Entry) FileNames() []string {
+func (e *Entry) AllowlistedFiles() []string {
 	names := make([]string, 0, 2+len(e.Extra))
 	for _, n := range []string{e.Kernel, e.Initrd} {
 		if n != "" {
@@ -40,6 +40,18 @@ func (e *Entry) FileNames() []string {
 		}
 	}
 	return names
+}
+
+// GrantedSubtrees lists subtree grants: Extra values shaped "dir:<name>"
+// (e.g. the probe's apk repo) allow everything under that directory.
+func (e *Entry) GrantedSubtrees() []string {
+	var out []string
+	for _, n := range e.Extra {
+		if rest, ok := strings.CutPrefix(n, "dir:"); ok && rest != "" {
+			out = append(out, rest)
+		}
+	}
+	return out
 }
 
 // Resolver answers boot lookups by MAC (normalized lowercase colon form).
@@ -87,6 +99,25 @@ func RenderScript(e *Entry, baseURL string) string {
 func NoEntryScript(mac string) string {
 	return fmt.Sprintf("#!ipxe\n# mammoth: no pending boot entry for %s\n"+
 		"echo mammoth: no boot entry for this MAC\nexit\n", mac)
+}
+
+// RenderEnrollScript renders the zero-registration fallback (docs/
+// 09-roadmap.md): an unknown MAC is offered the shared enrollment payload —
+// an alpine probe environment that scans /sys and reports to the enrollment
+// endpoint keyed by the booting NIC's MAC (kernel arg; the shared overlay
+// cannot know it at build time). e is the shared tree descriptor built once
+// at startup (Token fixed "enroll"; Extra carries the file grants the
+// enroll-file endpoint serves).
+func RenderEnrollScript(e *Entry, baseURL, mac string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "#!ipxe\n")
+	fmt.Fprintf(&b, "# mammoth enroll entry mac=%s\n", mac)
+	fmt.Fprintf(&b, "kernel %s/netboot/enroll-file/%s %s enroll_mac=%s\n",
+		strings.TrimSuffix(baseURL, "/"), e.Kernel, sanitizeArgs(e.KernelArgs), mac)
+	fmt.Fprintf(&b, "initrd %s/netboot/enroll-file/%s\n",
+		strings.TrimSuffix(baseURL, "/"), e.Initrd)
+	b.WriteString("boot\n")
+	return b.String()
 }
 
 // sanitizeArgs collapses whitespace runs so the args stay on the kernel

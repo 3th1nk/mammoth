@@ -270,6 +270,13 @@ func (s *Server) createJobRecord(ctx context.Context, in createJobRecord) (*gen.
 					Message:   verr.Error(),
 					Retryable: false,
 				}
+			} else if verr := s.validateFirmwareMatch(ctx, mid, effective); verr != nil {
+				init.State = "failed"
+				init.Error = &store.ErrorInfo{
+					Code:      appErrCode(verr),
+					Message:   verr.Error(),
+					Retryable: false,
+				}
 			} else if verr := s.validateSnapshotBinding(ctx, mid, effective); verr != nil {
 				init.State = "failed"
 				init.Error = &store.ErrorInfo{
@@ -777,6 +784,43 @@ func (s *Server) validateBootStrategy(specRaw json.RawMessage) error {
 			spec.Image.Distro, pxe)
 	}
 	return nil
+}
+
+// validateFirmwareMatch gates the distro media's firmware range against the
+// machine's observed PXE firmware (docs/09-roadmap.md, boot 策略门禁): a
+// UEFI-only media (rocky10) handed to a BIOS-firmware machine fails at boot
+// — and only at boot, possibly a batch sibling already wiped — so the
+// submission rejects it instead. No observation → no gate: the check never
+// blocks a machine mammoth has not yet seen on the wire, and the firmware
+// fact is a point-in-time observation (docs/08-data-model.md
+// machines.pxe_firmware), not a promise about the BMC boot mode right now.
+func (s *Server) validateFirmwareMatch(ctx context.Context, machineID string, specRaw json.RawMessage) error {
+	var spec struct {
+		Image struct {
+			Distro string `json:"distro"`
+		} `json:"image"`
+	}
+	if err := json.Unmarshal(specRaw, &spec); err != nil {
+		return nil // structural errors surface via the schema validation path
+	}
+	driver, err := s.Render.For(spec.Image.Distro)
+	if err != nil {
+		return nil // unknown distro surfaces at execution with SCHEMA_UNKNOWN_DISTRO
+	}
+	sup := render.FirmwareSupportOf(driver)
+	if sup == render.FirmwareAll {
+		return nil // the common case — no machine lookup at all
+	}
+	m, err := s.Machines.Get(ctx, machineID)
+	if err != nil {
+		return nil // machine state surfaces elsewhere; never double-fail here
+	}
+	if m.PXEFirmware == nil || sup.Allows(*m.PXEFirmware) {
+		return nil
+	}
+	return verr("SCHEMA_FIRMWARE_MISMATCH",
+		"machine %s was last seen announcing %q firmware, but distro %s media is %q — it cannot boot this media",
+		machineID, *m.PXEFirmware, spec.Image.Distro, sup)
 }
 
 // validateDistroKeepSupport gates keep semantics by the distro driver's

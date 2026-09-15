@@ -246,7 +246,8 @@ func (r *MachineRepo) LatestLayoutBySource(ctx context.Context, machineID, sourc
 const machineSelect = `
 	SELECT id, labels, bmc_address, bmc_protocol, bmc_credential_id, ssh_credential_id, ssh_address,
 	       vendor, model, serial_number, firmware_version, hardware,
-	       power_state, state, last_error, created_at, updated_at
+	       power_state, state, last_error, created_at, updated_at,
+	       pxe_firmware, pxe_last_seen_at
 	FROM machines`
 
 type rowScanner interface{ Scan(dest ...any) error }
@@ -257,10 +258,13 @@ func scanMachine(row rowScanner) (*Machine, error) {
 	var sshCred, vendor, model, serial, firmware sql.NullString
 	var hardware, lastError []byte
 	var sshAddr sql.NullString
+	var pxeFirmware sql.NullString
+	var pxeSeen sql.NullTime
 	err := row.Scan(
 		&m.ID, &labels, &m.BMCAddress, &m.BMCProtocol, &m.BMCCredentialID, &sshCred, &sshAddr,
 		&vendor, &model, &serial, &firmware, &hardware,
 		&m.PowerState, &m.State, &lastError, &m.CreatedAt, &m.UpdatedAt,
+		&pxeFirmware, &pxeSeen,
 	)
 	if err == nil {
 		m.SSHAddress = sshAddr.String
@@ -281,6 +285,14 @@ func scanMachine(row rowScanner) (*Machine, error) {
 		return &v
 	}
 	m.Vendor, m.Model, m.SerialNumber, m.FirmwareVersion = ptr(vendor), ptr(model), ptr(serial), ptr(firmware)
+	if pxeFirmware.Valid {
+		v := pxeFirmware.String
+		m.PXEFirmware = &v
+	}
+	if pxeSeen.Valid {
+		t := pxeSeen.Time
+		m.PXELastSeenAt = &t
+	}
 	if len(hardware) > 0 {
 		m.Hardware = json.RawMessage(hardware)
 	}

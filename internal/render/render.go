@@ -9,6 +9,7 @@ package render
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/3th1nk/mammoth/internal/bmc"
@@ -228,6 +229,54 @@ func PXESupport(d OSDriver) SupportLevel {
 		return p.PXESupport()
 	}
 	return SupportNone
+}
+
+// FirmwareSupport declares which client firmware a distro's install media
+// can boot (docs/08-data-model.md machines.pxe_firmware, docs/09-roadmap.md
+// boot 策略门禁).
+type FirmwareSupport string
+
+const (
+	// FirmwareAll — BIOS + UEFI. The default: most distro media carries
+	// both boot paths.
+	FirmwareAll FirmwareSupport = "all"
+	// FirmwareUEFIOnly — the media dropped its BIOS boot images upstream
+	// (rocky10): a BIOS-firmware machine can neither PXE nor virtual-media
+	// boot it, so the mismatch must be caught at submission.
+	FirmwareUEFIOnly FirmwareSupport = "uefi_only"
+	// FirmwareBIOSOnly — reserved; no driver member today.
+	FirmwareBIOSOnly FirmwareSupport = "bios_only"
+)
+
+// FirmwareDriver is the optional capability declaring the distro media's
+// firmware range. Drivers that do not implement it are treated as
+// FirmwareAll — third-party drivers keep compiling unchanged (same pattern
+// as PXEDriver).
+type FirmwareDriver interface {
+	FirmwareSupport() FirmwareSupport
+}
+
+// FirmwareSupportOf reports a driver's media firmware range.
+func FirmwareSupportOf(d OSDriver) FirmwareSupport {
+	if f, ok := d.(FirmwareDriver); ok {
+		return f.FirmwareSupport()
+	}
+	return FirmwareAll
+}
+
+// Allows reports whether a client firmware can boot this media. fw is the
+// observed option-93 label ("bios", "ia32", "uefi-x64", "uefi-arm64");
+// ia32 counts as legacy BIOS-class (no UEFI).
+func (f FirmwareSupport) Allows(fw string) bool {
+	uefi := strings.HasPrefix(fw, "uefi")
+	switch f {
+	case FirmwareUEFIOnly:
+		return uefi
+	case FirmwareBIOSOnly:
+		return !uefi
+	default:
+		return true
+	}
 }
 
 // Registry routes specs to drivers by distro.

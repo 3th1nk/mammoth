@@ -253,3 +253,72 @@ func toStrSlice(v any) []string {
 	}
 	return out
 }
+
+// The PXE variant: casper mounts the live root over NFS from the unpacked
+// tree (no whole-ISO-into-RAM), and the nocloud seed rides HTTP. Static-net
+// declarations are rejected — netplan cannot apply before the NFS root is up.
+func TestRenderNetbootCasperArgs(t *testing.T) {
+	d := New("ubuntu22")
+	base := render.InstallInputs{
+		TaskToken:     "toku",
+		MachineID:     "mch_u",
+		Hostname:      "node-u1",
+		ImageSource:   "https://mirror.example/ubuntu-22.04.5-live-server-amd64.iso",
+		RootPassword:  "uRoot-pw",
+		BootDrive:     "sda",
+		AnswerBaseURL: "http://10.0.0.1:8080/render/toku",
+		CompleteURL:   "http://10.0.0.1:8080/render/toku/complete",
+		Disks: []render.ResolvedDisk{
+			{Device: "sda", Wipe: true, Partitions: []render.ResolvedPartition{
+				{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+				{Mount: "/", FS: "ext4", SizeMB: 20480},
+			}},
+		},
+	}
+	in := base
+	in.Netboot = &render.NetbootInputs{
+		PoolURL:    "http://10.0.0.1:8080/netboot/files/toku",
+		NFSRootURL: "10.0.0.1:/export/netboot/toku/iso",
+	}
+	answers, boot, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if boot.NetbootKernelArgs == "" ||
+		!strings.Contains(boot.NetbootKernelArgs, "ds=nocloud-net;s=http://10.0.0.1:8080/render/toku/") ||
+		!strings.Contains(boot.NetbootKernelArgs, "boot=casper netboot=nfs nfsroot=10.0.0.1:/export/netboot/toku/iso") {
+		t.Errorf("netboot args missing casper/nfsroot/seed: %q", boot.NetbootKernelArgs)
+	}
+	// The seed files stay identical to the ISO path (ds= is an absolute URL).
+	var found bool
+	for _, a := range answers {
+		if a.Name == "user-data" && strings.Contains(a.Content, "autoinstall") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("user-data missing from netboot render: %+v", answers)
+	}
+
+	// Static network + PXE is rejected with a carrier pointer.
+	static := base
+	static.Netboot = &render.NetbootInputs{NFSRootURL: "10.0.0.1:/export/netboot/toku/iso"}
+	static.Network = []render.NetworkEntry{{
+		Match:     &render.NetMatch{MAC: "aa:bb:cc:dd:ee:02"},
+		Addresses: []string{"172.16.1.12/24"},
+	}}
+	if _, _, err := d.RenderAnswers(static, render.MachineView{}); err == nil {
+		t.Error("static-net PXE must be rejected")
+	}
+}
+
+// The netboot carrier declarations: casper from the ISO + NFS tree source.
+func TestNetbootDeclarationsUbuntu(t *testing.T) {
+	d := New("ubuntu22")
+	if c, p := render.NetbootInstallOf(d); c != render.NetbootCarrierISO || p != render.NetbootPoolNFS {
+		t.Errorf("carrier/pool = %q/%q, want iso/nfs_tree", c, p)
+	}
+	if d.PXESupport() != render.SupportFull {
+		t.Errorf("ubuntu22 PXE support must be full")
+	}
+}

@@ -302,3 +302,61 @@ func TestMultiDistro(t *testing.T) {
 		}
 	}
 }
+
+// The PXE variant: a separate seed with the install source pointed at the
+// HTTP pool unpacked under the boot tree — no cdrom mount, no upstream
+// mirror; netboot args fetch the seed over preseed/url.
+func TestRenderNetbootVariant(t *testing.T) {
+	in := wipeInputs()
+	in.Netboot = &render.NetbootInputs{
+		PoolURL:    "http://10.0.0.1:8080/netboot/files/tokd",
+		NFSRootURL: "10.0.0.1:/export/netboot/tokd/iso",
+	}
+	answers, boot, err := New("debian12").RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	var seed string
+	foundISOSeed := false
+	for _, a := range answers {
+		switch a.Name {
+		case "preseed-netboot.cfg":
+			seed = a.Content
+		case "preseed.cfg":
+			foundISOSeed = true // the offline seed must stay absent on PXE
+		}
+	}
+	if seed == "" || foundISOSeed {
+		t.Fatalf("want only preseed-netboot.cfg, got %+v", answers)
+	}
+	if !strings.Contains(seed, "d-i mirror/http/hostname string 10.0.0.1:8080") {
+		t.Errorf("pool hostname (host:port) missing:\n%s", seed)
+	}
+	if !strings.Contains(seed, "d-i mirror/http/directory string /netboot/files/tokd") {
+		t.Errorf("pool directory missing:\n%s", seed)
+	}
+	if !strings.Contains(seed, "d-i mirror/suite string bookworm") {
+		t.Errorf("suite missing:\n%s", seed)
+	}
+	if strings.Contains(seed, "file=/cdrom") || strings.Contains(seed, "apt-setup/cdrom") {
+		t.Errorf("netboot seed must not reference the cdrom:\n%s", seed)
+	}
+	if boot.NetbootKernelArgs == "" ||
+		!strings.Contains(boot.NetbootKernelArgs, "preseed/url=https://m/render/tokd/preseed-netboot.cfg") {
+		t.Errorf("netboot args must fetch the netboot seed: %q", boot.NetbootKernelArgs)
+	}
+	if !strings.Contains(boot.KernelArgs, "file=/cdrom/preseed.cfg") {
+		t.Errorf("ISO args must stay untouched: %q", boot.KernelArgs)
+	}
+}
+
+// The netboot carrier declarations: di_netboot tarball + HTTP pool.
+func TestNetbootDeclarations(t *testing.T) {
+	d := New("debian12")
+	if c, p := render.NetbootInstallOf(d); c != render.NetbootCarrierDINetboot || p != render.NetbootPoolHTTP {
+		t.Errorf("carrier/pool = %q/%q, want di_netboot/http_pool", c, p)
+	}
+	if d.PXESupport() != render.SupportFull {
+		t.Errorf("debian12 PXE support must be full")
+	}
+}

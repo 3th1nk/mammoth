@@ -412,6 +412,7 @@ func serve(args []string) error {
 			RamdiskEnabled:      cfg.RamdiskEnabled,
 			ProbeAlpineISO:      cfg.ProbeAlpineISO,
 			ProbeAlpineNetboot:  cfg.ProbeAlpineNetboot,
+			PXEDINetbootTarball: cfg.PXEDINetboot,
 			ProbeStaticCIDR:     cfg.ProbeStaticCIDR,
 			ProbePrefix:         cfg.ProbePrefix,
 			ProbeGateway:        cfg.ProbeGateway,

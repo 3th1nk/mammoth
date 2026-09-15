@@ -12,6 +12,7 @@ package preseed
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/3th1nk/mammoth/internal/render"
@@ -36,6 +37,32 @@ func (d *Driver) SupportedArchs() []render.Arch { return []render.Arch{render.Ar
 // (the same level as ubuntu22, docs/06-install-pipeline.md §5 matrix).
 func (d *Driver) KeepPartitionSupport() render.SupportLevel { return render.SupportPartial }
 
+// PXESupport: full over the netboot tarball (MAMMOTH_PXE_DEBIAN12_NETBOOT)
+// with the install source served as an HTTP pool unpacked from the distro
+// ISO — offline semantics kept, no upstream mirror (docs/06-install-pipeline.md
+// §3.3, §6).
+func (d *Driver) PXESupport() render.SupportLevel { return render.SupportFull }
+
+// NetbootCarrier: the ISO's own d-i initrd is the cdrom flavour — useless
+// over the wire; the boot files come from the distro's official netboot
+// tarball instead.
+func (d *Driver) NetbootCarrier() render.NetbootCarrier { return render.NetbootCarrierDINetboot }
+
+// NetbootPool: the ISO unpacks under the boot tree and serves as d-i's
+// HTTP mirror (dists/ + pool/), keyed by suite.
+func (d *Driver) NetbootPool() render.NetbootPool { return render.NetbootPoolHTTP }
+
+// suite is the archive codename the pool's dists/ carries — choose-mirror
+// needs it preseeded because the pool layout has no Release label prompt.
+func (d *Driver) suite() (string, error) {
+	switch d.distro {
+	case "debian12":
+		return "bookworm", nil
+	default:
+		return "", fmt.Errorf("%s: no archive suite mapped for PXE installs", d.distro)
+	}
+}
+
 // kernelArgs boots the d-i TEXT installer fully preseeded. auto=true turns on
 // auto-install mode (priority=critical + automatic confirmation); file= loads
 // the seed from the CD mount with zero networking; locale/keyboard precede
@@ -44,6 +71,16 @@ func (d *Driver) KeepPartitionSupport() render.SupportLevel { return render.Supp
 const kernelArgs = "auto=true priority=critical file=/cdrom/preseed.cfg " +
 	"debian-installer/locale=en_US.UTF-8 keyboard-configuration/layoutcode=us " +
 	"console-setup/ask_detect=false console-setup/layoutcode=us"
+
+// netbootKernelArgs swaps the seed carrier: preseed/url fetches over HTTP —
+// the netboot initrd has no CD to mount. The early-question kernel arguments
+// are identical; the seed body differs only in its install-source section.
+func netbootKernelArgs(answerBaseURL, seedName string) string {
+	return "auto=true priority=critical preseed/url=" +
+		strings.TrimSuffix(answerBaseURL, "/") + "/" + seedName + " " +
+		"debian-installer/locale=en_US.UTF-8 keyboard-configuration/layoutcode=us " +
+		"console-setup/ask_detect=false console-setup/layoutcode=us"
+}
 
 // RenderAnswers produces the preseed file plus the pre/post install scripts,
 // all baked into the rebuilt ISO root (SeedFiles). The scripts are separate
@@ -70,23 +107,40 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		return nil, render.BootParams{}, err
 	}
 
+	// Two seed carriers, one body: the netboot variant differs only in its
+	// install-source section (HTTP pool mirror instead of the CD mount).
+	seedName, bootArgs := "preseed.cfg", kernelArgs
+	if in.Netboot != nil {
+		seedName = "preseed-netboot.cfg"
+		bootArgs = netbootKernelArgs(in.AnswerBaseURL, seedName)
+	}
+
 	return []render.AnswerFile{
-			{Name: "preseed.cfg", Content: d.preseed(in, target, recipe, net)},
+			{Name: seedName, Content: d.preseed(in, target, recipe, net, in.Netboot)},
 			{Name: "run/mammoth/pre-install.sh", Content: preInstallScript(in)},
 			{Name: "run/mammoth/post-install.sh", Content: postInstallScript(d.distro, in)},
 		}, render.BootParams{
-			AnswerURL:  strings.TrimSuffix(in.AnswerBaseURL, "/") + "/preseed.cfg",
-			KernelArgs: kernelArgs,
+			AnswerURL:         strings.TrimSuffix(in.AnswerBaseURL, "/") + "/" + seedName,
+			KernelArgs:        kernelArgs,
+			NetbootKernelArgs: bootArgs,
 		}, nil
 }
 
-// preseed assembles the answer file. The netinst ISO carries the base system,
-// so the install source is the CD itself — mirror prompts are preseeded away
-// and the install completes with zero network dependency.
-func (d *Driver) preseed(in render.InstallInputs, t target, recipe, net string) string {
+// preseed assembles the answer file. Offline (nil netboot) the netinst ISO
+// carries the base system — the install source is the CD itself and mirror
+// prompts are preseeded away. Over PXE the source is the HTTP pool unpacked
+// from the same ISO under the boot tree: the mirror points there (dists/ +
+// pool/), keeping the offline semantics with no upstream mirror.
+func (d *Driver) preseed(in render.InstallInputs, t target, recipe, net string, nb *render.NetbootInputs) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Mammoth — task %s / machine %s\n", in.TaskToken, in.MachineID)
-	b.WriteString("# Baked into the boot ISO root; loaded offline via file=/cdrom/preseed.cfg.\n")
+	if nb == nil {
+		b.WriteString("# Baked into the boot ISO root; loaded offline via file=/cdrom/preseed.cfg.\n")
+	} else {
+		b.WriteString("# Served over HTTP for the PXE path; loaded via preseed/url (netboot initrd\n")
+		b.WriteString("# has no CD to mount). Install source: the distro ISO unpacked under the\n")
+		b.WriteString("# task boot tree, consumed as a plain HTTP pool.\n")
+	}
 	b.WriteString("# Locale/keyboard ALSO ride as kernel arguments: d-i asks them before\n")
 	b.WriteString("# the seed loads (auto=true priority=critical suppresses everything else).\n\n")
 	b.WriteString("#### locale / keyboard / clock\n")
@@ -100,19 +154,43 @@ func (d *Driver) preseed(in render.InstallInputs, t target, recipe, net string) 
 	b.WriteString("d-i debconf/frontend select text\n\n")
 	b.WriteString("#### network (netcfg: one interface, static or dhcp)\n")
 	b.WriteString(net)
-	b.WriteString("\n#### install source: the netinst ISO carries the base system; no mirror\n")
-	b.WriteString("d-i mirror/country string manual\n")
-	b.WriteString("d-i apt-setup/use_mirror boolean false\n")
-	b.WriteString("d-i apt-setup/services-select multiselect\n")
-	b.WriteString("popularity-contest popularity-contest/participate boolean false\n")
-	// Single-medium installs must not let apt hunt for other discs: the
-	// standard taskset is NOT fully present in the netinst pool (it expects
-	// a mirror), which otherwise loops apt on "Please insert the media
-	// labeled ..." forever (real-hardware). Base + pkgsel/include covers the
-	// provisioning contract; extra packages ride the config channel.
-	b.WriteString("d-i apt-setup/cdrom/set-first boolean false\n")
-	b.WriteString("d-i apt-setup/cdrom/set-next boolean false\n")
-	b.WriteString("d-i apt-setup/cdrom/set-double boolean false\n\n")
+	if nb == nil {
+		b.WriteString("\n#### install source: the netinst ISO carries the base system; no mirror\n")
+		b.WriteString("d-i mirror/country string manual\n")
+		b.WriteString("d-i apt-setup/use_mirror boolean false\n")
+		b.WriteString("d-i apt-setup/services-select multiselect\n")
+		b.WriteString("popularity-contest popularity-contest/participate boolean false\n")
+		// Single-medium installs must not let apt hunt for other discs: the
+		// standard taskset is NOT fully present in the netinst pool (it expects
+		// a mirror), which otherwise loops apt on "Please insert the media
+		// labeled ..." forever (real-hardware). Base + pkgsel/include covers the
+		// provisioning contract; extra packages ride the config channel.
+		b.WriteString("d-i apt-setup/cdrom/set-first boolean false\n")
+		b.WriteString("d-i apt-setup/cdrom/set-next boolean false\n")
+		b.WriteString("d-i apt-setup/cdrom/set-double boolean false\n\n")
+	} else {
+		suite, err := d.suite()
+		if err != nil {
+			// Rendered seeds are already validated upstream (suite mapping is
+			// driver-static); this guard keeps the template total.
+			suite = "stable"
+		}
+		u, perr := url.Parse(nb.PoolURL)
+		host, dir := u.Host, u.Path
+		if perr != nil || host == "" {
+			host, dir = nb.PoolURL, ""
+		}
+		fmt.Fprintf(&b, "\n#### install source: the distro ISO unpacked under the boot tree, over HTTP\n")
+		b.WriteString("d-i mirror/country string manual\n")
+		// choose-mirror accepts host:port in the hostname — mammoth's machine
+		// face is rarely on port 80 (qemu verification pending).
+		fmt.Fprintf(&b, "d-i mirror/http/hostname string %s\n", host)
+		fmt.Fprintf(&b, "d-i mirror/http/directory string %s\n", dir)
+		fmt.Fprintf(&b, "d-i mirror/suite string %s\n", suite)
+		b.WriteString("d-i apt-setup/use_mirror boolean false\n")
+		b.WriteString("d-i apt-setup/services-select multiselect\n")
+		b.WriteString("popularity-contest popularity-contest/participate boolean false\n\n")
+	}
 	b.WriteString("#### account: root with the per-task password; no regular user\n")
 	b.WriteString("d-i passwd/root-login boolean true\n")
 	fmt.Fprintf(&b, "d-i passwd/root-password string %s\n", in.RootPassword)

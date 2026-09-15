@@ -85,6 +85,15 @@ func (r *PendingRepo) Get(ctx context.Context, mac string) (*PendingMachine, err
 	return m, err
 }
 
+// Delete removes a claimed sighting. Idempotent by design — the claim flow
+// migrates the row's data into the machine first, so a lost race here (two
+// claims of one MAC) is caught by the bmc_address unique constraint on the
+// machine side, and the second delete is simply a no-op.
+func (r *PendingRepo) Delete(ctx context.Context, mac string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM pending_machines WHERE mac = $1`, mac)
+	return err
+}
+
 func scanPending(sc interface{ Scan(...any) error }) (*PendingMachine, error) {
 	m := &PendingMachine{}
 	var report []byte

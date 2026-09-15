@@ -127,3 +127,54 @@ func (s *Server) GetPendingMachine(ctx context.Context, request gen.GetPendingMa
 	}
 	return gen.GetPendingMachine200JSONResponse(pendingToGen(m)), nil
 }
+
+// ClaimPendingMachine promotes a sighting to a registered machine: the
+// registration runs the exact POST /machines path, then the pending data
+// migrates so nothing the machine reported about itself is lost — the
+// firmware observation into the machine's PXE observation columns, the
+// /sys scan into its first layout snapshot (source=ramdisk, docs/
+// 05-inventory.md §5) — and finally the pending row is consumed.
+//
+// The migration steps are best-effort by design: the claim's primary
+// effect is the machine; a failed migration is logged, never fatal, and
+// the auto-discovery job refreshes the same facts anyway. The final delete
+// is last so a mid-way failure leaves the sighting inspectable.
+func (s *Server) ClaimPendingMachine(ctx context.Context, request gen.ClaimPendingMachineRequestObject) (gen.ClaimPendingMachineResponseObject, error) {
+	if s.Pending == nil {
+		return nil, verrStatus(http.StatusNotFound, "MACHINE_NOT_FOUND",
+			"no pending sighting for %q", request.Mac)
+	}
+	mac := netboot.NormalizeMAC(request.Mac)
+	pending, err := s.Pending.Get(ctx, mac)
+	if err != nil {
+		return nil, err
+	}
+	m, err := s.registerMachine(ctx, request.Body)
+	if err != nil {
+		// A bmc_address conflict surfaces here (409) — the sighting stays
+		// pending and inspectable.
+		return nil, err
+	}
+	if pending.Firmware != nil || !pending.LastSeenAt.IsZero() {
+		if err := s.Machines.SetPXEObservation(ctx, m.ID, pending.Firmware, &pending.LastSeenAt); err != nil {
+			obs.FromContext(ctx).WarnContext(ctx, "claim: pxe observation migration failed",
+				obs.FieldMachineID, m.ID, "err", err.Error())
+		}
+	}
+	if len(pending.Report) > 0 {
+		if _, err := s.Machines.SaveLayout(ctx, m.ID, "ramdisk", pending.Report, 0); err != nil {
+			obs.FromContext(ctx).WarnContext(ctx, "claim: probe report migration failed",
+				obs.FieldMachineID, m.ID, "err", err.Error())
+		}
+	}
+	if err := s.Pending.Delete(ctx, mac); err != nil {
+		obs.FromContext(ctx).WarnContext(ctx, "claim: pending row removal failed",
+			"mac", mac, "err", err.Error())
+	}
+	s.Events.Append(ctx, "machine", m.ID, "machine.claimed", map[string]any{
+		"mac": mac, "firmware": pending.Firmware,
+	})
+	obs.FromContext(ctx).InfoContext(ctx, "pending sighting claimed",
+		obs.FieldMachineID, m.ID, "mac", mac)
+	return gen.ClaimPendingMachine201JSONResponse(machineOut(m)), nil
+}

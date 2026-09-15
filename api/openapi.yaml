@@ -798,6 +798,49 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /api/v1/pending-machines/{mac}/claim:
+    parameters:
+      - name: mac
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^([0-9A-Fa-f]{2}[:.-]?){5}[0-9A-Fa-f]{2}$'
+    post:
+      operationId: claimPendingMachine
+      tags: [machines]
+      summary: Promote a zero-registration sighting to a registered machine
+      description: |
+        Claims a pending sighting (docs/09-roadmap.md, zero-registration
+        entry). Creates the machine exactly as POST /machines would, then
+        migrates the pending data so nothing gathered by itself is lost: the
+        firmware observation into the machine's PXE observation columns and
+        the enrollment probe's /sys scan into its first layout snapshot
+        (source=ramdisk), and finally removes the pending row. The request
+        body is the human's side of the bargain — the sighting tells you
+        WHICH machine this is, the claim tells mammoth how to REACH it.
+      parameters:
+        - $ref: '#/components/parameters/idempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MachineCreate'
+      responses:
+        '201':
+          description: Machine registered (the claimed sighting is consumed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Machine'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
   /api/v1/jobs/{id}/events:
     parameters:
       - $ref: '#/components/parameters/jobId'

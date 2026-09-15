@@ -103,4 +103,15 @@ func TestPendingRepo(t *testing.T) {
 	if _, err := repo.Get(ctx, "00:00:00:00:00:01"); err != ErrNotFound {
 		t.Errorf("unknown mac err = %v, want ErrNotFound", err)
 	}
+
+	// Claim path: delete consumes the row; deleting again is a no-op.
+	if err := repo.Delete(ctx, mac); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := repo.Get(ctx, mac); err != ErrNotFound {
+		t.Errorf("after delete err = %v, want ErrNotFound", err)
+	}
+	if err := repo.Delete(ctx, mac); err != nil {
+		t.Errorf("idempotent delete: %v", err)
+	}
 }

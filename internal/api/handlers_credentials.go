@@ -61,7 +61,17 @@ func (s *Server) DeleteCredential(ctx context.Context, request gen.DeleteCredent
 // ── machines ────────────────────────────────────────────────────────────────
 
 func (s *Server) CreateMachine(ctx context.Context, request gen.CreateMachineRequestObject) (gen.CreateMachineResponseObject, error) {
-	body := request.Body
+	m, err := s.registerMachine(ctx, request.Body)
+	if err != nil {
+		return nil, err
+	}
+	return gen.CreateMachine201JSONResponse(machineOut(m)), nil
+}
+
+// registerMachine is the shared registration path of POST /machines and the
+// claim flow: validate the body, create the row, fire auto-discovery, and
+// return the fresh machine.
+func (s *Server) registerMachine(ctx context.Context, body *gen.MachineCreate) (*store.Machine, error) {
 	if body == nil || body.Bmc.Address == "" {
 		return nil, verr("SCHEMA_INVALID_MACHINE", "bmc.address is required")
 	}
@@ -112,7 +122,7 @@ func (s *Server) CreateMachine(ctx context.Context, request gen.CreateMachineReq
 	if err != nil {
 		return nil, err
 	}
-	return gen.CreateMachine201JSONResponse(machineOut(fresh)), nil
+	return fresh, nil
 }
 
 func (s *Server) GetMachine(ctx context.Context, request gen.GetMachineRequestObject) (gen.GetMachineResponseObject, error) {

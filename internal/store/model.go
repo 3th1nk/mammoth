@@ -74,6 +74,12 @@ type Machine struct {
 	LastError       *ErrorInfo
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	// PXE responder observations (docs/08-data-model.md machines, migration
+	// 00006): the firmware architecture the client last announced (option 93
+	// label: bios | ia32 | uefi-x64 | uefi-arm64) and when. Observation
+	// facts, not identity — nil until the machine has been seen on the wire.
+	PXEFirmware   *string
+	PXELastSeenAt *time.Time
 }
 
 // FlowName maps a job type to the state-machine definition executed per task

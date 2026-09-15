@@ -600,3 +600,22 @@ func TestRenderGrowExplicitSizePaths(t *testing.T) {
 		}
 	})
 }
+
+// TestFirmwareSupportDeclarations pins the media firmware range per distro:
+// rocky10 dropped BIOS boot images upstream (UEFI-only, docs/compat/distros.md)
+// — the submit-time firmware gate keys off exactly this declaration.
+func TestFirmwareSupportDeclarations(t *testing.T) {
+	cases := map[string]render.FirmwareSupport{
+		"rocky9":      render.FirmwareAll,
+		"rocky10":     render.FirmwareUEFIOnly,
+		"centos7":     render.FirmwareAll,
+		"kylinv10":    render.FirmwareAll,
+		"kylinv11":    render.FirmwareAll,
+		"uniontechos": render.FirmwareAll,
+	}
+	for distro, want := range cases {
+		if got := New(distro).FirmwareSupport(); got != want {
+			t.Errorf("%s firmware support = %q, want %q", distro, got, want)
+		}
+	}
+}

@@ -40,6 +40,20 @@ type Driver struct {
 // New returns the driver for one distro name ("rocky9", "uniontechos").
 func New(distro string) *Driver { return &Driver{distro: distro} }
 
+// FirmwareSupport declares the media's bootable firmware range. rocky10's
+// install media dropped the BIOS boot images upstream (UEFI-only,
+// docs/compat/distros.md) — a BIOS-firmware machine can neither PXE nor
+// virtual-media boot it, so the submit-time gate turns that into a 422
+// instead of a machine stranded at boot.
+func (d *Driver) FirmwareSupport() render.FirmwareSupport {
+	switch d.distro {
+	case "rocky10":
+		return render.FirmwareUEFIOnly
+	default:
+		return render.FirmwareAll
+	}
+}
+
 func (d *Driver) Distro() string {
 	if d.distro == "" {
 		return "rocky9" // keeps the zero-value constructor usable in tests

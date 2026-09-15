@@ -182,6 +182,13 @@ type OSDriver interface {
 - 可选能力 `PXEDriver{PXESupport() SupportLevel}`:声明网络引导支持级
   (未实现的驱动按 none),`boot.strategy=pxe` 的提交按此门禁
   (`SCHEMA_UNSUPPORTED_BOOT_STRATEGY`),与 keep 门禁同型;
+- 可选能力 `FirmwareDriver{FirmwareSupport() FirmwareSupport}`:声明媒体
+  可引导的固件范围(缺省 all;rocky10 = uefi_only,上游已移除 BIOS 引导
+  镜像)。提交链按机器的 option 93 观测值
+  (`machines.pxe_firmware`,docs/08)逐台门禁——UEFI-only 媒体派给 BIOS
+  固件机器即 `SCHEMA_FIRMWARE_MISMATCH`,该 task 创建即 failed、不阻塞
+  同批兄弟机器;**无观测不门禁**(从未在引导线上出现过的机器不受影响,
+  观测是时点事实而非当前 BMC 引导模式的承诺);
 - 应答文件名归驱动(rocky9:ks.cfg;ubuntu22:user-data;debian12:preseed.cfg +
   脚本),编排层不硬编码。
 

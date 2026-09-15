@@ -89,7 +89,10 @@ iPXE    ──HTTP GET /netboot/files/<token>/…──▶ kernel/initrd(+modloo
   固件从哪个口引导是固件的事,全注册;
 - **无条目回退**:脚本端点对未知 MAC 返回 200 + `exit` 脚本(绝不 404——
   404 会把 iPXE 留在自己的 shell;`exit` 回固件引导序自然落盘),顺带无害化
-  "安装后固件再次 PXE"的竞态;
+  "安装后固件再次 PXE"的竞态。演进方向:未知 MAC 可选渲染**默认探针脚本**
+  ——引导进 ramdisk 探针环境自动上报规格与布局,注册为待认领机器
+  (零注册入门,见 docs/05-inventory.md §4 与 roadmap 下一阶段),与
+  `exit` 回退并存、按配置门控;
 - **kernel args 与 ISO 通路零差异**:`inst.ks=` 本就是绝对 HTTP URL、
   `inst.repo=nfs:` 本就是网络安装源、无静态网声明时 earlynet 自动 `ip=dhcp`
   ——RHEL 系是唯一零新增安装源工作的家族(矩阵见 §6);
@@ -121,7 +124,10 @@ iPXE    ──HTTP GET /netboot/files/<token>/…──▶ kernel/initrd(+modloo
 
 ## 5. install_os(安装执行)
 
-安装环境内,%pre / early-command 钩子执行 Mammoth 注入的校验-生成脚本:
+安装环境内,%pre / early-command 钩子执行 Mammoth 注入的校验-生成脚本
+(动机:无头装机中应答文件的磁盘声明错误表现为 anaconda **静默回退交互
+模式**、d-i **卡死在对应步骤且无报错**——均不可远程诊断;%pre 强校验把
+这类失败前移为显式错误码退出):
 
 ```
 1. 读取实际分区表(lsblk/blkid/sysfs)

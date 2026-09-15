@@ -347,3 +347,27 @@ func (r *MachineRepo) SetHardware(ctx context.Context, id string, hardware json.
 		UPDATE machines SET hardware = $2, updated_at = now() WHERE id = $1`, id, hardware)
 	return err
 }
+
+// ObservePXE records a PXE responder sighting for the machine owning this
+// NIC MAC: the firmware architecture it announced (DHCP option 93) and the
+// sighting time. The MAC lives inside the hardware view's nics array, so the
+// match is a jsonb membership test with separators stripped on both sides —
+// Redfish and the PXE wire spell MACs differently. Returns false when no
+// machine claims the MAC (unknown devices have no record to observe yet;
+// their zero-registration entry point is roadmap territory).
+func (r *MachineRepo) ObservePXE(ctx context.Context, mac, firmware string) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE machines
+		SET pxe_firmware = $2, pxe_last_seen_at = now(), updated_at = now()
+		WHERE jsonb_typeof(hardware->'nics') = 'array'
+		  AND EXISTS (
+		      SELECT 1 FROM jsonb_array_elements(hardware->'nics') AS n
+		      WHERE regexp_replace(lower(n->>'mac'), '[:.-]', '', 'g')
+		          = regexp_replace(lower($1), '[:.-]', '', 'g'))`,
+		mac, firmware)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}

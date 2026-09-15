@@ -148,6 +148,9 @@ func (s *Server) reply(p *packet) []byte {
 		s.logf("dhcp: pxe client without recognizable arch (mac %s) — silent", mac)
 		return nil
 	}
+	if s.opts.OnObserve != nil {
+		s.opts.OnObserve(mac, arch)
+	}
 
 	// Options the boot ROM checks before it will accept the offer: the
 	// PXEClient vendor class marks a PXE-capable server, and the client

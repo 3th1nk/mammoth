@@ -50,6 +50,69 @@ type BootParams struct {
 	// dialog instead; for those installers the pipeline issues the reboot
 	// itself after the deferred media release.
 	InstallerAutoReboot bool `json:"installer_auto_reboot,omitempty"`
+	// NetbootKernelArgs overrides KernelArgs when the task boots via PXE —
+	// the network-install source (preseed/url, casper nfsroot) is shaped
+	// differently from the offline CD mount. Empty means the ISO args apply
+	// verbatim (the RHEL case: inst.repo=nfs: serves both carriers).
+	NetbootKernelArgs string `json:"netboot_kernel_args,omitempty"`
+}
+
+// NetbootInputs carries the PXE-install source locations (non-nil when the
+// submission pinned boot.strategy=pxe, docs/06-install-pipeline.md §3.3):
+// drivers with a network-install source shape their args / seed against it.
+type NetbootInputs struct {
+	// PoolURL is the HTTP install-source pool: the distro ISO unpacked under
+	// the task's boot tree (<ExternalURL>/netboot/files/<token>).
+	PoolURL string
+	// NFSRootURL is the NFS install-source tree in casper's nfsroot form
+	// (host:/path — MediaNFSBase + /netboot/<token>/iso).
+	NFSRootURL string
+}
+
+// NetbootCarrier declares where a distro's PXE boot files come from.
+type NetbootCarrier string
+
+const (
+	// NetbootCarrierISO — the boot files extract from the distro ISO itself
+	// (RHEL pxeboot, casper).
+	NetbootCarrierISO NetbootCarrier = "iso"
+	// NetbootCarrierDINetboot — the ISO's d-i initrd is the cdrom flavour,
+	// useless over the wire; the boot files come from the distro's official
+	// netboot tarball instead (a deployment-configured carrier,
+	// MAMMOTH_PXE_DEBIAN12_NETBOOT).
+	NetbootCarrierDINetboot NetbootCarrier = "di_netboot"
+)
+
+// NetbootPool declares how a distro's PXE install source is served.
+type NetbootPool string
+
+const (
+	// NetbootPoolNone — no unpacked source tree needed (RHEL: anaconda
+	// mounts the NFS-hosted ISO directly via inst.repo).
+	NetbootPoolNone NetbootPool = ""
+	// NetbootPoolHTTP — the ISO unpacks under the boot tree and serves as a
+	// plain HTTP pool (d-i's mirror: dists/ + pool/, offline semantics kept).
+	NetbootPoolHTTP NetbootPool = "http_pool"
+	// NetbootPoolNFS — the ISO unpacks under the boot tree and is consumed
+	// over NFS (casper's netboot=nfs squashfs root).
+	NetbootPoolNFS NetbootPool = "nfs_tree"
+)
+
+// NetbootInstallDriver is the optional capability describing how a distro
+// boots and sources its installer over PXE (docs/06-install-pipeline.md
+// §3.3). Drivers that do not implement it get the RHEL treatment: boot
+// files from the ISO, no unpacked source tree.
+type NetbootInstallDriver interface {
+	NetbootCarrier() NetbootCarrier
+	NetbootPool() NetbootPool
+}
+
+// NetbootInstallOf reports a driver's PXE carrier and install-source pool.
+func NetbootInstallOf(d OSDriver) (NetbootCarrier, NetbootPool) {
+	if n, ok := d.(NetbootInstallDriver); ok {
+		return n.NetbootCarrier(), n.NetbootPool()
+	}
+	return NetbootCarrierISO, NetbootPoolNone
 }
 
 // ── resolved inputs (produced by verify_layout / orchestration) ─────────────
@@ -175,6 +238,11 @@ type InstallInputs struct {
 	// DriftCheck enables the %pre layout drift guard (policy.verify_layout,
 	// default true; docs/09-roadmap.md M4).
 	DriftCheck bool
+
+	// Netboot, non-nil when the submission pinned boot.strategy=pxe: the
+	// driver shapes its netboot answer files and kernel args against the
+	// network install source (docs/06-install-pipeline.md §3.3).
+	Netboot *NetbootInputs
 }
 
 // ResolvedRaid is one RAID volume with resolved member devices.

@@ -48,19 +48,10 @@ type bootStrategy interface {
 // rejected here too — the submit-side gate is advisory against stale
 // runners, this one is authoritative.
 func (e *Executor) bootStrategyFor(spec *installSpecView) (bootStrategy, error) {
-	name := strategyVirtualMedia
-	if spec != nil && spec.Boot.Strategy != "" {
-		switch spec.Boot.Strategy {
-		case "virtual_media":
-			name = strategyVirtualMedia
-		case "pxe":
-			name = strategyPXE
-		default:
-			return nil, classifiedErr("SCHEMA_INVALID_BOOT_STRATEGY", false,
-				"unknown boot.strategy %q (want virtual_media|pxe)", spec.Boot.Strategy)
-		}
-	} else if e.BootStrategyDefault == "pxe" {
-		name = strategyPXE
+	name, known := effectiveStrategyName(e, spec)
+	if !known {
+		return nil, classifiedErr("SCHEMA_INVALID_BOOT_STRATEGY", false,
+			"unknown boot.strategy %q (want virtual_media|pxe)", spec.Boot.Strategy)
 	}
 	if name == strategyPXE && e.Netboot == nil {
 		return nil, classifiedErr("NETBOOT_UNAVAILABLE", false,
@@ -70,6 +61,29 @@ func (e *Executor) bootStrategyFor(spec *installSpecView) (bootStrategy, error) 
 		return &pxeStrategy{e: e}, nil
 	}
 	return &virtualMediaStrategy{e: e}, nil
+}
+
+// effectiveStrategyName resolves the strategy the same way bootStrategyFor
+// does (spec declaration wins, else deployment default) — usable before the
+// strategy object exists, e.g. at render time. Unknown declarations return
+// known=false with the virtual_media fallback; bootStrategyFor turns that
+// into the authoritative rejection, render-time callers just proceed (the
+// task fails at bootStrategyFor before anything ships).
+func effectiveStrategyName(e *Executor, spec *installSpecView) (bootStrategyName, bool) {
+	if spec != nil && spec.Boot.Strategy != "" {
+		switch spec.Boot.Strategy {
+		case "pxe":
+			return strategyPXE, true
+		case "virtual_media":
+			return strategyVirtualMedia, true
+		default:
+			return strategyVirtualMedia, false
+		}
+	}
+	if e.BootStrategyDefault == "pxe" {
+		return strategyPXE, true
+	}
+	return strategyVirtualMedia, true
 }
 
 // releaseBootPayload reclaims whichever payload a task produced — the

@@ -11,6 +11,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/builder"
 	"github.com/3th1nk/mammoth/internal/netboot"
 	"github.com/3th1nk/mammoth/internal/obs"
+	"github.com/3th1nk/mammoth/internal/render"
 	"github.com/3th1nk/mammoth/internal/store"
 )
 
@@ -28,15 +29,56 @@ func (s *pxeStrategy) name() bootStrategyName { return strategyPXE }
 func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 	e := s.e
 	ictx, task := b.Ictx, b.Task
+	driver, err := e.Render.For(b.Spec.Image.Distro)
+	if err != nil {
+		return classifiedErr("SCHEMA_UNKNOWN_DISTRO", false, "%s", err.Error())
+	}
+	carrier, pool := render.NetbootInstallOf(driver)
 	distroISO, err := builder.EnsureISO(ctx, b.Spec.Image.Source, e.MediaDir)
 	if err != nil {
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 			"distro ISO fetch failed: %s", err.Error())
 	}
-	tree, err := builder.ExtractBootFiles(ctx, "", distroISO, filepath.Join(e.BootTreeDir, ictx.Token))
-	if err != nil {
-		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
-			"boot tree extraction failed: %s", err.Error())
+	treeDir := filepath.Join(e.BootTreeDir, ictx.Token)
+	var tree builder.BootTree
+	switch carrier {
+	case render.NetbootCarrierDINetboot:
+		// The ISO's d-i initrd is the cdrom flavour — useless over the wire.
+		// The official netboot tarball is the deployment-configured carrier;
+		// its initrd pulls installer components from the HTTP pool.
+		if e.PXEDINetbootTarball == "" {
+			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,
+				"%s PXE needs the d-i netboot tarball (set MAMMOTH_PXE_DEBIAN12_NETBOOT) — the ISO's own initrd is the cdrom flavour and cannot fetch components over the network", b.Spec.Image.Distro)
+		}
+		tarball, terr := builder.EnsureISO(ctx, e.PXEDINetbootTarball, e.MediaWorkDir)
+		if terr != nil {
+			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+				"d-i netboot tarball fetch failed: %s", terr.Error())
+		}
+		tree, err = builder.ExtractDINetboot(ctx, tarball, treeDir)
+		if err != nil {
+			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+				"boot tree extraction failed: %s", err.Error())
+		}
+	default:
+		tree, err = builder.ExtractBootFiles(ctx, "", distroISO, treeDir)
+		if err != nil {
+			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+				"boot tree extraction failed: %s", err.Error())
+		}
+	}
+	// The unpacked install source rides the boot tree: HTTP-authorized for
+	// pool consumers (d-i's mirror) or merely NFS-visible for NFS ones
+	// (casper's netboot=nfs root, under the always-on MediaDir export).
+	switch pool {
+	case render.NetbootPoolHTTP, render.NetbootPoolNFS:
+		if perr := builder.ExtractISOTree(ctx, "", distroISO, filepath.Join(treeDir, "iso")); perr != nil {
+			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+				"install-source tree extraction failed: %s", perr.Error())
+		}
+		if pool == render.NetbootPoolHTTP {
+			tree.Extra["iso"] = "dir:iso"
+		}
 	}
 
 	// Arm every inventoried NIC: whichever the firmware actually boots is
@@ -54,10 +96,14 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 			"machine %s has no NIC MAC in its inventory (re-run discover with redfish or inband_ssh) — PXE boot entries are keyed by MAC", task.MachineID)
 	}
 	for _, mac := range macs {
+		args := b.Boot.KernelArgs
+		if b.Boot.NetbootKernelArgs != "" {
+			args = b.Boot.NetbootKernelArgs
+		}
 		entry := &store.NetbootEntry{
 			MAC: mac, TaskID: task.ID, MachineID: task.MachineID, Token: ictx.Token,
 			Kind: "install", Kernel: tree.Kernel, Initrd: tree.Initrd,
-			KernelArgs: b.Boot.KernelArgs, Extra: tree.Extra,
+			KernelArgs: args, Extra: tree.Extra,
 		}
 		if err := e.Netboot.Upsert(ctx, entry); err != nil {
 			return classifiedErr("NETBOOT_REGISTER_FAILED", true,
@@ -71,8 +117,20 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 	})
 	obs.FromContext(ctx).InfoContext(ctx, "netboot tree armed",
 		"macs", len(macs), "kernel", tree.Kernel, "initrd", tree.Initrd,
-		"kernel_args", b.Boot.KernelArgs)
+		"kernel_args", b.Boot.NetbootKernelArgs)
 	return nil
+}
+
+// nfsRootFor converts the NFS media base (nfs://host/export) into casper's
+// nfsroot form (host:/export/netboot/<token>/iso). Empty base → empty
+// result: the NFS-pool drivers reject it at render/prepare time.
+func nfsRootFor(mediaNFSBase, token string) string {
+	if mediaNFSBase == "" || token == "" {
+		return ""
+	}
+	u := strings.TrimPrefix(mediaNFSBase, "nfs://")
+	u = strings.TrimSuffix(u, "/")
+	return u + "/netboot/" + token + "/iso"
 }
 
 // arm one-shot points the firmware at PXE and powers the machine. No media

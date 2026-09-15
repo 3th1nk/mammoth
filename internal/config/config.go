@@ -91,6 +91,7 @@ type Config struct {
 	RamdiskEnabled     bool
 	ProbeAlpineISO     string // alpine standard ISO (path/URL) the probe medium is built from
 	ProbeAlpineNetboot string // alpine NETBOOT tarball (path/URL) for the probe's PXE carrier (network drivers included)
+	PXEDINetboot       string // debian d-i netboot.tar.gz (path/URL) — the PXE carrier for debian12 (the ISO's initrd is the cdrom flavour)
 	ProbeStaticCIDR    string // DHCP fallback for machines without ssh.address
 	ProbePrefix        int    // prefix length for a bare ssh.address fallback CIDR (default 24)
 	ProbeGateway       string // fallback default route (cross-subnet report targets)
@@ -233,6 +234,7 @@ func FromEnv() (Config, error) {
 	applyString(&c.IPMIInterface, "MAMMOTH_IPMI_INTERFACE", &errs)
 	applyString(&c.ProbeAlpineISO, "MAMMOTH_PROBE_ALPINE_ISO", &errs)
 	applyString(&c.ProbeAlpineNetboot, "MAMMOTH_PROBE_ALPINE_NETBOOT", &errs)
+	applyString(&c.PXEDINetboot, "MAMMOTH_PXE_DEBIAN12_NETBOOT", &errs)
 	applyString(&c.ProbeStaticCIDR, "MAMMOTH_PROBE_STATIC_CIDR", &errs)
 	applyString(&c.ProbeGateway, "MAMMOTH_PROBE_GATEWAY", &errs)
 	applyString(&c.MediaDir, "MAMMOTH_MEDIA_DIR", &errs)

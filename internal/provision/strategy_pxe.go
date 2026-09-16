@@ -122,15 +122,21 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 }
 
 // nfsRootFor converts the NFS media base (nfs://host/export) into casper's
-// nfsroot form (host:/export/netboot/<token>/iso). Empty base → empty
-// result: the NFS-pool drivers reject it at render/prepare time.
+// nfsroot form (host:/export/netboot/<token>/iso — the colon separator is
+// what busybox nfsmount parses server from path; without it the mount
+// reports "need a path"). Empty base → empty result: the NFS-pool drivers
+// reject it at render/prepare time.
 func nfsRootFor(mediaNFSBase, token string) string {
 	if mediaNFSBase == "" || token == "" {
 		return ""
 	}
 	u := strings.TrimPrefix(mediaNFSBase, "nfs://")
 	u = strings.TrimSuffix(u, "/")
-	return u + "/netboot/" + token + "/iso"
+	host, export, ok := strings.Cut(u, "/")
+	if !ok {
+		return ""
+	}
+	return host + ":/" + export + "/netboot/" + token + "/iso"
 }
 
 // arm one-shot points the firmware at PXE and powers the machine. No media

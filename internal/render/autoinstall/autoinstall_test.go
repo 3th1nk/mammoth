@@ -322,3 +322,26 @@ func TestNetbootDeclarationsUbuntu(t *testing.T) {
 		t.Errorf("ubuntu22 PXE support must be full")
 	}
 }
+
+// PXE without an NFS media base is rejected — casper's nfsroot would be
+// empty and the live root could never mount (qemu verification finding).
+func TestRenderNetbootRejectsEmptyNFSRoot(t *testing.T) {
+	in := baseNetbootInputs()
+	in.Netboot = &render.NetbootInputs{PoolURL: "http://10.0.0.2/netboot/files/toku"} // no NFSRootURL
+	if _, _, err := New("ubuntu22").RenderAnswers(in, render.MachineView{}); err == nil {
+		t.Fatal("empty NFSRootURL must be rejected")
+	}
+}
+
+func baseNetbootInputs() render.InstallInputs {
+	return render.InstallInputs{
+		TaskToken: "toku", MachineID: "mch_u", Hostname: "node-u1",
+		ImageSource: "https://mirror.example/u.iso", RootPassword: "pw",
+		AnswerBaseURL: "http://10.0.2.2/render/toku",
+		CompleteURL:   "http://10.0.2.2/render/toku/complete",
+		Disks: []render.ResolvedDisk{{Device: "sda", Wipe: true, Partitions: []render.ResolvedPartition{
+			{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+			{Mount: "/", FS: "ext4", SizeMB: 8192},
+		}}},
+	}
+}

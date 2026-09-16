@@ -181,6 +181,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		if len(in.Network) > 0 && !networkIsDHCP(in.Network) {
 			return nil, render.BootParams{}, fmt.Errorf("%s: PXE installs boot the live system over DHCP only — drop the static network declaration or use the virtual-media carrier", d.distro)
 		}
+		if in.Netboot.NFSRootURL == "" {
+			return nil, render.BootParams{}, fmt.Errorf("%s: PXE installs need an NFS media base for the casper live root (set MAMMOTH_MEDIA_BASE_URI=nfs://<host>/<export> on the runner)", d.distro)
+		}
 		boot.NetbootKernelArgs = fmt.Sprintf(
 			"autoinstall ds=nocloud-net;s=%s/ ip=dhcp boot=casper netboot=nfs nfsroot=%s",
 			strings.TrimSuffix(in.AnswerBaseURL, "/"), in.Netboot.NFSRootURL)

@@ -68,6 +68,10 @@ type Executor struct {
 	// (MAMMOTH_PXE_DI_NETBOOT): the ISO's own initrd is the cdrom
 	// flavour and cannot fetch installer components over the network.
 	PXEDINetbootTarball string
+	// PXEDIUdebsDir is the staged netboot udeb archive subset
+	// (MAMMOTH_PXE_DI_UDEBS_DIR, scripts/fetch-di-udebs.sh shape) filling
+	// the netinst ISO's pruned pool at prepare time. Empty = no fill.
+	PXEDIUdebsDir string
 	// ProbeStaticCIDR, when set, is the probe's DHCP fallback address for
 	// machines WITHOUT ssh.address ("198.51.100.75/24") — machine rooms
 	// without DHCP. Empty disables the fallback.

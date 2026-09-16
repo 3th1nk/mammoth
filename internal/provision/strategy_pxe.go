@@ -77,6 +77,20 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 				"install-source tree extraction failed: %s", perr.Error())
 		}
 		if pool == render.NetbootPoolHTTP {
+			// Signed, udeb-complete offline mirror (Release re-checksummed and
+			// re-signed; netboot udebs filled from the staged archive subset —
+			// the netinst ISO prunes them, real-hardware: anna died with "No
+			// kernel modules were found" and apt-setup rejected the unsigned
+			// pool; see builder.StageNetbootPool).
+			ent, kerr := builder.PoolSigningEntity(e.MediaDir)
+			if kerr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,
+					"pool signing key unavailable: %s", kerr.Error())
+			}
+			if serr := builder.StageNetbootPool(filepath.Join(treeDir, "iso"), e.PXEDIUdebsDir, ent); serr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+					"pool staging failed: %s", serr.Error())
+			}
 			tree.Extra["iso"] = "dir:iso"
 		}
 	}

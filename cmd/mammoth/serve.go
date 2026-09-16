@@ -194,6 +194,7 @@ func serve(args []string) error {
 		kickstart.New("uniontechos"),
 		autoinstall.New("ubuntu22"),
 		preseed.New("debian12"),
+		preseed.New("debian13"),
 	} {
 		if err := renderReg.Register(d); err != nil {
 			return err
@@ -264,6 +265,9 @@ func serve(args []string) error {
 			Resolver:   nbResolver,
 			DHCP:       pool,
 			Log:        logger,
+			// macOS/vmnet verification setups: limited broadcast leaves via
+			// the default interface, so offer a directed one (config.go).
+			BroadcastAddr: net.ParseIP(cfg.PXEBroadcastAddr),
 			// Persist firmware observations (DHCP option 93) into the machine
 			// record — docs/08-data-model.md machines, roadmap next phase.
 			// Inline on the DHCP read path: short timeout, never blocks long.

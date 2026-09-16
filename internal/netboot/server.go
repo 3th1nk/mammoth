@@ -44,6 +44,13 @@ type Options struct {
 	// — keep it fast and non-blocking. nil keeps the responder
 	// observation-free.
 	OnObserve func(mac string, arch Arch)
+	// BroadcastAddr, when set, replaces the limited broadcast
+	// (255.255.255.255) in boot replies with this directed broadcast
+	// (the provisioning subnet's 192.168.x.255). macOS routing sends
+	// 255.255.255.255 via the default interface — guests behind a local
+	// vmnet bridge never see the offer (qemu verification finding); Linux
+	// deployments need no override (nil).
+	BroadcastAddr net.IP
 	// DHCP, when set, turns the responder into a full DHCP server for PXE
 	// clients (option 60) on DHCP-less provisioning L2s — a boot ROM needs
 	// an IP lease before it will fetch anything. nil keeps the pure proxy
@@ -51,6 +58,15 @@ type Options struct {
 	DHCP *DHCPPool
 	// Log receives service diagnostics; nil defaults to slog.Default().
 	Log *slog.Logger
+}
+
+// broadcastFor resolves the reply broadcast target: the configured directed
+// broadcast when set, else the limited broadcast.
+func (o Options) broadcastFor() net.IP {
+	if o.BroadcastAddr != nil {
+		return o.BroadcastAddr
+	}
+	return net.IPv4bcast
 }
 
 // Server is one running netboot service (proxyDHCP + TFTP).
@@ -217,6 +233,7 @@ func (s *Server) serveUDP(ctx context.Context, conn *net.UDPConn, port int) {
 		if cm != nil {
 			wcm.IfIndex = cm.IfIndex
 		}
+		s.logf("dhcp: request from %s (ifindex %d) -> reply to %s", addr, cm.IfIndex, to)
 		if _, err := pc.WriteTo(reply, wcm, to); err != nil {
 			s.logf("dhcp: reply to %s: %v", to, err)
 		}

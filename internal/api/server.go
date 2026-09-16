@@ -96,21 +96,25 @@ func New(d Deps, apiToken string) *gin.Engine {
 	if d.Metrics != nil {
 		router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	}
-	// The apk repository subtree rides multi-segment paths
-	// (/netboot/files/<token>/apks/x86_64/*.apk) the generated single-param
-	// route can't match — a manual catch-all shares the strict handler.
-	router.GET("/netboot/files/:token/apks/*rest", func(c *gin.Context) {
-		req := gen.FetchNetbootFileRequestObject{
-			Token: c.Param("token"),
-			File:  "apks" + c.Param("rest"),
-		}
-		resp, err := srv.FetchNetbootFile(c.Request.Context(), req)
-		if err != nil {
-			writeError(c, err)
-			return
-		}
-		_ = resp.VisitFetchNetbootFileResponse(c.Writer)
-	})
+	// Boot-tree subtrees ride multi-segment paths (/netboot/files/<token>/
+	// apks/x86_64/*.apk, /netboot/files/<token>/iso/dists/...) the generated
+	// single-param route can't match — manual catch-alls share the strict
+	// handler; allowlisting is enforced inside it (entryGrants).
+	for _, sub := range []string{"apks", "iso"} {
+		sub := sub
+		router.GET("/netboot/files/:token/"+sub+"/*rest", func(c *gin.Context) {
+			req := gen.FetchNetbootFileRequestObject{
+				Token: c.Param("token"),
+				File:  sub + c.Param("rest"),
+			}
+			resp, err := srv.FetchNetbootFile(c.Request.Context(), req)
+			if err != nil {
+				writeError(c, err)
+				return
+			}
+			_ = resp.VisitFetchNetbootFileResponse(c.Writer)
+		})
+	}
 	gen.RegisterHandlers(router, strict)
 
 	router.NoRoute(func(c *gin.Context) {

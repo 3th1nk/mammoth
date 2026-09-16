@@ -79,7 +79,7 @@ const (
 	// NetbootCarrierDINetboot — the ISO's d-i initrd is the cdrom flavour,
 	// useless over the wire; the boot files come from the distro's official
 	// netboot tarball instead (a deployment-configured carrier,
-	// MAMMOTH_PXE_DEBIAN12_NETBOOT).
+	// MAMMOTH_PXE_DI_NETBOOT).
 	NetbootCarrierDINetboot NetbootCarrier = "di_netboot"
 )
 

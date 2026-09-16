@@ -37,7 +37,7 @@ func (d *Driver) SupportedArchs() []render.Arch { return []render.Arch{render.Ar
 // (the same level as ubuntu22, docs/06-install-pipeline.md §5 matrix).
 func (d *Driver) KeepPartitionSupport() render.SupportLevel { return render.SupportPartial }
 
-// PXESupport: full over the netboot tarball (MAMMOTH_PXE_DEBIAN12_NETBOOT)
+// PXESupport: full over the netboot tarball (MAMMOTH_PXE_DI_NETBOOT)
 // with the install source served as an HTTP pool unpacked from the distro
 // ISO — offline semantics kept, no upstream mirror (docs/06-install-pipeline.md
 // §3.3, §6).
@@ -58,6 +58,8 @@ func (d *Driver) suite() (string, error) {
 	switch d.distro {
 	case "debian12":
 		return "bookworm", nil
+	case "debian13":
+		return "trixie", nil
 	default:
 		return "", fmt.Errorf("%s: no archive suite mapped for PXE installs", d.distro)
 	}
@@ -187,6 +189,11 @@ func (d *Driver) preseed(in render.InstallInputs, t target, recipe, net string, 
 		fmt.Fprintf(&b, "d-i mirror/http/hostname string %s\n", host)
 		fmt.Fprintf(&b, "d-i mirror/http/directory string %s\n", dir)
 		fmt.Fprintf(&b, "d-i mirror/suite string %s\n", suite)
+		// The distro ISO's dists/ carries a bare Release without Release.gpg
+		// (trixie signed-repo layout) — choose-mirror's gpg check 404s on it.
+		// The pool is the byte-exact unpack of the official ISO on the
+		// provisioning L2, so the signature check adds nothing here.
+		b.WriteString("d-i debian-installer/allow_unauthenticated boolean true\n")
 		b.WriteString("d-i apt-setup/use_mirror boolean false\n")
 		b.WriteString("d-i apt-setup/services-select multiselect\n")
 		b.WriteString("popularity-contest popularity-contest/participate boolean false\n\n")
@@ -234,7 +241,16 @@ func (d *Driver) preseed(in render.InstallInputs, t target, recipe, net string, 
 	b.WriteString("d-i pkgsel/upgrade select none\n\n")
 	b.WriteString("#### finish: hooks live on the boot medium (see run/mammoth/*.sh)\n")
 	b.WriteString("d-i debian-installer/exit/poweroff boolean false\n")
-	b.WriteString("d-i preseed/early_command string sh /cdrom/run/mammoth/pre-install.sh\n")
-	b.WriteString("d-i preseed/late_command string sh /cdrom/run/mammoth/post-install.sh\n")
+	// Hook delivery follows the carrier: the ISO mounts at /cdrom, while the
+	// netboot initrd has no CD — its scripts fetch over HTTP from the task
+	// token URL (busybox wget is present in both d-i environments).
+	if nb == nil {
+		b.WriteString("d-i preseed/early_command string sh /cdrom/run/mammoth/pre-install.sh\n")
+		b.WriteString("d-i preseed/late_command string sh /cdrom/run/mammoth/post-install.sh\n")
+	} else {
+		base := strings.TrimSuffix(in.AnswerBaseURL, "/")
+		b.WriteString("d-i preseed/early_command string wget -qO- " + base + "/run/mammoth/pre-install.sh | sh\n")
+		b.WriteString("d-i preseed/late_command string wget -qO- " + base + "/run/mammoth/post-install.sh | sh\n")
+	}
 	return b.String()
 }

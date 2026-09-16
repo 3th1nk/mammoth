@@ -48,7 +48,7 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 		// its initrd pulls installer components from the HTTP pool.
 		if e.PXEDINetbootTarball == "" {
 			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,
-				"%s PXE needs the d-i netboot tarball (set MAMMOTH_PXE_DEBIAN12_NETBOOT) — the ISO's own initrd is the cdrom flavour and cannot fetch components over the network", b.Spec.Image.Distro)
+				"%s PXE needs the d-i netboot tarball (set MAMMOTH_PXE_DI_NETBOOT) — the ISO's own initrd is the cdrom flavour and cannot fetch components over the network", b.Spec.Image.Distro)
 		}
 		tarball, terr := builder.EnsureISO(ctx, e.PXEDINetbootTarball, e.MediaWorkDir)
 		if terr != nil {

@@ -65,7 +65,7 @@ type Executor struct {
 	ProbeAlpineNetboot string
 	// PXEDINetbootTarball is the debian-installer netboot tarball
 	// (netboot.tar.gz, local path or URL) — the d-i PXE carrier
-	// (MAMMOTH_PXE_DEBIAN12_NETBOOT): the ISO's own initrd is the cdrom
+	// (MAMMOTH_PXE_DI_NETBOOT): the ISO's own initrd is the cdrom
 	// flavour and cannot fetch installer components over the network.
 	PXEDINetbootTarball string
 	// ProbeStaticCIDR, when set, is the probe's DHCP fallback address for

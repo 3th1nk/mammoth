@@ -76,7 +76,7 @@ func (s *Server) handle(req []byte, port int, src *net.UDPAddr) ([]byte, *net.UD
 	if reply == nil {
 		return nil, nil
 	}
-	return reply, bootReplyAddr(p, src)
+	return reply, bootReplyAddr(p, src, s.opts.broadcastFor())
 }
 
 // bootReplyAddr selects where a reply goes (RFC 2131 §4.1): a boot ROM has
@@ -85,7 +85,7 @@ func (s *Server) handle(req []byte, port int, src *net.UDPAddr) ([]byte, *net.UD
 // address there would send the offer to 0.0.0.0, which the kernel quietly
 // delivers to loopback — the offer vanishes without a single error log
 // (the 2288H real-hardware finding that cost the first PXE boot attempt).
-func bootReplyAddr(p *packet, src *net.UDPAddr) *net.UDPAddr {
+func bootReplyAddr(p *packet, src *net.UDPAddr, broadcastAddr net.IP) *net.UDPAddr {
 	port := 68
 	if src != nil && src.Port != 0 {
 		port = src.Port
@@ -100,6 +100,14 @@ func bootReplyAddr(p *packet, src *net.UDPAddr) *net.UDPAddr {
 		return &net.UDPAddr{IP: g, Port: 67}
 	}
 	if src == nil || src.IP == nil || src.IP.IsUnspecified() || p.flags&0x8000 != 0 {
+		// Limited broadcast (255.255.255.255) is routed by Linux out the
+		// arriving interface, but macOS sends it via the default route —
+		// unreachable for guests behind a local vmnet bridge. A configured
+		// directed broadcast address (the provisioning subnet's
+		// 192.168.x.255) routes correctly there instead.
+		if broadcastAddr != nil {
+			return &net.UDPAddr{IP: broadcastAddr, Port: port}
+		}
 		return &net.UDPAddr{IP: net.IPv4bcast, Port: port}
 	}
 	return src

@@ -66,15 +66,18 @@ func (s *Server) FetchNetbootFile(ctx context.Context, request gen.FetchNetbootF
 	}
 	rel, ok := entryGrants(e, request.File)
 	if !ok {
+		obs.FromContext(ctx).InfoContext(ctx, "netboot file rejected", "token", e.Token, "file", request.File)
 		return nil, verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
 			"file %q is not part of this boot tree", request.File)
 	}
 	path := filepath.Join(s.MediaDir, "netboot", e.Token, rel)
 	f, err := os.Open(path)
 	if err != nil {
+		obs.FromContext(ctx).InfoContext(ctx, "netboot file miss", "token", e.Token, "file", rel)
 		return nil, verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
 			"file %q is not available yet", request.File)
 	}
+	obs.FromContext(ctx).InfoContext(ctx, "netboot file served", "file", rel)
 	st, err := f.Stat()
 	if err != nil || !st.Mode().IsRegular() {
 		f.Close()

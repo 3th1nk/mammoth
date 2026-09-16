@@ -147,7 +147,7 @@ iPXE 脚本),默认关闭。启用清单:
    不触碰机器)。
 6. **非 RHEL 家族的 PXE 安装源**:
    - **debian12**:载体为 d-i 官方 `netboot.tar.gz`
-     (`MAMMOTH_PXE_DEBIAN12_NETBOOT`,路径或 URL;ISO 自带 initrd 是 cdrom
+     (`MAMMOTH_PXE_DI_NETBOOT`,路径或 URL;ISO 自带 initrd 是 cdrom
      flavour,网络上不可用),安装源为 ISO 解包后的 HTTP 池(自动经引导树
      授权暴露),preseed mirror 指向池——离线语义保持;
    - **ubuntu22**:载体与源均自动(casper 从 ISO 提取 + NFS squashfs 树,

@@ -149,6 +149,12 @@ type Config struct {
 	// exists.
 	PXEDHCPPool   string
 	PXEDHCPRouter string // optional lease router; defaults to PXENextServer
+	// PXEBroadcastAddr (optional) replaces the limited broadcast
+	// (255.255.255.255) in PXE replies with a directed broadcast — macOS
+	// routing sends 255.255.255.255 via the default interface, which never
+	// reaches guests behind a local vmnet bridge (qemu verification setup).
+	// Linux deployments need no override.
+	PXEBroadcastAddr string
 	// PXEEnroll turns on the zero-registration entry (MAMMOTH_PXE_ENROLL,
 	// docs/09-roadmap.md): unknown MACs are offered the shared enrollment
 	// payload — an alpine probe environment that scans /sys and reports
@@ -234,7 +240,7 @@ func FromEnv() (Config, error) {
 	applyString(&c.IPMIInterface, "MAMMOTH_IPMI_INTERFACE", &errs)
 	applyString(&c.ProbeAlpineISO, "MAMMOTH_PROBE_ALPINE_ISO", &errs)
 	applyString(&c.ProbeAlpineNetboot, "MAMMOTH_PROBE_ALPINE_NETBOOT", &errs)
-	applyString(&c.PXEDINetboot, "MAMMOTH_PXE_DEBIAN12_NETBOOT", &errs)
+	applyString(&c.PXEDINetboot, "MAMMOTH_PXE_DI_NETBOOT", &errs)
 	applyString(&c.ProbeStaticCIDR, "MAMMOTH_PROBE_STATIC_CIDR", &errs)
 	applyString(&c.ProbeGateway, "MAMMOTH_PROBE_GATEWAY", &errs)
 	applyString(&c.MediaDir, "MAMMOTH_MEDIA_DIR", &errs)
@@ -273,6 +279,7 @@ func FromEnv() (Config, error) {
 	applyString(&c.PXENextServer, "MAMMOTH_PXE_NEXT_SERVER", &errs)
 	applyString(&c.PXEDHCPPool, "MAMMOTH_PXE_DHCP_POOL", &errs)
 	applyString(&c.PXEDHCPRouter, "MAMMOTH_PXE_DHCP_ROUTER", &errs)
+	applyString(&c.PXEBroadcastAddr, "MAMMOTH_PXE_BROADCAST_ADDR", &errs)
 	applyBool(&c.PXEEnroll, "MAMMOTH_PXE_ENROLL", &errs)
 	applyString(&c.PXEEnrollToken, "MAMMOTH_PXE_ENROLL_TOKEN", &errs)
 	applyString(&c.BootStrategyDefault, "MAMMOTH_BOOT_STRATEGY", &errs)

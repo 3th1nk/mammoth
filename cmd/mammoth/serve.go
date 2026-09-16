@@ -410,6 +410,7 @@ func serve(args []string) error {
 			MediaDir:            cfg.MediaDir,
 			MediaWorkDir:        cfg.MediaWorkDir,
 			MediaBaseURI:        cfg.MediaBaseURI,
+			MediaNFSBase:        cfg.MediaBaseURI,
 			BootSettleDelay:     cfg.BootSettleDelay,
 			VerifyReadyWait:     cfg.VerifyReadyWait,
 			MediaUploader:       mediaUploader,

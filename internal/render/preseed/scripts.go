@@ -73,8 +73,9 @@ func preInstallScript(in render.InstallInputs, t target) string {
 // the storage drivers, so the volume is visible under /sys/block. It matches
 // by size, seeds partman-auto/disk and grub-installer/bootdev via
 // debconf-set, and rides the same failtrap semantics — a failed resolution
-// reports pre_install failed instead of letting partman write the wrong
-// device. Runs over HTTP like the other hooks (the route serves
+// reports pre_install failed (with the block-device inventory in the detail,
+// the eyes we had missing on real hardware) instead of letting partman write
+// the wrong device. Runs over HTTP like the other hooks (the route serves
 // run/mammoth/* multi-segment names).
 func resolveDiskScript(in render.InstallInputs, t target) string {
 	var b strings.Builder
@@ -82,36 +83,28 @@ func resolveDiskScript(in render.InstallInputs, t target) string {
 	b.WriteString("# Mammoth disk resolution (partman/early_command; storage enumerated).\n")
 	b.WriteString(failtrap("pre_install", in.CompleteURL) + "\n")
 	b.WriteString("set -e\n")
-	b.WriteString(deviceResolveScript(t))
-	b.WriteString("trap - EXIT\n")
-	return b.String()
-}
-
-// deviceResolveScript re-identifies a hardware-RAID volume by capacity: the
-// tolerance mirrors kickstart's %pre resolver (1%, floor 64MiB) — Redfish and
-// kernel capacities agree to within controller rounding. busybox arithmetic
-// is 64-bit; the size sysfs node counts 512-byte sectors.
-func deviceResolveScript(t target) string {
-	var b strings.Builder
-	b.WriteString("# resolve the hardware-RAID volume (controller name -> kernel device, by size)\n")
 	fmt.Fprintf(&b, "want=%d\n", t.sizeBytes)
 	b.WriteString("best=\"\"; bestdiff=0\n")
+	b.WriteString("inv=\"\"\n")
 	b.WriteString("for d in /sys/block/*; do\n")
 	b.WriteString("  name=${d##*/}\n")
 	b.WriteString("  case \"$name\" in loop*|ram*|dm-*|sr*|md*) continue ;; esac\n")
 	b.WriteString("  [ -f \"$d/size\" ] || continue\n")
 	b.WriteString("  size=$(($(cat \"$d/size\") * 512))\n")
+	b.WriteString("  inv=\"$inv $name=$size\"\n")
 	b.WriteString("  diff=$((size - want)); [ $diff -lt 0 ] && diff=$((-diff))\n")
 	b.WriteString("  if [ -z \"$best\" ] || [ $diff -lt $bestdiff ]; then best=$name; bestdiff=$diff; fi\n")
 	b.WriteString("done\n")
 	b.WriteString("tol=$((want / 100)); [ $tol -lt 67108864 ] && tol=67108864\n")
 	b.WriteString("if [ -z \"$best\" ] || [ $bestdiff -gt $tol ]; then\n")
-	b.WriteString("  echo \"mammoth: no block device matches size=$want (closest $best off by $bestdiff)\" >&2\n")
+	b.WriteString("  echo \"mammoth: no block device matches size=$want (inventory:$inv)\" >&2\n")
+	b.WriteString("  wget -q -T 5 -O /dev/null --post-data=\"{\\\"status\\\":\\\"failed\\\",\\\"detail\\\":\\\"pre_install: no device matches size=$want (inventory:$inv)\\\"}\" " + in.CompleteURL + " >/dev/null 2>&1 || true\n")
 	b.WriteString("  exit 1\n")
 	b.WriteString("fi\n")
 	fmt.Fprintf(&b, "echo \"mammoth: install target %s -> /dev/$best (off by $bestdiff bytes)\" >&2\n", t.device)
 	b.WriteString("debconf-set partman-auto/disk /dev/$best\n")
 	b.WriteString("debconf-set grub-installer/bootdev /dev/$best\n")
+	b.WriteString("trap - EXIT\n")
 	return b.String()
 }
 

@@ -223,15 +223,17 @@ func serve(args []string) error {
 	// escape hatch — a silent downgrade would strand machines at the PXE
 	// prompt — so a bind failure is fatal when explicitly enabled.
 	var nbResolver netboot.Resolver
+	// dhcpPool survives the netboot facet scope: the runner's verify_ready
+	// resolves DHCP-carrier machine addresses through it (nil = disabled).
+	var dhcpPool *netboot.DHCPPool
 	if cfg.PXEEnabled && cfg.Mode.RunsNetboot() {
 		nextServer := net.ParseIP(cfg.PXENextServer)
-		var pool *netboot.DHCPPool
 		if cfg.PXEDHCPPool != "" {
 			router := net.ParseIP(cfg.PXEDHCPRouter)
 			if router == nil {
 				router = nextServer
 			}
-			pool, err = netboot.ParseDHCPPool(cfg.PXEDHCPPool, router)
+			dhcpPool, err = netboot.ParseDHCPPool(cfg.PXEDHCPPool, router)
 			if err != nil {
 				return fmt.Errorf("netboot: MAMMOTH_PXE_DHCP_POOL: %w", err)
 			}
@@ -263,7 +265,7 @@ func serve(args []string) error {
 			BaseURL:    strings.TrimSuffix(cfg.ExternalURL, "/"),
 			NBPs:       pxe.Files,
 			Resolver:   nbResolver,
-			DHCP:       pool,
+			DHCP:       dhcpPool,
 			Log:        logger,
 			// macOS/vmnet verification setups: limited broadcast leaves via
 			// the default interface, so offer a directed one (config.go).
@@ -427,6 +429,11 @@ func serve(args []string) error {
 			Netboot:             netbootRepo,
 			BootTreeDir:         filepath.Join(cfg.MediaDir, "netboot"),
 			BootStrategyDefault: cfg.BootStrategyDefault,
+		}
+		if dhcpPool != nil {
+			// DHCP-carrier installs (ubuntu PXE) move the machine off any
+			// recorded static address; verify_ready resolves the live lease.
+			exec.DHCPLeaseFor = dhcpPool.LeaseFor
 		}
 		runner := provision.NewRunner(tq, jobRepo, eventRepo, exec, metrics, provision.RunnerOptions{
 			Concurrency:     cfg.RunnerConcurrency,

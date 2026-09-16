@@ -1070,10 +1070,22 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 					PrivateKey string `json:"private_key"`
 				}
 				if json.Unmarshal(plain, &secret) == nil {
-					res, degraded, perr := e.waitForNewSystem(ctx, m.SSHAddress, inbandssh.Credentials{
+					cred := inbandssh.Credentials{
 						Username: secret.Username, Password: secret.Password,
 						PrivateKey: secret.PrivateKey,
-					})
+					}
+					res, degraded, perr := e.waitForNewSystem(ctx, m.SSHAddress, cred)
+					if perr != nil {
+						// DHCP-carrier installs (ubuntu PXE: no static
+						// declaration allowed) move the machine off the
+						// recorded address — its live lease is where the
+						// completion report came from. Retry there once.
+						if addr, ok := e.dhcpLeaseAddr(m.Hardware); ok {
+							obs.FromContext(ctx).WarnContext(ctx, "verify_ready static address unreachable; retrying against the DHCP lease",
+								"machine", task.MachineID, "static", m.SSHAddress, "lease", addr)
+							res, degraded, perr = e.waitForNewSystem(ctx, addr, cred)
+						}
+					}
 					if perr != nil {
 						return classifiedErr("INSTALL_NOT_REACHABLE", true,
 							"new system did not answer in-band: %s", perr.Error())
@@ -1178,6 +1190,33 @@ func errString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// dhcpLeaseAddr resolves the machine's live DHCP lease IP from its hardware
+// view's NIC MACs — the verify_ready address fallback for DHCP-carrier
+// installs (ubuntu PXE). ok=false when the lease hook is absent (runner
+// without the netboot facet) or no NIC holds a live lease.
+func (e *Executor) dhcpLeaseAddr(hardware json.RawMessage) (string, bool) {
+	if e.DHCPLeaseFor == nil || len(hardware) == 0 {
+		return "", false
+	}
+	var hw struct {
+		NICs []struct {
+			MAC string `json:"mac"`
+		} `json:"nics"`
+	}
+	if err := json.Unmarshal(hardware, &hw); err != nil {
+		return "", false
+	}
+	for _, n := range hw.NICs {
+		if n.MAC == "" {
+			continue
+		}
+		if ip := e.DHCPLeaseFor(n.MAC); ip != nil {
+			return ip.String(), true
+		}
+	}
+	return "", false
 }
 
 // ── snapshot binding helpers (M4) ───────────────────────────────────────────

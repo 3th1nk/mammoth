@@ -59,6 +59,38 @@ func TestNewDHCPPoolRejectsGarbage(t *testing.T) {
 	}
 }
 
+// LeaseFor is the read-only forward lookup verify_ready uses: it finds a
+// live lease in any spelling, never reserves for unknown MACs, and returns
+// nil after expiry.
+func TestDHCPPoolLeaseFor(t *testing.T) {
+	pool, err := NewDHCPPool(net.IPv4(192, 168, 77, 200), net.IPv4(192, 168, 77, 203), nil, net.IPv4(192, 168, 77, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip := pool.lease("52:54:00:00:00:01")
+	if ip == nil {
+		t.Fatal("no lease to find")
+	}
+
+	// Any common spelling finds the lease; the lookup never allocates.
+	for _, mac := range []string{"52:54:00:00:00:01", "52-54-00-00-00-01", "525400000001", "5254:0000:0001"} {
+		got := pool.LeaseFor(mac)
+		if got == nil || !got.Equal(ip) {
+			t.Fatalf("LeaseFor(%q) = %v, want %v", mac, got, ip)
+		}
+	}
+	if got := pool.LeaseFor("52:54:00:00:00:09"); got != nil {
+		t.Fatalf("LeaseFor reserved for an unknown MAC: %v", got)
+	}
+	if got := pool.LeaseFor(""); got != nil {
+		t.Fatalf("LeaseFor(\"\") = %v", got)
+	}
+	var nilPool *DHCPPool
+	if got := nilPool.LeaseFor("52:54:00:00:00:01"); got != nil {
+		t.Fatalf("nil pool returned %v", got)
+	}
+}
+
 func TestDHCPPoolMacFor(t *testing.T) {
 	pool, _ := NewDHCPPool(net.IPv4(192, 168, 77, 200), net.IPv4(192, 168, 77, 203), nil, net.IPv4(192, 168, 77, 1))
 	ip := pool.lease("52:54:00:00:00:01")

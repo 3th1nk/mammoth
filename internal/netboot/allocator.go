@@ -222,8 +222,7 @@ func (p *DHCPPool) lease(mac string) net.IP {
 // lease IP, because Debian grubnet requests the fixed path /grub/grub.cfg
 // (proxyDHCP leaves net_default_server empty, so the per-MAC filename
 // variants are never tried).
-func (p *DHCPPool) macFor(ip net.IP) string {
-	if p == nil || ip == nil {
+func (p *DHCPPool) macFor(ip net.IP) string {	if p == nil || ip == nil {
 		return ""
 	}
 	v4 := ip.To4()
@@ -239,6 +238,29 @@ func (p *DHCPPool) macFor(ip net.IP) string {
 		}
 	}
 	return ""
+}
+
+// LeaseFor returns the live lease IP for mac, or nil — a pure read, never
+// reserving (the allocating path is lease, the DHCP read path). Provision's
+// verify_ready uses it as the address fallback for DHCP-carrier installs
+// (ubuntu PXE: live system and target both DHCP, so the machine answers on
+// its lease, not on any recorded static address). MAC spelling is normalized
+// on both sides — the pool keys chaddr spellings, machine records carry
+// Redfish spellings, and the two differ in case and separators.
+func (p *DHCPPool) LeaseFor(mac string) net.IP {
+	if p == nil || mac == "" {
+		return nil
+	}
+	want := normalizeMAC(mac)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now()
+	for m, l := range p.leases {
+		if normalizeMAC(m) == want && now.Before(l.expires) {
+			return l.ip
+		}
+	}
+	return nil
 }
 
 // Mask and Router are the lease parameters handed to clients.

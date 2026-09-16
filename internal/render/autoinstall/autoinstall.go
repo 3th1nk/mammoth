@@ -185,7 +185,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			return nil, render.BootParams{}, fmt.Errorf("%s: PXE installs need an NFS media base for the casper live root (set MAMMOTH_MEDIA_BASE_URI=nfs://<host>/<export> on the runner)", d.distro)
 		}
 		boot.NetbootKernelArgs = fmt.Sprintf(
-			"autoinstall ds=nocloud-net;s=%s/ ip=dhcp boot=casper netboot=nfs nfsroot=%s nfsopts=proto=tcp,vers=3",
+			"autoinstall ds=nocloud-net;s=%s/ ip=dhcp boot=casper netboot=nfs nfsroot=%s nfsopts=tcp,v3",
 			strings.TrimSuffix(in.AnswerBaseURL, "/"), in.Netboot.NFSRootURL)
 	}
 	return answers, boot, nil

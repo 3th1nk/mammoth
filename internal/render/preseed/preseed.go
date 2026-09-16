@@ -228,7 +228,7 @@ func (d *Driver) preseed(in render.InstallInputs, t target, recipe, net string, 
 		if nb == nil {
 			b.WriteString("d-i partman/early_command string sh /cdrom/run/mammoth/resolve-disk.sh\n")
 		} else {
-			fmt.Fprintf(&b, "d-i partman/early_command string wget -qO- %s/run/mammoth/resolve-disk.sh | sh\n", strings.TrimSuffix(in.AnswerBaseURL, "/"))
+			fmt.Fprintf(&b, "d-i partman/early_command string wget -q -T 10 -O /tmp/mammoth-resolve.sh %s/run/mammoth/resolve-disk.sh && sh /tmp/mammoth-resolve.sh\n", strings.TrimSuffix(in.AnswerBaseURL, "/"))
 		}
 		b.WriteString("# partman-auto/disk: set by resolve-disk.sh (hardware-RAID volume resolved by size)\n")
 	} else {
@@ -278,8 +278,8 @@ func (d *Driver) preseed(in render.InstallInputs, t target, recipe, net string, 
 		b.WriteString("d-i preseed/late_command string sh /cdrom/run/mammoth/post-install.sh\n")
 	} else {
 		base := strings.TrimSuffix(in.AnswerBaseURL, "/")
-		b.WriteString("d-i preseed/early_command string wget -qO- " + base + "/run/mammoth/pre-install.sh | sh\n")
-		b.WriteString("d-i preseed/late_command string wget -qO- " + base + "/run/mammoth/post-install.sh | sh\n")
+		b.WriteString("d-i preseed/early_command string wget -q -T 10 -O /tmp/mammoth-pre.sh " + base + "/run/mammoth/pre-install.sh && sh /tmp/mammoth-pre.sh\n")
+		b.WriteString("d-i preseed/late_command string wget -q -T 10 -O /tmp/mammoth-post.sh " + base + "/run/mammoth/post-install.sh && sh /tmp/mammoth-post.sh\n")
 	}
 	return b.String()
 }

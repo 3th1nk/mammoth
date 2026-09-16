@@ -465,8 +465,8 @@ func TestDynamicTargetNetbootHook(t *testing.T) {
 	}}
 	in.Netboot = &render.NetbootInputs{PoolURL: "http://10.0.0.1/netboot/files/tokd"}
 	seed := fetchNetbootSeed(t, in)
-	if !strings.Contains(seed, "partman/early_command string wget -qO- https://m/render/tokd/run/mammoth/resolve-disk.sh | sh") {
-		t.Errorf("netboot seed missing partman/early_command wget hook: %s", seed)
+	if !strings.Contains(seed, "partman/early_command string wget -q -T 10 -O /tmp/mammoth-resolve.sh https://m/render/tokd/run/mammoth/resolve-disk.sh && sh /tmp/mammoth-resolve.sh") {
+		t.Errorf("netboot seed missing partman/early_command fetch hook: %s", seed)
 	}
 }
 

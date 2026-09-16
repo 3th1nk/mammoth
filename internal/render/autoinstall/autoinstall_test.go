@@ -294,6 +294,22 @@ func TestRenderNetbootCasperArgs(t *testing.T) {
 		!strings.Contains(boot.NetbootKernelArgs, "BOOTIF=01-02-00-00-00-00-00") {
 		t.Errorf("netboot args missing casper/nfsroot/seed/tcp/BOOTIF: %q", boot.NetbootKernelArgs)
 	}
+
+	// A DHCP-only spec (the PXE-legal form) carries no network declaration —
+	// the BOOTIF MAC then comes from the machine's NIC inventory.
+	in.Network = nil
+	_, boot2, err := d.RenderAnswers(in, render.MachineView{
+		Hardware: &bmc.HardwareView{NICs: []bmc.NICView{
+			{Name: "eno1", MAC: "02:00:00:00:00:00"},
+			{Name: "eno2", MAC: "02:00:00:00:00:01"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("render dhcp-only: %v", err)
+	}
+	if !strings.Contains(boot2.NetbootKernelArgs, "BOOTIF=01-02-00-00-00-00-00") {
+		t.Errorf("dhcp-only render missing BOOTIF from machine inventory: %q", boot2.NetbootKernelArgs)
+	}
 	// The seed files stay identical to the ISO path (ds= is an absolute URL).
 	var found bool
 	for _, a := range answers {

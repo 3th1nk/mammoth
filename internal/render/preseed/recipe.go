@@ -15,6 +15,12 @@ type target struct {
 	device     string // kernel name; partman-auto/disk accepts that form only
 	sizeBytes  int64
 	partitions []render.ResolvedPartition
+	// dynamic marks a controller-named hardware-RAID volume (LogicalDrive0,
+	// not a kernel name): the preseed leaves partman-auto/disk and
+	// grub-installer/bootdev unset and the early_command hook resolves the
+	// kernel device by size, seeding both via debconf-set (the official
+	// dynamic-preseed shape — the same re-identification kickstart does in %pre).
+	dynamic bool
 }
 
 // growMaxMB is the expert_recipe "max" for rest-size partitions — partman
@@ -63,7 +69,12 @@ func installTarget(distro string, in render.InstallInputs, m render.MachineView)
 
 	t := candidates[0]
 	if !render.IsKernelDeviceName(t.device) {
-		return target{}, fmt.Errorf("%sinstall target %s is not a kernel device name; configure_raid must bind it first", prefix, t.device)
+		// Controller-assigned names (LogicalDriveN) are re-identified by size
+		// in the early_command hook — impossible without a known capacity.
+		if t.sizeBytes <= 0 {
+			return target{}, fmt.Errorf("%sinstall target %s is not a kernel device name and its capacity is unknown (no inventory snapshot); cannot resolve it in the installer", prefix, t.device)
+		}
+		t.dynamic = true
 	}
 	if len(t.partitions) == 0 {
 		return target{}, fmt.Errorf("%sinstall target %s declares no partitions (partman-auto needs an expert recipe)", prefix, t.device)

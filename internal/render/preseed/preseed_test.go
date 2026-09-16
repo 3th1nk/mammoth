@@ -287,6 +287,70 @@ func TestRenderHardwareRaidTarget(t *testing.T) {
 	}
 }
 
+// A controller-named volume (LogicalDriveN, not a kernel name) resolves in
+// the early_command: the preseed carries no partman-auto/disk or
+// grub-installer/bootdev line and the pre-install hook seeds both via
+// debconf-set after matching the capacity (real-hardware: Huawei 2288H LSI).
+func TestRenderDynamicRaidTarget(t *testing.T) {
+	in := wipeInputs()
+	in.Disks = []render.ResolvedDisk{{Device: "sdb", KeepDisk: true}}
+	in.Raid = []render.ResolvedRaid{{
+		Name: "vol0", Mode: "hardware", Level: "1", BoundDevice: "LogicalDrive0",
+		SizeBytes: 3999999721472, MemberSerials: []string{"S1", "S2"},
+		Partitions: []render.ResolvedPartition{
+			{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+			{Mount: "/", FS: "ext4", Grow: true},
+		},
+	}}
+	answers, _, err := New("debian13").RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	var seed, preInstall string
+	for _, a := range answers {
+		switch a.Name {
+		case "preseed.cfg":
+			seed = a.Content
+		case "run/mammoth/pre-install.sh":
+			preInstall = a.Content
+		}
+	}
+	if seed == "" || preInstall == "" {
+		t.Fatalf("missing answers: %+v", answers)
+	}
+	if strings.Contains(seed, "d-i partman-auto/disk string") {
+		t.Errorf("dynamic target must not pin partman-auto/disk: %s", seed)
+	}
+	if strings.Contains(seed, "d-i grub-installer/bootdev string") {
+		t.Errorf("dynamic target must not pin grub-installer/bootdev: %s", seed)
+	}
+	for _, want := range []string{
+		"want=3999999721472",
+		"debconf-set partman-auto/disk /dev/$best",
+		"debconf-set grub-installer/bootdev /dev/$best",
+		"LogicalDrive0 -> /dev/$best",
+	} {
+		if !strings.Contains(preInstall, want) {
+			t.Errorf("pre-install hook missing %q:\n%s", want, preInstall)
+		}
+	}
+}
+
+// A dynamic target without a known capacity cannot be re-identified in the
+// installer — render must say so instead of shipping an unresolvable seed.
+func TestRenderDynamicRaidTargetWithoutSize(t *testing.T) {
+	in := wipeInputs()
+	in.Disks = []render.ResolvedDisk{{Device: "sdb", KeepDisk: true}}
+	in.Raid = []render.ResolvedRaid{{
+		Name: "vol0", Mode: "hardware", Level: "1", BoundDevice: "LogicalDrive0",
+		Partitions: []render.ResolvedPartition{{Mount: "/", FS: "ext4", Grow: true}},
+	}}
+	_, _, err := New("debian12").RenderAnswers(in, render.MachineView{})
+	if err == nil || !strings.Contains(err.Error(), "capacity is unknown") {
+		t.Errorf("want capacity-unknown error, got %v", err)
+	}
+}
+
 // One driver per registered distro name.
 func TestMultiDistro(t *testing.T) {
 	if New("debian12").KeepPartitionSupport() != render.SupportPartial {
@@ -301,6 +365,58 @@ func TestMultiDistro(t *testing.T) {
 			t.Errorf("%s: render: %v", name, err)
 		}
 	}
+}
+
+// The netboot carrier must carry every netcfg answer on the kernel command
+// line: a URL seed loads after netcfg ran, and on a multi-port machine the
+// unpinned "auto" choice lands on a port without the provisioning L2
+// (real-hardware: 2288H LOM port 2 stalled the DHCP probe).
+func TestNetbootKernelArgsCarryNetcfg(t *testing.T) {
+	in := wipeInputs()
+	// The default-route CIDR spelling real specs use — the gateway must
+	// resolve from it, not just from the literal "default".
+	in.Network[0].Routes = []render.NetRoute{{To: "0.0.0.0/0", Via: "172.16.1.1"}}
+	in.Netboot = &render.NetbootInputs{
+		PoolURL:    "http://10.0.0.1/netboot/files/tokd",
+		NFSRootURL: "10.0.0.1:/export/netboot/tokd/iso",
+	}
+	_, boot, err := New("debian13").RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, want := range []string{
+		"netcfg/choose_interface=aa:bb:cc:dd:ee:01",
+		"netcfg/disable_autoconfig=true",
+		"netcfg/get_ipaddress=172.16.1.11",
+		"netcfg/get_netmask=255.255.255.0",
+		"netcfg/get_gateway=172.16.1.1",
+		"netcfg/get_hostname=node-d1",
+		"netcfg/confirm_static=true",
+	} {
+		if !strings.Contains(boot.NetbootKernelArgs, want) {
+			t.Errorf("netboot kernel args missing %q: %s", want, boot.NetbootKernelArgs)
+		}
+	}
+	// The preseed file keeps its own netcfg block for the ISO carrier.
+	seed := fetchNetbootSeed(t, in)
+	if !strings.Contains(seed, "d-i netcfg/choose_interface select aa:bb:cc:dd:ee:01") {
+		t.Errorf("seed should pin the interface MAC for the ISO carrier: %s", seed)
+	}
+}
+
+func fetchNetbootSeed(t *testing.T, in render.InstallInputs) string {
+	t.Helper()
+	answers, _, err := New("debian13").RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, a := range answers {
+		if a.Name == "preseed-netboot.cfg" {
+			return a.Content
+		}
+	}
+	t.Fatal("no preseed-netboot.cfg")
+	return ""
 }
 
 // The PXE variant: a separate seed with the install source pointed at the

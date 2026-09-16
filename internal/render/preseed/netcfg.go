@@ -33,7 +33,15 @@ func netcfgSection(distro string, entries []render.NetworkEntry, hostname string
 
 	var b strings.Builder
 	b.WriteString("d-i netcfg/enable boolean true\n")
-	b.WriteString("d-i netcfg/choose_interface select auto\n")
+	// Pin the interface by MAC when the spec declares one: multi-port
+	// machines make "auto" pick whichever link is up first — a port without
+	// the provisioning L2 stalls netcfg's DHCP probe (real-hardware: 2288H
+	// LOM port 2). d-i accepts a MAC as the choices value.
+	if mac := interfaceMAC(entries); mac != "" {
+		fmt.Fprintf(&b, "d-i netcfg/choose_interface select %s\n", strings.ToLower(mac))
+	} else {
+		b.WriteString("d-i netcfg/choose_interface select auto\n")
+	}
 	if len(static) == 0 {
 		b.WriteString("d-i netcfg/dhcp_timeout string 10\n")
 		b.WriteString("d-i netcfg/dhcpv6_timeout string 10\n")
@@ -54,7 +62,7 @@ func netcfgSection(distro string, entries []render.NetworkEntry, hostname string
 		fmt.Fprintf(&b, "d-i netcfg/get_ipaddress string %s\n", ip.String())
 		fmt.Fprintf(&b, "d-i netcfg/get_netmask string %s\n", dottedMask(ipnet.Mask))
 		for _, r := range e.Routes {
-			if r.To == "default" {
+			if isDefaultRoute(r.To) {
 				fmt.Fprintf(&b, "d-i netcfg/get_gateway string %s\n", r.Via)
 			}
 		}
@@ -70,11 +78,7 @@ func netcfgSection(distro string, entries []render.NetworkEntry, hostname string
 	// Identity: netcfg asks for the hostname right after link setup, so it is
 	// pinned here (seen=true — netcfg would otherwise prefer a DHCP-provided
 	// name). A dotted hostname splits into host + domain.
-	if hostname != "" {
-		host, domain := hostname, ""
-		if i := strings.IndexByte(hostname, '.'); i > 0 {
-			host, domain = hostname[:i], hostname[i+1:]
-		}
+	if host, domain, ok := splitHostname(hostname); ok {
 		fmt.Fprintf(&b, "d-i netcfg/get_hostname string %s\n", host)
 		b.WriteString("d-i netcfg/get_hostname seen boolean true\n")
 		if domain != "" {
@@ -82,6 +86,88 @@ func netcfgSection(distro string, entries []render.NetworkEntry, hostname string
 		}
 	}
 	return b.String(), nil
+}
+
+// interfaceMAC returns the MAC the spec pins the installer network to, if
+// any — the first entry with a match.mac wins (the dialect's one-interface
+// shape makes ordering moot).
+func interfaceMAC(entries []render.NetworkEntry) string {
+	for _, e := range entries {
+		if e.Match != nil && e.Match.MAC != "" {
+			return e.Match.MAC
+		}
+	}
+	return ""
+}
+
+// netcfgKernelArgs mirrors netcfgSection as kernel-command-line preseed:
+// a URL-loaded seed arrives AFTER netcfg has run (the download needs a
+// working network), so on the netboot carrier every netcfg answer — the
+// interface choice above all — must ride the kernel command line to take
+// effect at all (the official network-preseed ordering rule). Values must
+// stay space-free: they land in one command-line string.
+func netcfgKernelArgs(entries []render.NetworkEntry, hostname string) string {
+	args := []string{"netcfg/enable=true"}
+	if mac := interfaceMAC(entries); mac != "" {
+		args = append(args, "netcfg/choose_interface="+strings.ToLower(mac))
+	} else {
+		args = append(args, "netcfg/choose_interface=auto")
+	}
+	for _, e := range entries {
+		if len(e.Addresses) == 0 {
+			continue
+		}
+		ip, ipnet, err := net.ParseCIDR(e.Addresses[0])
+		if err != nil {
+			continue // render already rejects it in netcfgSection
+		}
+		args = append(args,
+			"netcfg/disable_autoconfig=true",
+			"netcfg/get_ipaddress="+ip.String(),
+			"netcfg/get_netmask="+dottedMask(ipnet.Mask),
+			"netcfg/confirm_static=true",
+		)
+		for _, r := range e.Routes {
+			if isDefaultRoute(r.To) {
+				args = append(args, "netcfg/get_gateway="+r.Via)
+			}
+		}
+		if len(e.Nameservers) > 0 {
+			args = append(args, "netcfg/get_nameservers="+strings.Join(e.Nameservers, ","))
+		}
+		break // the dialect's one-static-entry limit; netcfgSection validates
+	}
+	if host, domain, ok := splitHostname(hostname); ok {
+		args = append(args, "netcfg/get_hostname="+host)
+		if domain != "" {
+			args = append(args, "netcfg/get_domain="+domain)
+		}
+	}
+	return strings.Join(args, " ")
+}
+
+// splitHostname splits a dotted hostname; ok is false for empty input.
+func splitHostname(hostname string) (host, domain string, ok bool) {
+	if hostname == "" {
+		return "", "", false
+	}
+	host, domain = hostname, ""
+	if i := strings.IndexByte(hostname, '.'); i > 0 {
+		host, domain = hostname[:i], hostname[i+1:]
+	}
+	return host, domain, true
+}
+
+// isDefaultRoute matches the default-route spellings the spec accepts —
+// "default" and the CIDR forms (0.0.0.0/0, ::/0). Missing this match leaves
+// netcfg without a gateway, and its static-confirmation asks for one
+// (real-hardware: the installer stalled on the gateway dialog).
+func isDefaultRoute(to string) bool {
+	switch to {
+	case "default", "0.0.0.0/0", "::/0":
+		return true
+	}
+	return false
 }
 
 // dottedMask renders a CIDR mask as the dotted-quad netcfg expects.

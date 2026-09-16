@@ -151,6 +151,17 @@ ln -sf /etc/systemd/system/mammoth-hostname.service /target/etc/systemd/system/m
 	}
 	b.WriteString("mkdir -p /target/etc/ssh/sshd_config.d\n")
 	b.WriteString("echo 'PermitRootLogin yes' > /target/etc/ssh/sshd_config.d/60-mammoth.conf\n")
+	// grub-installer's update-grub is observed to die between writing
+	// grub.cfg.new and its rename on the LSI hardware-RAID volume
+	// (real-hardware 2288H: the install "succeeded", yet the box dropped to
+	// the grub prompt — /boot/grub had grub.cfg.new and no grub.cfg; the
+	// same update-grub on the booted system exits 0). Re-run it, and keep
+	// the .new as a fallback config.
+	b.WriteString("in-target update-grub || true\n")
+	b.WriteString("[ -f /target/boot/grub/grub.cfg ] || cp -a /target/boot/grub/grub.cfg.new /target/boot/grub/grub.cfg 2>/dev/null || true\n")
+	// The installer syslog (ramfs) dies with the installer; the provisioned
+	// system ships without /var/log/installer — keep it for post-mortems.
+	b.WriteString("mkdir -p /target/var/log/installer && cp -a /var/log/syslog /target/var/log/installer/syslog 2>/dev/null || true\n")
 	// The key deb's offline-apt tolerances existed for apt-setup's in-target
 	// mirror verification only; the provisioned system keeps the pool key
 	// (mammoth's signing identity) but never a permanently permissive apt.

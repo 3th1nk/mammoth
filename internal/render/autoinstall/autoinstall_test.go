@@ -307,8 +307,34 @@ func TestRenderNetbootCasperArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render dhcp-only: %v", err)
 	}
-	if !strings.Contains(boot2.NetbootKernelArgs, "BOOTIF=01-02-00-00-00-00-00") {
-		t.Errorf("dhcp-only render missing BOOTIF from machine inventory: %q", boot2.NetbootKernelArgs)
+	if !strings.Contains(boot2.NetbootKernelArgs, "BOOTIF=01-02-00-00-00-00-00") ||
+		!strings.Contains(boot2.NetbootKernelArgs, " ip=dhcp ") {
+		t.Errorf("dhcp-only render missing BOOTIF/dhcp: %q", boot2.NetbootKernelArgs)
+	}
+
+	// With a pool reservation the initramfs configures a static address
+	// directly (boot-time DHCP is racy on real hardware): the reserved ip=
+	// replaces the dhcp argument, device still pinned by BOOTIF.
+	in.Netboot.StaticIP = "198.51.100.186"
+	in.Netboot.StaticRouter = "198.51.100.240"
+	in.Netboot.StaticMask = "255.255.255.0"
+	_, boot3, err := d.RenderAnswers(in, render.MachineView{
+		Hardware: &bmc.HardwareView{NICs: []bmc.NICView{{Name: "eno1", MAC: "02:00:00:00:00:00"}}},
+	})
+	if err != nil {
+		t.Fatalf("render reserved: %v", err)
+	}
+	for _, want := range []string{
+		"ip=198.51.100.186::198.51.100.240:255.255.255.0:::off",
+		"BOOTIF=01-02-00-00-00-00-00",
+		"nfsopts=tcp,v3",
+	} {
+		if !strings.Contains(boot3.NetbootKernelArgs, want) {
+			t.Errorf("reserved render missing %q: %q", want, boot3.NetbootKernelArgs)
+		}
+	}
+	if strings.Contains(boot3.NetbootKernelArgs, "ip=dhcp") {
+		t.Errorf("reserved render still asks for dhcp: %q", boot3.NetbootKernelArgs)
 	}
 	// The seed files stay identical to the ISO path (ds= is an absolute URL).
 	var found bool

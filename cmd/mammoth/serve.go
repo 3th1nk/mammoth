@@ -434,6 +434,11 @@ func serve(args []string) error {
 			// DHCP-carrier installs (ubuntu PXE) move the machine off any
 			// recorded static address; verify_ready resolves the live lease.
 			exec.DHCPLeaseFor = dhcpPool.LeaseFor
+			// And the arm-time reservation pins that address up front so the
+			// installer can boot with a static ip= (boot-time DHCP is racy).
+			exec.DHCPReserveFor = func(mac string) (ip, router net.IP, mask net.IPMask) {
+				return dhcpPool.Reserve(mac), dhcpPool.Router(), net.IPMask(dhcpPool.Mask().To4())
+			}
 		}
 		runner := provision.NewRunner(tq, jobRepo, eventRepo, exec, metrics, provision.RunnerOptions{
 			Concurrency:     cfg.RunnerConcurrency,

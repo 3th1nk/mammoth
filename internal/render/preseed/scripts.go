@@ -151,6 +151,10 @@ ln -sf /etc/systemd/system/mammoth-hostname.service /target/etc/systemd/system/m
 	}
 	b.WriteString("mkdir -p /target/etc/ssh/sshd_config.d\n")
 	b.WriteString("echo 'PermitRootLogin yes' > /target/etc/ssh/sshd_config.d/60-mammoth.conf\n")
+	// The key deb's offline-apt tolerances existed for apt-setup's in-target
+	// mirror verification only; the provisioned system keeps the pool key
+	// (mammoth's signing identity) but never a permanently permissive apt.
+	b.WriteString("rm -f /target/etc/apt/apt.conf.d/99mammoth-offline\n")
 	for _, s := range in.Scripts {
 		if s.Stage != "post_install" {
 			continue

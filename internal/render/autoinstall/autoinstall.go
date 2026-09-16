@@ -187,6 +187,19 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		boot.NetbootKernelArgs = fmt.Sprintf(
 			"autoinstall ds=nocloud-net;s=%s/ ip=dhcp boot=casper netboot=nfs nfsroot=%s nfsopts=tcp,v3",
 			strings.TrimSuffix(in.AnswerBaseURL, "/"), in.Netboot.NFSRootURL)
+		// BOOTIF pins the NIC casper's configure_networking configures: udev
+		// renames interfaces mid-initramfs (2288H: enp1s0 → eno1 between
+		// ipconfig's device scan and its DHCP), and ipconfig then times out
+		// against the vanished name. pxelinux-style "01-<mac>" survives any
+		// rename — the functions resolve the device by MAC, not by name.
+		for _, n := range in.Network {
+			if n.Match == nil || n.Match.MAC == "" {
+				continue
+			}
+			mac := strings.ToLower(strings.NewReplacer(":", "-", ".", "-").Replace(n.Match.MAC))
+			boot.NetbootKernelArgs += " BOOTIF=01-" + mac
+			break
+		}
 	}
 	return answers, boot, nil
 }

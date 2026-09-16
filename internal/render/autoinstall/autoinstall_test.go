@@ -280,6 +280,9 @@ func TestRenderNetbootCasperArgs(t *testing.T) {
 		PoolURL:    "http://10.0.0.1:8080/netboot/files/toku",
 		NFSRootURL: "10.0.0.1:/export/netboot/toku/iso",
 	}
+	in.Network = []render.NetworkEntry{{
+		Match: &render.NetMatch{MAC: "02:00:00:00:00:00"},
+	}}
 	answers, boot, err := d.RenderAnswers(in, render.MachineView{})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -287,8 +290,9 @@ func TestRenderNetbootCasperArgs(t *testing.T) {
 	if boot.NetbootKernelArgs == "" ||
 		!strings.Contains(boot.NetbootKernelArgs, "ds=nocloud-net;s=http://10.0.0.1:8080/render/toku/") ||
 		!strings.Contains(boot.NetbootKernelArgs, "boot=casper netboot=nfs nfsroot=10.0.0.1:/export/netboot/toku/iso") ||
-		!strings.Contains(boot.NetbootKernelArgs, "nfsopts=tcp,v3") {
-		t.Errorf("netboot args missing casper/nfsroot/seed/tcp: %q", boot.NetbootKernelArgs)
+		!strings.Contains(boot.NetbootKernelArgs, "nfsopts=tcp,v3") ||
+		!strings.Contains(boot.NetbootKernelArgs, "BOOTIF=01-02-00-00-00-00-00") {
+		t.Errorf("netboot args missing casper/nfsroot/seed/tcp/BOOTIF: %q", boot.NetbootKernelArgs)
 	}
 	// The seed files stay identical to the ISO path (ds= is an absolute URL).
 	var found bool

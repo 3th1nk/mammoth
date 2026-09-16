@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"strings"
 	"time"
 
@@ -106,6 +107,13 @@ type Executor struct {
 	// real-hardware finding; task-level retries cover only ~30s). Zero
 	// applies the default (10m).
 	VerifyReadyWait time.Duration
+
+	// DHCPLeaseFor, when set, resolves a NIC MAC's live DHCP lease —
+	// verify_ready's address fallback for DHCP-carrier installs (ubuntu PXE:
+	// live system and target both DHCP, so the machine answers on its lease,
+	// not on the recorded static address). Wired from the netboot DHCPPool;
+	// nil (runner without the netboot facet) disables the fallback.
+	DHCPLeaseFor func(mac string) net.IP
 }
 
 // ExecuteStage runs stage seq of the task's flow.

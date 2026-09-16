@@ -67,6 +67,11 @@ type NetbootInputs struct {
 	// NFSRootURL is the NFS install-source tree in casper's nfsroot form
 	// (host:/path — MediaNFSBase + /netboot/<token>/iso).
 	NFSRootURL string
+	// PoolPublicKey is the binary OpenPGP keyring of the pool signing key —
+	// the HTTP pool is a signed offline mirror, and the installer's apt needs
+	// this key in its trustdb to pass apt-setup's mirror verification. Nil
+	// when no pool key is configured (unsigned pool: apt setup will fail).
+	PoolPublicKey []byte
 }
 
 // NetbootCarrier declares where a distro's PXE boot files come from.

@@ -367,6 +367,40 @@ func TestMultiDistro(t *testing.T) {
 	}
 }
 
+// The pool signing public key rides the pre-install hook: base64 heredoc
+// into trusted.gpg.d plus the legacy trusted.gpg append — apt-setup's mirror
+// verification otherwise rejects the re-signed offline pool.
+func TestNetbootPoolKeyInjection(t *testing.T) {
+	in := wipeInputs()
+	in.Netboot = &render.NetbootInputs{
+		PoolURL:      "http://10.0.0.1/netboot/files/tokd",
+		PoolPublicKey: []byte{0x99, 0x1, 0x2, 0x3},
+	}
+	answers, _, err := New("debian13").RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	var pre string
+	for _, a := range answers {
+		if a.Name == "run/mammoth/pre-install.sh" {
+			pre = a.Content
+		}
+	}
+	if pre == "" {
+		t.Fatal("no pre-install.sh")
+	}
+	for _, want := range []string{
+		"base64 -d > /etc/apt/trusted.gpg.d/mammoth-pool.gpg <<'MAMMOTH_POOL_KEY'",
+		"mQECAw==", // base64 of {0x99, 0x1, 0x2, 0x3}
+		"MAMMOTH_POOL_KEY",
+		"cat /etc/apt/trusted.gpg.d/mammoth-pool.gpg >> /etc/apt/trusted.gpg",
+	} {
+		if !strings.Contains(pre, want) {
+			t.Errorf("pre-install.sh missing %q:\n%s", want, pre)
+		}
+	}
+}
+
 // The netboot carrier must carry every netcfg answer on the kernel command
 // line: a URL seed loads after netcfg ran, and on a multi-port machine the
 // unpinned "auto" choice lands on a port without the provisioning L2

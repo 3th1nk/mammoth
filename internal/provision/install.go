@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/3th1nk/mammoth/internal/bmc"
+	"github.com/3th1nk/mammoth/internal/builder"
 	"github.com/3th1nk/mammoth/internal/inventory/inbandssh"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/render"
@@ -730,6 +731,15 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 			// mirror directory and casper's http fallback both root there.
 			PoolURL:    fmt.Sprintf("%s/netboot/files/%s/iso", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
 			NFSRootURL: nfsRootFor(e.MediaNFSBase, ictx.Token),
+		}
+		// The HTTP pool is a signed offline mirror; the installer's apt needs
+		// the pool key in its trustdb (see builder.StageNetbootPool). A key
+		// failure here is non-fatal at render time — the pool staging below
+		// reports it as a media-build failure with the same cause.
+		if ent, kerr := builder.PoolSigningEntity(e.MediaDir); kerr == nil {
+			if pub, perr := builder.PoolPublicKey(ent); perr == nil {
+				in.Netboot.PoolPublicKey = pub
+			}
 		}
 	}
 

@@ -72,6 +72,16 @@ type NetbootInputs struct {
 	// this key in its trustdb to pass apt-setup's mirror verification. Nil
 	// when no pool key is configured (unsigned pool: apt setup will fail).
 	PoolPublicKey []byte
+	// StaticIP/StaticRouter/StaticMask describe the DHCP-pool reservation
+	// made for this machine at arm time (DHCP-carrier installs, ubuntu PXE):
+	// the installer gets them as a static ip= kernel argument because the
+	// casper initramfs's boot-time DHCP proved racy on real hardware (udev
+	// renames the NIC mid-ipconfig), and the reserved address is sticky —
+	// the installed system renews the same lease. Empty on deployments
+	// without the DHCP pool (drivers fall back to their DHCP-only shape).
+	StaticIP     string
+	StaticRouter string
+	StaticMask   string
 }
 
 // NetbootCarrier declares where a distro's PXE boot files come from.

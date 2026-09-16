@@ -114,6 +114,11 @@ type Executor struct {
 	// not on the recorded static address). Wired from the netboot DHCPPool;
 	// nil (runner without the netboot facet) disables the fallback.
 	DHCPLeaseFor func(mac string) net.IP
+	// DHCPReserveFor allocates (or returns the sticky) pool lease for a NIC
+	// MAC at arm time — DHCP-carrier installs hand it to the installer as a
+	// static ip= kernel argument (the casper initramfs's boot-time DHCP is
+	// racy on real hardware). Nil disables the reservation (DHCP-only args).
+	DHCPReserveFor func(mac string) (ip, router net.IP, mask net.IPMask)
 }
 
 // ExecuteStage runs stage seq of the task's flow.

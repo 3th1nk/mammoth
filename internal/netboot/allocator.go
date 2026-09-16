@@ -263,6 +263,15 @@ func (p *DHCPPool) LeaseFor(mac string) net.IP {
 	return nil
 }
 
+// Reserve allocates (or returns the sticky) lease for mac at arm time —
+// provision calls it before the machine boots so the install can hand the
+// address to the installer as a static ip= kernel argument: the casper
+// initramfs's boot-time DHCP proved racy on real hardware (udev renames the
+// NIC mid-ipconfig), while the assignment itself is stable once made.
+func (p *DHCPPool) Reserve(mac string) net.IP {
+	return p.lease(mac)
+}
+
 // Mask and Router are the lease parameters handed to clients.
 func (p *DHCPPool) Mask() net.IP {
 	if p == nil {

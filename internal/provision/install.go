@@ -726,7 +726,9 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	// can render its netboot-shaped args/seed up front.
 	if name, _ := effectiveStrategyName(e, spec); name == strategyPXE {
 		in.Netboot = &render.NetbootInputs{
-			PoolURL:    fmt.Sprintf("%s/netboot/files/%s", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
+			// PoolURL points at the unpacked ISO subtree (/iso) — d-i's
+			// mirror directory and casper's http fallback both root there.
+			PoolURL:    fmt.Sprintf("%s/netboot/files/%s/iso", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
 			NFSRootURL: nfsRootFor(e.MediaNFSBase, ictx.Token),
 		}
 	}

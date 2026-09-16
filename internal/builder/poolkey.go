@@ -63,10 +63,28 @@ func PoolSigningEntity(mediaDir string) (*openpgp.Entity, error) {
 	if err := w.Close(); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
-		return nil, err
+	// O_EXCL decides a first-use race between concurrent tasks: the loser
+	// adopts the winner's on-disk key (a private overwrite would leave the
+	// loser signing with a key whose public half nobody injected).
+	if f, ferr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600); ferr == nil {
+		if _, werr := f.Write(buf.Bytes()); werr != nil {
+			f.Close()
+			return nil, werr
+		}
+		if cerr := f.Close(); cerr != nil {
+			return nil, cerr
+		}
+		return ent, nil
 	}
-	return ent, nil
+	b, rerr := os.ReadFile(path)
+	if rerr != nil {
+		return nil, rerr
+	}
+	won, rerr := openpgp.ReadArmoredKeyRing(bytes.NewReader(b))
+	if rerr != nil || len(won) == 0 {
+		return nil, errors.New("builder: pool signing key unreadable after first-use race")
+	}
+	return won[0], nil
 }
 
 // PoolPublicKey exports the pool signing key's public part in the binary

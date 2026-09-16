@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sync"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -244,6 +245,7 @@ func uriPath(u string) string {
 func EnsureISO(ctx context.Context, sourceURL, cacheDir string) (string, error) {
 	filename := sourceURL[strings.LastIndex(sourceURL, "/")+1:]
 	dest := filepath.Join(cacheDir, filename)
+	defer lockISOFetch(dest)()
 
 	isHTTP := strings.HasPrefix(sourceURL, "http://") || strings.HasPrefix(sourceURL, "https://")
 
@@ -321,6 +323,18 @@ func EnsureISO(ctx context.Context, sourceURL, cacheDir string) (string, error) 
 		return "", fmt.Errorf("builder: download distro ISO: %w", err)
 	}
 	return dest, f.Close()
+}
+
+// isoFetchLocks serializes cache writes per destination: concurrent tasks
+// fetching the same source would otherwise interleave appends into one file
+// and leave a corrupt cache (resume offsets from two readers disagree).
+var isoFetchLocks sync.Map // dest string -> *sync.Mutex
+
+func lockISOFetch(dest string) func() {
+	v, _ := isoFetchLocks.LoadOrStore(dest, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 // isoHasCasper reports whether the ISO carries an Ubuntu casper layout.

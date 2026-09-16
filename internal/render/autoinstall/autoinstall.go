@@ -192,13 +192,27 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		// ipconfig's device scan and its DHCP), and ipconfig then times out
 		// against the vanished name. pxelinux-style "01-<mac>" survives any
 		// rename — the functions resolve the device by MAC, not by name.
+		// The MAC comes from the machine's NIC inventory: a DHCP-only spec
+		// (the only PXE-legal form) carries no network declaration at all.
+		bootif := ""
 		for _, n := range in.Network {
 			if n.Match == nil || n.Match.MAC == "" {
 				continue
 			}
-			mac := strings.ToLower(strings.NewReplacer(":", "-", ".", "-").Replace(n.Match.MAC))
-			boot.NetbootKernelArgs += " BOOTIF=01-" + mac
+			bootif = "01-" + strings.ToLower(strings.NewReplacer(":", "-", ".", "-").Replace(n.Match.MAC))
 			break
+		}
+		if bootif == "" && m.Hardware != nil {
+			for _, n := range m.Hardware.NICs {
+				if n.MAC == "" {
+					continue
+				}
+				bootif = "01-" + strings.ToLower(strings.NewReplacer(":", "-", ".", "-").Replace(n.MAC))
+				break
+			}
+		}
+		if bootif != "" {
+			boot.NetbootKernelArgs += " BOOTIF=" + bootif
 		}
 	}
 	return answers, boot, nil

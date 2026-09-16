@@ -193,8 +193,8 @@ mini.iso)提供驱动支持。
 |--------|-----------|------|
 | rocky9 / centos7 / kylinv10 / kylinv11 / uniontechos | full | anaconda/dracut 内核对网络引导原生;`inst.repo=nfs:` 安装源复用 nfsx 导出,`inst.ks=` 走 HTTP,与 ISO 通路零差异 |
 | rocky10(UEFI-only 媒体) | full | 引导文件同为 `images/pxeboot/*`,UEFI 侧无虞;BIOS 引导上游已移除(镜像 UEFI-only),不做 BIOS PXE。驱动声明 `FirmwareUEFIOnly`,派给观测为 BIOS 固件的机器在提交期即被 `SCHEMA_FIRMWARE_MISMATCH` 拒绝(不阻塞同批其他机器) |
-| ubuntu22 | full(qemu 待验证) | casper kernel/initrd 从 ISO 提取;**NFS squashfs 源**——ISO 解包至引导树,casper `netboot=nfs nfsroot=` 挂载 live root,不做整 ISO 进内存(4GB 级 tmpfs 写满教训);seed `ds=nocloud-net` 走 HTTP 与 ISO 通路零差异;PXE 阶段仅 DHCP(静态网声明请用虚拟媒体) |
-| debian12 | full(qemu 待验证) | **载体 = d-i 官方 netboot.tar.gz**(`MAMMOTH_PXE_DI_NETBOOT`;ISO 自带 initrd 为 cdrom flavour,网络上不可用);**安装源 = ISO 解包为 HTTP 池**(dists/+pool/ 经引导树授权暴露),preseed mirror 指向池——离线语义保持,不上游镜像 |
+| ubuntu22 | full(qemu 源级验证;挂载待真机) | casper kernel/initrd 从 ISO 提取;**NFS squashfs 源**——ISO 解包至引导树,casper `netboot=nfs nfsroot=` 挂载 live root,不做整 ISO 进内存(4GB 级 tmpfs 写满教训);seed `ds=nocloud-net` 走 HTTP 与 ISO 通路零差异;PXE 阶段仅 DHCP(静态网声明请用虚拟媒体);**qemu 实测注记**:casper NFS 语法为 `boot=nfs nfsroot=host:/path`(冒号必需);macOS nfsd(UDP-only)不可作验证宿主,RPC 可达但挂载不收,真机 Linux nfsd 无此限制 |
+| debian12 | full(qemu 源级验证;组件收尾待真机) | **载体 = d-i 官方 netboot.tar.gz**(`MAMMOTH_PXE_DI_NETBOOT`;ISO 自带 initrd 为 cdrom flavour,网络上不可用);**安装源 = ISO 解包为 HTTP 池**(dists/+pool/ 经引导树授权暴露),preseed mirror 指向池——离线语义保持,不上游镜像;**qemu 实测注记**:netinst 池裁剪 netboot 专用 udeb(kernel-modules-di 等),纯 ISO 池需 archive 补齐(fill-udebs 机制);Release.gpg 缺失需 allow_unauthenticated(池为官方 ISO 解包,签名无增量) |
 
 实现注记:
 

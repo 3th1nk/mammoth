@@ -18,10 +18,10 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"sync"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 

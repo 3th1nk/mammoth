@@ -287,10 +287,13 @@ func TestRenderHardwareRaidTarget(t *testing.T) {
 	}
 }
 
-// A controller-named volume (LogicalDriveN, not a kernel name) resolves in
-// the early_command: the preseed carries no partman-auto/disk or
-// grub-installer/bootdev line and the pre-install hook seeds both via
-// debconf-set after matching the capacity (real-hardware: Huawei 2288H LSI).
+// A controller-named volume (LogicalDriveN, not a kernel name) resolves at
+// partman/early_command time: the preseed carries no partman-auto/disk or
+// grub-installer/bootdev line, partman/early_command fetches
+// run/mammoth/resolve-disk.sh (storage IS enumerated at partman start — the
+// preseed-load-time early_command runs before hw-detect and sees no volume,
+// real-hardware: 2288H LSI), and that script seeds both via debconf-set
+// after matching the capacity.
 func TestRenderDynamicRaidTarget(t *testing.T) {
 	in := wipeInputs()
 	in.Disks = []render.ResolvedDisk{{Device: "sdb", KeepDisk: true}}
@@ -306,16 +309,18 @@ func TestRenderDynamicRaidTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
-	var seed, preInstall string
+	var seed, preInstall, resolve string
 	for _, a := range answers {
 		switch a.Name {
 		case "preseed.cfg":
 			seed = a.Content
 		case "run/mammoth/pre-install.sh":
 			preInstall = a.Content
+		case "run/mammoth/resolve-disk.sh":
+			resolve = a.Content
 		}
 	}
-	if seed == "" || preInstall == "" {
+	if seed == "" || preInstall == "" || resolve == "" {
 		t.Fatalf("missing answers: %+v", answers)
 	}
 	if strings.Contains(seed, "d-i partman-auto/disk string") {
@@ -324,14 +329,21 @@ func TestRenderDynamicRaidTarget(t *testing.T) {
 	if strings.Contains(seed, "d-i grub-installer/bootdev string") {
 		t.Errorf("dynamic target must not pin grub-installer/bootdev: %s", seed)
 	}
+	if !strings.Contains(seed, "partman/early_command string sh /cdrom/run/mammoth/resolve-disk.sh") {
+		t.Errorf("seed missing partman/early_command hook (offline carrier): %s", seed)
+	}
+	// The preseed-load-time hook must NOT do device work (no hardware yet).
+	if strings.Contains(preInstall, "debconf-set") {
+		t.Errorf("pre-install.sh must not resolve devices (too early):\n%s", preInstall)
+	}
 	for _, want := range []string{
 		"want=3999999721472",
 		"debconf-set partman-auto/disk /dev/$best",
 		"debconf-set grub-installer/bootdev /dev/$best",
 		"LogicalDrive0 -> /dev/$best",
 	} {
-		if !strings.Contains(preInstall, want) {
-			t.Errorf("pre-install hook missing %q:\n%s", want, preInstall)
+		if !strings.Contains(resolve, want) {
+			t.Errorf("resolve-disk.sh missing %q:\n%s", want, resolve)
 		}
 	}
 }
@@ -435,6 +447,26 @@ func TestNetbootKernelArgsCarryNetcfg(t *testing.T) {
 	seed := fetchNetbootSeed(t, in)
 	if !strings.Contains(seed, "d-i netcfg/choose_interface select aa:bb:cc:dd:ee:01") {
 		t.Errorf("seed should pin the interface MAC for the ISO carrier: %s", seed)
+	}
+	_ = seed
+}
+
+// The netboot carrier resolves the dynamic target over HTTP from partman.
+func TestDynamicTargetNetbootHook(t *testing.T) {
+	in := wipeInputs()
+	in.Disks = []render.ResolvedDisk{{Device: "sdb", KeepDisk: true}}
+	in.Raid = []render.ResolvedRaid{{
+		Name: "vol0", Mode: "hardware", Level: "1", BoundDevice: "LogicalDrive0",
+		SizeBytes: 3999999721472,
+		Partitions: []render.ResolvedPartition{
+			{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+			{Mount: "/", FS: "ext4", Grow: true},
+		},
+	}}
+	in.Netboot = &render.NetbootInputs{PoolURL: "http://10.0.0.1/netboot/files/tokd"}
+	seed := fetchNetbootSeed(t, in)
+	if !strings.Contains(seed, "partman/early_command string wget -qO- https://m/render/tokd/run/mammoth/resolve-disk.sh | sh") {
+		t.Errorf("netboot seed missing partman/early_command wget hook: %s", seed)
 	}
 }
 

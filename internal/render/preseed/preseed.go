@@ -129,15 +129,15 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		answers = append(answers, render.AnswerFile{
 			// Fetched by partman/early_command (storage is enumerated by then;
 			// the early_command fires at preseed load, before hw-detect).
-			Name:   "run/mammoth/resolve-disk.sh",
+			Name:    "run/mammoth/resolve-disk.sh",
 			Content: resolveDiskScript(in, target),
 		})
 	}
 	return answers, render.BootParams{
-			AnswerURL:         strings.TrimSuffix(in.AnswerBaseURL, "/") + "/" + seedName,
-			KernelArgs:        kernelArgs,
-			NetbootKernelArgs: bootArgs,
-		}, nil
+		AnswerURL:         strings.TrimSuffix(in.AnswerBaseURL, "/") + "/" + seedName,
+		KernelArgs:        kernelArgs,
+		NetbootKernelArgs: bootArgs,
+	}, nil
 }
 
 // preseed assembles the answer file. Offline (nil netboot) the netinst ISO
@@ -206,7 +206,11 @@ func (d *Driver) preseed(in render.InstallInputs, t target, recipe, net string, 
 		// The pool is the byte-exact unpack of the official ISO on the
 		// provisioning L2, so the signature check adds nothing here.
 		b.WriteString("d-i debian-installer/allow_unauthenticated boolean true\n")
-		b.WriteString("d-i apt-setup/use_mirror boolean false\n")
+		// trixie's d-i has no apt-udeb: apt-setup verifies the mirror with an
+		// apt-get INSIDE the target, so the pool signing key must be in the
+		// target's apt trust store. The pool carries it as a one-file deb;
+		// debootstrap installs it during bootstrap (builder.stageKeyDeb).
+		b.WriteString("d-i base-installer/includes string mammoth-key\n")
 		b.WriteString("d-i apt-setup/services-select multiselect\n")
 		b.WriteString("popularity-contest popularity-contest/participate boolean false\n\n")
 	}

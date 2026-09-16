@@ -385,17 +385,22 @@ func TestMultiDistro(t *testing.T) {
 func TestNetbootPoolKeyInjection(t *testing.T) {
 	in := wipeInputs()
 	in.Netboot = &render.NetbootInputs{
-		PoolURL:      "http://10.0.0.1/netboot/files/tokd",
+		PoolURL:       "http://10.0.0.1/netboot/files/tokd",
 		PoolPublicKey: []byte{0x99, 0x1, 0x2, 0x3},
 	}
 	answers, _, err := New("debian13").RenderAnswers(in, render.MachineView{})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
-	var pre string
+	var pre, seed, post string
 	for _, a := range answers {
-		if a.Name == "run/mammoth/pre-install.sh" {
+		switch a.Name {
+		case "run/mammoth/pre-install.sh":
 			pre = a.Content
+		case "preseed-netboot.cfg":
+			seed = a.Content
+		case "run/mammoth/post-install.sh":
+			post = a.Content
 		}
 	}
 	if pre == "" {
@@ -410,6 +415,27 @@ func TestNetbootPoolKeyInjection(t *testing.T) {
 		if !strings.Contains(pre, want) {
 			t.Errorf("pre-install.sh missing %q:\n%s", want, pre)
 		}
+	}
+	// trixie's apt-setup verifies the mirror inside the target, so the pool
+	// key must ride debootstrap into the target (the installer-env key above
+	// alone arrives too early to help apt-setup); the main-mirror line is
+	// generated unconditionally on netboot, so apt-setup/use_mirror (a CD-era
+	// gate) has no effect there and is gone.
+	for _, want := range []string{
+		"d-i base-installer/includes string mammoth-key",
+		"d-i apt-setup/services-select multiselect",
+	} {
+		if !strings.Contains(seed, want) {
+			t.Errorf("preseed missing %q:\n%s", want, seed)
+		}
+	}
+	if strings.Contains(seed, "apt-setup/use_mirror") {
+		t.Errorf("netboot preseed still carries the CD-era use_mirror gate:\n%s", seed)
+	}
+	// The provisioned system keeps the pool key but not the permissive apt:
+	// post-install strips the tolerance file the key deb shipped.
+	if !strings.Contains(post, "rm -f /target/etc/apt/apt.conf.d/99mammoth-offline") {
+		t.Errorf("post-install.sh missing the offline-apt cleanup:\n%s", post)
 	}
 }
 

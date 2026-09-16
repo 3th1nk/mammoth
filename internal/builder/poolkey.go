@@ -25,7 +25,7 @@ import (
 
 // poolKeyName/… are the on-disk artifacts under MediaDir.
 const (
-	poolKeyFile = ".pool-signing-key.asc"
+	poolKeyFile  = ".pool-signing-key.asc"
 	poolKeyName  = "mammoth offline pool"
 	poolKeyEmail = "pool@mammoth.invalid"
 )

@@ -184,9 +184,20 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		if in.Netboot.NFSRootURL == "" {
 			return nil, render.BootParams{}, fmt.Errorf("%s: PXE installs need an NFS media base for the casper live root (set MAMMOTH_MEDIA_BASE_URI=nfs://<host>/<export> on the runner)", d.distro)
 		}
+		// Addressing: with a pool reservation the initramfs configures a
+		// static address directly (the boot-time DHCP is racy on real
+		// hardware — udev renames the NIC mid-ipconfig); BOOTIF below makes
+		// that device choice rename-proof. Without a pool the casper DHCP
+		// contract stands (the deployment is then the address authority and
+		// must serve plain DHCP too, not just PXE clients).
+		ipArg := "ip=dhcp"
+		if in.Netboot.StaticIP != "" {
+			ipArg = fmt.Sprintf("ip=%s::%s:%s:::off",
+				in.Netboot.StaticIP, in.Netboot.StaticRouter, in.Netboot.StaticMask)
+		}
 		boot.NetbootKernelArgs = fmt.Sprintf(
-			"autoinstall ds=nocloud-net;s=%s/ ip=dhcp boot=casper netboot=nfs nfsroot=%s nfsopts=tcp,v3",
-			strings.TrimSuffix(in.AnswerBaseURL, "/"), in.Netboot.NFSRootURL)
+			"autoinstall ds=nocloud-net;s=%s/ %s boot=casper netboot=nfs nfsroot=%s nfsopts=tcp,v3",
+			strings.TrimSuffix(in.AnswerBaseURL, "/"), ipArg, in.Netboot.NFSRootURL)
 		// BOOTIF pins the NIC casper's configure_networking configures: udev
 		// renames interfaces mid-initramfs (2288H: enp1s0 → eno1 between
 		// ipconfig's device scan and its DHCP), and ipconfig then times out

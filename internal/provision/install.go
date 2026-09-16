@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -732,6 +733,31 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 			PoolURL:    fmt.Sprintf("%s/netboot/files/%s/iso", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
 			NFSRootURL: nfsRootFor(e.MediaNFSBase, ictx.Token),
 		}
+		// Reserve the machine's pool address now: DHCP-carrier installs (the
+		// casper carrier) hand it to the installer as a static ip= argument —
+		// the boot-time DHCP is racy on real hardware (udev renames the NIC
+		// mid-ipconfig) while the assignment is sticky across reboots. The
+		// first inventoried NIC is the provisioning NIC (the same one the
+		// spec's match.mac and the netboot entries arm).
+		if e.DHCPReserveFor != nil {
+			for _, n := range hw.NICs {
+				if n.MAC == "" {
+					continue
+				}
+				ip, router, mask := e.DHCPReserveFor(n.MAC)
+				if ip == nil {
+					break
+				}
+				in.Netboot.StaticIP = ip.String()
+				if router != nil {
+					in.Netboot.StaticRouter = router.String()
+				}
+				if mask != nil {
+					in.Netboot.StaticMask = netmaskString(mask)
+				}
+				break
+			}
+		}
 		// The HTTP pool is a signed offline mirror; the installer's apt needs
 		// the pool key in its trustdb (see builder.StageNetbootPool). A key
 		// failure here is non-fatal at render time — the pool staging below
@@ -1190,6 +1216,14 @@ func errString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// netmaskString renders a v4 netmask dotted (net.IPMask.String returns hex).
+func netmaskString(mask net.IPMask) string {
+	if len(mask) != 4 {
+		return ""
+	}
+	return fmt.Sprintf("%d.%d.%d.%d", mask[0], mask[1], mask[2], mask[3])
 }
 
 // dhcpLeaseAddr resolves the machine's live DHCP lease IP from its hardware

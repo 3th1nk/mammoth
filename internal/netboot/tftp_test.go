@@ -158,13 +158,26 @@ func TestTFTPRoundTrip(t *testing.T) {
 		}
 	})
 
-	t.Run("unknown file stays silent", func(t *testing.T) {
+	t.Run("unknown file answers ERROR file-not-found", func(t *testing.T) {
+		// shim probes optional files (revocations_*, shim_certificate_*) and
+		// treats a proper ERROR as "absent, move on"; silence blocks the EFI
+		// PXE client in a download-retry loop (real-hardware shim stall).
 		c := startClient(t)
 		c.send(addr, append([]byte{0, tftpRRQ}, ("nope.bin\x00octet\x00")...))
-		c.conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+		c.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 		b := make([]byte, 512)
-		if _, _, err := c.conn.ReadFromUDP(b); err == nil {
-			t.Fatal("unknown file must not produce a datagram")
+		n, _, err := c.conn.ReadFromUDP(b)
+		if err != nil {
+			t.Fatalf("no answer for unknown file: %v", err)
+		}
+		if binary.BigEndian.Uint16(b[:2]) != 5 {
+			t.Fatalf("want ERROR op, got %d", binary.BigEndian.Uint16(b[:2]))
+		}
+		if code := binary.BigEndian.Uint16(b[2:4]); code != 1 {
+			t.Fatalf("want error code 1 (file not found), got %d", code)
+		}
+		if n < 5 || b[n-1] != 0 {
+			t.Fatalf("malformed ERROR datagram (want NUL-terminated message): %q", b[:n])
 		}
 	})
 }

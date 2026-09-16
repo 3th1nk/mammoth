@@ -25,12 +25,29 @@ func failtrap(phase, completeURL string) string {
 // preInstallScript runs in the installer environment: user pre_install
 // scripts execute before partitioning (the %pre contract), then the trap is
 // cleared so the install itself is no longer guarded by this hook.
-func preInstallScript(in render.InstallInputs) string {
+//
+// A dynamic target (controller-named hardware-RAID volume) is resolved here
+// first: the kernel device is matched by size among /sys/block entries and
+// seeded into partman-auto/disk and grub-installer/bootdev via debconf-set —
+// the official dynamic-preseed shape. A failed resolution exits non-zero and
+// rides the failtrap: mammoth sees pre_install failed while partman, with no
+// disk set, stalls instead of writing the wrong device.
+func preInstallScript(in render.InstallInputs, t target) string {
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
 	b.WriteString("# Mammoth pre_install stage (installer environment; early_command).\n")
 	b.WriteString(failtrap("pre_install", in.CompleteURL) + "\n")
 	b.WriteString("set -e\n")
+	if t.dynamic {
+		fmt.Fprintf(&b, "%s", deviceResolveScript(t))
+	}
+	// The unpacked-ISO pool is an unsigned mirror: the distro ISO layout
+	// (Debian 13+) ships a bare Release with no detached signature, and
+	// apt-setup's mirror verification runs `apt-get update`, whose index
+	// signature check allow_unauthenticated does NOT cover — the install
+	// stalls in "failed to access the mirror" without these.
+	b.WriteString("mkdir -p /etc/apt/apt.conf.d\n")
+	b.WriteString("printf 'Acquire::AllowInsecureRepositories \"true\";\\nAPT::Get::AllowUnauthenticated \"true\";\\n' > /etc/apt/apt.conf.d/99mammoth-insecure\n")
 	for _, s := range in.Scripts {
 		if s.Stage != "pre_install" {
 			continue
@@ -41,6 +58,34 @@ func preInstallScript(in render.InstallInputs) string {
 		}
 	}
 	b.WriteString("trap - EXIT\n")
+	return b.String()
+}
+
+// deviceResolveScript re-identifies a hardware-RAID volume by capacity: the
+// tolerance mirrors kickstart's %pre resolver (1%, floor 64MiB) — Redfish and
+// kernel capacities agree to within controller rounding. busybox arithmetic
+// is 64-bit; the size sysfs node counts 512-byte sectors.
+func deviceResolveScript(t target) string {
+	var b strings.Builder
+	b.WriteString("# resolve the hardware-RAID volume (controller name -> kernel device, by size)\n")
+	fmt.Fprintf(&b, "want=%d\n", t.sizeBytes)
+	b.WriteString("best=\"\"; bestdiff=0\n")
+	b.WriteString("for d in /sys/block/*; do\n")
+	b.WriteString("  name=${d##*/}\n")
+	b.WriteString("  case \"$name\" in loop*|ram*|dm-*|sr*|md*) continue ;; esac\n")
+	b.WriteString("  [ -f \"$d/size\" ] || continue\n")
+	b.WriteString("  size=$(($(cat \"$d/size\") * 512))\n")
+	b.WriteString("  diff=$((size - want)); [ $diff -lt 0 ] && diff=$((-diff))\n")
+	b.WriteString("  if [ -z \"$best\" ] || [ $diff -lt $bestdiff ]; then best=$name; bestdiff=$diff; fi\n")
+	b.WriteString("done\n")
+	b.WriteString("tol=$((want / 100)); [ $tol -lt 67108864 ] && tol=67108864\n")
+	b.WriteString("if [ -z \"$best\" ] || [ $bestdiff -gt $tol ]; then\n")
+	b.WriteString("  echo \"mammoth: no block device matches size=$want (closest $best off by $bestdiff)\" >&2\n")
+	b.WriteString("  exit 1\n")
+	b.WriteString("fi\n")
+	fmt.Fprintf(&b, "echo \"mammoth: install target %s -> /dev/$best (off by $bestdiff bytes)\" >&2\n", t.device)
+	b.WriteString("debconf-set partman-auto/disk /dev/$best\n")
+	b.WriteString("debconf-set grub-installer/bootdev /dev/$best\n")
 	return b.String()
 }
 

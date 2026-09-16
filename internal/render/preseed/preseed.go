@@ -77,11 +77,14 @@ const kernelArgs = "auto=true priority=critical file=/cdrom/preseed.cfg " +
 // netbootKernelArgs swaps the seed carrier: preseed/url fetches over HTTP —
 // the netboot initrd has no CD to mount. The early-question kernel arguments
 // are identical; the seed body differs only in its install-source section.
-func netbootKernelArgs(answerBaseURL, seedName string) string {
+func netbootKernelArgs(answerBaseURL, seedName string, netEntries []render.NetworkEntry, hostname string) string {
 	return "auto=true priority=critical preseed/url=" +
 		strings.TrimSuffix(answerBaseURL, "/") + "/" + seedName + " " +
 		"debian-installer/locale=en_US.UTF-8 keyboard-configuration/layoutcode=us " +
-		"console-setup/ask_detect=false console-setup/layoutcode=us"
+		"console-setup/ask_detect=false console-setup/layoutcode=us " +
+		// netcfg answers cannot ride the URL seed (it loads after netcfg ran)
+		// — they take effect only from the command line.
+		netcfgKernelArgs(netEntries, hostname)
 }
 
 // RenderAnswers produces the preseed file plus the pre/post install scripts,
@@ -114,12 +117,12 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	seedName, bootArgs := "preseed.cfg", kernelArgs
 	if in.Netboot != nil {
 		seedName = "preseed-netboot.cfg"
-		bootArgs = netbootKernelArgs(in.AnswerBaseURL, seedName)
+		bootArgs = netbootKernelArgs(in.AnswerBaseURL, seedName, in.Network, in.Hostname)
 	}
 
 	return []render.AnswerFile{
 			{Name: seedName, Content: d.preseed(in, target, recipe, net, in.Netboot)},
-			{Name: "run/mammoth/pre-install.sh", Content: preInstallScript(in)},
+			{Name: "run/mammoth/pre-install.sh", Content: preInstallScript(in, target)},
 			{Name: "run/mammoth/post-install.sh", Content: postInstallScript(d.distro, in)},
 		}, render.BootParams{
 			AnswerURL:         strings.TrimSuffix(in.AnswerBaseURL, "/") + "/" + seedName,
@@ -208,7 +211,14 @@ func (d *Driver) preseed(in render.InstallInputs, t target, recipe, net string, 
 	b.WriteString("#### partitioning: expert recipe on the single install target\n")
 	b.WriteString("d-i partman-auto/method string regular\n")
 	b.WriteString("d-i partman-partitioning/default_label string gpt\n")
-	fmt.Fprintf(&b, "d-i partman-auto/disk string /dev/%s\n", t.device)
+	if t.dynamic {
+		// Controller-named volume: partman-auto/disk and grub-installer/bootdev
+		// are seeded by the early_command hook via debconf-set (see
+		// pre-install.sh) — writing them here would race that resolution.
+		b.WriteString("# partman-auto/disk: set by the early_command (hardware-RAID volume resolved by size)\n")
+	} else {
+		fmt.Fprintf(&b, "d-i partman-auto/disk string /dev/%s\n", t.device)
+	}
 	b.WriteString("d-i partman-auto/expert_recipe string \\\n")
 	b.WriteString(recipe)
 	b.WriteString("d-i partman-partitioning/confirm_write_new_label boolean true\n")
@@ -229,7 +239,11 @@ func (d *Driver) preseed(in render.InstallInputs, t target, recipe, net string, 
 	b.WriteString("#### bootloader\n")
 	b.WriteString("d-i grub-installer/only_debian boolean true\n")
 	b.WriteString("d-i grub-installer/with_other_os boolean false\n")
-	fmt.Fprintf(&b, "d-i grub-installer/bootdev string /dev/%s\n\n", t.device)
+	if t.dynamic {
+		b.WriteString("# grub-installer/bootdev: set by the early_command (hardware-RAID volume resolved by size)\n\n")
+	} else {
+		fmt.Fprintf(&b, "d-i grub-installer/bootdev string /dev/%s\n\n", t.device)
+	}
 	// No tasksel taskset: the standard task's packages are not fully in the
 	// netinst pool — offline installs would loop apt on a media-change
 	// prompt forever (real-hardware). Base + pkgsel/include carries the

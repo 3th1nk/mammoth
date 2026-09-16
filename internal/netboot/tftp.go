@@ -121,9 +121,13 @@ func transferTFTP(c *net.UDPConn, addr *net.UDPAddr, files fs.FS, render func(st
 	if r == nil {
 		f, err := files.Open(name)
 		if err != nil {
-			// No error datagram: an unknown file usually means the client asked
-			// for another PXE vendor's payload; silence falls through.
 			log("tftp: no such file %q (client %s)", name, addr.IP)
+			// RFC 1350 §5: answer with an ERROR datagram. Clients probing
+			// optional files (shim's revocations_*/shim_certificate_*
+			// Secure-Boot fetches) treat a proper "file not found" as absent
+			// and move on; silence makes the EFI PXE client block in a
+			// download-retry loop (real-hardware: shim stalled 4s/req forever).
+			sendError(c, addr, 1, "File not found")
 			return
 		}
 		closer = f
@@ -202,6 +206,16 @@ func sendExpectACK(c *net.UDPConn, addr *net.UDPAddr, pkt []byte, want uint16) b
 		}
 	}
 	return false
+}
+
+// sendError answers with a TFTP ERROR datagram (opcode 5): code 1 = file not
+// found. The message is NUL-terminated per RFC 1350 §5.
+func sendError(c *net.UDPConn, addr *net.UDPAddr, code uint16, msg string) {
+	pkt := make([]byte, 4+len(msg)+1)
+	binary.BigEndian.PutUint16(pkt, 5)
+	binary.BigEndian.PutUint16(pkt[2:], code)
+	copy(pkt[4:], msg)
+	c.WriteToUDP(pkt, addr)
 }
 
 // expectACK waits for the next ACK datagram and returns its block number.

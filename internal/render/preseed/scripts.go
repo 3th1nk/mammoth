@@ -23,25 +23,19 @@ func failtrap(phase, completeURL string) string {
 		phase, completeURL)
 }
 
-// preInstallScript runs in the installer environment: user pre_install
-// scripts execute before partitioning (the %pre contract), then the trap is
-// cleared so the install itself is no longer guarded by this hook.
-//
-// A dynamic target (controller-named hardware-RAID volume) is resolved here
-// first: the kernel device is matched by size among /sys/block entries and
-// seeded into partman-auto/disk and grub-installer/bootdev via debconf-set —
-// the official dynamic-preseed shape. A failed resolution exits non-zero and
-// rides the failtrap: mammoth sees pre_install failed while partman, with no
-// disk set, stalls instead of writing the wrong device.
+// preInstallScript runs in the installer environment (preseed/early_command,
+// fired at preseed load): user pre_install scripts, apt trust config for the
+// signed offline pool. NOT device resolution — at preseed-load time storage
+// drivers have not run hw-detect yet (real-hardware: the LSI volume was
+// absent from /sys/block 41s post-initrd, failing the resolve); that work
+// belongs to partman/early_command (resolveDiskScript), which runs when
+// partman starts with hardware enumerated.
 func preInstallScript(in render.InstallInputs, t target) string {
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
 	b.WriteString("# Mammoth pre_install stage (installer environment; early_command).\n")
 	b.WriteString(failtrap("pre_install", in.CompleteURL) + "\n")
 	b.WriteString("set -e\n")
-	if t.dynamic {
-		fmt.Fprintf(&b, "%s", deviceResolveScript(t))
-	}
 	// The unpacked-ISO pool is an unsigned mirror: the distro ISO layout
 	// (Debian 13+) ships a bare Release with no detached signature, and
 	// apt-setup's mirror verification runs `apt-get update`, whose index
@@ -70,6 +64,25 @@ func preInstallScript(in render.InstallInputs, t target) string {
 			b.WriteString("sh -c " + quoteSh(s.Inline) + "\n")
 		}
 	}
+	b.WriteString("trap - EXIT\n")
+	return b.String()
+}
+
+// resolveDiskScript resolves a dynamic target (controller-named
+// hardware-RAID volume) at partman/early_command time: hw-detect has loaded
+// the storage drivers, so the volume is visible under /sys/block. It matches
+// by size, seeds partman-auto/disk and grub-installer/bootdev via
+// debconf-set, and rides the same failtrap semantics — a failed resolution
+// reports pre_install failed instead of letting partman write the wrong
+// device. Runs over HTTP like the other hooks (the route serves
+// run/mammoth/* multi-segment names).
+func resolveDiskScript(in render.InstallInputs, t target) string {
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n")
+	b.WriteString("# Mammoth disk resolution (partman/early_command; storage enumerated).\n")
+	b.WriteString(failtrap("pre_install", in.CompleteURL) + "\n")
+	b.WriteString("set -e\n")
+	b.WriteString(deviceResolveScript(t))
 	b.WriteString("trap - EXIT\n")
 	return b.String()
 }

@@ -166,6 +166,12 @@ func TestStageNetbootPool(t *testing.T) {
 	if strings.Count(idx, "Package: mammoth-key\n") != 1 {
 		t.Errorf("restage duplicated the key stanza:\n%s", idx)
 	}
+	// debootstrap's pkgdetails closes stanzas on blank lines — the appended
+	// stanza must be blank-line terminated (and separated) or it is invisible
+	// to debootstrap ("Couldn't find these debs").
+	if !strings.HasSuffix(idx, ".\n\n") || !strings.Contains(idx, "\n\nPackage: mammoth-key\n") {
+		t.Errorf("key stanza not blank-line delimited:\n%q", idx[len(idx)-120:])
+	}
 }
 
 // dataFromDeb walks the ar container (debian-binary, control.tar.gz,

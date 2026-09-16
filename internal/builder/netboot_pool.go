@@ -285,11 +285,15 @@ func appendIndexStanza(idxDir string, keyring, deb []byte) error {
 	}
 	md5sum := md5.Sum(deb)
 	sha := sha256.Sum256(deb)
+	// The stanza needs blank lines on BOTH sides: they open and close the
+	// record for debootstrap's pkgdetails (an unterminated final stanza is
+	// invisible to it — real-hardware: "Couldn't find these debs:
+	// mammoth-key" — while apt tolerates EOF-terminated stanzas).
 	stanza := fmt.Sprintf("\nPackage: %s\nVersion: %s\nArchitecture: all\n"+
 		"Maintainer: mammoth offline pool <pool@mammoth.invalid>\n"+
 		"Installed-Size: %d\nFilename: %s\nSize: %d\nMD5Sum: %s\nSHA256: %s\n"+
 		"Description: mammoth offline pool signing key\n"+
-		" Delivers the pool signing key into /etc/apt/trusted.gpg.d.\n",
+		" Delivers the pool signing key into /etc/apt/trusted.gpg.d.\n\n",
 		keyDebPkg, keyDebVer, len(keyring)/1024+1, keyDebPath, len(deb),
 		hex.EncodeToString(md5sum[:]), hex.EncodeToString(sha[:]))
 	idx = append(idx, []byte(stanza)...)

@@ -120,11 +120,20 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		bootArgs = netbootKernelArgs(in.AnswerBaseURL, seedName, in.Network, in.Hostname)
 	}
 
-	return []render.AnswerFile{
-			{Name: seedName, Content: d.preseed(in, target, recipe, net, in.Netboot)},
-			{Name: "run/mammoth/pre-install.sh", Content: preInstallScript(in, target)},
-			{Name: "run/mammoth/post-install.sh", Content: postInstallScript(d.distro, in)},
-		}, render.BootParams{
+	answers := []render.AnswerFile{
+		{Name: seedName, Content: d.preseed(in, target, recipe, net, in.Netboot)},
+		{Name: "run/mammoth/pre-install.sh", Content: preInstallScript(in, target)},
+		{Name: "run/mammoth/post-install.sh", Content: postInstallScript(d.distro, in)},
+	}
+	if target.dynamic {
+		answers = append(answers, render.AnswerFile{
+			// Fetched by partman/early_command (storage is enumerated by then;
+			// the early_command fires at preseed load, before hw-detect).
+			Name:   "run/mammoth/resolve-disk.sh",
+			Content: resolveDiskScript(in, target),
+		})
+	}
+	return answers, render.BootParams{
 			AnswerURL:         strings.TrimSuffix(in.AnswerBaseURL, "/") + "/" + seedName,
 			KernelArgs:        kernelArgs,
 			NetbootKernelArgs: bootArgs,
@@ -213,9 +222,15 @@ func (d *Driver) preseed(in render.InstallInputs, t target, recipe, net string, 
 	b.WriteString("d-i partman-partitioning/default_label string gpt\n")
 	if t.dynamic {
 		// Controller-named volume: partman-auto/disk and grub-installer/bootdev
-		// are seeded by the early_command hook via debconf-set (see
-		// pre-install.sh) — writing them here would race that resolution.
-		b.WriteString("# partman-auto/disk: set by the early_command (hardware-RAID volume resolved by size)\n")
+		// are seeded when partman starts (partman/early_command — hw-detect has
+		// run, so the volume is actually visible; preseed/early_command fires
+		// at preseed load, before storage drivers, real-hardware proven).
+		if nb == nil {
+			b.WriteString("d-i partman/early_command string sh /cdrom/run/mammoth/resolve-disk.sh\n")
+		} else {
+			fmt.Fprintf(&b, "d-i partman/early_command string wget -qO- %s/run/mammoth/resolve-disk.sh | sh\n", strings.TrimSuffix(in.AnswerBaseURL, "/"))
+		}
+		b.WriteString("# partman-auto/disk: set by resolve-disk.sh (hardware-RAID volume resolved by size)\n")
 	} else {
 		fmt.Fprintf(&b, "d-i partman-auto/disk string /dev/%s\n", t.device)
 	}

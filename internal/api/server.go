@@ -115,6 +115,24 @@ func New(d Deps, apiToken string) *gin.Engine {
 			_ = resp.VisitFetchNetbootFileResponse(c.Writer)
 		})
 	}
+	// The same single-param limitation hits the answer scripts on the netboot
+	// carrier: hooks are named run/mammoth/*.sh (multi-segment) and the
+	// generated /render/{token}/{file} route can't match them — the installer's
+	// hook fetch (early/late_command) 401s into the NoRoute auth wall and the
+	// completion callback never fires (real-hardware: install ran to the end,
+	// then hung at the first hook fetch).
+	router.GET("/render/:token/run/*rest", func(c *gin.Context) {
+		req := gen.FetchAnswerFileRequestObject{
+			Token: c.Param("token"),
+			File:  "run" + c.Param("rest"),
+		}
+		resp, err := srv.FetchAnswerFile(c.Request.Context(), req)
+		if err != nil {
+			writeError(c, err)
+			return
+		}
+		_ = resp.VisitFetchAnswerFileResponse(c.Writer)
+	})
 	gen.RegisterHandlers(router, strict)
 
 	router.NoRoute(func(c *gin.Context) {

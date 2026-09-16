@@ -8,6 +8,7 @@ tool (
 )
 
 require (
+	github.com/ProtonMail/go-crypto v1.4.1
 	github.com/getkin/kin-openapi v0.135.0
 	github.com/gin-gonic/gin v1.10.1
 	github.com/oapi-codegen/runtime v1.4.2
@@ -22,6 +23,7 @@ require (
 
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
+	github.com/cloudflare/circl v1.6.2 // indirect
 	github.com/go-git/go-billy/v5 v5.6.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

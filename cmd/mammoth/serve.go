@@ -418,6 +418,7 @@ func serve(args []string) error {
 			ProbeAlpineISO:      cfg.ProbeAlpineISO,
 			ProbeAlpineNetboot:  cfg.ProbeAlpineNetboot,
 			PXEDINetbootTarball: cfg.PXEDINetboot,
+			PXEDIUdebsDir:      cfg.PXEDIUdebsDir,
 			ProbeStaticCIDR:     cfg.ProbeStaticCIDR,
 			ProbePrefix:         cfg.ProbePrefix,
 			ProbeGateway:        cfg.ProbeGateway,

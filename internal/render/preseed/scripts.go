@@ -1,6 +1,7 @@
 package preseed
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -48,6 +49,18 @@ func preInstallScript(in render.InstallInputs, t target) string {
 	// stalls in "failed to access the mirror" without these.
 	b.WriteString("mkdir -p /etc/apt/apt.conf.d\n")
 	b.WriteString("printf 'Acquire::AllowInsecureRepositories \"true\";\\nAPT::Get::AllowUnauthenticated \"true\";\\n' > /etc/apt/apt.conf.d/99mammoth-insecure\n")
+
+	// The pool's own signing key (the pool Release is re-signed by mammoth;
+	// see builder.StageNetbootPool): both apt trustdb locations get it —
+	// trusted.gpg.d is the documented one, the append to trusted.gpg covers
+	// installer environments whose apt only consults the legacy keyring.
+	if pub := netbootPoolKey(in); len(pub) > 0 {
+		b.WriteString("mkdir -p /etc/apt/trusted.gpg.d\n")
+		b.WriteString("base64 -d > /etc/apt/trusted.gpg.d/mammoth-pool.gpg <<'MAMMOTH_POOL_KEY'\n")
+		b.WriteString(base64Encode(pub))
+		b.WriteString("\nMAMMOTH_POOL_KEY\n")
+		b.WriteString("cat /etc/apt/trusted.gpg.d/mammoth-pool.gpg >> /etc/apt/trusted.gpg\n")
+	}
 	for _, s := range in.Scripts {
 		if s.Stage != "pre_install" {
 			continue
@@ -157,4 +170,18 @@ ln -sf /etc/systemd/system/mammoth-hostname.service /target/etc/systemd/system/m
 // ubuntu22 driver).
 func quoteSh(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
+
+// netbootPoolKey nil-safely reads the pool signing public key.
+func netbootPoolKey(in render.InstallInputs) []byte {
+	if in.Netboot == nil {
+		return nil
+	}
+	return in.Netboot.PoolPublicKey
+}
+
+// base64Encode wraps the standard encoding for heredoc payloads (76-column
+// wrapping keeps the generated script readable; busybox base64 -d accepts it).
+func base64Encode(b []byte) string {
+	return base64.StdEncoding.EncodeToString(b)
 }

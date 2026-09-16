@@ -35,6 +35,11 @@ import (
 //     verification runs a signature-checking apt-get update that
 //     allow_unauthenticated does not cover. The signature is armored —
 //     current apt rejects binary detached signatures.
+//  4. by-hash backfill: the component Releases advertise Acquire-By-Hash:
+//     yes but the netinst ISO ships no by-hash store at all, so apt-setup's
+//     verification 404s on dists/<suite>/<comp>/binary-*/by-hash/SHA256/<sha>
+//     and "Configure the package manager" reports "failed to access the
+//     mirror" even though the signature chain is sound.
 //
 // The suite is discovered from the tree (the single non-symlink dists/
 // entry); the ISO's symlink aliases (stable → trixie) keep working.
@@ -47,6 +52,9 @@ func StageNetbootPool(isoDir, udebsDir string, ent *openpgp.Entity) error {
 		if err := fillUdebs(isoDir, udebsDir, suite); err != nil {
 			return err
 		}
+	}
+	if err := indexByHash(isoDir, suite); err != nil {
+		return err
 	}
 	relPath := filepath.Join(isoDir, "dists", suite, "Release")
 	rel, err := os.ReadFile(relPath)
@@ -122,6 +130,42 @@ func fillUdebs(isoDir, udebsDir, suite string) error {
 		}
 	}
 	return nil
+}
+
+// indexByHash backfills the by-hash store for every component index under
+// dists/<suite> (both binary-amd64 and binary-amd64/debian-installer
+// shapes). Idempotent: existing entries are kept, so re-staging a shared
+// content-addressed pool never rewrites served history.
+func indexByHash(isoDir, suite string) error {
+	root := filepath.Join(isoDir, "dists", suite)
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		switch filepath.Base(path) {
+		case "Packages", "Packages.gz", "Packages.xz":
+		default:
+			return nil
+		}
+		h := sha256.New()
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(h, f)
+		f.Close()
+		if err != nil {
+			return err
+		}
+		dst := filepath.Join(filepath.Dir(path), "by-hash", "SHA256", hex.EncodeToString(h.Sum(nil)))
+		if _, err := os.Stat(dst); err == nil {
+			return nil
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		return copyFile(path, dst)
+	})
 }
 
 // releaseChecksumSections are the checksum blocks a Release carries, in the

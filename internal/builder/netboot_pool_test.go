@@ -80,6 +80,24 @@ func TestStageNetbootPool(t *testing.T) {
 		t.Errorf("header fields clobbered:\n%s", relB)
 	}
 
+	// by-hash backfilled for every component index — the replaced installer
+	// one and the untouched deb one alike (the ISO advertises by-hash but
+	// ships no store; apt-setup's mirror verify 404s without this).
+	for name, content := range map[string]string{
+		"main/debian-installer/binary-amd64/Packages.gz": "complete-index-gz",
+		"main/binary-amd64/Packages.gz":                  "deb-index-gz",
+	} {
+		sum := sha256.Sum256([]byte(content))
+		bh := filepath.Join(filepath.Dir(filepath.Join(iso, "dists/trixie", name)),
+			"by-hash", "SHA256", hex.EncodeToString(sum[:]))
+		got, err := os.ReadFile(bh)
+		if err != nil {
+			t.Errorf("by-hash entry missing for %s: %v", name, err)
+		} else if string(got) != content {
+			t.Errorf("by-hash entry wrong for %s: %q", name, got)
+		}
+	}
+
 	// Signature verifies with the exported public key (armored detached).
 	sig, err := os.ReadFile(filepath.Join(iso, "dists/trixie/Release.gpg"))
 	if err != nil {

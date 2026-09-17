@@ -27,6 +27,9 @@ type VolumeCreator interface {            // 硬件 RAID 声明式建卷(configu
 type PhysicalDriveEnumerator interface {  // RAID 成员选择需要物理盘视角(卷优先呈现时不可见)
     PhysicalDrives(ctx, addr, cred) ([]DiskView, error)
 }
+type FirmwareInventoryProvider interface { // 固件清单(纯读,v1.1 能力接口第一项,先行热身)
+    FirmwareInventory(ctx, addr, cred) ([]FirmwareComponent, error)
+}
 ```
 
 已实装的驱动侧适配(实录见 [compat/huawei.md](compat/huawei.md)):标准
@@ -53,6 +56,7 @@ Reset 拒绝时以 `ForceRestart` 重试重启类动作;自签名 TLS 经
 | KVM | ✅ 厂商 OEM(归一为 URL) | ❌(仅 SOL 串口) |
 | 硬件盘查 | ✅ Storage/Ethernet/Processor/Memory(宽容解析违规固件) | ⚠️ 有限(FRU/传感器) |
 | RAID 卷管理 | ✅ `VolumeCreator`(标准载荷被拒时走 OEM 载荷,如华为 DriveID) | ❌ |
+| 固件清单 | ✅ `FirmwareInventoryProvider`(UpdateService/FirmwareInventory,宽容解析,缺链接/坏条目降级) | ❌(能力缺失即无数据,盘查不失败) |
 | 一次性引导 | ✅ | ✅ |
 
 选择逻辑(`protocol: auto`):

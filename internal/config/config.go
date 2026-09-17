@@ -141,6 +141,13 @@ type Config struct {
 	PXEDHCPPort   int    // proxyDHCP listen (default 67)
 	PXETFTPPort   int    // NBP transfer (default 69)
 	PXEProxyPort  int    // PXE boot-server discovery (default 4011)
+	// PXESyslogPort is the installer-log sink port (MAMMOTH_PXE_SYSLOG_PORT,
+	// default 514): d-i forwards its ramfs syslog here via the syslog= kernel
+	// argument, and lines that resolve to an armed task land in task_logs —
+	// the installer environment dies with the ramfs, a post-mortem otherwise
+	// has nothing (related-work §2). A busy port degrades to a warning: the
+	// sink is a diagnostic, never a lifeline.
+	PXESyslogPort int
 	// PXEDHCPPool (optional) turns the responder into a full DHCP for PXE
 	// clients — for provisioning L2s WITHOUT a site DHCP, where a boot ROM
 	// otherwise never gets an IP lease. Two syntaxes: dash range
@@ -257,6 +264,7 @@ func FromEnv() (Config, error) {
 	applyInt(&c.PXEDHCPPort, "MAMMOTH_PXE_DHCP_PORT", &errs)
 	applyInt(&c.PXETFTPPort, "MAMMOTH_PXE_TFTP_PORT", &errs)
 	applyInt(&c.PXEProxyPort, "MAMMOTH_PXE_PROXY_PORT", &errs)
+	applyInt(&c.PXESyslogPort, "MAMMOTH_PXE_SYSLOG_PORT", &errs)
 
 	applyDuration(&c.HeartbeatInterval, "MAMMOTH_HEARTBEAT_INTERVAL", &errs)
 	applyDuration(&c.VisibilityTimeout, "MAMMOTH_VISIBILITY_TIMEOUT", &errs)

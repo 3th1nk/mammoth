@@ -356,15 +356,27 @@ func TestRenderNetbootCasperArgs(t *testing.T) {
 		t.Errorf("user-data missing from netboot render: %+v", answers)
 	}
 
-	// Static network + PXE is rejected with a carrier pointer.
+	// Static network + PXE translates to static ip= kernel arguments (and
+	// the netplan section already carries the declaration for the target) —
+	// the site-DHCP-safe shape: mammoth never becomes the address authority.
 	static := base
 	static.Netboot = &render.NetbootInputs{NFSRootURL: "10.0.0.1:/export/netboot/toku/iso"}
 	static.Network = []render.NetworkEntry{{
 		Match:     &render.NetMatch{MAC: "aa:bb:cc:dd:ee:02"},
 		Addresses: []string{"172.16.1.12/24"},
+		Routes:    []render.NetRoute{{To: "0.0.0.0/0", Via: "172.16.1.1"}},
 	}}
-	if _, _, err := d.RenderAnswers(static, render.MachineView{}); err == nil {
-		t.Error("static-net PXE must be rejected")
+	_, bootS, err := d.RenderAnswers(static, render.MachineView{})
+	if err != nil {
+		t.Fatalf("static-net PXE render: %v", err)
+	}
+	for _, want := range []string{
+		"ip=172.16.1.12::172.16.1.1:255.255.255.0:::off",
+		"BOOTIF=01-aa-bb-cc-dd-ee-02",
+	} {
+		if !strings.Contains(bootS.NetbootKernelArgs, want) {
+			t.Errorf("static-net PXE missing %q: %q", want, bootS.NetbootKernelArgs)
+		}
 	}
 }
 

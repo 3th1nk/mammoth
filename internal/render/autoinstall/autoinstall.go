@@ -9,6 +9,7 @@
 package autoinstall
 
 import (
+	"net"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -217,25 +218,27 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// PXE: no boot medium to mount at /cdrom — the nocloud seed rides HTTP
 	// (the seed URL is already absolute) and the live root mounts from the
 	// unpacked tree over NFS. casper needs early networking for the NFS hop;
-	// static-net declarations cannot be honoured at that stage (netplan only
-	// applies later, inside the installer) so DHCP is the netboot contract.
+	// that networking comes from ip= kernel arguments — static when the spec
+	// declares it (machine rooms with a site DHCP: mammoth must NOT be the
+	// address authority — dual-DHCP races made installs intermittent),
+	// DHCP-only otherwise.
 	if in.Netboot != nil {
-		if len(in.Network) > 0 && !networkIsDHCP(in.Network) {
-			return nil, render.BootParams{}, fmt.Errorf("%s: PXE installs boot the live system over DHCP only — drop the static network declaration or use the virtual-media carrier", d.distro)
-		}
 		if in.Netboot.NFSRootURL == "" {
 			return nil, render.BootParams{}, fmt.Errorf("%s: PXE installs need an NFS media base for the casper live root (set MAMMOTH_MEDIA_BASE_URI=nfs://<host>/<export> on the runner)", d.distro)
 		}
-		// Addressing: with a pool reservation the initramfs configures a
-		// static address directly (the boot-time DHCP is racy on real
-		// hardware — udev renames the NIC mid-ipconfig); BOOTIF below makes
-		// that device choice rename-proof. Without a pool the casper DHCP
-		// contract stands (the deployment is then the address authority and
-		// must serve plain DHCP too, not just PXE clients).
+		// Addressing precedence: pool reservation → spec static declaration →
+		// DHCP. The static forms feed the initramfs directly (the boot-time
+		// DHCP is racy on real hardware — udev renames the NIC mid-ipconfig)
+		// AND the target's netplan (the network section below already carries
+		// the spec declaration), so the installed system comes up reachable.
 		ipArg := "ip=dhcp"
 		if in.Netboot.StaticIP != "" {
 			ipArg = fmt.Sprintf("ip=%s::%s:%s:::off",
 				in.Netboot.StaticIP, in.Netboot.StaticRouter, in.Netboot.StaticMask)
+		} else if e, ok := firstStaticNetwork(in.Network); ok {
+			addr := strings.SplitN(e.Addresses[0], "/", 2)[0]
+			ipArg = fmt.Sprintf("ip=%s::%s:%s:::off",
+				addr, e.Routes[0].Via, maskOfCIDR(e.Addresses[0]))
 		}
 		boot.NetbootKernelArgs = fmt.Sprintf(
 			"autoinstall ds=nocloud-net;s=%s/ %s boot=casper netboot=nfs nfsroot=%s nfsopts=tcp,v3",
@@ -245,8 +248,6 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		// ipconfig's device scan and its DHCP), and ipconfig then times out
 		// against the vanished name. pxelinux-style "01-<mac>" survives any
 		// rename — the functions resolve the device by MAC, not by name.
-		// The MAC comes from the machine's NIC inventory: a DHCP-only spec
-		// (the only PXE-legal form) carries no network declaration at all.
 		bootif := ""
 		for _, n := range in.Network {
 			if n.Match == nil || n.Match.MAC == "" {
@@ -269,6 +270,32 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		}
 	}
 	return answers, boot, nil
+}
+
+// firstStaticNetwork returns the first network entry carrying a static
+// address with a default route — the spec-driven replacement for the pool
+// reservation on deployments where a site DHCP owns addressing.
+func firstStaticNetwork(entries []render.NetworkEntry) (render.NetworkEntry, bool) {
+	for _, e := range entries {
+		if len(e.Addresses) > 0 && strings.Contains(e.Addresses[0], "/") &&
+			len(e.Routes) > 0 && (e.Routes[0].To == "default" || e.Routes[0].To == "0.0.0.0/0") {
+			return e, true
+		}
+	}
+	return render.NetworkEntry{}, false
+}
+
+// maskOfCIDR converts "a.b.c.d/p" into a dotted netmask.
+func maskOfCIDR(cidr string) string {
+	_, ipnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return "255.255.255.0"
+	}
+	mask := net.IPMask(ipnet.Mask)
+	if len(mask) != 4 {
+		return "255.255.255.0"
+	}
+	return fmt.Sprintf("%d.%d.%d.%d", mask[0], mask[1], mask[2], mask[3])
 }
 
 // sizeWithinTolerance reports b within 1% of a (either may be 0/unknown —

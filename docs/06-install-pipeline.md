@@ -198,8 +198,8 @@ type OSDriver interface {
 | 发行版 | 安装器 | 应答文件 | 保留分区 | PXE | 状态 |
 |--------|--------|---------|---------|-----|------|
 | RHEL 系(Rocky/Alma) | Anaconda | kickstart | **full**(`%pre` + `--onpart/--noformat`) | full(`inst.repo=nfs:` 网络装机现成;rocky10 BIOS 待真机) | ✅ 真机闭环(Huawei 2288H V5) |
-| Ubuntu Server 22.04 | subiquity | autoinstall | partial(keep: disk) | full(casper NFS squashfs 源:ISO 解包引导树,`netboot=nfs` 挂 live root,不做整 ISO 进内存;PXE 阶段仅 DHCP)——qemu 待验证 | ✅ 真机闭环(ISO 通路) |
-| Debian 12 | debian-installer | preseed | partial(keep: disk) | full(载体 = d-i netboot.tar.gz `MAMMOTH_PXE_DI_NETBOOT`;安装源 = ISO 解包 HTTP 池,离线语义保持)——qemu 待验证 | ✅ 真机闭环(ISO 通路) |
+| Ubuntu Server 22.04/24.04 | subiquity | autoinstall | partial(keep: disk) | full(casper NFS squashfs 源:ISO 解包共享池树,`netboot=nfs` 挂 live root,不做整 ISO 进内存;PXE 阶段仅 DHCP,静态网声明翻译为 ip= 内核参数) | ✅ 真机闭环(ISO + PXE/casper NFS,2026-09-17) |
+| Debian 12/13 | debian-installer | preseed | partial(keep: disk) | full(载体 = d-i netboot.tar.gz `MAMMOTH_PXE_DI_NETBOOT`;安装源 = ISO 解包 HTTP 池,池钥匙签名 + debootstrap 进 target,离线语义保持) | ✅ 真机闭环(ISO + PXE/d-i netboot,debian13,2026-09-17) |
 | 统信服务器 V20(UOS) | anaconda 定制 | kickstart(同 rocky9 方言) | full(同 rocky9) | full(同 rocky9) | **blocked**(Finish 阶段崩溃,见 distros.md) |
 | Windows | Setup | unattend | full | 未开始 | 未开始 |
 

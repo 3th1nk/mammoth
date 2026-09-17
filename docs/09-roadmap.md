@@ -1,11 +1,13 @@
 # 09 · 演进路线
 
 > **当前状态(2026-09)**:M0~M6 全部交付(契约冻结 = v1.0);M7 PXE/iPXE
-> 网络引导通路已交付并**真机闭环**(2288H V5:boot.strategy=pxe rocky9 六阶段
-> 全绿,含可选 DHCP 池模式;ramdisk 探针 PXE 已 succeeded)。SQLite 最小部署形态已评估并放弃
-> (见 10 §D2),存储收敛为 PostgreSQL-only。余项:uniontechos(见
-> compat/distros.md)、ubuntu 24.04 验证、PXE 真机矩阵(见 M7 余项)。
-> 三方言(rocky9 / ubuntu22 / debian12)已真机端到端闭环。
+> 网络引导通路已交付并**真机闭环**,三方言四镜像全链打通——rocky9(虚拟
+> 介质 + PXE)、ubuntu22/24(casper NFS 载体,零人工重装 + 重启自举双
+> 验证)、debian13(d-i netboot 载体,2026-09-17 真机全绿),均为 2288H V5;
+> ramdisk 探针 PXE 已 succeeded;shim+grubnet Secure Boot 闭环。SQLite 最小
+> 部署形态已评估并放弃(见 10 §D2),存储收敛为 PostgreSQL-only。余项:
+> uniontechos(见 compat/distros.md)、relay 真机回归、arm64 引导链
+> (见 M7 余项)。
 
 里程碑按"每阶段交付物独立可用"的依赖关系排序。M1 之前没有任何东西能对用户产生价值,
 因此 M0 的唯一目标是让最通用的能力先跑起来。
@@ -106,15 +108,29 @@
 - ✅ UEFI x64 Secure Boot 链(shim+grubnet):shimx64.efi(Microsoft 签名)
   → grubx64.efi(Debian 签名 grubnet)→ TFTP 动态渲染 grub.cfg-01-<mac>
   → HTTP 拉 kernel/initrd;x64 NBP 从 ipxe-amd64.efi 切到 shim 链
-  (DHCP 无法区分 Secure Boot,UEFI x64 统一走 shim);
+  (DHCP 无法区分 Secure Boot,UEFI x64 统一走 shim);真机闭环
+  (2026-09-14,2288H);
 - ✅ `netboot_entries` 注册表 + 引导项生命周期(注册/宽限注销/孤儿清扫),
   `MAMMOTH_PXE_ENABLED`(默认关,启用时 bind 失败即退出)、
   `MAMMOTH_PXE_NEXT_SERVER`、`MAMMOTH_BOOT_STRATEGY`;
+- ✅ ubuntu/debian PXE 真机闭环(2026-09-17,2288H):debian13 = d-i
+  netboot 载体 + 签名 HTTP 池(池钥匙经 debootstrap 进 target,连环修
+  十一项,零人工六阶段全绿);ubuntu22/24 = casper NFS squashfs 源
+  (连环修十八项:BOOTIF 钉口、内核参数分号转义、crypt 密码、spec 静态
+  网络翻译 ip= 等,零人工重装 + 重启自举双验证)——实录见
+  compat/distros.md 与 compat/huawei.md;
+- ✅ 寻址策略三层定案(2026-09-17):**spec 静态声明 > 池预约 > DHCP**;
+  池模式三件套——租约白名单(只应答已武装装机任务的 MAC)、白名单
+  nil-entry 门、ReserveFree 预约探测(ping+邻居表,ICMP 黑洞型静默占址
+  也能识别);完成回调以 RemoteIP(非 XFF,防伪造)回写 machine.ssh_address;
+- ✅ 装机通路工程收尾(2026-09-17):netboot 内置安装器日志 syslog sink
+  (514/udp,租约反查落 task_logs)+ debian `syslog=` 内核参数;共享池
+  内容寻址缓存(`MediaDir/pool-store/<sha256>`,多任务复用一份解包树);
+  TFTP OACK 容忍(X722 shim 不回 ACK0,短等待后直接落 DATA,~10s/文件
+  自愈 → ~2s);apt 信任收尾(debian 池行显式 signed-by、双方言容忍清除);
 - 余项(不阻塞):UefiHttp(Redfish HTTP Boot,厂商 OEM URI 各异)、
-  **ubuntu/debian PXE 真机验证**(通路已实现:casper NFS squashfs 源 +
-  d-i netboot 载体 + HTTP 池,qemu 验证与真机回归待跑)、外部
-  DHCP+TFTP 逃生门、**真机 relay 回归**(跨 VLAN:应答回 giaddr:67 已实现
-  并有单测,带 relay 的真机/qemu 拓扑未跑,见 11-pxe-walkthrough §4)、
+  外部 DHCP+TFTP 逃生门、**真机 relay 回归**(跨 VLAN:应答回 giaddr:67
+  已实现并有单测,带 relay 的真机/qemu 拓扑未跑,见 11-pxe-walkthrough §4)、
   arm64 PXE 引导链(ipxe-aa64.efi / shim+grubnet aa64,
   opt 93 = 0x000B;无真机,后续——信创混合机群 x86_64/ARM64 混部的刚需,
   与 kylin/uniontechos 矩阵绑定排期;option 93 固件观测入档案可先行,
@@ -124,7 +140,8 @@
 
 > 2026-09 确认执行顺序;v1.0 tag 延后至 PXE 增强 + BiosSetter 完成后。
 
-1. **PXE 增强**:UefiHttp、ubuntu/debian PXE 化、外部 DHCP+TFTP 逃生门
+1. **PXE 增强**:~~ubuntu/debian PXE 化~~ ✅(源级 + 真机闭环,2026-09-17);
+   剩余:UefiHttp、外部 DHCP+TFTP 逃生门
 2. **零注册入门与设备档案**:✅ 全部交付(2026-09-15/16)——option 93 固件
    观测入机器档案(machines.pxe_firmware/pxe_last_seen_at,b3f75ee)+ 未知
    MAC 零注册入门(enroll 共享探针树 → pending_machines 台账,含
@@ -137,8 +154,9 @@
    基线核对)→ NIST 800-88 擦盘合规(见 related-work);高危动作引入
    **两段式确认契约**(请求显式确认标志 + 服务端二次校验),做成 API 策略
    开关供全自动化调用方关闭;
-4. **发行版扩展**:ubuntu 24.04 验证(预计现有驱动直接可用)→ uniontechos
-   (blocked,等 UOS 支持,不主动排期)→ Windows unattend
+4. **发行版扩展**:~~ubuntu 24.04 验证~~ ✅(现有 ubuntu22 驱动直接可用,
+   2026-09-17 真机闭环,24.04.x 已入回归基线,见 runbooks/test-baselines.md)
+   → uniontechos(blocked,等 UOS 支持,不主动排期)→ Windows unattend
 
 ## 长期方向(不承诺排期)
 

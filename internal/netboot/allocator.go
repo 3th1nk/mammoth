@@ -272,6 +272,79 @@ func (p *DHCPPool) Reserve(mac string) net.IP {
 	return p.lease(mac)
 }
 
+// ReserveFree is Reserve with a liveness gate: candidate addresses flagged
+// alive by probe (a static device that never speaks DHCP but answers ping
+// or resolves in ARP) are skipped and recorded as phantom leases, so the
+// same dead address is not re-handed out on the next arm. probe may be nil
+// (no liveness gate). Returns false when every address is taken or alive.
+func (p *DHCPPool) ReserveFree(mac string, probe func(net.IP) bool) (net.IP, bool) {
+	if p == nil {
+		return nil, false
+	}
+	want := normalizeMAC(mac)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now()
+	// Sticky assignment for this MAC wins without probing.
+	for m, l := range p.leases {
+		if normalizeMAC(m) == want && now.Before(l.expires) {
+			l.expires = now.Add(dhcpLeaseTTL)
+			p.leases[m] = l
+			return l.ip, true
+		}
+	}
+	if p.addrs != nil {
+		for _, ip := range p.addrs {
+			taken := false
+			for m, l := range p.leases {
+				if m != mac && l.ip.Equal(ip) && now.Before(l.expires) {
+					taken = true
+					break
+				}
+			}
+			if taken || probe != nil && probe(ip) {
+				continue
+			}
+			p.leases[mac] = dhcpLease{ip: ip, expires: now.Add(dhcpLeaseTTL)}
+			return ip, true
+		}
+		return nil, false
+	}
+	start, end := binaryIP(p.start), binaryIP(p.end)
+	n := p.next
+	if n < start || n > end {
+		n = start
+	}
+	for {
+		ip := ipFromBinary(n)
+		taken := false
+		for m, l := range p.leases {
+			if l.ip.Equal(ip) && m != mac && now.Before(l.expires) {
+				taken = true
+				break
+			}
+		}
+		n++
+		if n > end {
+			n = start
+		}
+		if !taken && probe != nil && probe(ip) {
+			// Phantom-lease the live address under a synthetic key so the
+			// probe result outlives this call.
+			p.leases["probe:"+ip.String()] = dhcpLease{ip: ip, expires: now.Add(dhcpLeaseTTL)}
+			continue
+		}
+		if !taken {
+			p.leases[mac] = dhcpLease{ip: ip, expires: now.Add(dhcpLeaseTTL)}
+			p.next = n
+			return ip, true
+		}
+		if n == start {
+			return nil, false
+		}
+	}
+}
+
 // Mask and Router are the lease parameters handed to clients.
 func (p *DHCPPool) Mask() net.IP {
 	if p == nil {

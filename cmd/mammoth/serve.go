@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -421,7 +422,7 @@ func serve(args []string) error {
 			ProbeAlpineISO:      cfg.ProbeAlpineISO,
 			ProbeAlpineNetboot:  cfg.ProbeAlpineNetboot,
 			PXEDINetbootTarball: cfg.PXEDINetboot,
-			PXEDIUdebsDir:      cfg.PXEDIUdebsDir,
+			PXEDIUdebsDir:       cfg.PXEDIUdebsDir,
 			ProbeStaticCIDR:     cfg.ProbeStaticCIDR,
 			ProbePrefix:         cfg.ProbePrefix,
 			ProbeGateway:        cfg.ProbeGateway,
@@ -435,10 +436,29 @@ func serve(args []string) error {
 			// DHCP-carrier installs (ubuntu PXE) move the machine off any
 			// recorded static address; verify_ready resolves the live lease.
 			exec.DHCPLeaseFor = dhcpPool.LeaseFor
-			// And the arm-time reservation pins that address up front so the
+			// The arm-time reservation pins an address up front so the
 			// installer can boot with a static ip= (boot-time DHCP is racy).
+			// The probe skips silently-occupied addresses: static devices
+			// that never speak DHCP but answer ping or resolve in ARP share
+			// the wire (2288H machine room: a VMware VM held .191, and two
+			// ICMP-blackholed hosts sat on .194/.195 — ping alone misses
+			// those, the neighbour-table check after the ping catches them).
+			probeAlive := func(ip net.IP) bool {
+				_ = osexec.Command("ping", "-c1", "-W1", ip.String()).Run()
+				out, err := osexec.Command("ip", "neigh", "show", ip.String()).Output()
+				if err != nil {
+					return false
+				}
+				line := string(out)
+				return strings.Contains(line, "REACHABLE") || strings.Contains(line, "STALE") ||
+					strings.Contains(line, "DELAY") || strings.Contains(line, "PROBE")
+			}
 			exec.DHCPReserveFor = func(mac string) (ip, router net.IP, mask net.IPMask) {
-				return dhcpPool.Reserve(mac), dhcpPool.Router(), net.IPMask(dhcpPool.Mask().To4())
+				reserved, ok := dhcpPool.ReserveFree(mac, probeAlive)
+				if !ok {
+					return nil, nil, nil
+				}
+				return reserved, dhcpPool.Router(), net.IPMask(dhcpPool.Mask().To4())
 			}
 		}
 		runner := provision.NewRunner(tq, jobRepo, eventRepo, exec, metrics, provision.RunnerOptions{

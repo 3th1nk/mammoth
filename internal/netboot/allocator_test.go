@@ -254,3 +254,35 @@ func TestParseDHCPPool(t *testing.T) {
 		}
 	}
 }
+
+// ReserveFree skips liveness-flagged addresses (static devices that never
+// speak DHCP) and remembers the verdicts as phantom leases; a sticky lease
+// for the MAC wins without probing.
+func TestDHCPPoolReserveFree(t *testing.T) {
+	pool, err := NewDHCPPool(net.IPv4(192, 168, 77, 200), net.IPv4(192, 168, 77, 203), nil, net.IPv4(192, 168, 77, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	alive := map[string]bool{"192.168.77.200": true, "192.168.77.201": true}
+	probe := func(ip net.IP) bool { return alive[ip.String()] }
+
+	ip, ok := pool.ReserveFree("52:54:00:00:00:aa", probe)
+	if !ok || !ip.Equal(net.IPv4(192, 168, 77, 202)) {
+		t.Fatalf("ReserveFree = %v,%v; want the first unprobed address", ip, ok)
+	}
+	// The verdicts became phantom leases: re-reserving another MAC skips
+	// them without re-probing.
+	ip2, ok := pool.ReserveFree("52:54:00:00:00:bb", nil)
+	if !ok || !ip2.Equal(net.IPv4(192, 168, 77, 203)) {
+		t.Fatalf("second ReserveFree = %v,%v; want .203", ip2, ok)
+	}
+	// Sticky: the first MAC keeps its address on the next arm.
+	ipAgain, ok := pool.ReserveFree("52:54:00:00:00:aa", nil)
+	if !ok || !ipAgain.Equal(ip) {
+		t.Fatalf("sticky ReserveFree = %v,%v", ipAgain, ok)
+	}
+	// Exhaustion: all four addresses claimed.
+	if _, ok := pool.ReserveFree("52:54:00:00:00:cc", nil); ok {
+		t.Fatal("exhausted pool handed out an address")
+	}
+}

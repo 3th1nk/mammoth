@@ -392,3 +392,48 @@ func baseNetbootInputs() render.InstallInputs {
 		}}},
 	}
 }
+
+// A controller-named volume without a serial (stale snapshot: the in-band
+// probe predates serial collection) must resolve to the kernel name from
+// the machine's in-band view by size — curtin's path form matches nothing
+// on "LogicalDrive0" (2288H: "matched no disk").
+func TestStorageResolvesControllerVolumeBySize(t *testing.T) {
+	d := New("ubuntu22")
+	in := render.InstallInputs{
+		TaskToken:     "tokr",
+		MachineID:     "mch_r",
+		Hostname:      "node-r1",
+		ImageSource:   "https://mirror.example/ubuntu-22.04.5-live-server-amd64.iso",
+		RootPassword:  "rRoot-pw",
+		BootDrive:     "LogicalDrive0",
+		AnswerBaseURL: "http://10.0.0.1:8080/render/tokr",
+		CompleteURL:   "http://10.0.0.1:8080/render/tokr/complete",
+		Raid: []render.ResolvedRaid{{
+			Name: "LogicalDrive0", Mode: "hardware", BoundDevice: "LogicalDrive0",
+			SizeBytes: 3999999721472,
+			Partitions: []render.ResolvedPartition{
+				{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+				{Mount: "/", FS: "ext4", Grow: true},
+			},
+		}},
+	}
+	m := render.MachineView{Hardware: &bmc.HardwareView{Disks: []bmc.DiskView{
+		{Name: "sda", SizeBytes: 3999999721472},
+	}}}
+	answers, _, err := d.RenderAnswers(in, m)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	var ud string
+	for _, a := range answers {
+		if a.Name == "user-data" {
+			ud = a.Content
+		}
+	}
+	if !strings.Contains(ud, `"path": "/dev/sda"`) {
+		t.Errorf("storage did not resolve the volume to the kernel name:\n%s", ud)
+	}
+	if strings.Contains(ud, `"path": "/dev/LogicalDrive0"`) {
+		t.Errorf("storage leaked the controller name into the path:\n%s", ud)
+	}
+}

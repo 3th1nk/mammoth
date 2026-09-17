@@ -307,7 +307,37 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 		if disk.serial != "" {
 			entry["serial"] = disk.serial
 		} else {
-			entry["path"] = "/dev/" + disk.device
+			// A controller-named volume ("LogicalDrive0") is not a kernel
+			// name — curtin's path form matches nothing (real-hardware:
+			// "matched no disk"). The in-band snapshot carries the kernel
+			// view: resolve by exact size, fall back to the sole disk when
+			// the snapshot lists just one (the single-volume machines this
+			// dialect targets).
+			path := ""
+			if render.IsKernelDeviceName(disk.device) {
+				path = "/dev/" + disk.device
+			} else if m.Hardware != nil {
+				var bySize []string
+				for _, d := range m.Hardware.Disks {
+					if d.SizeBytes == disk.sizeBytes {
+						bySize = append(bySize, d.Name)
+					}
+				}
+				if len(bySize) == 1 {
+					path = "/dev/" + bySize[0]
+				} else if len(bySize) > 1 {
+					return nil, fmt.Errorf("%s: %d disks match %s's size — bind the volume serial (re-probe the machine) and resubmit",
+						d.distro, len(bySize), disk.device)
+				}
+			}
+			if path == "" {
+				if len(m.Hardware.Disks) == 1 && disk.sizeBytes == 0 {
+					path = "/dev/" + m.Hardware.Disks[0].Name
+				} else {
+					path = "/dev/" + disk.device
+				}
+			}
+			entry["path"] = path
 		}
 		entry["grub_device"] = true
 		rendered++

@@ -90,8 +90,15 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// environment); curl/wget are not guaranteed there.
 	var late []string
 	late = append(late, "echo mammoth-install-finished")
+	// The one-time password, crypt-hashed: subiquity stores identity.password
+	// VERBATIM in /etc/shadow (a plain string there matches no login), and
+	// chpasswd -e consumes the same hash for root (both users unreachable
+	// after a green install, 2288H — rendered plain text was the cause).
+	rootpwCrypt := ""
 	if in.RootPassword != "" {
-		late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("echo root:"+in.RootPassword+" | chpasswd")))
+		salt := randomSalt()
+		rootpwCrypt = cryptSHA512(in.RootPassword, salt)
+		late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("echo root:"+rootpwCrypt+" | chpasswd -e")))
 	}
 	late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("mkdir -p /etc/ssh/sshd_config.d && echo 'PermitRootLogin yes' > /etc/ssh/sshd_config.d/60-mammoth.conf")))
 	// The target's own cloud-init generates the host keys on first boot and
@@ -147,7 +154,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		"identity": map[string]any{
 			"hostname": in.Hostname,
 			"username": "mammoth",
-			"password": in.RootPassword,
+			"password": rootpwCrypt,
 		},
 		"ssh": map[string]any{
 			"install-server": true,

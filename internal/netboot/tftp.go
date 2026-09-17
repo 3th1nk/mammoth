@@ -23,6 +23,12 @@ const (
 
 	tftpTimeout    = 1 * time.Second
 	tftpMaxRetries = 5
+	// OACK acknowledgements get fewer retries before tolerance kicks in:
+	// some PXE ROMs (Huawei X722 NIC shim, 2288H) never ACK the OACK at
+	// all and expect DATA to just follow — each wasted second here is a
+	// second of the boot chain, and the client's own RRQ retry makes the
+	// old give-up path self-heal only after ~10s.
+	tftpOACKRetries = 2
 	// Classic 512 vs option-negotiated blocks; the cap keeps replies inside
 	// one Ethernet frame so they never fragment (fragmented UDP + TFTP is a
 	// known firmware trap).
@@ -159,9 +165,16 @@ func transferTFTP(c *net.UDPConn, addr *net.UDPAddr, files fs.FS, render func(st
 			oack = append(oack, "blksize\x00"...)
 			oack = append(oack, strconv.Itoa(opts.blksize)+"\x00"...)
 		}
-		if !sendExpectACK(c, addr, oack, 0) {
-			log("tftp: client %s ignored oack for %q", addr.IP, name)
-			return
+		// Tolerance over strictness: a client that ACKs the OACK proceeds
+		// normally (block-0 ACK received, lockstep starts at DATA 1). A
+		// client that stays silent on the OACK — the X722 shim, which never
+		// ACKs block 0 — is served the first DATA block anyway: it either
+		// accepts it and the transfer proceeds, or keeps stalling and
+		// sendFile's own retries end the session. Abandoning the transfer
+		// here instead only forced the client to re-RRQ (its ~10s self-heal
+		// on real hardware).
+		if !sendExpectACKN(c, addr, oack, 0, tftpOACKRetries) {
+			log("tftp: client %s did not ack oack for %q — sending data anyway", addr.IP, name)
 		}
 	}
 	if err := sendFile(c, addr, r, opts.blksize); err != nil {
@@ -196,7 +209,13 @@ func sendFile(c *net.UDPConn, addr *net.UDPAddr, f io.Reader, blksize int) error
 // sendExpectACK sends pkt and waits for the ACK of block want, resending up
 // to tftpMaxRetries times.
 func sendExpectACK(c *net.UDPConn, addr *net.UDPAddr, pkt []byte, want uint16) bool {
-	for range tftpMaxRetries {
+	return sendExpectACKN(c, addr, pkt, want, tftpMaxRetries)
+}
+
+// sendExpectACKN is sendExpectACK with the retry budget spelled out — the
+// OACK wait uses fewer retries before the X722 tolerance takes over.
+func sendExpectACKN(c *net.UDPConn, addr *net.UDPAddr, pkt []byte, want uint16, retries int) bool {
+	for range retries {
 		if _, err := c.WriteToUDP(pkt, addr); err != nil {
 			return false
 		}

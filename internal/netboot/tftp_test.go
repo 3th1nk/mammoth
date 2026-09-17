@@ -221,3 +221,77 @@ func bytesN(n int) []byte {
 	}
 	return b
 }
+
+// The X722-shim shape: the client never ACKs the OACK and expects DATA to
+// follow anyway. The transfer must complete instead of being abandoned to
+// the client's RRQ-retry self-heal (~10s on real hardware).
+func TestTFTPOACKSilentClient(t *testing.T) {
+	files := fstest.MapFS{
+		"ipxe-amd64.efi": &fstest.MapFile{Data: bytesN(2048)},
+	}
+	addr := startTestTFTP(t, files, nil)
+	c := startClient(t)
+	c.blksize = 1428
+	rrq := []byte{0, tftpRRQ}
+	rrq = append(rrq, "ipxe-amd64.efi\x00octet\x00blksize\x001428\x00"...)
+	c.send(addr, rrq)
+	oack := c.recv()
+	if binary.BigEndian.Uint16(oack[:2]) != tftpOACK {
+		t.Fatalf("want OACK, got op=%d", binary.BigEndian.Uint16(oack[:2]))
+	}
+	// Deliberately no block-0 ACK. The tolerance window (tftpOACKRetries ×
+	// tftpTimeout ≈ 2s) passes — meanwhile the OACK retransmits land here,
+	// so read until DATA 1 shows up.
+	start := time.Now()
+	var pkt []byte
+	c.conn.SetReadDeadline(time.Now().Add(8 * time.Second))
+	retries := 0
+	for {
+		b := make([]byte, 65536)
+		n, from, err := c.conn.ReadFromUDP(b)
+		if err != nil {
+			t.Fatalf("no DATA after silent OACK: %v", err)
+		}
+		c.peer = from
+		if op := binary.BigEndian.Uint16(b[:2]); op == tftpOACK {
+			retries++
+			continue
+		}
+		pkt = b[:n]
+		break
+	}
+	if retries == 0 {
+		t.Errorf("expected the OACK to retransmit inside the tolerance window")
+	}
+	if op := binary.BigEndian.Uint16(pkt[:2]); op != tftpDATA {
+		t.Fatalf("want DATA, got op=%d", op)
+	}
+	if blk := binary.BigEndian.Uint16(pkt[2:4]); blk != 1 {
+		t.Fatalf("block %d, want 1", blk)
+	}
+	if elapsed := time.Since(start); elapsed < tftpOACKRetries*tftpTimeout {
+		t.Logf("tolerance window took %v", elapsed)
+	}
+	// Lockstep proceeds normally from here (the shim ACKs DATA blocks).
+	var out []byte
+	block := uint16(1)
+	for {
+		out = append(out, pkt[4:]...)
+		ack := make([]byte, 4)
+		binary.BigEndian.PutUint16(ack, tftpACK)
+		binary.BigEndian.PutUint16(ack[2:], block)
+		c.send(c.peer, ack)
+		if len(pkt)-4 < c.blksize {
+			break
+		}
+		next := c.recv()
+		if binary.BigEndian.Uint16(next[:2]) != tftpDATA {
+			t.Fatal("unexpected non-DATA")
+		}
+		block++
+		pkt = next
+	}
+	if len(out) != 2048 {
+		t.Fatalf("transferred %d bytes, want 2048", len(out))
+	}
+}

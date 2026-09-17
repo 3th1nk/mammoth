@@ -154,21 +154,30 @@ iPXE 脚本),默认关闭。启用清单:
 6. **非 RHEL 家族的 PXE 安装源**:
    - **debian12**:载体为 d-i 官方 `netboot.tar.gz`
      (`MAMMOTH_PXE_DI_NETBOOT`,路径或 URL;ISO 自带 initrd 是 cdrom
-     flavour,网络上不可用),安装源为 ISO 解包后的 HTTP 池(自动经引导树
-     授权暴露),preseed mirror 指向池——离线语义保持;
+     flavour,网络上不可用),安装源为 ISO 解包后的 HTTP 池(preseed
+     mirror 指向池)——离线语义保持;
    - **ubuntu22**:载体与源均自动(casper 从 ISO 提取 + NFS squashfs 树,
      复用 nfsx 导出),无需额外配置;PXE 阶段仅 DHCP 网络;
    - 两条通路的 qemu 验证与真机回归待跑(见 roadmap M7 余项)。
+   - **共享池树(内容寻址)**:安装源按镜像内容哈希共享
+     (`MediaDir/pool-store/<sha256>/iso`),多任务复用一份解包(每棵
+     ~2.5G,批量同发行版不再重复解包);经 `/netboot/store/<sha>/…`
+     (HTTP)与 MediaDir NFS 导出(同路径)消费。树内是公开发行版内容
+     (官方 ISO 解包 + mammoth 池签名公钥 deb),sha 即地址、不含任务敏感
+     数据;首建原子落位(可见即完整),装机触碰会刷新活跃时间,启动时
+     清扫闲置超 7 天的树。**更换池签名钥匙或 udeb 档案后需手工删除对应
+     树**(首建时重做签名与补齐)。
 7. **固件前提**:UEFI x64 的 Secure Boot **已支持**(shim+grubnet 链,
    shimx64.efi → grubx64.efi,来源见 assets/pxe/PROVENANCE.md);arm64 仍须
    关闭 Secure Boot。目标机 BIOS/UEFI 的 PXE/网络引导需在固件中可用。
 8. **镜像形态**:distroless 主镜像已内嵌 iPXE 二进制(assets/pxe,来源与
    重建见 `assets/pxe/PROVENANCE.md`),无需额外包。
 9. **运维**:引导项孤儿(进程崩溃残留)由 reaper 按任务终态清扫(默认
-   1h);`MediaDir/netboot/<token>/` 引导树随注销删除。排查机器停在
-   PXE 提示符:先确认 `GET /api/v1` 的 `netboot_enabled` 与任务事件的
-   `task.netboot_registered`,再抓 DHCP(DISCOVER 是否到达、OFFER 是否
-   回出)。
+   1h);`MediaDir/netboot/<token>/` 引导树(kernel/initrd)随注销删除,
+   共享池树 `MediaDir/pool-store/` 不随任务删除(启动时按 7 天闲置清扫,
+   见上)。排查机器停在 PXE 提示符:先确认 `GET /api/v1` 的
+   `netboot_enabled` 与任务事件的 `task.netboot_registered`,再抓 DHCP
+   (DISCOVER 是否到达、OFFER 是否回出)。
 
 ## 4.6 HTTPS 终止(生产)
 

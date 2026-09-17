@@ -14,6 +14,8 @@ package builder
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -714,4 +716,21 @@ func ensureRemovable(root string) error {
 		return nil
 	})
 	return firstErr
+}
+
+// FileSHA256 streams a file's SHA-256 — the content address of the shared
+// pool store (many tasks reuse one unpacked ISO tree; see provision's pool
+// store). A multi-gigabyte ISO hashes in seconds, negligible next to the
+// extraction it gates.
+func FileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("builder: hash %s: %w", path, err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", fmt.Errorf("builder: hash %s: %w", path, err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

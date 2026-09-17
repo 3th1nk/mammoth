@@ -61,11 +61,11 @@ type BootParams struct {
 // submission pinned boot.strategy=pxe, docs/06-install-pipeline.md §3.3):
 // drivers with a network-install source shape their args / seed against it.
 type NetbootInputs struct {
-	// PoolURL is the HTTP install-source pool: the distro ISO unpacked under
-	// the task's boot tree (<ExternalURL>/netboot/files/<token>).
+	// PoolURL is the HTTP install-source pool: the distro ISO's shared,
+	// content-addressed unpack (<ExternalURL>/netboot/store/<sha256>/iso).
 	PoolURL string
 	// NFSRootURL is the NFS install-source tree in casper's nfsroot form
-	// (host:/path — MediaNFSBase + /netboot/<token>/iso).
+	// (host:/path — MediaNFSBase + the shared pool-store path).
 	NFSRootURL string
 	// PoolPublicKey is the binary OpenPGP keyring of the pool signing key —
 	// the HTTP pool is a signed offline mirror, and the installer's apt needs

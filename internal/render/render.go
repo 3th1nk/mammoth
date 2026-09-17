@@ -384,6 +384,24 @@ func (f FirmwareSupport) Allows(fw string) bool {
 	}
 }
 
+// FamilyDriver is the optional capability reporting the distro's installer
+// family ("kickstart", "autoinstall", "preseed", "agent") — the
+// support-matrix surface telling API consumers which install path a distro
+// rides. Family membership is a driver-level fact (how the dialect drives
+// the installer), not per-distro data.
+type FamilyDriver interface {
+	Family() string
+}
+
+// FamilyOf reports a driver's installer family ("" when undeclared —
+// third-party drivers keep compiling unchanged).
+func FamilyOf(d OSDriver) string {
+	if f, ok := d.(FamilyDriver); ok {
+		return f.Family()
+	}
+	return ""
+}
+
 // Registry routes specs to drivers by distro.
 type Registry struct {
 	mu      sync.RWMutex

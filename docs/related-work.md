@@ -121,9 +121,6 @@ TFTP + HTTP 脚本,硬件记录按 MAC 匹配):
 bootloader 文件名、内核参数、架构、版本范围),社区维护、**加新发行版
 不改代码**。与 mammoth OSDriver 注册制同构;可吸收为声明式数据文件,
 把"接入新发行版"从写 Go 变成写 JSON。
-**✅ 已吸收(2026-09-18)**:`internal/render/distros/distros.json`——
-已知家族内新增发行版 = 一条 JSON;方言模板与布局探测启发式保留 Go
-(边界见 docs/06 §6)。
 
 ### 5. 对照结论:mammoth 的差异化与行动清单
 

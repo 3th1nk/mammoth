@@ -22,7 +22,6 @@ import (
 	"strings"
 
 	"github.com/3th1nk/mammoth/internal/render"
-	"github.com/3th1nk/mammoth/internal/render/distros"
 )
 
 // Driver is the mammoth-agent install driver. One instance per distro name
@@ -82,16 +81,12 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if err := validate(in); err != nil {
 		return nil, render.BootParams{}, fmt.Errorf("%s: %w", d.distro, err)
 	}
-	prof := distros.AgentFor(d.Distro())
-	if len(prof.Packages) == 0 {
-		return nil, render.BootParams{}, fmt.Errorf("%s: no agent profile declared (distros.json agent entry missing)", d.distro)
-	}
 	base := strings.TrimSuffix(in.AnswerBaseURL, "/")
-	json, err := d.renderJSON(in, prof)
+	json, err := d.renderJSON(in)
 	if err != nil {
 		return nil, render.BootParams{}, err
 	}
-	sh := renderSH(in, prof)
+	sh := renderSH(in)
 	return []render.AnswerFile{
 			{Name: answerJSON, Content: json},
 			{Name: answerSH, Content: sh},
@@ -171,17 +166,14 @@ func validate(in render.InstallInputs) error {
 
 // planJSON mirrors the sh plan's dataset — the documented shape an agent
 // implementation (current or future) can consume directly.
-func (d *Driver) renderJSON(in render.InstallInputs, prof distros.AgentProfile) (string, error) {
+func (d *Driver) renderJSON(in render.InstallInputs) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "{\n  \"version\": 1,\n  \"distro\": %q,\n  \"task_token\": %q,\n  \"machine_id\": %q,\n", d.distro, in.TaskToken, in.MachineID)
 	fmt.Fprintf(&b, "  \"hostname\": %q,\n", in.Hostname)
 	fmt.Fprintf(&b, "  \"root_password\": %q,\n", in.RootPassword)
 	fmt.Fprintf(&b, "  \"boot_drive\": %q,\n", in.BootDrive)
 	fmt.Fprintf(&b, "  \"complete_url\": %q,\n", in.CompleteURL)
-	fmt.Fprintf(&b, "  \"packages\": [%s],\n", strsJSON(prof.Packages))
-	fmt.Fprintf(&b, "  \"bootloader_bios\": [%s],\n", strsJSON(prof.BootloaderBIOS))
-	fmt.Fprintf(&b, "  \"bootloader_uefi\": [%s],\n", strsJSON(prof.BootloaderUEFI))
-	fmt.Fprintf(&b, "  \"agent_tools\": [%s],\n", strsJSON(prof.Tools))
+	fmt.Fprintf(&b, "  \"packages\": [\"alpine-base\", \"linux-lts\", \"openssh\"],\n")
 	fmt.Fprintf(&b, "  \"ssh_keys\": [")
 	for i, k := range in.SSHPublicKeys {
 		if i > 0 {
@@ -282,17 +274,14 @@ func defaultGateway(routes []render.NetRoute) string {
 // renderSH emits the data declarations the agent sources after defining the
 // mammoth_* collector functions. One line per fact — grep-able, quote-safe,
 // and readable in a BMC SOL session (the agent prints it before applying).
-func renderSH(in render.InstallInputs, prof distros.AgentProfile) string {
+func renderSH(in render.InstallInputs) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# mammoth agent plan (executable face of agent-plan.json) — task %s / machine %s\n", in.TaskToken, in.MachineID)
 	fmt.Fprintf(&b, "MAMMOTH_HOSTNAME=%s\n", shQuote(in.Hostname))
 	fmt.Fprintf(&b, "MAMMOTH_ROOT_PASSWORD=%s\n", shQuote(in.RootPassword))
 	fmt.Fprintf(&b, "MAMMOTH_BOOT_DRIVE=%s\n", shQuote(in.BootDrive))
 	fmt.Fprintf(&b, "MAMMOTH_COMPLETE_URL=%s\n", shQuote(in.CompleteURL))
-	fmt.Fprintf(&b, "MAMMOTH_PACKAGES=%s\n", shQuote(strings.Join(prof.Packages, " ")))
-	fmt.Fprintf(&b, "MAMMOTH_BOOTLOADER_BIOS=%s\n", shQuote(strings.Join(prof.BootloaderBIOS, " ")))
-	fmt.Fprintf(&b, "MAMMOTH_BOOTLOADER_UEFI=%s\n", shQuote(strings.Join(prof.BootloaderUEFI, " ")))
-	fmt.Fprintf(&b, "MAMMOTH_AGENT_TOOLS=%s\n", shQuote(strings.Join(prof.Tools, " ")))
+	fmt.Fprintf(&b, "MAMMOTH_PACKAGES=%s\n", shQuote("alpine-base linux-lts openssh"))
 	fmt.Fprintf(&b, "MAMMOTH_SSH_KEYS=%s\n", shQuote(strings.Join(sshKeys(in.SSHPublicKeys), "\n")))
 
 	b.WriteString("\n# disks: mammoth_disk <device>\n")

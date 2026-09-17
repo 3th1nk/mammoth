@@ -417,8 +417,10 @@ func TestStorageResolvesControllerVolumeBySize(t *testing.T) {
 			},
 		}},
 	}
+	// The snapshot's size differs slightly from the Redfish-reported volume
+	// size (rounding between views) — the 1% band still resolves it.
 	m := render.MachineView{Hardware: &bmc.HardwareView{Disks: []bmc.DiskView{
-		{Name: "sda", SizeBytes: 3999999721472},
+		{Name: "sda", SizeBytes: 4000225165312},
 	}}}
 	answers, _, err := d.RenderAnswers(in, m)
 	if err != nil {

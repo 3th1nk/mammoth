@@ -263,6 +263,7 @@ func serve(args []string) error {
 			DHCPPort:   cfg.PXEDHCPPort,
 			ProxyPort:  cfg.PXEProxyPort,
 			TFTPPort:   cfg.PXETFTPPort,
+			SyslogPort: cfg.PXESyslogPort,
 			NextServer: nextServer,
 			BaseURL:    strings.TrimSuffix(cfg.ExternalURL, "/"),
 			NBPs:       pxe.Files,

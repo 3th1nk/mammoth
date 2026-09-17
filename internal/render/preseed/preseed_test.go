@@ -492,6 +492,9 @@ func TestNetbootKernelArgsCarryNetcfg(t *testing.T) {
 		"netcfg/get_gateway=172.16.1.1",
 		"netcfg/get_hostname=node-d1",
 		"netcfg/confirm_static=true",
+		// The installer's ramfs log forwards to mammoth's sink: the answer
+		// base URL's host is the machine-face host (related-work §2).
+		"syslog=m",
 	} {
 		if !strings.Contains(boot.NetbootKernelArgs, want) {
 			t.Errorf("netboot kernel args missing %q: %s", want, boot.NetbootKernelArgs)

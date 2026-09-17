@@ -119,12 +119,18 @@ iPXE 脚本),默认关闭。启用清单:
    未完成,见 [11-pxe-walkthrough.md](11-pxe-walkthrough.md) §4;当前最稳
    拓扑是 mammoth 每个装机 VLAN 一条腿(服务监听全接口,天然多 L2)。
 2. **端口与权限**:UDP 67(proxyDHCP)、4011(PXE boot-server discovery)、
-   69(TFTP)是特权端口——容器部署需 `network_mode: host`(或 macvlan)+
+   69(TFTP)、514(安装器日志 sink,`MAMMOTH_PXE_SYSLOG_PORT` 可改)是特权
+   端口——容器部署需 `network_mode: host`(或 macvlan)+
    `CAP_NET_BIND_SERVICE`;裸机部署可用 `setcap cap_net_bind_service=+ep`。
    kernel/initrd 走 API 的 8080(机器面已需可达,无新增 TCP 端口)。NBP 之
    后的分发坚持 HTTP:国产系(麒麟/UOS 系)安装器 initrd 常达数百 MB
    (阵列卡/网卡固件全量塞入),TFTP 停等确认在体积与并发下必然超时;
    TFTP 仅承担 NBP(百 KB 级),属不可避免的最小面。
+   **安装器日志 sink(UDP 514)**:d-i 经 `syslog=<mammoth 地址>` 内核参数
+   把 ramfs 日志转发到 mammoth(ramfs 随安装器重启即逝,尸检别无它据);
+   能反查到已武装任务的行带 `task_id` 落 task_logs(`jobs logs` 可查),
+   外来客户端只记源 IP。514 被占(如站点 rsyslogd)仅告警降级,不阻塞
+   PXE——日志是诊断,不是命脉。
 3. **地址来源(二选一)**:
    - **站点 DHCP 存在** → 什么都不用配(proxy 模式:mammoth 只应答 PXEClient,
      地址分配仍归站点 DHCP);

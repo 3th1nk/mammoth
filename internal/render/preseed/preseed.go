@@ -77,11 +77,26 @@ const kernelArgs = "auto=true priority=critical file=/cdrom/preseed.cfg " +
 // netbootKernelArgs swaps the seed carrier: preseed/url fetches over HTTP —
 // the netboot initrd has no CD to mount. The early-question kernel arguments
 // are identical; the seed body differs only in its install-source section.
+// syslog= forwards the installer's ramfs log to mammoth's sink (UDP 514 on
+// the machine-face host): the ramfs dies with the installer, and without the
+// forward a post-mortem has nothing (related-work §2). The host is taken
+// verbatim from the answer base URL — an IP literal is the common shape and
+// needs no resolver; a nonstandard sink port must be configured on both
+// sides (the argument carries no port).
 func netbootKernelArgs(answerBaseURL, seedName string, netEntries []render.NetworkEntry, hostname string) string {
+	syslogHost := ""
+	if u, err := url.Parse(answerBaseURL); err == nil {
+		syslogHost = u.Hostname()
+	}
+	syslog := ""
+	if syslogHost != "" {
+		syslog = "syslog=" + syslogHost + " "
+	}
 	return "auto=true priority=critical preseed/url=" +
 		strings.TrimSuffix(answerBaseURL, "/") + "/" + seedName + " " +
 		"debian-installer/locale=en_US.UTF-8 keyboard-configuration/layoutcode=us " +
 		"console-setup/ask_detect=false console-setup/layoutcode=us " +
+		syslog +
 		// netcfg answers cannot ride the URL seed (it loads after netcfg ran)
 		// — they take effect only from the command line.
 		netcfgKernelArgs(netEntries, hostname)

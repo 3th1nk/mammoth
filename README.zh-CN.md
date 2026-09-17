@@ -27,29 +27,25 @@ Mammoth 通过带外控制器(BMC)接管机器,自动盘查硬件与磁盘布局
 
 ```mermaid
 flowchart TD
-    subgraph ON["上电注册"]
-        direction LR
+    subgraph ON["1 · 上电注册"]
         reg["注册机器:<br/>BMC 地址 + 凭证<br/>(Redfish,IPMI 兜底)"]
-        zr["零注册:未知机器 PXE 引导<br/>共享探针树 → pending_machines<br/>→ claim 升格注册"]
+        zr["零注册:未知机器 PXE<br/>引导共享探针树<br/>→ pending_machines<br/>→ claim 升格注册"]
     end
-    subgraph INV["盘查 / 探测"]
-        direction LR
+    subgraph INV["2 · 盘查 / 探测"]
         rf["redfish(带外)"]
         ram["ramdisk 探针(alpine):<br/>PXE 或虚拟介质"]
         ish["inband_ssh 探针"]
     end
-    subgraph INS["安装 —— 一份声明式 Install Spec"]
-        direction LR
+    subgraph INS["3 · 安装 —— 一份声明式 Install Spec"]
         vm["virtual_media(默认):<br/>BMC 挂载重打包引导 ISO<br/>(NFS/HTTP 介质仓库)"]
-        pxe["pxe(可选):<br/>shim → grubnet → 内核<br/>经 DHCP/proxyDHCP + TFTP + HTTP"]
+        pxe["pxe(可选):<br/>shim → grubnet → 内核<br/>DHCP/proxyDHCP + TFTP + HTTP"]
     end
-    subgraph DIA["安装器方言"]
-        direction LR
+    subgraph DIA["4 · 安装器方言"]
         ks["kickstart<br/>rocky · centos · kylin · UOS"]
         ai["autoinstall<br/>ubuntu 22.04 / 24.04"]
         ps["preseed<br/>debian 12 / 13"]
     end
-    ver["校验:完成回调<br/>+ 带内 SSH 探测(识别安装器)<br/>+ 装后布局快照"]
+    ver["5 · 校验:完成回调 + 带内 SSH<br/>探测(识别安装器)<br/>+ 装后布局快照"]
     reg --> rf
     zr --> ram
     rf --> vm
@@ -73,9 +69,9 @@ flowchart TD
 ```mermaid
 flowchart TD
     q{"装机网段是否已有<br/>site DHCP 服务?"}
-    q -- "没有 —— mammoth 拥有该网段" --> pool["**POOL 模式** —— 配置 MAMMOTH_PXE_DHCP_POOL<br/>· mammoth 为 PXE ROM 与安装器应答 DHCP<br/>· arm 时预约地址:ping + 邻居表探测跳过静默占址的静态设备<br/>· 租约只发给已武装装机任务的 MAC<br/>· 引导与目标系统使用预约地址(ip= 内核参数)"]
-    q -- "有 —— 共存,绝不竞争" --> proxy["**PROXY 模式** —— 不配置池<br/>· site DHCP 应答引导期 IP<br/>· mammoth 只附加 PXE 引导选项(67/4011)<br/>· 在 spec 里声明装机地址:<br/>  静态 ip= 内核参数 + 目标 netplan<br/>· verify 探测声明地址"]
-    pool --> vlan["**跨 VLAN**:机器网段的 DHCP relay(ip helper)把广播<br/>转发给 mammoth;应答按 giaddr 回程(RFC 2131)。TFTP/HTTP 是<br/>单播 —— NextServer 与介质/API 地址必须从机器网段可达"]
+    q -- "没有" --> pool["**POOL 模式** —— 配置 MAMMOTH_PXE_DHCP_POOL<br/>mammoth 拥有该网段:<br/>· 为 PXE ROM 与安装器应答 DHCP<br/>· arm 时预约地址:ping + 邻居表探测<br/>  跳过被静默占用的静态地址<br/>· 租约只发给已武装装机任务的 MAC<br/>· 引导与目标系统使用预约地址<br/>(ip= 内核参数)"]
+    q -- "有" --> proxy["**PROXY 模式** —— 不配置池<br/>site DHCP 拥有地址:<br/>· site DHCP 应答引导期 IP<br/>· mammoth 只附加 PXE 引导选项<br/>  (67/4011)<br/>· 在 spec 里声明装机地址:<br/>  静态 ip= 参数 + 目标 netplan<br/>· verify 探测该声明地址"]
+    pool --> vlan["**跨 VLAN**:机器网段的 DHCP relay(ip helper)把<br/>广播转发给 mammoth;应答按 giaddr 回程(RFC 2131)。<br/>TFTP/HTTP 是单播 —— NextServer 与介质/API 地址<br/>必须从机器网段可达"]
     proxy --> vlan
 ```
 

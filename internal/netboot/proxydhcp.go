@@ -139,7 +139,10 @@ func (s *Server) reply(p *packet) []byte {
 	var leaseOpts []option
 	if s.opts.DHCP != nil {
 		if s.opts.Resolver != nil {
-			if _, err := s.opts.Resolver.Entry(context.Background(), mac); err != nil {
+			// The cached wrapper returns (nil, nil) for unknown MACs — both
+			// must gate, or every foreign client passes the allowlist
+			// (2288H machine room: VMs drained the pool through this hole).
+			if e, err := s.opts.Resolver.Entry(context.Background(), mac); err != nil || e == nil {
 				s.logf("dhcp: no armed entry for %s — not leasing (pool serves installs only)", mac)
 				return nil
 			}

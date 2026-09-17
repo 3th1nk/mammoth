@@ -740,11 +740,13 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		// first inventoried NIC is the provisioning NIC (the same one the
 		// spec's match.mac and the netboot entries arm).
 		if e.DHCPReserveFor != nil {
+			obs.FromContext(ctx).InfoContext(ctx, "reservation probe", "nics", len(hw.NICs), "wired", e.DHCPReserveFor != nil)
 			for _, n := range hw.NICs {
 				if n.MAC == "" {
 					continue
 				}
 				ip, router, mask := e.DHCPReserveFor(n.MAC)
+				obs.FromContext(ctx).InfoContext(ctx, "reservation result", "mac", n.MAC, "ip", ip)
 				if ip == nil {
 					break
 				}

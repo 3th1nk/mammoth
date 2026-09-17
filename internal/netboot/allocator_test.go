@@ -327,4 +327,29 @@ func TestPoolModeIgnoresUnknownMACs(t *testing.T) {
 	if reply != nil {
 		t.Fatal("foreign MAC was leased")
 	}
+
+	// The cached-wrapper shape: unknown MACs come back as (nil, nil) — the
+	// allowlist must gate on the nil ENTRY too, not only on the error
+	// (2288H machine room: VMs drained the pool through exactly this hole).
+	s2 := testServer(t, Options{
+		NextServer: []byte{192, 168, 77, 1},
+		BaseURL:    "http://192.168.77.1:8080",
+		DHCP:       pool2(t),
+		Resolver: ResolverFunc(func(_ context.Context, mac string) (*Entry, error) {
+			return nil, nil
+		}),
+	})
+	reply, _ = s2.handle(discover(0x23, foreign, pxeOpts...), 67, &net.UDPAddr{IP: net.IPv4zero, Port: 68})
+	if reply != nil {
+		t.Fatal("(nil, nil) resolver leased a foreign MAC")
+	}
+}
+
+func pool2(t *testing.T) *DHCPPool {
+	t.Helper()
+	p, err := NewDHCPPool(net.IPv4(192, 168, 77, 200), net.IPv4(192, 168, 77, 200), nil, net.IPv4(192, 168, 77, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

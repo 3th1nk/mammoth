@@ -147,6 +147,10 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		"ssh": map[string]any{
 			"install-server": true,
 			"allow-pw":       true,
+			// cloud-init prints the generated host PRIVATE keys to the local
+			// console by default (headless-retrieval affordance) — a secret
+			// This deployment does not need on the tty.
+			"emit-keys-to-console": false,
 		},
 		"storage": storage,
 		"late-commands": append([]string{

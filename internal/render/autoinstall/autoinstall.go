@@ -226,19 +226,19 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		if in.Netboot.NFSRootURL == "" {
 			return nil, render.BootParams{}, fmt.Errorf("%s: PXE installs need an NFS media base for the casper live root (set MAMMOTH_MEDIA_BASE_URI=nfs://<host>/<export> on the runner)", d.distro)
 		}
-		// Addressing precedence: pool reservation → spec static declaration →
-		// DHCP. The static forms feed the initramfs directly (the boot-time
-		// DHCP is racy on real hardware — udev renames the NIC mid-ipconfig)
-		// AND the target's netplan (the network section below already carries
-		// the spec declaration), so the installed system comes up reachable.
+		// Addressing precedence: spec static declaration (user intent — the
+		// declared address is the contract, netplan below already carries it)
+		// → pool reservation (system-chosen, dhcp-only specs) → DHCP. The
+		// static forms feed the initramfs directly (the boot-time DHCP is
+		// racy on real hardware — udev renames the NIC mid-ipconfig).
 		ipArg := "ip=dhcp"
-		if in.Netboot.StaticIP != "" {
-			ipArg = fmt.Sprintf("ip=%s::%s:%s:::off",
-				in.Netboot.StaticIP, in.Netboot.StaticRouter, in.Netboot.StaticMask)
-		} else if e, ok := firstStaticNetwork(in.Network); ok {
+		if e, ok := firstStaticNetwork(in.Network); ok {
 			addr := strings.SplitN(e.Addresses[0], "/", 2)[0]
 			ipArg = fmt.Sprintf("ip=%s::%s:%s:::off",
 				addr, e.Routes[0].Via, maskOfCIDR(e.Addresses[0]))
+		} else if in.Netboot.StaticIP != "" {
+			ipArg = fmt.Sprintf("ip=%s::%s:%s:::off",
+				in.Netboot.StaticIP, in.Netboot.StaticRouter, in.Netboot.StaticMask)
 		}
 		boot.NetbootKernelArgs = fmt.Sprintf(
 			"autoinstall ds=nocloud-net;s=%s/ %s boot=casper netboot=nfs nfsroot=%s nfsopts=tcp,v3",

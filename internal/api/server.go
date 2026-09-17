@@ -83,7 +83,7 @@ type Enrollment struct {
 func New(d Deps, apiToken string) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
-	router.Use(gin.Recovery(), RequestID(), OTelSpan(), MetricsMiddleware(d.Metrics))
+	router.Use(gin.Recovery(), RequestID(), ClientIP(), OTelSpan(), MetricsMiddleware(d.Metrics))
 
 	srv := &Server{Deps: d}
 	strict := gen.NewStrictHandlerWithOptions(srv, nil, gen.StrictGinServerOptions{

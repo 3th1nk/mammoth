@@ -94,6 +94,11 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("echo root:"+in.RootPassword+" | chpasswd")))
 	}
 	late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("mkdir -p /etc/ssh/sshd_config.d && echo 'PermitRootLogin yes' > /etc/ssh/sshd_config.d/60-mammoth.conf")))
+	// The target's own cloud-init generates the host keys on first boot and
+	// prints the PRIVATE keys to the console by default — the autoinstall
+	// ssh section does not reach it (the seed is gone by then), so the
+	// tolerance rides a dropped-in cloud-init override instead.
+	late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("mkdir -p /etc/cloud/cloud.cfg.d && printf 'ssh:\\n  emit_keys_to_console: false\\n' > /etc/cloud/cloud.cfg.d/99-mammoth.conf")))
 	for _, k := range in.SSHPublicKeys {
 		late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("mkdir -p /root/.ssh && echo "+quoteSh(k)+" >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys")))
 	}

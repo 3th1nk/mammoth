@@ -210,7 +210,8 @@ find_plan() {
 bootstrap_tools() {
     # The agent bootstraps its own toolchain from the pool — the same repo
     # the base system installs from (boot media apks or alpine_repo= URL).
-    apk add --no-cache sfdisk util-linux e2fsprogs dosfstools openssl >/dev/console 2>&1
+    # The tool list is DECLARED per distro (MAMMOTH_AGENT_TOOLS in the plan).
+    apk add --no-cache $MAMMOTH_AGENT_TOOLS >/dev/console 2>&1
     # filesystem modules for the target mounts (ext4 usually auto-loads via
     # modprobe, but the modloop lookup is not worth racing)
     modprobe ext4 >/dev/console 2>&1
@@ -446,9 +447,9 @@ install_bootloader() {
     # not recurse into /media's submounts) while the agent env's own repo
     # already works. grub's device probing uses the live /dev /proc /sys.
     if [ "$uefi" = 1 ]; then
-        pkgs="grub grub-efi"; [ -n "$ESP_MOUNT" ] || ESP_MOUNT=/boot/efi
+        pkgs="$MAMMOTH_BOOTLOADER_UEFI"; [ -n "$ESP_MOUNT" ] || ESP_MOUNT=/boot/efi
     else
-        pkgs="grub grub-bios"
+        pkgs="$MAMMOTH_BOOTLOADER_BIOS"
     fi
     apk add --no-cache $pkgs >/dev/console 2>&1 || return 1
     if [ "$uefi" = 1 ]; then

@@ -1,0 +1,501 @@
+// Agent install media (docs/12-agent-initramfs.md): the mammoth agent is a
+// minimal install runtime inside an alpine disk-less root — the same carrier
+// the ramdisk probe uses (netboot tarball + apkovl overlay), with a much
+// longer job: read the rendered plan (agent-plan.sh), partition the target
+// disks, install the base system from the package pool, configure
+// identity/network/bootloader, report completion, and reboot into the new
+// system. No distro installer runs on the machine — the declarative Install
+// Spec is consumed directly, which is the whole point of the pilot.
+package builder
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+// AgentOverlayName is the overlay file name at the ISO root (the initramfs
+// auto-applies *.apkovl.tar.gz found there); the netboot carrier writes the
+// same content under the same name into the boot tree.
+const AgentOverlayName = "mammoth.apkovl.tar.gz"
+
+// AgentOverlay builds the agent's apkovl overlay for the boot media: the
+// runtime script under etc/local.d/ plus the openrc hookup. The script is
+// plan-independent (it fetches/reads the plan at runtime), so it is built
+// once per carrier assembly, not per task render.
+func AgentOverlay() (name string, data []byte, err error) {
+	data, err = apkovlArchive(agentOverlayEntries(agentScript()))
+	if err != nil {
+		return "", nil, err
+	}
+	return AgentOverlayName, data, nil
+}
+
+// agentOverlayEntries mirrors probeOverlayEntries — same openrc mechanics,
+// different payload script. With an overlay present the initramfs skips its
+// default boot services; the marker restores them (hardware, modloop).
+func agentOverlayEntries(script string) []cpioEntry {
+	return []cpioEntry{
+		{Name: "etc/.default_boot_services", Mode: 0o100644, Body: []byte{}},
+		{Name: "etc/local.d/", Mode: 0o040755},
+		{Name: "etc/local.d/mammoth-agent.start", Mode: 0o100755, Body: []byte(script)},
+		{Name: "etc/runlevels/default/local", Mode: 0o120777, Link: "/etc/init.d/local"},
+	}
+}
+
+// AgentNetbootOptions configure the agent's network boot payload.
+type AgentNetbootOptions struct {
+	// TarballPath is the alpine NETBOOT tarball (kernel/initrd/modloop),
+	// already resolved through EnsureISO by the caller. Required — the
+	// standard-ISO initramfs lacks the machine room's NIC drivers (probe
+	// finding), and the agent needs the network for the plan and the pool.
+	TarballPath string
+	// ApksISOPath is the alpine distro ISO whose /apks package repository
+	// is extracted into the boot tree — the memory root's AND the target's
+	// package source.
+	ApksISOPath string
+	// DestDir is the per-task boot tree (MediaDir/netboot/<token>).
+	DestDir string
+	// XorrisoPath overrides the xorriso binary (default: PATH lookup).
+	XorrisoPath string
+	// Overlay is the agent apkovl content (builder.AgentOverlay), written
+	// into the tree as agent.apkovl.tar.gz and fetched by URL via apkovl=.
+	Overlay []byte
+	// ModloopURL / ApksURL / OverlayURL are the URLs the caller renders into
+	// the kernel arguments (the driver composes them from the same file
+	// layout); they are recorded here only to keep the tree self-describing.
+	ModloopURL string
+	ApksURL    string
+	OverlayURL string
+}
+
+// BuildAgentNetboot assembles the agent install payload as a network boot
+// tree. Kernel arguments come from the agent driver's BootParams
+// (NetbootKernelArgs) — the tree only publishes the files they reference.
+func BuildAgentNetboot(ctx context.Context, opt AgentNetbootOptions) (BootTree, error) {
+	if opt.TarballPath == "" {
+		return BootTree{}, fmt.Errorf("builder: alpine netboot tarball is required")
+	}
+	if len(opt.Overlay) == 0 {
+		return BootTree{}, fmt.Errorf("builder: agent overlay is required")
+	}
+	if err := os.MkdirAll(opt.DestDir, 0o755); err != nil {
+		return BootTree{}, err
+	}
+	if err := extractTarFiles(ctx, opt.TarballPath, opt.DestDir, map[string]string{
+		"boot/vmlinuz-lts":   "vmlinuz",
+		"boot/initramfs-lts": "initrd.img",
+		"boot/modloop-lts":   "modloop",
+	}); err != nil {
+		return BootTree{}, err
+	}
+	tree := BootTree{Dir: opt.DestDir, Kernel: "vmlinuz", Initrd: "initrd.img",
+		Extra: map[string]string{"modloop": "modloop"}}
+	if opt.ApksISOPath != "" {
+		if err := extractIsoDir(ctx, opt.XorrisoPath, opt.ApksISOPath,
+			"/apks", filepath.Join(opt.DestDir, "apks")); err != nil {
+			return BootTree{}, fmt.Errorf("builder: apks repo extraction: %w", err)
+		}
+		tree.Extra["apks"] = "dir:apks"
+	}
+	if err := os.WriteFile(filepath.Join(tree.Dir, "agent.apkovl.tar.gz"), opt.Overlay, 0o644); err != nil {
+		return BootTree{}, err
+	}
+	tree.Extra["apkovl"] = "agent.apkovl.tar.gz"
+	return tree, nil
+}
+
+// agentScript is the busybox-sh install runtime. The plan's facts arrive as
+// data declarations (mammoth_disk / mammoth_partition / mammoth_network /
+// mammoth_script) collected into temp files while the plan sources — every
+// quote lives in the shell plan, not in JSON parsing (busybox has none).
+// Layout decisions the plan does not fix are made here at runtime, on the
+// hardware: UEFI → GPT + ESP (auto-added when the spec declares none),
+// BIOS → dos label + MBR grub.
+func agentScript() string {
+	return `#!/bin/sh
+# mammoth agent — declarative install runtime (docs/12-agent-initramfs.md)
+# openrc evals this script inside its service shell which runs with errexit —
+# any failing command would kill the whole runtime silently (no report, no
+# shell). This runtime handles its own errors: strip the -e and re-exec. The
+# child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
+case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
+
+PLAN=/tmp/mammoth-plan.sh
+TARGET=/target
+BASE="$(sed -n 's/.*mammoth_base=\([^ ]*\).*/\1/p' /proc/cmdline)"
+
+log() { echo "[mammoth-agent] $*" > /dev/console; }
+
+# ── plan collectors (the plan sources with these defined) ──────────────────
+DISKS=/tmp/mammoth-disks
+PARTS=/tmp/mammoth-parts
+NETS=/tmp/mammoth-nets
+SCRIPTS=/tmp/mammoth-scripts
+: > "$DISKS"; : > "$PARTS"; : > "$NETS"; : > "$SCRIPTS"
+mammoth_disk() { printf '%s\n' "$1" >> "$DISKS"; }
+mammoth_partition() { printf '%s|%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" "$5" >> "$PARTS"; }
+mammoth_network() { printf '%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" >> "$NETS"; }
+mammoth_script() { printf '%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" >> "$SCRIPTS"; }
+
+find_nic_by_mac() {
+    want=$(echo "$1" | tr 'A-Z' 'a-z')
+    [ -z "$want" ] && return 0
+    for nic in /sys/class/net/*; do
+        n="${nic##*/}"; [ "$n" = "lo" ] && continue
+        have=$(cat "$nic/address" 2>/dev/null | tr 'A-Z' 'a-z')
+        [ "$have" = "$want" ] && { echo "$n"; return 0; }
+    done
+}
+
+first_phys_nic() {
+    for nic in /sys/class/net/*; do
+        n="${nic##*/}"; [ "$n" = "lo" ] && continue
+        echo "$n"; return 0
+    done
+}
+
+# ── network (runtime bring-up for the plan fetch and the callback) ─────────
+bringup_network() {
+    for nic in /sys/class/net/*; do
+        n="${nic##*/}"; [ "$n" = "lo" ] && continue
+        ip link set "$n" up 2>/dev/null
+        if udhcpc -i "$n" -n -q -t 4 -T 2 >/dev/null 2>&1; then
+            log "dhcp up on $n"; return 0
+        fi
+    done
+    while IFS='|' read -r mac addrs gw dns; do
+        [ "$addrs" != "-" ] && [ -n "$addrs" ] || continue
+        n=$(find_nic_by_mac "$mac"); [ -z "$n" ] && n=$(first_phys_nic)
+        [ -n "$n" ] || return 1
+        ip addr add "$(echo "$addrs" | cut -d, -f1)" dev "$n" 2>/dev/null
+        [ "$gw" != "-" ] && [ -n "$gw" ] && ip route replace default via "$gw" dev "$n" 2>/dev/null
+        log "static up on $n"
+        return 0
+    done < "$NETS"
+    return 1
+}
+
+report() { # report <ok|failed> <detail>
+    DETAIL=$(printf '%s' "$2" | tr -d '"\\' | cut -c1-300)
+    printf '{"status":"%s","detail":"%s"}' "$1" "$DETAIL" > /tmp/mammoth-report.json
+    bringup_network || return 1
+    for i in 1 2 3; do
+        if wget -q -T 10 -O /dev/null --post-file=/tmp/mammoth-report.json "$MAMMOTH_COMPLETE_URL"; then
+            log "completion reported ($1)"; return 0
+        fi
+        log "report attempt $i failed"; sleep 2
+    done
+    return 1
+}
+
+bail() { # bail <stage> <detail>
+    log "FATAL ($1): $2"
+    report failed "$1: $2"
+    log "dropping to shell for diagnosis (BMC SOL)"
+    exec /bin/sh
+}
+
+find_plan() {
+    for d in /media/*/ ; do
+        if [ -f "${d}agent-plan.sh" ]; then PLAN="${d}agent-plan.sh"; return 0; fi
+    done
+    if [ -n "$BASE" ]; then
+        wget -q -T 10 -O /tmp/mammoth-plan.sh "$BASE/agent-plan.sh" && return 0
+    fi
+    return 1
+}
+
+bootstrap_tools() {
+    # The agent bootstraps its own toolchain from the pool — the same repo
+    # the base system installs from (boot media apks or alpine_repo= URL).
+    apk add --no-cache sfdisk util-linux e2fsprogs dosfstools openssl >/dev/console 2>&1
+    # filesystem modules for the target mounts (ext4 usually auto-loads via
+    # modprobe, but the modloop lookup is not worth racing)
+    modprobe ext4 >/dev/console 2>&1
+    modprobe vfat >/dev/console 2>&1
+}
+
+run_stage() { # run_stage <stage>
+    stage=$1
+    [ -s "$SCRIPTS" ] || return 0
+    rc=0
+    while IFS='|' read -r s content url exits; do
+        [ "$s" = "$stage" ] || continue
+        sf="/tmp/mammoth-script-$stage.sh"
+        if [ "$url" != "-" ] && [ -n "$url" ]; then
+            wget -q -T 10 -O "$sf" "$url" || { log "fetch $url failed"; rc=1; continue; }
+        elif [ "$content" != "-" ] && [ -n "$content" ]; then
+            printf '%s' "$content" | base64 -d > "$sf" 2>/dev/null || { log "bad script encoding"; rc=1; continue; }
+        else
+            continue
+        fi
+        sh "$sf"; src_rc=$?
+        allowed=0; [ "$src_rc" = 0 ] && allowed=1
+        if [ "$exits" != "-" ] && [ -n "$exits" ]; then
+            for e in $(echo "$exits" | tr ',' ' '); do
+                [ "$src_rc" = "$e" ] && allowed=1
+            done
+        fi
+        [ "$allowed" = 1 ] || { log "$stage script exit $src_rc not accepted"; rc=1; }
+    done < "$SCRIPTS"
+    return $rc
+}
+
+partnode() { # partition device name for disk+number (nvme/mmcblk use pN)
+    case "$1" in
+        *[!0-9]) echo "$1$2" ;;
+        *) echo "${1}p$2" ;;
+    esac
+}
+
+has_esp() { # does <disk> declare a partition carrying the esp flag?
+    awk -F'|' -v d="$1" '$1==d && $5 ~ /(^|,)esp(,|$)/ {f=1} END{ if (f) exit 0; exit 1 }' "$PARTS"
+}
+
+mk_table() { # mk_table <disk> <uefi> — writes the sfdisk input and the
+             # final partition layout (/tmp/mammoth-final-<disk>)
+    disk=$1; uefi=$2
+    tbl=/tmp/mammoth-table-$disk
+    final=/tmp/mammoth-final-$disk
+    : > "$final"
+    if [ "$uefi" = 1 ]; then
+        echo "label: gpt" > "$tbl"
+    else
+        echo "label: dos" > "$tbl"
+    fi
+    n=1
+    # UEFI + boot drive without a declared ESP: the bootloader has nowhere
+    # to live — prepend a 300MiB EFI System Partition (declared ESPs win).
+    autoesp=0
+    if [ "$uefi" = 1 ] && [ "$disk" = "$MAMMOTH_BOOT_DRIVE" ] && ! has_esp "$disk"; then
+        echo "/dev/$(partnode "$disk" "$n"): size=614400, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B" >> "$tbl"
+        printf '%s|%d|%s|%s|%s\n' "$disk" "$n" "/boot/efi" "vfat" "esp" >> "$final"
+        autoesp=1; n=$((n+1))
+        log "$disk: auto ESP added for UEFI (spec declares none)"
+    fi
+    while IFS='|' read -r d mount fs size flags; do
+        [ "$d" = "$disk" ] || continue
+        if [ "$uefi" = 1 ]; then
+            case "$fs" in
+                vfat) type="C12A7328-F81F-11D2-BA4B-00A0C93EC93B" ;;
+                swap) type="0657FD6D-A4AB-43C4-84E5-0933C84B4F4F" ;;
+                *)    type="0FC63DAF-8483-4772-8E79-3D69D8477DE4" ;;
+            esac
+        else
+            case "$fs" in
+                vfat) type="0c" ;;
+                swap) type="82" ;;
+                *)    type="83" ;;
+            esac
+        fi
+        if [ "$size" = "-" ] || [ -z "$size" ]; then
+            echo "/dev/$(partnode "$disk" "$n"): type=$type" >> "$tbl"
+        else
+            echo "/dev/$(partnode "$disk" "$n"): size=$((size * 2048)), type=$type" >> "$tbl"
+        fi
+        printf '%s|%d|%s|%s|%s\n' "$disk" "$n" "$mount" "$fs" "$flags" >> "$final"
+        n=$((n+1))
+    done < "$PARTS"
+    log "$disk: partitioning ($([ "$uefi" = 1 ] && echo gpt || echo dos))"
+    wipefs -a "/dev/$disk" >/dev/console 2>&1
+    sfdisk --force "/dev/$disk" < "$tbl" >/dev/console 2>&1 || return 1
+}
+
+apply_storage() {
+    mkdir -p "$TARGET"
+    uefi=0; [ -d /sys/firmware/efi ] && uefi=1
+    while read -r disk; do
+        [ -n "$disk" ] || continue
+        mk_table "$disk" "$uefi" || return 1
+    done < "$DISKS"
+    mdev -s 2>/dev/null
+    # format + mount: root first (fstab needs its mountpoint), then every
+    # other declared partition in table order
+    ROOT_NODE=""
+    for disk in $(cat "$DISKS"); do
+        while IFS='|' read -r d num mount fs flags; do
+            [ "$d" = "$disk" ] || continue
+            [ "$mount" = "/" ] || continue
+            [ "$fs" = "swap" ] && continue
+            node="/dev/$(partnode "$d" "$num")"
+            mkfs.ext4 -F "$node" >/dev/console 2>&1 || return 1
+            mkdir -p "$TARGET$mount"
+            mount "$node" "$TARGET$mount" || return 1
+            # the fresh root is EMPTY — the alpine-baselayout skeleton (/etc,
+            # /root, /var, …) only appears once apk installs alpine-base; the
+            # fstab and key copies below need /etc to exist right now
+            mkdir -p "$TARGET/etc" "$TARGET/root" "$TARGET/tmp" "$TARGET/dev" \
+                     "$TARGET/proc" "$TARGET/sys" "$TARGET/media" "$TARGET/var" "$TARGET/boot"
+            chmod 1777 "$TARGET/tmp" 2>/dev/null
+            uuid=$(blkid -s UUID -o value "$node")
+            echo "UUID=$uuid $mount $fs defaults 0 1" >> "$TARGET/etc/fstab"
+            ROOT_NODE="$node"
+        done < "/tmp/mammoth-final-$disk"
+    done
+    [ -n "$ROOT_NODE" ] || { log "no root filesystem mounted"; return 1; }
+    : > "$TARGET/etc/fstab" 2>/dev/null
+    echo "UUID=$(blkid -s UUID -o value "$ROOT_NODE") / ext4 defaults 0 1" > "$TARGET/etc/fstab"
+    ESP_MOUNT=""
+    for disk in $(cat "$DISKS"); do
+        while IFS='|' read -r d num mount fs flags; do
+            [ "$d" = "$disk" ] || continue
+            node="/dev/$(partnode "$d" "$num")"
+            if [ "$fs" = "swap" ]; then
+                mkswap "$node" >/dev/console 2>&1 || return 1
+                uuid=$(blkid -s UUID -o value "$node")
+                echo "UUID=$uuid none swap sw 0 0" >> "$TARGET/etc/fstab"
+                continue
+            fi
+            [ "$mount" = "/" ] && continue
+            case "$fs" in
+                ext4) mkfs.ext4 -F "$node" >/dev/console 2>&1 || return 1 ;;
+                vfat) mkfs.vfat -F 32 "$node" >/dev/console 2>&1 || return 1 ;;
+                *) log "unsupported fs $fs"; return 1 ;;
+            esac
+            mkdir -p "$TARGET$mount"
+            mount "$node" "$TARGET$mount" || return 1
+            case "$flags" in *esp*) ESP_MOUNT="$mount" ;; esac
+            echo "UUID=$(blkid -s UUID -o value "$node") $mount $fs defaults 0 2" >> "$TARGET/etc/fstab"
+        done < "/tmp/mammoth-final-$disk"
+    done
+    log "storage applied (root $(blkid -s UUID -o value "$ROOT_NODE"))"
+    return 0
+}
+
+install_base() {
+    # keys from the memory root (alpine-keys came with the disk-less base);
+    # repo list as the initramfs set it (boot media or alpine_repo= URL)
+    mkdir -p "$TARGET/etc/apk/keys"
+    cp -a /etc/apk/keys/. "$TARGET/etc/apk/keys/" 2>/dev/null
+    cp /etc/apk/repositories "$TARGET/etc/apk/repositories" 2>/dev/null
+    if [ ! -s /etc/apk/repositories ]; then
+        for d in /media/*/apks; do
+            [ -d "$d" ] && echo "$d" | tee -a /etc/apk/repositories "$TARGET/etc/apk/repositories" >/dev/null
+        done
+    fi
+    apk add --root "$TARGET" --initdb --no-cache $MAMMOTH_PACKAGES >/dev/console 2>&1 || return 1
+    log "base system installed from pool: $MAMMOTH_PACKAGES"
+}
+
+write_network_config() {
+    mkdir -p "$TARGET/etc/network"
+    dns_declared=0
+    {
+        echo "auto lo"
+        echo "iface lo inet loopback"
+        echo
+        if [ -s "$NETS" ]; then
+            while IFS='|' read -r mac addrs gw dns; do
+                n=$(find_nic_by_mac "$mac"); [ -z "$n" ] && continue
+                if [ "$addrs" = "-" ] || [ -z "$addrs" ]; then
+                    echo "auto $n"; echo "iface $n inet dhcp"; echo
+                else
+                    echo "auto $n"; echo "iface $n inet static"
+                    echo "  address $(echo "$addrs" | cut -d, -f1)"
+                    [ "$gw" != "-" ] && [ -n "$gw" ] && echo "  gateway $gw"
+                    echo
+                    if [ "$dns" != "-" ] && [ -n "$dns" ]; then
+                        for d in $(echo "$dns" | tr ',' ' '); do echo "nameserver $d"; done > "$TARGET/etc/resolv.conf"
+                        dns_declared=1
+                    fi
+                fi
+            done < "$NETS"
+        else
+            for nic in /sys/class/net/*; do
+                n="${nic##*/}"; [ "$n" = "lo" ] && continue
+                echo "auto $n"; echo "iface $n inet dhcp"; echo
+            done
+        fi
+    } > "$TARGET/etc/network/interfaces"
+    [ "$dns_declared" = 1 ] || cp /etc/resolv.conf "$TARGET/etc/resolv.conf" 2>/dev/null
+    return 0
+}
+
+configure_target() {
+    echo "$MAMMOTH_HOSTNAME" > "$TARGET/etc/hostname"
+    printf '127.0.0.1\tlocalhost %s\n::1\tlocalhost\n' "$MAMMOTH_HOSTNAME" > "$TARGET/etc/hosts"
+    # root password: sha512-crypt (busybox cryptpw; openssl passwd -6 as the
+    # fallback), written into shadow — a plaintext shadow entry would make
+    # the machine unloginnable (ubuntu22 real-hardware finding, mirrored).
+    hash=$(busybox cryptpw -m sha512 "$MAMMOTH_ROOT_PASSWORD" 2>/dev/null)
+    [ -n "$hash" ] || hash=$(openssl passwd -6 "$MAMMOTH_ROOT_PASSWORD" 2>/dev/null)
+    [ -n "$hash" ] || return 1
+    awk -F: -v h="$hash" 'BEGIN{OFS=":"} $1=="root"{$2=h} {print}' "$TARGET/etc/shadow" > "$TARGET/etc/shadow.new" \
+        && mv "$TARGET/etc/shadow.new" "$TARGET/etc/shadow" || return 1
+    if [ -n "$MAMMOTH_SSH_KEYS" ]; then
+        mkdir -p "$TARGET/root/.ssh" && chmod 700 "$TARGET/root/.ssh"
+        printf '%s\n' "$MAMMOTH_SSH_KEYS" > "$TARGET/root/.ssh/authorized_keys"
+        chmod 600 "$TARGET/root/.ssh/authorized_keys"
+    fi
+    printf 'PermitRootLogin yes\n' >> "$TARGET/etc/ssh/sshd_config"
+    write_network_config || return 1
+    # openrc runlevels: a bare apk --root install enables nothing
+    for s in devfs dmesg mdev hwdrivers; do chroot "$TARGET" rc-update add "$s" sysinit >/dev/console 2>&1; done
+    for s in hwclock modules sysctl hostname bootmisc syslog networking; do chroot "$TARGET" rc-update add "$s" boot >/dev/console 2>&1; done
+    chroot "$TARGET" rc-update add sshd default >/dev/console 2>&1
+    for s in killprocs mount-ro savecache; do chroot "$TARGET" rc-update add "$s" shutdown >/dev/console 2>&1; done
+    log "target configured (hostname $MAMMOTH_HOSTNAME)"
+}
+
+install_bootloader() {
+    uefi=0; [ -d /sys/firmware/efi ] && uefi=1
+    # grub runs from the AGENT env against the target root (--root-directory):
+    # no chroot — a chroot cannot reach the local apks repo (bind mounts do
+    # not recurse into /media's submounts) while the agent env's own repo
+    # already works. grub's device probing uses the live /dev /proc /sys.
+    if [ "$uefi" = 1 ]; then
+        pkgs="grub grub-efi"; [ -n "$ESP_MOUNT" ] || ESP_MOUNT=/boot/efi
+    else
+        pkgs="grub grub-bios"
+    fi
+    apk add --no-cache $pkgs >/dev/console 2>&1 || return 1
+    if [ "$uefi" = 1 ]; then
+        # --removable writes the fallback path (EFI/BOOT/BOOTX64.EFI) and
+        # --no-nvram skips efivarfs: the machine face restores boot order,
+        # and firmware without a boot entry still finds the fallback.
+        grub-install --root-directory="$TARGET" --removable --no-nvram \
+            --efi-directory="$TARGET$ESP_MOUNT" --boot-directory="$TARGET/boot" >/dev/console 2>&1 || return 1
+    else
+        grub-install --root-directory="$TARGET" --no-floppy "/dev/$MAMMOTH_BOOT_DRIVE" >/dev/console 2>&1 || return 1
+    fi
+    kflavor=$(ls "$TARGET"/boot/vmlinuz-* 2>/dev/null | head -1 | sed 's|.*/vmlinuz-||')
+    [ -n "$kflavor" ] || return 1
+    rootuuid=$(blkid -s UUID -o value "$ROOT_NODE")
+    [ -n "$rootuuid" ] || return 1
+    mkdir -p "$TARGET/boot/grub"
+    cat > "$TARGET/boot/grub/grub.cfg" <<EOF
+set default=0
+set timeout=1
+menuentry 'mammoth' {
+    linux /boot/vmlinuz-$kflavor root=UUID=$rootuuid modules=sd-mod,usb-storage,ext4 quiet
+    initrd /boot/initramfs-$kflavor
+}
+EOF
+    log "bootloader installed ($([ "$uefi" = 1 ] && echo "grub-efi $ESP_MOUNT" || echo "grub-bios MBR /dev/$MAMMOTH_BOOT_DRIVE"))"
+}
+
+# keep the runtime's stderr on the console: openrc swallows it, and the
+# trace (set -x) plus every tool error message is the SOL diagnostic surface
+exec 2>>/dev/console
+log "agent start (kernel $(uname -r))"
+find_plan || bail plan "agent-plan.sh not found (media scan + ${BASE:-<no base>}/agent-plan.sh)"
+. "$PLAN"
+[ -n "$MAMMOTH_COMPLETE_URL" ] || bail plan "plan carries no COMPLETE_URL"
+log "plan loaded: $(cat "$DISKS" | tr '\n' ' ')"
+bootstrap_tools || bail tools "agent tooling install failed"
+run_stage pre_install || bail pre_install "script failed"
+apply_storage || bail storage "partition/format/mount failed"
+install_base || bail packages "base install from pool failed"
+configure_target || bail config "system configuration failed"
+install_bootloader || bail bootloader "bootloader install failed"
+run_stage post_install || bail post_install "script failed"
+sync
+if report ok "installed by mammoth agent"; then
+    log "install complete — rebooting into the new system"
+    reboot -f
+fi
+bail report "completion report could not be delivered"
+`
+}

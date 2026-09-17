@@ -96,6 +96,12 @@ const (
 	// netboot tarball instead (a deployment-configured carrier,
 	// MAMMOTH_PXE_DI_NETBOOT).
 	NetbootCarrierDINetboot NetbootCarrier = "di_netboot"
+	// NetbootCarrierAlpineNetboot — the agent installer's carrier: the alpine
+	// NETBOOT tarball (MAMMOTH_PROBE_ALPINE_NETBOOT, shared with the ramdisk
+	// probe) supplies kernel/initrd/modloop, and the distro ISO contributes
+	// its /apks package repository. The agent's apkovl overlay rides the
+	// boot tree and is fetched by URL (apkovl=).
+	NetbootCarrierAlpineNetboot NetbootCarrier = "alpine_netboot"
 )
 
 // NetbootPool declares how a distro's PXE install source is served.
@@ -128,6 +134,22 @@ func NetbootInstallOf(d OSDriver) (NetbootCarrier, NetbootPool) {
 		return n.NetbootCarrier(), n.NetbootPool()
 	}
 	return NetbootCarrierISO, NetbootPoolNone
+}
+
+// AgentInstaller is the optional capability marking drivers whose install
+// runtime is the mammoth agent initramfs (docs/12-agent-initramfs.md) — a
+// distro installer never runs on the machine; the agent partitions the disks
+// and installs the base system from the pool itself. The boot carrier must
+// add the agent's apkovl overlay (built by the builder) to the boot media in
+// addition to the rendered answer files.
+type AgentInstaller interface {
+	AgentInstaller() bool
+}
+
+// IsAgentInstaller reports whether the driver runs the agent install runtime.
+func IsAgentInstaller(d OSDriver) bool {
+	a, ok := d.(AgentInstaller)
+	return ok && a.AgentInstaller()
 }
 
 // ── resolved inputs (produced by verify_layout / orchestration) ─────────────

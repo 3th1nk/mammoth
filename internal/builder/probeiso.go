@@ -149,12 +149,17 @@ func probeOverlayEntries(script string) []cpioEntry {
 // probeOverlay builds the apkovl tar.gz: the probe script under
 // etc/local.d/ plus the runlevel symlink that makes openrc execute it.
 func probeOverlay(reportURL, staticCIDR, staticGateway, kernel string) ([]byte, error) {
-	script := probeScript(reportURL, staticCIDR, staticGateway, kernel)
+	return apkovlArchive(probeOverlayEntries(probeScript(reportURL, staticCIDR, staticGateway, kernel)))
+}
+
+// apkovlArchive packs overlay entries into the apkovl tar.gz the alpine
+// initramfs applies — shared by the probe and the agent install runtime.
+func apkovlArchive(entries []cpioEntry) ([]byte, error) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 
-	for _, f := range probeOverlayEntries(script) {
+	for _, f := range entries {
 		hdr := &tar.Header{Name: f.Name, Mode: f.Mode}
 		switch {
 		case strings.HasSuffix(f.Name, "/"):

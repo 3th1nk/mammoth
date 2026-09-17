@@ -80,6 +80,29 @@
 - **已落地**:inbandssh ENV 探测、preseed post-install 拷日志;
   syslog sink 为近期行动项。
 
+## P7 共享二层网络的地址治理(2026-09-17 夜补)
+
+- **本质**:机房二层往往不是"真空"——外来 DHCP 客户端(VMware 虚拟机、
+  邻居服务器)会消耗任何应答它们的地址池;静态设备(ICMP 黑洞型)会占住
+  段内地址且 ping 扫描漏判。装机服务器一旦充当地址权威,就会与现场纠缠:
+  预约地址被占 → casper/目标机 NFS、回调全静默失败,且表现为"间歇性"。
+- **对策(三级,按环境选择)**:
+  1. 有 site DHCP:禁止 mammoth 发租约(proxy 模式),装机地址由 **spec
+     静态声明**钉死(渲染翻译为 ip= 内核参数 + target netplan),引导期
+     IP 由 site 供给——mammoth 永不做地址权威;
+  2. 无 site DHCP:池模式 + **预约探测**(ping 触发 ARP 解析后查邻居表,
+     ICMP 黑洞也能识别)+ **租约白名单**(只应答已武装装机任务的 MAC,
+     外来客户端零租约);探测结果记幻影租约,同址不再复用;
+  3. 池段选择必须先探测:ping+邻居表双查,"ping 不通"≠空闲。
+- **已落地**:internal/netboot/allocator.go(ReserveFree)、
+  proxydhcp.go(白名单 + nil-entry 门)、render/autoinstall(静态翻译)、
+  serve.go(probeAlive 接线)。
+- **连带教训**:①配置变量删除后重加,变更必须走完整 diff 流程(POOL
+  行丢失致一轮误诊);②验证钥匙的私钥必须落库保管(一次会话的 /tmp
+  私钥失传 = 装好的机器整体失联);③cloud-init 在 target 上由镜像自带
+  配置驱动,installer 期 seed 管不到它——对 target cloud-init 的任何
+  期望都要以 late-command 落文件的方式实现(如 emit_keys_to_console)。
+
 ## 使用方式
 
 - 新机型联调:先对照 P1-P4 的"证据形态"识别问题类别,再去厂商文档找

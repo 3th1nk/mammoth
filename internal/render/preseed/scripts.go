@@ -3,6 +3,7 @@ package preseed
 import (
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/3th1nk/mammoth/internal/render"
@@ -110,9 +111,10 @@ func resolveDiskScript(in render.InstallInputs, t target) string {
 
 // postInstallScript finalizes the fresh system at /target: ssh access
 // (authorized keys + PermitRootLogin — the preseed installed openssh-server
-// but d-i ships prohibit-password by default), user post_install scripts,
-// then the completion report.
-func postInstallScript(distro string, in render.InstallInputs) string {
+// but d-i ships prohibit-password by default), the apt trust retirement, user
+// post_install scripts, then the completion report. suite is the pool's
+// archive codename (empty on the ISO carrier, where no pool source exists).
+func postInstallScript(distro, suite string, in render.InstallInputs) string {
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
 	b.WriteString("# Mammoth post_install stage (installer environment; /target is the new system).\n")
@@ -166,6 +168,26 @@ ln -sf /etc/systemd/system/mammoth-hostname.service /target/etc/systemd/system/m
 	// mirror verification only; the provisioned system keeps the pool key
 	// (mammoth's signing identity) but never a permanently permissive apt.
 	b.WriteString("rm -f /target/etc/apt/apt.conf.d/99mammoth-offline\n")
+	// signed-by retirement (curtin's shape, docs/related-work.md §3): the
+	// pool line apt-setup wrote trusts the global keyring — trixie's sqv
+	// ignores trusted.gpg.d keys for unsigned-by lines, which is exactly why
+	// the tolerance file above had to exist. Rewriting the line with an
+	// explicit signed-by makes the source self-contained, so the provisioned
+	// system's apt stays correct under any verification generation with no
+	// tolerance at all. Guarded end to end: a missing keyring or a deb822
+	// sources file leaves the tree exactly as apt-setup wrote it — the
+	// tolerance removal above stays unconditional.
+	if in.Netboot != nil && suite != "" {
+		key := "/etc/apt/trusted.gpg.d/mammoth-pool.gpg"
+		pool := sedPatternEscape(aptSourceURL(in.Netboot.PoolURL))
+		b.WriteString("if [ -f /target" + key + " ]; then\n")
+		b.WriteString("  for f in /target/etc/apt/sources.list /target/etc/apt/sources.list.d/*; do\n")
+		b.WriteString("    [ -f \"$f\" ] || continue\n")
+		b.WriteString("    grep -q '^Types:' \"$f\" 2>/dev/null && continue\n")
+		b.WriteString("    sed -i \"s|^deb \\(" + pool + " \\)|deb [signed-by=" + key + "] \\1|\" \"$f\"\n")
+		b.WriteString("  done\n")
+		b.WriteString("fi\n")
+	}
 	for _, s := range in.Scripts {
 		if s.Stage != "post_install" {
 			continue
@@ -199,6 +221,26 @@ func netbootPoolKey(in render.InstallInputs) []byte {
 		return nil
 	}
 	return in.Netboot.PoolPublicKey
+}
+
+// aptSourceURL renders the pool URL in the form apt-setup writes it into
+// sources.list: host + directory, no scheme (d-i mirror/http/hostname +
+// mirror/http/directory concatenated).
+func aptSourceURL(poolURL string) string {
+	u, err := url.Parse(poolURL)
+	if err != nil || u.Host == "" {
+		return strings.TrimPrefix(poolURL, "http://")
+	}
+	return u.Host + u.Path
+}
+
+// sedPatternEscape escapes the BRE metacharacters so a URL matches literally
+// inside sed's s command (busybox sed in the d-i installer environment).
+func sedPatternEscape(s string) string {
+	return strings.NewReplacer(
+		`\`, `\\`, `.`, `\.`, `*`, `\*`, `[`, `\[`, `]`, `\]`,
+		`^`, `\^`, `$`, `\$`,
+	).Replace(s)
 }
 
 // base64Encode wraps the standard encoding for heredoc payloads (76-column

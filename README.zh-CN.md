@@ -69,9 +69,9 @@ flowchart TD
 ```mermaid
 flowchart TD
     q{"装机网段是否已有<br/>site DHCP 服务?"}
-    q -- "没有" --> pool["**POOL 模式** —— 配置 MAMMOTH_PXE_DHCP_POOL<br/>mammoth 拥有该网段:<br/>· 为 PXE ROM 与安装器应答 DHCP<br/>· arm 时预约地址:ping + 邻居表探测<br/>  跳过被静默占用的静态地址<br/>· 租约只发给已武装装机任务的 MAC<br/>· 引导与目标系统使用预约地址<br/>(ip= 内核参数)"]
-    q -- "有" --> proxy["**PROXY 模式** —— 不配置池<br/>site DHCP 拥有地址:<br/>· site DHCP 应答引导期 IP<br/>· mammoth 只附加 PXE 引导选项<br/>  (67/4011)<br/>· 在 spec 里声明装机地址:<br/>  静态 ip= 参数 + 目标 netplan<br/>· verify 探测该声明地址"]
-    pool --> vlan["**跨 VLAN**:机器网段的 DHCP relay(ip helper)把<br/>广播转发给 mammoth;应答按 giaddr 回程(RFC 2131)。<br/>TFTP/HTTP 是单播 —— NextServer 与介质/API 地址<br/>必须从机器网段可达"]
+    q -- "没有" --> pool["**POOL 模式**<br/>配置 MAMMOTH_PXE_DHCP_POOL,<br/>mammoth 拥有该网段:<br/>· 为 PXE ROM 与安装器<br/>  应答 DHCP<br/>· arm 时预约地址:ping +<br/>  邻居表探测跳过被占<br/>  静态地址<br/>· 租约只发给已武装装机<br/>  任务的 MAC<br/>· 引导与目标系统使用<br/>  预约地址(ip= 参数)"]
+    q -- "有" --> proxy["**PROXY 模式**<br/>不配置池,site DHCP<br/>拥有地址:<br/>· site DHCP 应答引导期 IP<br/>· mammoth 只附加 PXE<br/>  引导选项(67/4011)<br/>· 在 spec 里声明装机地址:<br/>  静态 ip= 参数 + netplan<br/>· verify 探测该声明地址"]
+    pool --> vlan["**跨 VLAN**<br/>机器网段的 DHCP relay<br/>(ip helper)把广播转发给<br/>mammoth;应答按 giaddr<br/>回程(RFC 2131)。TFTP/HTTP<br/>是单播 —— NextServer 与<br/>介质/API 地址须从机器<br/>网段可达"]
     proxy --> vlan
 ```
 

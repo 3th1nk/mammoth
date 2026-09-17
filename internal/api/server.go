@@ -97,9 +97,11 @@ func New(d Deps, apiToken string) *gin.Engine {
 		router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	}
 	// Boot-tree subtrees ride multi-segment paths (/netboot/files/<token>/
-	// apks/x86_64/*.apk, /netboot/files/<token>/iso/dists/...) the generated
+	// apks/x86_64/*.apk — the probe's apk repository) the generated
 	// single-param route can't match — manual catch-alls share the strict
-	// handler; allowlisting is enforced inside it (entryGrants).
+	// handler; allowlisting is enforced inside it (entryGrants). The shared
+	// pool trees have their own catch-all below (content-addressed, no
+	// per-task grant to enforce).
 	for _, sub := range []string{"apks", "iso"} {
 		sub := sub
 		router.GET("/netboot/files/:token/"+sub+"/*rest", func(c *gin.Context) {
@@ -115,6 +117,16 @@ func New(d Deps, apiToken string) *gin.Engine {
 			_ = resp.VisitFetchNetbootFileResponse(c.Writer)
 		})
 	}
+	// Shared pool trees (content-addressed by the image sha256, docs §3.3):
+	// the tree holds public distro content — the official ISO unpack plus
+	// mammoth's pool signing key deb — so the sha in the path is an address,
+	// not a credential; per-task answers and callbacks stay behind their
+	// unguessable tokens on /render/{token}.
+	router.GET("/netboot/store/:sha/*rest", func(c *gin.Context) {
+		if err := srv.fetchPoolStoreFile(c, c.Param("sha"), c.Param("rest")); err != nil {
+			writeError(c, err)
+		}
+	})
 	// The same single-param limitation hits the answer scripts on the netboot
 	// carrier: hooks are named run/mammoth/*.sh (multi-segment) and the
 	// generated /render/{token}/{file} route can't match them — the installer's

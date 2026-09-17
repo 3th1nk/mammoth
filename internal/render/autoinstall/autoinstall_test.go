@@ -426,16 +426,30 @@ func TestStorageResolvesControllerVolumeBySize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
-	var ud string
+	var ud, resolver string
 	for _, a := range answers {
-		if a.Name == "user-data" {
+		switch a.Name {
+		case "user-data":
 			ud = a.Content
+		case "run/mammoth/resolve-disk.sh":
+			resolver = a.Content
 		}
 	}
-	if !strings.Contains(ud, `"path": "/dev/sda"`) {
-		t.Errorf("storage did not resolve the volume to the kernel name:\n%s", ud)
+	// The kernel name is unknowable at render time (the snapshot carries the
+	// same controller view), so the path stays a placeholder and the
+	// on-machine resolver patches it — keyed by the controller name with the
+	// render-side size hint.
+	if !strings.Contains(ud, `"path": "/dev/LogicalDrive0"`) {
+		t.Errorf("placeholder path missing:\n%s", ud)
 	}
-	if strings.Contains(ud, `"path": "/dev/LogicalDrive0"`) {
-		t.Errorf("storage leaked the controller name into the path:\n%s", ud)
+	if resolver == "" {
+		t.Fatal("resolve-disk.sh not rendered for the controller-named volume")
+	}
+	if !strings.Contains(resolver, `"LogicalDrive0": 3999999721472`) ||
+		!strings.Contains(resolver, `/autoinstall.yaml`) {
+		t.Errorf("resolver missing size hint or config path:\n%s", resolver)
+	}
+	if !strings.Contains(ud, "resolve-disk.sh") {
+		t.Errorf("early-command for the resolver missing:\n%s", ud)
 	}
 }

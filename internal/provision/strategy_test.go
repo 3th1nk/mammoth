@@ -138,3 +138,23 @@ func TestReleaseBootPayloadDispatch(t *testing.T) {
 		t.Fatal("traversal token must not remove outside the tree root")
 	}
 }
+
+// A full boot-tree volume must fail the build BEFORE the extract, with a
+// message that names the remedy — a disk-full mid-extract surfaces as an
+// opaque xorriso error instead (2026-09-17 real-hardware, thrice).
+func TestRequireDiskHeadroom(t *testing.T) {
+	dir := t.TempDir()
+	if err := requireDiskHeadroom(dir, 1); err != nil {
+		t.Fatalf("sane volume rejected: %v", err)
+	}
+	// Absurd requirement on any real volume: rejected with guidance.
+	if err := requireDiskHeadroom(dir, 1<<50); err == nil {
+		t.Fatal("impossible headroom demand passed")
+	} else if !strings.Contains(err.Error(), "grow the volume") {
+		t.Fatalf("error lacks guidance: %v", err)
+	}
+	// Unknown volume (statfs fails): defer to the build.
+	if err := requireDiskHeadroom(filepath.Join(dir, "missing"), 1); err != nil {
+		t.Fatalf("missing dir should not fail: %v", err)
+	}
+}

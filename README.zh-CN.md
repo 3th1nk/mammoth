@@ -21,6 +21,93 @@ Mammoth 通过带外控制器(BMC)接管机器,自动盘查硬件与磁盘布局
 - 状态:**v1.0 就绪** —— M0~M6 全部交付(契约冻结),三方言(rocky9 / ubuntu22 / debian12)
   真机端到端闭环;M7 PXE/iPXE 网络引导已交付并真机闭环。([路线图](docs/09-roadmap.md))
 
+## 一图看懂
+
+**一条流水线,三条上电路径,两种引导载体,三种安装器方言。**
+
+```mermaid
+flowchart TD
+    subgraph ON["上电注册"]
+        direction LR
+        reg["注册机器:<br/>BMC 地址 + 凭证<br/>(Redfish,IPMI 兜底)"]
+        zr["零注册:未知机器 PXE 引导<br/>共享探针树 → pending_machines<br/>→ claim 升格注册"]
+    end
+    subgraph INV["盘查 / 探测"]
+        direction LR
+        rf["redfish(带外)"]
+        ram["ramdisk 探针(alpine):<br/>PXE 或虚拟介质"]
+        ish["inband_ssh 探针"]
+    end
+    subgraph INS["安装 —— 一份声明式 Install Spec"]
+        direction LR
+        vm["virtual_media(默认):<br/>BMC 挂载重打包引导 ISO<br/>(NFS/HTTP 介质仓库)"]
+        pxe["pxe(可选):<br/>shim → grubnet → 内核<br/>经 DHCP/proxyDHCP + TFTP + HTTP"]
+    end
+    subgraph DIA["安装器方言"]
+        direction LR
+        ks["kickstart<br/>rocky · centos · kylin · UOS"]
+        ai["autoinstall<br/>ubuntu 22.04 / 24.04"]
+        ps["preseed<br/>debian 12 / 13"]
+    end
+    ver["校验:完成回调<br/>+ 带内 SSH 探测(识别安装器)<br/>+ 装后布局快照"]
+    reg --> rf
+    zr --> ram
+    rf --> vm
+    ram --> vm
+    vm --> ks
+    vm --> ai
+    vm --> ps
+    pxe --> ks
+    pxe --> ai
+    pxe --> ps
+    ks --> ver
+    ai --> ver
+    ps --> ver
+```
+
+### PXE 寻址:DHCP 决策框架
+
+装机二层决定模式 —— **每部署声明一次,绝不在单次安装时猜测**
+(双 DHCP 抢答在代码层无法根治):
+
+```mermaid
+flowchart TD
+    q{"装机网段是否已有<br/>site DHCP 服务?"}
+    q -- "没有 —— mammoth 拥有该网段" --> pool["**POOL 模式** —— 配置 MAMMOTH_PXE_DHCP_POOL<br/>· mammoth 为 PXE ROM 与安装器应答 DHCP<br/>· arm 时预约地址:ping + 邻居表探测跳过静默占址的静态设备<br/>· 租约只发给已武装装机任务的 MAC<br/>· 引导与目标系统使用预约地址(ip= 内核参数)"]
+    q -- "有 —— 共存,绝不竞争" --> proxy["**PROXY 模式** —— 不配置池<br/>· site DHCP 应答引导期 IP<br/>· mammoth 只附加 PXE 引导选项(67/4011)<br/>· 在 spec 里声明装机地址:<br/>  静态 ip= 内核参数 + 目标 netplan<br/>· verify 探测声明地址"]
+    pool --> vlan["**跨 VLAN**:机器网段的 DHCP relay(ip helper)把广播<br/>转发给 mammoth;应答按 giaddr 回程(RFC 2131)。TFTP/HTTP 是<br/>单播 —— NextServer 与介质/API 地址必须从机器网段可达"]
+    proxy --> vlan
+```
+
+### 发行版适配矩阵 —— 什么载体用什么镜像
+
+| 发行版 | 方言 | virtual_media 镜像 | PXE 镜像 | PXE 安装源 | 真机 |
+|---|---|---|---|---|---|
+| rocky 9 | kickstart | minimal / DVD ISO(重打包) | 同 ISO(抽取引导文件) | HTTP 池或 NFS ISO | ✅ 双载体 |
+| rocky 10 | kickstart | DVD ISO,UEFI-only 布局 | 同上 | 同上 | qemu ✅ · 真机待验 |
+| centos 7 | kickstart | minimal ISO | 同 ISO | 同上 | ✅ 虚拟介质 |
+| kylin V10 / V11 | kickstart | DVD ISO | 同 ISO | 同上 | 待验 |
+| UOS | kickstart | DVD ISO | — | — | 受阻(厂商) |
+| ubuntu 22.04 / 24.04 | autoinstall | **live-server** ISO(casper,重打包) | **live-server** ISO(squashfs 走 NFS) | 解包 ISO 树走 NFS | ✅ 双载体 |
+| debian 12 / 13 | preseed | **netinst** ISO(重打包) | **netinst** ISO(签名 HTTP 池)**+ 官方 netboot.tar.gz** + 暂存 udebs | HTTP 池(校验和完整、by-hash 回填) | ✅ 双载体 |
+
+经验法则:**netinst / minimal** = 小安装器自带软件池(PXE 友好);
+**DVD** = 完全离线池;**live-server** = ubuntu 的安装器载体(casper);
+**live desktop** = 不支持(内无安装器)。virtual_media 载体总是重打包
+官方 ISO 并烘焙应答文件;PXE 载体抽取引导文件、把 ISO 内容当作包源。
+
+### 回归基线 —— 主流服务器镜像
+
+| 家族 | 基线镜像(最新点版本) | 载体覆盖 |
+|---|---|---|
+| RHEL 系 | Rocky 9.x minimal ISO | virtual_media ✅ · PXE ✅ |
+| Ubuntu 系 | Ubuntu 22.04.5 与 24.04.x live-server ISO | virtual_media ✅ · PXE ✅ |
+| Debian 系 | Debian 12 / 13 netinst ISO | virtual_media ✅ · PXE ✅ |
+| 扩展 | Rocky 10(UEFI-only)· CentOS 7(legacy)· Kylin V10/V11 · UOS | 按需 |
+
+每轮回归:六阶段流水线全绿 → 无人值守首启 → 装机钥匙 SSH 探测。详见
+[docs/runbooks/test-baselines.md](docs/runbooks/test-baselines.md)。
+
 ## 快速开始(一体化)
 
 前置条件:Go ≥ 1.26,Docker(用于 PostgreSQL)。

@@ -122,9 +122,14 @@ func RenderEnrollScript(e *Entry, baseURL, mac string) string {
 
 // sanitizeArgs collapses whitespace runs so the args stay on the kernel
 // line — upstream composes them from trusted templates, this only guards
-// against accidental newlines breaking the script.
+// against accidental newlines breaking the script. Semicolons are escaped
+// for the GRUB parser: an unescaped ";" is grub's command separator, which
+// truncates the linux line at the first one (real-hardware 2288H: the
+// ubuntu args "autoinstall ds=nocloud-net;s=http://... ip=... boot=casper"
+// lost everything after the ";", the kernel booted with no ip=/BOOTIF/
+// nfsroot at all and casper fell into its interactive prompt).
 func sanitizeArgs(s string) string {
-	return strings.Join(strings.Fields(s), " ")
+	return strings.ReplaceAll(strings.Join(strings.Fields(s), " "), ";", `\;`)
 }
 
 // RenderGRUB renders the GRUB config for an entry (UEFI Secure Boot chain:

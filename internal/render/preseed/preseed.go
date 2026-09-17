@@ -16,7 +16,6 @@ import (
 	"strings"
 
 	"github.com/3th1nk/mammoth/internal/render"
-	"github.com/3th1nk/mammoth/internal/render/distros"
 )
 
 // Driver is the debian-installer preseed driver. One instance per distro
@@ -30,16 +29,7 @@ type Driver struct {
 func New(distro string) *Driver { return &Driver{distro: distro} }
 
 func (d *Driver) Distro() string                { return d.distro }
-func (d *Driver) SupportedArchs() []render.Arch {
-	var out []render.Arch
-	for _, a := range distros.ArchsFor(d.Distro()) {
-		out = append(out, render.Arch(a))
-	}
-	return out
-}
-
-// Family reports the declarative family (docs/06-install-pipeline.md §5).
-func (d *Driver) Family() string { return "preseed" }
+func (d *Driver) SupportedArchs() []render.Arch { return []render.Arch{render.ArchAMD64} }
 
 // KeepPartitionSupport: d-i can keep a whole disk (it never becomes a
 // partman-auto target) but block-level partition reuse needs partman surgery
@@ -64,12 +54,15 @@ func (d *Driver) NetbootPool() render.NetbootPool { return render.NetbootPoolHTT
 
 // suite is the archive codename the pool's dists/ carries — choose-mirror
 // needs it preseeded because the pool layout has no Release label prompt.
-// Declared per distro (internal/render/distros/distros.json, preseed.suite).
 func (d *Driver) suite() (string, error) {
-	if suite := distros.PreseedFor(d.Distro()).Suite; suite != "" {
-		return suite, nil
+	switch d.distro {
+	case "debian12":
+		return "bookworm", nil
+	case "debian13":
+		return "trixie", nil
+	default:
+		return "", fmt.Errorf("%s: no archive suite mapped for PXE installs", d.distro)
 	}
-	return "", fmt.Errorf("%s: no archive suite mapped for PXE installs", d.Distro())
 }
 
 // kernelArgs boots the d-i TEXT installer fully preseeded. auto=true turns on

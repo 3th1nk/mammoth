@@ -170,16 +170,9 @@
    行开发,攒 2288H 回归窗口一次落)→ **NIST 800-88 擦盘**(破坏性,移队
    尾,等把握窗口顺带测,LSI secure erase 支持未知);两段式契约的 API 形
    态在 1 的结论之后定稿,避免返工;
-3. ~~**发行版接入声明化**~~ **✅ 已落地(2026-09-18)**——
-   `internal/render/distros/distros.json`:12 个发行版全量声明化(家族/
-   布局家族/池能力 boot_pool vs system_pool/架构/固件/家族参数:
-   kickstart 生成代差四标志+extras、preseed suite、agent
-   packages+bootloader+tools),加载期 fail-fast 校验,serve 注册循环
-   遍历声明构造驱动,capabilities 追加 `distros[].family`;**已知家族内
-   新增发行版 = 一条 JSON,零 Go**。仍属 Go(边界见 docs/06 §6):方言
-   模板逻辑、DetectLayout 布局探测启发式、keep/pxe/carrier 支持级
-   (家族属性,驱动导出)。顺修:ubuntu 声明修正 amd64-only(live-server
-   无 arm64 介质,原驱动过度声明);
+3. **发行版接入声明化**(跟随 1,顺序不能反:distro 签名表的字段形态取决
+   于 agent 路径结论;Cobbler 式数据文件,载体内核/initrd 相对路径、内核
+   参数、bootloader 形态——接入新发行版从写 Go 变成写声明);
 4. **PXE 余项的 qemu 可验部分**:外部 DHCP+TFTP 逃生门(mammoth 不能当
    PXE 服务的部署形态;网桥 + dnsmasq 同型验证)、arm64 引导链(qemu
    AAVMF + TCG 源级验链路,opt 93 = 0x000B,真机回归后补;信创混合机群

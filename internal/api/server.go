@@ -206,11 +206,15 @@ func (s *Server) GetCapabilities(ctx context.Context, _ gen.GetCapabilitiesReque
 	for _, name := range s.Render.Distros() {
 		if d, err := s.Render.For(name); err == nil {
 			pxe := render.PXESupport(d)
-			distros = append(distros, gen.DistroSupport{
+			entry := gen.DistroSupport{
 				Name:                 name,
 				KeepPartitionSupport: gen.DistroSupportKeepPartitionSupport(d.KeepPartitionSupport()),
 				PxeSupport:           (*gen.DistroSupportPxeSupport)(&pxe),
-			})
+			}
+			if family := render.FamilyOf(d); family != "" {
+				entry.Family = (*gen.DistroSupportFamily)(&family)
+			}
+			distros = append(distros, entry)
 		}
 	}
 	out.Distros = &distros

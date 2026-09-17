@@ -169,7 +169,8 @@ keep 任何形态(SupportLevel=none,提交门禁即拒)、xfs 等 ext4/vfat/swap
   SB 机器继续走方言路径或后续评估);
 - 真机回归(2288H 轮装时顺带:UEFI x64 一轮即可,载体与探针同源)。
 
-**对 roadmap 第 3 项(发行版接入声明化)的直接输入**:
+**对 roadmap 第 3 项(发行版接入声明化)的直接输入**
+(✅ 已落地:internal/render/distros/distros.json + docs/06 §6):
 - 池能力必须建模:boot_pool(引导自足)vs system_pool(可装系统)——
   extended/standard 的差异就是这个字段;
 - DetectLayout 的布局知识(alpine 分支)是签名表的第一个候选条目;

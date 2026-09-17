@@ -14,6 +14,7 @@ import (
 	"text/template"
 
 	"github.com/3th1nk/mammoth/internal/render"
+	"github.com/3th1nk/mammoth/internal/render/distros"
 )
 
 // dynDisk is one claimed disk that must be re-identified in %pre: ph is the
@@ -46,13 +47,18 @@ func New(distro string) *Driver { return &Driver{distro: distro} }
 // virtual-media boot it, so the submit-time gate turns that into a 422
 // instead of a machine stranded at boot.
 func (d *Driver) FirmwareSupport() render.FirmwareSupport {
-	switch d.distro {
-	case "rocky10":
+	switch distros.FirmwareFor(d.Distro()) {
+	case "uefi_only":
 		return render.FirmwareUEFIOnly
+	case "bios_only":
+		return render.FirmwareBIOSOnly
 	default:
 		return render.FirmwareAll
 	}
 }
+
+// Family reports the declarative family (docs/06-install-pipeline.md §5).
+func (d *Driver) Family() string { return "kickstart" }
 
 func (d *Driver) Distro() string {
 	if d.distro == "" {
@@ -68,14 +74,14 @@ func (d *Driver) Distro() string {
 // created user. Both commands are harmless no-ops on standard RHEL-lineage
 // anaconda (and the eula command is skipped with a warning where absent).
 func (d *Driver) dialectExtras() string {
-	switch d.distro {
-	case "uniontechos":
-		return "eula --agreed\nuser --name=uos --password=Uos@2024 --plaintext --groups=wheel"
-	}
-	return ""
+	return distros.KickstartFor(d.Distro()).Extras
 }
 func (d *Driver) SupportedArchs() []render.Arch {
-	return []render.Arch{render.ArchAMD64, render.ArchARM64}
+	var out []render.Arch
+	for _, a := range distros.ArchsFor(d.Distro()) {
+		out = append(out, render.Arch(a))
+	}
+	return out
 }
 
 // KeepPartitionSupport: RHEL-lineage has the most complete keep mechanism
@@ -91,63 +97,25 @@ func (d *Driver) KeepPartitionSupport() render.SupportLevel { return render.Supp
 func (d *Driver) PXESupport() render.SupportLevel { return render.SupportFull }
 
 // dialect carries the installer-generation deltas between distro members of
-// the kickstart package. Every version-specific behaviour branches here —
-// one declarative place to extend when a new distro lands (kylinv11 etc.
-// inherit via the prefix match).
+// the kickstart package. The values are DECLARATIONS now
+// (internal/render/distros/distros.json, kickstart.* fields — each flag is
+// a real-machine lesson, see the incidents in docs/compat/distros.md); this
+// struct is the driver's view of them.
 type dialect struct {
-	// hostnameViaNetworkCmd: the `network --hostname=` kickstart command is
-	// the hostname carrier. CentOS 7 (anaconda 19.31) predates the option's
-	// parser guarantees and rocky9 ignores the command on real hardware
-	// anyway — both carry the hostname through the unconditional %post
-	// write of /etc/hostname instead.
 	hostnameViaNetworkCmd bool
-	// rootExtensionSupported: the %post sfdisk safety net can resize GPT.
-	// util-linux 2.23 (CentOS 7 era) cannot — and there is no in-distro
-	// alternative on GPT-only large volumes, so a doomed script must not be
-	// rendered at all (its failure would abort a finished install).
 	rootExtensionSupported bool
-	// netRepair: the %pre hook additionally repairs the anaconda-written
-	// ifcfg (kylin's writer emits `HWADDR50:…` without the '=' and a
-	// malformed UUID) and re-manages the NIC through NM — without this, NM
-	// marks the dracut-configured device strictly unmanaged and the text
-	// install blocks at the network spoke forever (V10 SP3 2403, real
-	// machine).
-	netRepair bool
-	// deviceByMAC: the kickstart `network --device=` selector uses the MAC
-	// literal instead of a %pre-resolved interface name (paired with
-	// netRepair; the mangled writer path is the resolved-name form).
-	deviceByMAC bool
+	netRepair             bool
+	deviceByMAC           bool
 }
 
-// dialect resolves the installer-generation deltas for this distro. Each
-// generation gets an explicit case — no family-prefix inheritance: the V10
-// workarounds must not silently apply to V11 (different NM generation,
-// different anaconda).
+// dialect resolves this distro's declared installer-generation deltas.
 func (d *Driver) dialect() dialect {
-	switch d.distro {
-	case "kylinv10":
-		// Kylin V10 (RHEL8-generation anaconda, NM 1.18-era quirks).
-		return dialect{
-			hostnameViaNetworkCmd:  true,
-			rootExtensionSupported: true,
-			netRepair:              true,
-			deviceByMAC:            true,
-		}
-	case "centos7":
-		// CentOS 7: python2-era anaconda, util-linux 2.23.
-		return dialect{
-			hostnameViaNetworkCmd:  false,
-			rootExtensionSupported: false,
-			deviceByMAC:            false,
-		}
-	default:
-		// rocky9/rocky10/kylinv11/uniontechos — current-generation lineage:
-		// standard everything.
-		return dialect{
-			hostnameViaNetworkCmd:  true,
-			rootExtensionSupported: true,
-			deviceByMAC:            false,
-		}
+	p := distros.KickstartFor(d.Distro())
+	return dialect{
+		hostnameViaNetworkCmd:  p.HostnameViaNetworkCmd,
+		rootExtensionSupported: p.RootExtension,
+		netRepair:              p.NetRepair,
+		deviceByMAC:            p.DeviceByMAC,
 	}
 }
 

@@ -5,7 +5,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+
+	"github.com/gin-gonic/gin"
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/netboot"
@@ -121,4 +124,37 @@ func entryGrants(e interface {
 		}
 	}
 	return "", false
+}
+
+// poolStoreSHARe is the content address a shared pool tree is keyed by —
+// anything else in the :sha slot is a probe, not a tree.
+var poolStoreSHARe = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// fetchPoolStoreFile serves the shared, content-addressed pool tree
+// (MediaDir/pool-store/<sha256>/iso/...): one unpack per image content,
+// consumed by d-i (HTTP mirror) and casper (http fallback) across tasks.
+// The path is confined to the addressed tree — the sha slot is format-checked
+// and the rest cannot traverse (.. rejected, Clean strips chains).
+func (s *Server) fetchPoolStoreFile(c *gin.Context, sha, rest string) error {
+	if !poolStoreSHARe.MatchString(sha) || strings.Contains(rest, "..") {
+		return verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
+			"no pool tree at this address")
+	}
+	rel := strings.TrimPrefix(filepath.Clean("/"+rest), "/")
+	path := filepath.Join(s.MediaDir, "pool-store", sha, "iso", rel)
+	f, err := os.Open(path)
+	if err != nil {
+		return verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
+			"no pool tree at this address")
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		return verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
+			"no pool tree at this address")
+	}
+	obs.FromContext(c.Request.Context()).InfoContext(c.Request.Context(),
+		"pool store file served", "sha256", sha, "file", rel)
+	c.DataFromReader(http.StatusOK, st.Size(), "application/octet-stream", f, nil)
+	return nil
 }

@@ -73,31 +73,24 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 				"boot tree extraction failed: %s", err.Error())
 		}
 	}
-	// The unpacked install source rides the boot tree: HTTP-authorized for
-	// pool consumers (d-i's mirror) or merely NFS-visible for NFS ones
-	// (casper's netboot=nfs root, under the always-on MediaDir export).
+	// The unpacked install source is a SHARED, content-addressed tree (the
+	// pool store, MediaDir/pool-store/<sha256>): one unpack per image
+	// content, reused across tasks — batch installs of one distro no longer
+	// re-extract ~2.5G apiece. HTTP consumers fetch it via /netboot/store/,
+	// NFS consumers (casper's nfsroot) mount the same path through the
+	// MediaDir export. The d-i HTTP pool additionally gets its signed,
+	// udeb-complete mirror staging inside the same tree (first build only —
+	// visible means complete).
 	switch pool {
 	case render.NetbootPoolHTTP, render.NetbootPoolNFS:
-		if perr := builder.ExtractISOTree(ctx, "", distroISO, filepath.Join(treeDir, "iso")); perr != nil {
+		sha, err := builder.FileSHA256(distroISO)
+		if err != nil {
 			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
-				"install-source tree extraction failed: %s", perr.Error())
+				"distro ISO hash failed: %s", err.Error())
 		}
-		if pool == render.NetbootPoolHTTP {
-			// Signed, udeb-complete offline mirror (Release re-checksummed and
-			// re-signed; netboot udebs filled from the staged archive subset —
-			// the netinst ISO prunes them, real-hardware: anna died with "No
-			// kernel modules were found" and apt-setup rejected the unsigned
-			// pool; see builder.StageNetbootPool).
-			ent, kerr := builder.PoolSigningEntity(e.MediaDir)
-			if kerr != nil {
-				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,
-					"pool signing key unavailable: %s", kerr.Error())
-			}
-			if serr := builder.StageNetbootPool(filepath.Join(treeDir, "iso"), e.PXEDIUdebsDir, ent); serr != nil {
-				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
-					"pool staging failed: %s", serr.Error())
-			}
-			tree.Extra["iso"] = "dir:iso"
+		if _, err := EnsurePoolTree(ctx, e, distroISO, sha, pool, nil); err != nil {
+			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+				"%s", err.Error())
 		}
 	}
 
@@ -142,12 +135,12 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 }
 
 // nfsRootFor converts the NFS media base (nfs://host/export) into casper's
-// nfsroot form (host:/export/netboot/<token>/iso — the colon separator is
-// what busybox nfsmount parses server from path; without it the mount
-// reports "need a path"). Empty base → empty result: the NFS-pool drivers
-// reject it at render/prepare time.
-func nfsRootFor(mediaNFSBase, token string) string {
-	if mediaNFSBase == "" || token == "" {
+// nfsroot form (host:/export/<relPath> — the colon separator is what busybox
+// nfsmount parses server from path; without it the mount reports "need a
+// path"). relPath is export-relative (e.g. pool-store/<sha>/iso). Empty base
+// → empty result: the NFS-pool drivers reject it at render/prepare time.
+func nfsRootFor(mediaNFSBase, relPath string) string {
+	if mediaNFSBase == "" || relPath == "" {
 		return ""
 	}
 	u := strings.TrimPrefix(mediaNFSBase, "nfs://")
@@ -156,7 +149,7 @@ func nfsRootFor(mediaNFSBase, token string) string {
 	if !ok {
 		return ""
 	}
-	return host + ":/" + export + "/netboot/" + token + "/iso"
+	return host + ":/" + export + "/" + relPath
 }
 
 // arm one-shot points the firmware at PXE and powers the machine. No media

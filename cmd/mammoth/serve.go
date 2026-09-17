@@ -229,6 +229,10 @@ func serve(args []string) error {
 	// resolves DHCP-carrier machine addresses through it (nil = disabled).
 	var dhcpPool *netboot.DHCPPool
 	if cfg.PXEEnabled && cfg.Mode.RunsNetboot() {
+		// Reclaim shared pool trees no install has touched past the TTL
+		// (startup-time GC — a crashed runner never owns a shared tree, so
+		// age since last use is the only lifecycle signal there is).
+		provision.SweepPoolStore(cfg.MediaDir, logger)
 		nextServer := net.ParseIP(cfg.PXENextServer)
 		if cfg.PXEDHCPPool != "" {
 			router := net.ParseIP(cfg.PXEDHCPRouter)

@@ -75,7 +75,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		return nil, render.BootParams{}, fmt.Errorf("%s: image source is required", d.distro)
 	}
 
-	storage, err := d.storageConfig(in, m)
+	storage, dyn, err := d.storageConfig(in, m)
 	if err != nil {
 		return nil, render.BootParams{}, err
 	}
@@ -107,6 +107,21 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 
 	// pre_install scripts map to early-commands (installer environment).
 	var early []string
+	// Controller-named volumes whose kernel name mammoth cannot know (the
+	// snapshot itself carries the controller view): subiquity rewrites
+	// nothing, so an early command resolves the device ON THE MACHINE by
+	// size and patches /autoinstall.yaml before storage applies — the
+	// autoinstall twin of the debian resolve-disk.sh early_command (the
+	// kickstart dialect has the %pre equivalent). Real-hardware: curtin
+	// "matched no disk" on /dev/LogicalDrive0 three times over.
+	var resolveAnswers []render.AnswerFile
+	if len(dyn) > 0 {
+		resolveAnswers = []render.AnswerFile{{
+			Name:    "run/mammoth/resolve-disk.sh",
+			Content: resolveDiskScript(dyn),
+		}}
+		early = append(early, resolveDiskEarlyCommand(in))
+	}
 	for _, s := range in.Scripts {
 		if s.Stage == "pre_install" {
 			early = append(early, scriptLine(s))
@@ -169,6 +184,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		{Name: "meta-data", Content: meta},
 		{Name: "user-data", Content: userDataYAML},
 	}
+	answers = append(answers, resolveAnswers...)
 	// The answer files are BAKED into the rebuilt ISO root; the kernel
 	// argument points the nocloud-net datasource at the CD mount (file:// —
 	// fully offline). The autoinstall network section (above) configures the
@@ -257,9 +273,13 @@ func sizeWithinTolerance(a, b int64) bool {
 // storageConfig builds the curtin storage config (autoinstall.storage).
 // Wiped disks get the full disk→partition→format→mount chain; kept disks are
 // simply absent (curtin never touches them) — the partial keep semantics.
-func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (map[string]any, error) {
+func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (map[string]any, []dynDisk, error) {
 	config := []map[string]any{}
 	rendered := 0
+	// Controller-named volumes the render side cannot resolve to a kernel
+	// name (mammoth's snapshot carries the same controller view) — resolved
+	// on the machine by resolve-disk.sh.
+	var dyn []dynDisk
 
 	// Hardware RAID volumes are install targets like disks — the bound
 	// volume identifies by its SCSI serial (refreshed from the in-band
@@ -290,7 +310,7 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 			continue
 		}
 		if len(disk.Baseline) > 0 || len(disk.Remove) > 0 || hasPreserve(disk.Partitions) {
-			return nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"%s: keep: partitions is not supported on this distro (partial); submit without preserve", d.distro)
 		}
 		targets = append(targets, diskTarget{id: "disk-" + disk.Device, device: disk.Device,
@@ -304,7 +324,7 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 			continue
 		}
 		if !disk.wipe {
-			return nil, fmt.Errorf("%s: disk %s must declare wipe or keep", d.distro, disk.device)
+			return nil, nil, fmt.Errorf("%s: disk %s must declare wipe or keep", d.distro, disk.device)
 		}
 		diskBytes := disk.sizeBytes
 
@@ -322,35 +342,23 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 		if disk.serial != "" {
 			entry["serial"] = disk.serial
 		} else {
-			// A controller-named volume ("LogicalDrive0") is not a kernel
-			// name — curtin's path form matches nothing (real-hardware:
-			// "matched no disk"). The in-band snapshot carries the kernel
-			// view: resolve by size within 1% tolerance (Redfish capacity
-			// rounding differs between refresh passes — the same ±1% the
-			// kickstart %pre and debian early_command resolvers use), then
-			// fall back to the sole disk when the snapshot lists just one.
-			path := ""
+			// Kernel names take the path form. A controller-named volume
+			// ("LogicalDrive0") is a placeholder only: the kernel name exists
+			// solely on the machine — mammoth's snapshot carries the same
+			// controller view, so render-side resolution is impossible (2288H:
+			// "matched no disk" three times). The path is emitted as-is and
+			// resolve-disk.sh patches it on the machine before storage applies.
+			path := "/dev/" + disk.device
 			if render.IsKernelDeviceName(disk.device) {
-				path = "/dev/" + disk.device
+				// Snapshot cross-check: keep size drift visible (±1%, the band
+				// every resolver in this codebase uses).
+				if disk.sizeBytes > 0 && diskSizeOf(m, disk.device) > 0 &&
+					!sizeWithinTolerance(diskSizeOf(m, disk.device), disk.sizeBytes) {
+					return nil, nil, fmt.Errorf("%s: disk %s drifted from the snapshot size — re-probe the machine",
+						d.distro, disk.device)
+				}
 			} else {
-				var bySize []string
-				for _, d := range m.Hardware.Disks {
-					if sizeWithinTolerance(d.SizeBytes, disk.sizeBytes) {
-						bySize = append(bySize, d.Name)
-					}
-				}
-				switch {
-				case len(bySize) == 1:
-					path = "/dev/" + bySize[0]
-				case len(bySize) > 1:
-					return nil, fmt.Errorf("%s: %d disks match %s's size — bind the volume serial (re-probe the machine) and resubmit",
-						d.distro, len(bySize), disk.device)
-				case len(m.Hardware.Disks) == 1:
-					path = "/dev/" + m.Hardware.Disks[0].Name
-				}
-			}
-			if path == "" {
-				path = "/dev/" + disk.device
+				dyn = append(dyn, dynDisk{name: disk.device, size: disk.sizeBytes})
 			}
 			entry["path"] = path
 		}
@@ -431,9 +439,77 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 		}
 	}
 	if rendered == 0 {
-		return nil, fmt.Errorf("%s: storage config is empty", d.distro)
+		return nil, nil, fmt.Errorf("%s: storage config is empty", d.distro)
 	}
-	return map[string]any{"version": 1, "config": config}, nil
+	return map[string]any{"version": 1, "config": config}, dyn, nil
+}
+
+// dynDisk is a storage target whose path carries a controller name — the
+// kernel name exists only on the machine, so resolve-disk.sh rewrites it
+// there (keyed by the controller name, size-hinted).
+type dynDisk struct {
+	name string
+	size int64
+}
+
+// resolveDiskScript renders the on-machine resolver: patch every
+// controller-named path in /autoinstall.yaml to the device lsblk finds by
+// size (±1%; an unknown size falls back to the sole disk — the single-volume
+// shape this dialect targets). Runs as an early command, before storage.
+func resolveDiskScript(dyn []dynDisk) string {
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n")
+	b.WriteString("# mammoth: resolve controller-named disk paths to kernel names, on the machine.\n")
+	b.WriteString("python3 - <<'PY'\nimport re, subprocess, sys\n")
+	b.WriteString(fmt.Sprintf("SIZES = %s\n", dynLiteral(dyn)))
+	b.WriteString(`try:
+    raw = open("/autoinstall.yaml").read()
+except OSError:
+    sys.exit(0)
+devs = []
+for ln in subprocess.run(["lsblk", "-dnb", "-o", "NAME,SIZE"],
+                         capture_output=True, text=True).stdout.splitlines():
+    n, _, s = ln.partition(" ")
+    devs.append(("/dev/" + n, int(s)))
+def pick(size):
+    if size > 0:
+        m = [p for p, sz in devs if abs(sz - size) * 100 <= size]
+        if len(m) == 1:
+            return m[0]
+        return None
+    return devs[0][0] if len(devs) == 1 else None
+def repl(m):
+    d = SIZES.get(m.group(2))
+    if d is None:
+        return m.group(0)
+    dev = pick(d)
+    if dev is None:
+        sys.stderr.write("no unique device matches %s (%d bytes)\n" % (m.group(2), d))
+        sys.exit(1)
+    return m.group(1) + dev + m.group(3)
+new = re.sub(r'("path"\s*:\s*"|path:\s*)/dev/([A-Za-z0-9_.\-]+)("?)', repl, raw)
+open("/autoinstall.yaml", "w").write(new)
+PY
+`)
+	return b.String()
+}
+
+// dynLiteral renders the name→size map as a Go-quoted python dict literal.
+func dynLiteral(dyn []dynDisk) string {
+	parts := make([]string, 0, len(dyn))
+	for _, d := range dyn {
+		parts = append(parts, fmt.Sprintf("%q: %d", d.name, d.size))
+	}
+	return "{" + strings.Join(parts, ", ") + "}"
+}
+
+// resolveDiskEarlyCommand fetches (netboot) or sources (ISO) the resolver.
+func resolveDiskEarlyCommand(in render.InstallInputs) string {
+	if in.Netboot != nil {
+		return "wget -qO /tmp/mammoth-resolve-disk.sh " +
+			strings.TrimSuffix(in.AnswerBaseURL, "/") + "/run/mammoth/resolve-disk.sh && sh /tmp/mammoth-resolve-disk.sh"
+	}
+	return "sh /cdrom/run/mammoth/resolve-disk.sh"
 }
 
 func netplanConfig(entries []render.NetworkEntry) map[string]any {

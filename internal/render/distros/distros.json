@@ -1,0 +1,147 @@
+{
+  "version": 1,
+  "distros": [
+    {
+      "name": "rocky9",
+      "family": "kickstart",
+      "layout": "rhel",
+      "pool": "system_pool",
+      "archs": ["amd64", "arm64"],
+      "firmware": "all",
+      "kickstart": {
+        "hostname_via_network_cmd": true,
+        "root_extension": true,
+        "net_repair": false,
+        "device_by_mac": false,
+        "extras": ""
+      }
+    },
+    {
+      "name": "rocky10",
+      "family": "kickstart",
+      "layout": "rhel10",
+      "pool": "system_pool",
+      "archs": ["amd64", "arm64"],
+      "firmware": "uefi_only",
+      "kickstart": {
+        "hostname_via_network_cmd": true,
+        "root_extension": true,
+        "net_repair": false,
+        "device_by_mac": false,
+        "extras": ""
+      }
+    },
+    {
+      "name": "centos7",
+      "family": "kickstart",
+      "layout": "rhel",
+      "pool": "system_pool",
+      "archs": ["amd64", "arm64"],
+      "firmware": "all",
+      "kickstart": {
+        "hostname_via_network_cmd": false,
+        "root_extension": false,
+        "net_repair": false,
+        "device_by_mac": false,
+        "extras": ""
+      }
+    },
+    {
+      "name": "kylinv10",
+      "family": "kickstart",
+      "layout": "rhel",
+      "pool": "system_pool",
+      "archs": ["amd64", "arm64"],
+      "firmware": "all",
+      "kickstart": {
+        "hostname_via_network_cmd": true,
+        "root_extension": true,
+        "net_repair": true,
+        "device_by_mac": true,
+        "extras": ""
+      }
+    },
+    {
+      "name": "kylinv11",
+      "family": "kickstart",
+      "layout": "rhel",
+      "pool": "system_pool",
+      "archs": ["amd64", "arm64"],
+      "firmware": "all",
+      "kickstart": {
+        "hostname_via_network_cmd": true,
+        "root_extension": true,
+        "net_repair": false,
+        "device_by_mac": false,
+        "extras": ""
+      }
+    },
+    {
+      "name": "uniontechos",
+      "family": "kickstart",
+      "layout": "rhel",
+      "pool": "system_pool",
+      "archs": ["amd64", "arm64"],
+      "firmware": "all",
+      "kickstart": {
+        "hostname_via_network_cmd": true,
+        "root_extension": true,
+        "net_repair": false,
+        "device_by_mac": false,
+        "extras": "eula --agreed\nuser --name=uos --password=Uos@2024 --plaintext --groups=wheel"
+      }
+    },
+    {
+      "name": "ubuntu22",
+      "family": "autoinstall",
+      "layout": "casper",
+      "pool": "system_pool",
+      "archs": ["amd64"],
+      "firmware": "all"
+    },
+    {
+      "name": "ubuntu24",
+      "family": "autoinstall",
+      "layout": "casper",
+      "pool": "system_pool",
+      "archs": ["amd64"],
+      "firmware": "all"
+    },
+    {
+      "name": "debian12",
+      "family": "preseed",
+      "layout": "debian-di",
+      "pool": "system_pool",
+      "archs": ["amd64"],
+      "firmware": "all",
+      "preseed": {
+        "suite": "bookworm"
+      }
+    },
+    {
+      "name": "debian13",
+      "family": "preseed",
+      "layout": "debian-di",
+      "pool": "system_pool",
+      "archs": ["amd64"],
+      "firmware": "all",
+      "preseed": {
+        "suite": "trixie"
+      }
+    },
+    {
+      "name": "alpine",
+      "family": "agent",
+      "layout": "alpine",
+      "pool": "system_pool",
+      "archs": ["amd64"],
+      "firmware": "all",
+      "agent": {
+        "packages": ["alpine-base", "linux-lts", "openssh"],
+        "bootloader_bios": ["grub", "grub-bios"],
+        "bootloader_uefi": ["grub", "grub-efi"],
+        "tools": ["sfdisk", "util-linux", "e2fsprogs", "dosfstools", "openssl"]
+      }
+    }
+  ]
+}

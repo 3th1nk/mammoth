@@ -164,7 +164,20 @@ iPXE    ──HTTP GET /netboot/files/<token>/…──▶ kernel/initrd(+modloo
 
 ## 6. 发行版驱动(OS Driver)
 
-新增发行版 = 新增一个驱动实现 + 模板,**零编排层改动**:
+**声明化(2026-09-18,`internal/render/distros/distros.json`)**:已知家族
+内新增发行版 = **一条 JSON 声明,零 Go 改动**——每条声明携带家族名
+(kickstart/autoinstall/preseed/agent)、ISO 布局家族(rhel/rhel10/casper/
+debian-di/alpine,文档化+校验)、包池能力(system_pool/boot_pool,docs/12
+§6 的建模输入;当前全部成员为 system_pool)、架构集、固件范围与家族参数
+(kickstart 生成代差四标志 + extras、preseed suite、agent
+packages/bootloader/tools)。加载期 fail-fast 校验(未知家族/布局、重名、
+家族载荷缺失);`serve` 的注册循环遍历声明构造驱动,家族 → Go 类型的
+映射只有这一处。capabilities 的 distros[].family 字段导出声明家族。**仍属
+Go 的部分**:方言模板逻辑本身(如何驱动安装器不是 per-distro 数据)、
+builder 的布局探测启发式(DetectLayout——声明中的布局家族是文档化事实,
+实际仍探测镜像)、keep/pxe/carrier/pool 支持级(家族属性,由驱动导出矩阵)。
+
+驱动接口不变:
 
 ```go
 type OSDriver interface {

@@ -1,6 +1,7 @@
 package netboot
 
 import (
+	"context"
 	"encoding/binary"
 	"net"
 	"time"
@@ -131,10 +132,18 @@ func (s *Server) reply(p *packet) []byte {
 
 	// Pool mode (MAMMOTH_PXE_DHCP_POOL): the ROM needs an IP lease before
 	// it will fetch anything, and the installer kernel's dracut re-requests
-	// one without any PXE options. Every client gets a lease; boot
-	// parameters go only to PXE clients.
+	// one without any PXE options. Leases go ONLY to MACs with an armed
+	// netboot entry — the pool is the address authority for the machines it
+	// installs, not for the wire: foreign DHCP clients (site VMs, stray
+	// servers) otherwise drain small pools mid-install (2288H machine room).
 	var leaseOpts []option
 	if s.opts.DHCP != nil {
+		if s.opts.Resolver != nil {
+			if _, err := s.opts.Resolver.Entry(context.Background(), mac); err != nil {
+				s.logf("dhcp: no armed entry for %s — not leasing (pool serves installs only)", mac)
+				return nil
+			}
+		}
 		if ip := s.opts.DHCP.lease(mac); ip != nil {
 			copy(p.yiaddr[:], ip.To4())
 			lb := make([]byte, 4)

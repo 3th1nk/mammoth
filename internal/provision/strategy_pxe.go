@@ -3,9 +3,12 @@ package provision
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/3th1nk/mammoth/internal/bmc"
 	"github.com/3th1nk/mammoth/internal/builder"
@@ -34,6 +37,9 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 		return classifiedErr("SCHEMA_UNKNOWN_DISTRO", false, "%s", err.Error())
 	}
 	carrier, pool := render.NetbootInstallOf(driver)
+	if err := requireDiskHeadroom(e.BootTreeDir, 3<<30); err != nil {
+		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false, "%s", err.Error())
+	}
 	distroISO, err := builder.EnsureISO(ctx, b.Spec.Image.Source, e.MediaDir)
 	if err != nil {
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
@@ -215,4 +221,22 @@ func removeBootTree(root, token string) {
 		return
 	}
 	_ = os.RemoveAll(filepath.Join(root, token))
+}
+
+// requireDiskHeadroom refuses media builds when the boot-tree volume is
+// nearly full: an ubuntu tree is ~2.5G and a full volume fails the extract
+// half-written with an opaque xorriso error (2026-09-17 real-hardware: the
+// third such disk-full killed a run mid-flight). 3GiB covers the biggest
+// carrier (casper ISO unpack) plus pool staging headroom.
+func requireDiskHeadroom(dir string, min int64) error {
+	var st unix.Statfs_t
+	if err := unix.Statfs(dir, &st); err != nil {
+		return nil // unknown volume state: let the build try and fail honestly
+	}
+	free := int64(st.Bavail) * int64(st.Bsize)
+	if free < min {
+		return fmt.Errorf("boot-tree volume is low on space (%dMiB free, need %dMiB) — stale trees under %s are removed when their tasks end; restart mammoth to sweep orphans, or grow the volume",
+			free>>20, min>>20, dir)
+	}
+	return nil
 }

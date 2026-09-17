@@ -193,6 +193,7 @@ func serve(args []string) error {
 		kickstart.New("kylinv11"),
 		kickstart.New("uniontechos"),
 		autoinstall.New("ubuntu22"),
+		autoinstall.New("ubuntu24"),
 		preseed.New("debian12"),
 		preseed.New("debian13"),
 	} {

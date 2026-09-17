@@ -73,9 +73,9 @@ guessed per install (dual-DHCP races are unwinnable in code):
 ```mermaid
 flowchart TD
     q{"Does a site DHCP server already<br/>serve the install segment?"}
-    q -- "no" --> pool["**POOL mode** — MAMMOTH_PXE_DHCP_POOL<br/>mammoth owns the wire:<br/>· answers DHCP for PXE ROMs<br/>  and installers<br/>· arm-time reservation: ping +<br/>  neighbour probe skips<br/>  occupied static addresses<br/>· leases only for MACs with<br/>  an armed install<br/>· boot and target use the<br/>  reserved address (ip= args)"]
-    q -- "yes" --> proxy["**PROXY mode** — no pool configured<br/>site DHCP owns addresses:<br/>· site DHCP answers the<br/>  boot-phase IP<br/>· mammoth adds only PXE boot<br/>  options (67/4011)<br/>· declare the install address<br/>  in the spec: static ip= args<br/>  + target netplan<br/>· verify targets that address"]
-    pool --> vlan["**cross-VLAN**: DHCP relay (ip helper) on the<br/>machine segment forwards to mammoth; replies<br/>follow giaddr (RFC 2131). TFTP/HTTP are unicast —<br/>NextServer and media/API URLs must be routable"]
+    q -- "no" --> pool["**POOL mode**<br/>set MAMMOTH_PXE_DHCP_POOL —<br/>mammoth owns the wire:<br/>· answers DHCP for PXE ROMs<br/>  and installers<br/>· arm-time reservation: ping +<br/>  neighbour probe skips<br/>  occupied static addresses<br/>· leases only for MACs with<br/>  an armed install<br/>· boot and target use the<br/>  reserved address (ip= args)"]
+    q -- "yes" --> proxy["**PROXY mode** — no pool<br/>site DHCP owns addresses:<br/>· site DHCP answers the<br/>  boot-phase IP<br/>· mammoth adds only PXE<br/>  boot options (67/4011)<br/>· declare the install address<br/>  in the spec: static ip= args<br/>  + target netplan<br/>· verify targets that address"]
+    pool --> vlan["**cross-VLAN**<br/>DHCP relay (ip helper) on the<br/>machine segment forwards to<br/>mammoth; replies follow giaddr<br/>(RFC 2131). TFTP/HTTP are unicast —<br/>NextServer and media/API URLs<br/>must be routable from the<br/>machine VLAN"]
     proxy --> vlan
 ```
 

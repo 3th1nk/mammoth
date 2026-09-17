@@ -69,6 +69,10 @@ type Machine struct {
 	SerialNumber    *string
 	FirmwareVersion *string
 	Hardware        json.RawMessage
+	// Firmware is the controller's firmware inventory (migration 00008,
+	// docs/07-bmc.md §6) — nil until a discovery with the capability
+	// succeeds.
+	Firmware json.RawMessage
 	PowerState      string // on | off | unknown
 	State           string // registering | discovering | ready | error
 	LastError       *ErrorInfo

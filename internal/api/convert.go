@@ -70,6 +70,12 @@ func machineOut(m *store.Machine) gen.Machine {
 			out.Hardware = &hw
 		}
 	}
+	if len(m.Firmware) > 0 {
+		var fw []gen.FirmwareComponent
+		if json.Unmarshal(m.Firmware, &fw) == nil && len(fw) > 0 {
+			out.Firmware = &fw
+		}
+	}
 	return out
 }
 

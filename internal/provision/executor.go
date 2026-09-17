@@ -357,12 +357,32 @@ func (e *Executor) runDiscover(ctx context.Context, task *store.Task, job *store
 		hardware.Note(note)
 	}
 
+	// Firmware inventory (docs/07-bmc.md §6): the pure-read capability probe.
+	// Absence (ipmi) or any failure never fails discovery — the BMC answered
+	// and the spec view stands; the firmware view just stays whatever it was.
+	var firmware json.RawMessage
+	if res, ferr := e.BMC.Do(ctx, addr, cred, proto, "firmware_inventory", func(ctx context.Context, d bmc.Driver) (any, error) {
+		fi, ok := d.(bmc.FirmwareInventoryProvider)
+		if !ok {
+			return nil, &bmc.Error{Kind: bmc.KindUnsupported, Op: "firmware_inventory"}
+		}
+		return fi.FirmwareInventory(ctx, addr, cred)
+	}); ferr == nil {
+		if components := res.([]bmc.FirmwareComponent); len(components) > 0 {
+			firmware = marshalJSON(components)
+		}
+	} else if bmcKind(ferr) != bmc.KindUnsupported {
+		obs.FromContext(ctx).WarnContext(ctx, "firmware inventory unavailable",
+			obs.FieldMachineID, task.MachineID, "err", ferr.Error())
+	}
+
 	err = e.Machines.UpdateProbeResult(ctx, task.MachineID, store.ProbeResult{
 		Vendor:          strPtr(info.Vendor),
 		Model:           strPtr(info.Model),
 		SerialNumber:    strPtr(info.SerialNumber),
 		FirmwareVersion: strPtr(info.FirmwareVersion),
 		Hardware:        marshalJSON(hardware),
+		Firmware:        firmware,
 		PowerState:      string(info.PowerState),
 		State:           "ready",
 	})

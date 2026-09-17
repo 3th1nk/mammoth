@@ -151,6 +151,7 @@ type ProbeResult struct {
 	SerialNumber    *string
 	FirmwareVersion *string
 	Hardware        json.RawMessage
+	Firmware        json.RawMessage
 	PowerState      string
 	State           string
 	LastError       *ErrorInfo
@@ -173,6 +174,10 @@ func (r *MachineRepo) UpdateProbeResult(ctx context.Context, id string, p ProbeR
 	if len(p.Hardware) > 0 {
 		hw = []byte(p.Hardware)
 	}
+	var fw any
+	if len(p.Firmware) > 0 {
+		fw = []byte(p.Firmware)
+	}
 	var le any
 	if p.LastError != nil {
 		b, _ := json.Marshal(p.LastError)
@@ -185,13 +190,14 @@ func (r *MachineRepo) UpdateProbeResult(ctx context.Context, id string, p ProbeR
 		  serial_number = COALESCE($4, serial_number),
 		  firmware_version = COALESCE($5, firmware_version),
 		  hardware = COALESCE($6, hardware),
+		  firmware = COALESCE($10, firmware),
 		  power_state = $7,
 		  state = $8,
 		  last_error = $9,
 		  updated_at = now()
 		WHERE id = $1`,
 		id, p.Vendor, p.Model, p.SerialNumber, p.FirmwareVersion, hw,
-		p.PowerState, p.State, le)
+		p.PowerState, p.State, le, fw)
 	return err
 }
 
@@ -255,7 +261,7 @@ func (r *MachineRepo) LatestLayoutBySource(ctx context.Context, machineID, sourc
 
 const machineSelect = `
 	SELECT id, labels, bmc_address, bmc_protocol, bmc_credential_id, ssh_credential_id, ssh_address,
-	       vendor, model, serial_number, firmware_version, hardware,
+	       vendor, model, serial_number, firmware_version, hardware, firmware,
 	       power_state, state, last_error, created_at, updated_at,
 	       pxe_firmware, pxe_last_seen_at
 	FROM machines`
@@ -266,13 +272,13 @@ func scanMachine(row rowScanner) (*Machine, error) {
 	var m Machine
 	var labels []byte
 	var sshCred, vendor, model, serial, firmware sql.NullString
-	var hardware, lastError []byte
+	var hardware, lastError, firmwareList []byte
 	var sshAddr sql.NullString
 	var pxeFirmware sql.NullString
 	var pxeSeen sql.NullTime
 	err := row.Scan(
 		&m.ID, &labels, &m.BMCAddress, &m.BMCProtocol, &m.BMCCredentialID, &sshCred, &sshAddr,
-		&vendor, &model, &serial, &firmware, &hardware,
+		&vendor, &model, &serial, &firmware, &hardware, &firmwareList,
 		&m.PowerState, &m.State, &lastError, &m.CreatedAt, &m.UpdatedAt,
 		&pxeFirmware, &pxeSeen,
 	)
@@ -305,6 +311,9 @@ func scanMachine(row rowScanner) (*Machine, error) {
 	}
 	if len(hardware) > 0 {
 		m.Hardware = json.RawMessage(hardware)
+	}
+	if len(firmwareList) > 0 {
+		m.Firmware = json.RawMessage(firmwareList)
 	}
 	if len(lastError) > 0 {
 		var ei ErrorInfo

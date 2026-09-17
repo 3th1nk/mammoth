@@ -149,8 +149,17 @@ func TestRenderAutoinstallWipeAndBond(t *testing.T) {
 	if !strings.Contains(late, "python3") {
 		t.Errorf("completion callback must use python3 (curl absent in subiquity env)")
 	}
-	if !strings.Contains(late, `chpasswd`) || !strings.Contains(late, "uRoot-pw") {
-		t.Errorf("root password provisioning missing")
+	// The root password travels as a $6$ crypt (chpasswd -e): subiquity
+	// stores identity.password verbatim, so a plain string there would be
+	// an untypeable password.
+	if !strings.Contains(late, `chpasswd -e`) {
+		t.Errorf("root password provisioning (crypt) missing:\n%s", late)
+	}
+	if strings.Contains(late, "uRoot-pw") {
+		t.Errorf("PLAIN root password leaked into the seed:\n%s", late)
+	}
+	if !strings.Contains(late, "$6$") {
+		t.Errorf("no crypt hash in late-commands:\n%s", late)
 	}
 	if !strings.Contains(late, "PermitRootLogin yes") {
 		t.Errorf("PermitRootLogin provisioning missing")

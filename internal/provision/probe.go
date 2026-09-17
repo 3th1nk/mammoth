@@ -113,6 +113,9 @@ func (e *Executor) probeRamdisk(ctx context.Context, task *store.Task, usePXE bo
 			return classifiedErr("BMC_UNSUPPORTED", false,
 				"probe boot=pxe needs the alpine NETBOOT tarball (set MAMMOTH_PROBE_ALPINE_NETBOOT) — the standard-ISO initramfs usually lacks the machine room's NIC drivers, and without them the modloop can never be fetched")
 		}
+		if err := requireDiskHeadroom(e.BootTreeDir, 2<<30); err != nil {
+			return classifiedErr("PROBE_MEDIA_FAILED", false, "%s", err.Error())
+		}
 		carrier, err := builder.EnsureISO(ctx, e.ProbeAlpineNetboot, e.MediaWorkDir)
 		if err != nil {
 			return classifiedErr("PROBE_MEDIA_FAILED", true, "netboot tarball unavailable: %s", err.Error())

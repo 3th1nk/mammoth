@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
@@ -94,4 +95,25 @@ func MetricsMiddleware(m *obs.Metrics) gin.HandlerFunc {
 		m.HTTPDur.WithLabelValues(c.Request.Method, route, strconv.Itoa(c.Writer.Status())).
 			Observe(time.Since(start).Seconds())
 	}
+}
+
+// clientIPKey carries the peer address of the HTTP request (RemoteIP, NOT
+// the X-Forwarded-For-aware ClientIP: the machine face is talked to directly
+// over the provisioning L2 and the completion report's source address is
+// the one fact that survives any addressing scheme).
+type clientIPKey struct{}
+
+// ClientIP records the request peer address into the request context.
+func ClientIP() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Request = c.Request.WithContext(
+			context.WithValue(c.Request.Context(), clientIPKey{}, c.RemoteIP()))
+		c.Next()
+	}
+}
+
+// ClientIPFromContext returns the recorded peer address ("" when absent).
+func ClientIPFromContext(ctx context.Context) string {
+	s, _ := ctx.Value(clientIPKey{}).(string)
+	return s
 }

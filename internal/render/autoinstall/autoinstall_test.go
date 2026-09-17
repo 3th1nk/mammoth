@@ -321,12 +321,28 @@ func TestRenderNetbootCasperArgs(t *testing.T) {
 		t.Errorf("dhcp-only render missing BOOTIF/dhcp: %q", boot2.NetbootKernelArgs)
 	}
 
-	// With a pool reservation the initramfs configures a static address
-	// directly (boot-time DHCP is racy on real hardware): the reserved ip=
-	// replaces the dhcp argument, device still pinned by BOOTIF.
+	// Precedence: the SPEC declaration is user intent and beats the pool
+	// reservation.
+	in.Network = []render.NetworkEntry{{
+		Match:     &render.NetMatch{MAC: "02:00:00:00:00:00"},
+		Addresses: []string{"198.51.100.50/24"},
+		Routes:    []render.NetRoute{{To: "0.0.0.0/0", Via: "198.51.100.1"}},
+	}}
 	in.Netboot.StaticIP = "198.51.100.186"
 	in.Netboot.StaticRouter = "198.51.100.240"
 	in.Netboot.StaticMask = "255.255.255.0"
+	_, bootP, err := d.RenderAnswers(in, render.MachineView{
+		Hardware: &bmc.HardwareView{NICs: []bmc.NICView{{Name: "eno1", MAC: "02:00:00:00:00:00"}}},
+	})
+	if err != nil {
+		t.Fatalf("render precedence: %v", err)
+	}
+	if !strings.Contains(bootP.NetbootKernelArgs, "ip=198.51.100.50::198.51.100.1:255.255.255.0:::off") {
+		t.Errorf("spec static must beat the reservation:\n%s", bootP.NetbootKernelArgs)
+	}
+	// Reservation-only (dhcp-only spec): the reserved address drives both the
+	// initramfs and (via the missing netplan) stays the machine's address.
+	in.Network = nil
 	_, boot3, err := d.RenderAnswers(in, render.MachineView{
 		Hardware: &bmc.HardwareView{NICs: []bmc.NICView{{Name: "eno1", MAC: "02:00:00:00:00:00"}}},
 	})

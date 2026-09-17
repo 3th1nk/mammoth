@@ -30,6 +30,10 @@ type bootSession struct {
 	Ictx    *installTaskContext
 	Answers []render.AnswerFile
 	Boot    render.BootParams
+	// Seed carries extra boot-media seed files beyond the rendered answers
+	// (the agent installer's apkovl overlay — binary content that must not
+	// round-trip through the JSON task context).
+	Seed map[string]string
 }
 
 // bootStrategy is the seam between "make the installer reachable" and the

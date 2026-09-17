@@ -805,6 +805,18 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		return err
 	}
 	session := &bootSession{Task: task, Job: job, Spec: spec, Ictx: &ictx, Answers: answers, Boot: boot}
+	// The agent install runtime rides the boot media as an apkovl overlay
+	// (docs/12-agent-initramfs.md) — plan-independent, built once here, and
+	// kept OUT of the rendered answers: the tar.gz is binary and the answers
+	// round-trip through the JSON task context.
+	if render.IsAgentInstaller(driver) {
+		name, overlay, aerr := builder.AgentOverlay()
+		if aerr != nil {
+			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+				"agent overlay build failed: %s", aerr.Error())
+		}
+		session.Seed = map[string]string{name: string(overlay)}
+	}
 	if err := strategy.prepare(ctx, session); err != nil {
 		return err
 	}

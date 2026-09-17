@@ -24,6 +24,7 @@ Mammoth 是一个自包含的裸金属服务器安装/重装引擎:以 `{带外�
 | [09-roadmap.md](09-roadmap.md) | 演进路线:里程碑划分、当前状态与各阶段验收标准 |
 | [10-tech-stack.md](10-tech-stack.md) | 技术栈选型、决策记录、依赖树与仓库布局约定 |
 | [11-pxe-walkthrough.md](11-pxe-walkthrough.md) | PXE 导览:两条入门路径对比、完整引导接力链、零注册入门、跨网段/Relay |
+| [12-agent-initramfs.md](12-agent-initramfs.md) | agent initramfs 安装路径试点:动机、架构、qemu 双固件验证结论、后续边界 |
 | [operations.md](operations.md) | 运维手册:备份恢复、介质服务形态、部署注意 |
 | [security-baseline.md](security-baseline.md) | 安全基线:鉴权、凭证加密、介质生命周期、审查余项 |
 | [compat/patterns.md](compat/patterns.md) | 跨厂商装机共性模式(P1 控制器卷名/P2 DHCP 竞态/P3 参数截断…)——新机型/新方言自查清单 |

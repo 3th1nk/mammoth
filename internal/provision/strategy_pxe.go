@@ -66,6 +66,31 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 				"boot tree extraction failed: %s", err.Error())
 		}
+	case render.NetbootCarrierAlpineNetboot:
+		// The agent install runtime (docs/12-agent-initramfs.md): the alpine
+		// netboot tarball (shared with the ramdisk probe) is the carrier,
+		// the distro ISO contributes its /apks package repo, and the agent's
+		// apkovl overlay rides the tree. The driver's NetbootKernelArgs
+		// reference these files by URL (modloop / apks / agent.apkovl.tar.gz).
+		if e.ProbeAlpineNetboot == "" {
+			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,
+				"%s PXE needs the alpine netboot tarball (set MAMMOTH_PROBE_ALPINE_NETBOOT) — the standard-ISO initramfs lacks the machine room's NIC drivers", b.Spec.Image.Distro)
+		}
+		tarball, terr := builder.EnsureISO(ctx, e.ProbeAlpineNetboot, e.MediaWorkDir)
+		if terr != nil {
+			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+				"alpine netboot tarball fetch failed: %s", terr.Error())
+		}
+		tree, err = builder.BuildAgentNetboot(ctx, builder.AgentNetbootOptions{
+			TarballPath: tarball,
+			ApksISOPath: distroISO,
+			DestDir:     treeDir,
+			Overlay:     []byte(b.Seed[builder.AgentOverlayName]),
+		})
+		if err != nil {
+			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+				"agent boot tree build failed: %s", err.Error())
+		}
 	default:
 		tree, err = builder.ExtractBootFiles(ctx, "", distroISO, treeDir)
 		if err != nil {

@@ -134,7 +134,9 @@ post-install 改写 sources.list.d + signed-by,撤全局 insecure 容忍~~
 **✅ 已落地(2026-09-17)**:post-install 原地改写 apt-setup 池行为显式
 `signed-by=`(钥匙保留 trusted.gpg.d,容忍文件无条件 rm;deb822 形态跳过),
 ubuntu late-commands 同步补容忍清除(双方言对称);
-③中期:agent initramfs 安装路径试点(修正本文件开头的方言坚持结论)——
-已入 roadmap"下一阶段"第 1 项(真机可得性重排后提前,qemu 全程可验);
+③~~中期:agent initramfs 安装路径试点~~ **✅ 已落地并 qemu 双固件验证
+(2026-09-18,docs/12-agent-initramfs.md)**——§1 的修正结论兑现:无方言
+路径直接消费声明式 spec,新发行版接入面收敛到"池可达 + 声明";后续新
+发行版优先评估 agent 路径,方言保留为兼容模式;
 ④数据化 distro 签名(OSDriver → JSON)——已入 roadmap"下一阶段"
 第 3 项(跟随①定形态),与③联动评估。

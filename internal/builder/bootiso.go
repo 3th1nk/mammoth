@@ -73,14 +73,29 @@ type Layout = isoLayout
 // Exported for the media-space precheck: full-repack families need ~2x the
 // ISO transiently, selective assemblies only the boot files.
 func DetectLayout(ctx context.Context, xorrisoPath, isoPath string) (Layout, string, error) {
-	if isoHasCasper(ctx, isoPath, xorrisoPath) {
+	xorriso := xorrisoPath
+	if xorriso == "" {
+		xorriso = "xorriso"
+	}
+	if isoHasCasper(ctx, isoPath, xorriso) {
 		return layoutCasper, "", nil
 	}
-	if dir := debianInstallDir(ctx, isoPath, xorrisoPath); dir != "" {
+	if dir := debianInstallDir(ctx, isoPath, xorriso); dir != "" {
 		return layoutDebianDI, dir, nil
 	}
-	if rhel10Layout(ctx, xorrisoPath, isoPath) {
+	if rhel10Layout(ctx, xorriso, isoPath) {
 		return layoutRHEL10, "", nil
+	}
+	// Alpine (standard/virt): a /boot/vmlinuz-<flavor> tree nobody else
+	// ships. The flavor doubles as the config installDir (kernel/initrd are
+	// named by it). Classification is needed beyond the probe builder now —
+	// the agent install path repacks the distro ISO through BuildBootISO.
+	if alpineKernelProbe(ctx, xorriso, isoPath) {
+		flavor, err := alpineKernel(ctx, xorriso, isoPath)
+		if err != nil {
+			return "", "", err
+		}
+		return layoutAlpine, flavor, nil
 	}
 	return "", "", nil
 }
@@ -89,7 +104,7 @@ func DetectLayout(ctx context.Context, xorrisoPath, isoPath string) (Layout, str
 // (as opposed to a selective boot-media assembly).
 func (l Layout) FullRepack() bool {
 	switch l {
-	case layoutCasper, layoutDebianDI, layoutRHEL10:
+	case layoutCasper, layoutDebianDI, layoutRHEL10, layoutAlpine:
 		return true
 	}
 	return false
@@ -225,11 +240,15 @@ func tail(b []byte, n int) string {
 }
 
 // uriPath extracts the path part of a scheme://host/path URI ("/path");
-// empty when the shape doesn't match.
+// empty when the shape doesn't match. file:// counts — a file URI IS a
+// local path (the e2e/dev harness submits images that way).
 func uriPath(u string) string {
 	rest, ok := strings.CutPrefix(u, "nfs://")
 	if !ok {
 		rest, ok = strings.CutPrefix(u, "cifs://")
+	}
+	if !ok {
+		rest, ok = strings.CutPrefix(u, "file://")
 	}
 	if !ok {
 		return ""
@@ -571,16 +590,16 @@ menuentry 'mammoth' --class fedora --class gnu-linux --class gnu --class os {
 		isolinux := fmt.Sprintf(`SERIAL 0 115200
 TIMEOUT 10
 PROMPT 0
-DEFAULT probe
+DEFAULT mammoth
 
-LABEL probe
-  MENU LABEL mammoth probe
+LABEL mammoth
+  MENU LABEL mammoth
   KERNEL /boot/vmlinuz-%[1]s
   INITRD /boot/initramfs-%[1]s
   APPEND %[2]s
 `, installDir, kernelArgs)
 		grub := fmt.Sprintf(`set timeout=3
-menuentry 'mammoth probe' {
+menuentry 'mammoth' {
   linux /boot/vmlinuz-%[1]s %[2]s
   initrd /boot/initramfs-%[1]s
 }

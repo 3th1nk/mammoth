@@ -29,6 +29,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/provision"
 	"github.com/3th1nk/mammoth/internal/render"
+	"github.com/3th1nk/mammoth/internal/render/agent"
 	"github.com/3th1nk/mammoth/internal/render/autoinstall"
 	"github.com/3th1nk/mammoth/internal/render/kickstart"
 	"github.com/3th1nk/mammoth/internal/render/preseed"
@@ -197,6 +198,10 @@ func serve(args []string) error {
 		autoinstall.New("ubuntu24"),
 		preseed.New("debian12"),
 		preseed.New("debian13"),
+		// The agent install path pilot (docs/12-agent-initramfs.md): no
+		// distro installer — the mammoth agent initramfs consumes the
+		// declarative spec directly and installs from the package pool.
+		agent.New("alpine"),
 	} {
 		if err := renderReg.Register(d); err != nil {
 			return err

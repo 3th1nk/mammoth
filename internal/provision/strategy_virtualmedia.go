@@ -38,6 +38,9 @@ func (s *virtualMediaStrategy) prepare(ctx context.Context, b *bootSession) erro
 	for _, a := range b.Answers {
 		seed[a.Name] = a.Content
 	}
+	for name, content := range b.Seed {
+		seed[name] = content
+	}
 	// Build in the scratch space when configured (the media repo may be a
 	// size-limited share — the extract+assemble needs ~2x the image size
 	// transiently), then move the finished image into the repo. Precheck the

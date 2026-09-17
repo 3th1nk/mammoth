@@ -31,29 +31,25 @@ dialects.**
 
 ```mermaid
 flowchart TD
-    subgraph ON["Onboarding"]
-        direction LR
+    subgraph ON["1 · Onboarding"]
         reg["register a machine:<br/>BMC address + credential<br/>(Redfish, IPMI fallback)"]
-        zr["zero-registration:<br/>unknown machine PXE-boots the<br/>shared probe tree → pending_machines<br/>→ claim to register"]
+        zr["zero-registration:<br/>unknown machine PXE-boots<br/>the shared probe tree<br/>→ pending_machines → claim"]
     end
-    subgraph INV["Inventory / probe"]
-        direction LR
+    subgraph INV["2 · Inventory / probe"]
         rf["redfish (out-of-band)"]
         ram["ramdisk probe (alpine):<br/>PXE or virtual media"]
         ish["inband_ssh probe"]
     end
-    subgraph INS["Install — one declarative Install Spec"]
-        direction LR
+    subgraph INS["3 · Install — one declarative Install Spec"]
         vm["virtual_media (default):<br/>BMC mounts a rebuilt boot ISO<br/>(NFS/HTTP media repo)"]
-        pxe["pxe (opt-in):<br/>shim → grubnet → kernel over<br/>DHCP/proxyDHCP + TFTP + HTTP"]
+        pxe["pxe (opt-in):<br/>shim → grubnet → kernel<br/>DHCP/proxyDHCP + TFTP + HTTP"]
     end
-    subgraph DIA["Installer dialects"]
-        direction LR
+    subgraph DIA["4 · Installer dialects"]
         ks["kickstart<br/>rocky · centos · kylin · UOS"]
         ai["autoinstall<br/>ubuntu 22.04 / 24.04"]
         ps["preseed<br/>debian 12 / 13"]
     end
-    ver["verify: completion report<br/>+ in-band SSH probe (installer-aware)<br/>+ post-install layout snapshot"]
+    ver["5 · verify: completion report +<br/>in-band SSH probe (installer-aware)<br/>+ post-install layout snapshot"]
     reg --> rf
     zr --> ram
     rf --> vm
@@ -77,9 +73,9 @@ guessed per install (dual-DHCP races are unwinnable in code):
 ```mermaid
 flowchart TD
     q{"Does a site DHCP server already<br/>serve the install segment?"}
-    q -- "no — mammoth owns the wire" --> pool["**POOL mode** — set MAMMOTH_PXE_DHCP_POOL<br/>· mammoth answers DHCP for PXE ROMs and installers<br/>· arm-time address reservation: ping + neighbour-table<br/>  probing skips silently-occupied static addresses<br/>· leases go only to MACs with an armed install<br/>· boot and target use the reserved address (ip= args)"]
-    q -- "yes — coexist, never compete" --> proxy["**PROXY mode** — no pool configured<br/>· site DHCP answers the boot-phase IP<br/>· mammoth only adds PXE boot options (67/4011)<br/>· declare the install address in the spec:<br/>  static ip= kernel args + target netplan<br/>· verify targets the declared address"]
-    pool --> vlan["**cross-VLAN**: DHCP relay (ip helper) on the machine<br/>segment forwards broadcasts to mammoth; replies follow<br/>giaddr (RFC 2131). TFTP/HTTP are unicast — NextServer and<br/>the media/API base URL must be routable from the machine VLAN"]
+    q -- "no" --> pool["**POOL mode** — MAMMOTH_PXE_DHCP_POOL<br/>mammoth owns the wire:<br/>· answers DHCP for PXE ROMs<br/>  and installers<br/>· arm-time reservation: ping +<br/>  neighbour probe skips<br/>  occupied static addresses<br/>· leases only for MACs with<br/>  an armed install<br/>· boot and target use the<br/>  reserved address (ip= args)"]
+    q -- "yes" --> proxy["**PROXY mode** — no pool configured<br/>site DHCP owns addresses:<br/>· site DHCP answers the<br/>  boot-phase IP<br/>· mammoth adds only PXE boot<br/>  options (67/4011)<br/>· declare the install address<br/>  in the spec: static ip= args<br/>  + target netplan<br/>· verify targets that address"]
+    pool --> vlan["**cross-VLAN**: DHCP relay (ip helper) on the<br/>machine segment forwards to mammoth; replies<br/>follow giaddr (RFC 2131). TFTP/HTTP are unicast —<br/>NextServer and media/API URLs must be routable"]
     proxy --> vlan
 ```
 

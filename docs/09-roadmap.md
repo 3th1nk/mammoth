@@ -1,13 +1,15 @@
 # 09 · 演进路线
 
-> **当前状态(2026-09)**:M0~M6 全部交付(契约冻结 = v1.0);M7 PXE/iPXE
-> 网络引导通路已交付并**真机闭环**,三方言四镜像全链打通——rocky9(虚拟
-> 介质 + PXE)、ubuntu22/24(casper NFS 载体,零人工重装 + 重启自举双
-> 验证)、debian13(d-i netboot 载体,2026-09-17 真机全绿),均为 2288H V5;
-> ramdisk 探针 PXE 已 succeeded;shim+grubnet Secure Boot 闭环。SQLite 最小
-> 部署形态已评估并放弃(见 10 §D2),存储收敛为 PostgreSQL-only。余项:
-> uniontechos(见 compat/distros.md)、relay 真机回归、arm64 引导链
-> (见 M7 余项)。
+> **当前状态(2026-09)**:M0~M6 全部交付(契约冻结 = v1.0,**边界定案
+> 2026-09-18:就地落地,见"下一阶段"题注**);M7 PXE/iPXE 网络引导通路已
+> 交付并**真机闭环**,三方言四镜像全链打通——rocky9(虚拟介质 + PXE)、
+> ubuntu22/24(casper NFS 载体,零人工重装 + 重启自举双验证)、debian13
+> (d-i netboot 载体,2026-09-17 真机全绿),均为 2288H V5;ramdisk 探针
+> PXE 已 succeeded;shim+grubnet Secure Boot 闭环;零注册入门与设备档案
+> 全链交付(option 93 观测、enroll/pending_machines/claim、固件门禁)。
+> SQLite 最小部署形态已评估并放弃(见 10 §D2),存储收敛为 PostgreSQL-only。
+> 余项:uniontechos(见 compat/distros.md)、relay 真机回归、arm64 引导链
+> (见 M7 余项与下一阶段 2)。
 
 里程碑按"每阶段交付物独立可用"的依赖关系排序。M1 之前没有任何东西能对用户产生价值,
 因此 M0 的唯一目标是让最通用的能力先跑起来。
@@ -95,7 +97,8 @@
 - ✅ 机器面 `/netboot/script?mac=`(按 MAC 渲染 iPXE 脚本;无条目回 `exit`
   脚本回固件引导序)+ `/netboot/files/{token}/{file}`(引导树,allowlist);
 - ✅ RHEL 系安装走 PXE(`inst.repo=nfs:` 复用 nfsx 导出,零新增安装源工作);
-  ubuntu22/debian12 提交即拒(PXESupport none 门禁);
+  ubuntu/debian 当时提交即拒(PXESupport none 门禁),PXE 化后放开为 full
+  (见下);
 - ✅ 可选 DHCP 池(`MAMMOTH_PXE_DHCP_POOL`):无站点 DHCP 的机房,UEFI PXE ROM
   拿不到租约就不会走网络引导——mammoth 对 PXE 客户端与装机内核兼做全量
   DHCP(租约内存态);有站点 DHCP 时保持纯 proxy 模式;
@@ -138,25 +141,37 @@
 
 ## 下一阶段(v1.0 后,按优先级)
 
-> 2026-09 确认执行顺序;v1.0 tag 延后至 PXE 增强 + BiosSetter 完成后。
+> **v1.0 边界定案(2026-09-18,方案 A:就地落地)**:M6 四项门槛早已全部
+> 达成,实际交付已远超门槛(三方言四镜像真机全链 + Secure Boot + 零注册),
+> 当前 HEAD 即 v1.0。曾一度把 tag 延后至"PXE 增强 + BiosSetter 完成",复议
+> 时其前提(ubuntu/debian PXE 未闭环)已消失,BiosSetter 的 BIOS 前置动机
+> 也被 `SetBootDevice(PXE, oneshot)` 现有路径覆盖——UefiHttp、外部
+> DHCP+TFTP 逃生门、BMC 能力接口、Windows unattend、arm64 引导链全部外移
+> v1.x,不阻塞冻结。
 
-1. **PXE 增强**:~~ubuntu/debian PXE 化~~ ✅(源级 + 真机闭环,2026-09-17);
-   剩余:UefiHttp、外部 DHCP+TFTP 逃生门
-2. **零注册入门与设备档案**:✅ 全部交付(2026-09-15/16)——option 93 固件
-   观测入机器档案(machines.pxe_firmware/pxe_last_seen_at,b3f75ee)+ 未知
-   MAC 零注册入门(enroll 共享探针树 → pending_machines 台账,含
-   `GET /api/v1/pending-machines` 与 `POST /netboot/enroll/{token}`)+
-   claim(待认领升格注册:`POST /pending-machines/{mac}/claim`,观测迁入
-   机器、/sys 报告迁为首份 layout 快照,台账消费)+ **boot 策略门禁**
-   (发行版媒体固件范围 vs 机器观测固件,UEFI-only 媒体误派 BIOS 机器
-   提交期 SCHEMA_FIRMWARE_MISMATCH 拒绝,per-machine 不阻塞兄弟);
-3. **BMC 能力接口**:BiosSetter(根治 BIOS 前置)→ FirmwareInventory(固件
-   基线核对)→ NIST 800-88 擦盘合规(见 related-work);高危动作引入
+1. **BMC 能力接口**(v1.1 主体):BiosSetter(根治 BIOS 前置)→ FirmwareInventory
+   (固件基线核对)→ NIST 800-88 擦盘合规(见 related-work);高危动作引入
    **两段式确认契约**(请求显式确认标志 + 服务端二次校验),做成 API 策略
    开关供全自动化调用方关闭;
-4. **发行版扩展**:~~ubuntu 24.04 验证~~ ✅(现有 ubuntu22 驱动直接可用,
-   2026-09-17 真机闭环,24.04.x 已入回归基线,见 runbooks/test-baselines.md)
-   → uniontechos(blocked,等 UOS 支持,不主动排期)→ Windows unattend
+2. **PXE 增强余项**(v1.1):UefiHttp(Redfish HTTP Boot,厂商 OEM URI 各异)、
+   外部 DHCP+TFTP 逃生门(mammoth 不能当 PXE 服务的部署形态)、arm64 引导链
+   (ipxe-aa64.efi / shim+grubnet aa64,opt 93 = 0x000B;信创混合机群刚需,
+   无真机前 option 93 固件观测先行积累);~~ubuntu/debian PXE 化~~ ✅ 已入
+   v1.0(2026-09-17 真机闭环);
+3. **发行版扩展**:Windows unattend → uniontechos(blocked,等 UOS 支持,
+   不主动排期);~~ubuntu 24.04~~ ✅ 已入 v1.0(现有驱动直接可用,已入
+   回归基线 runbooks/test-baselines.md);
+4. **agent initramfs 安装路径试点**(中期,related-work §1 修正结论):自有
+   最小 agent(分区 + 从池装内核/包),六阶段流水线与声明式 spec 原样承载,
+   preseed/kickstart 方言降级为兼容模式——与"方言抽象的价值在兼容存量,
+   不应阻碍自持安装路径"的修正呼应;先试点再定去留;
+5. **发行版接入声明化**(related-work §4,Cobbler 式):distro 签名(载体
+   内核/initrd 相对路径、内核参数、bootloader 形态)收敛为数据文件,接入
+   新发行版从写 Go 变成写声明;与 4 联动评估落地顺序;
+6. **例行回归**(维护窗口,不占版本边界):CentOS7/Kylin/rocky10-PXE/
+   22.04-crypt 复验轮、真机 relay 回归(跨 VLAN,giaddr 应答已有单测)、
+   共享二层地址治理(线下协调)——绑定 runbooks/test-baselines.md 基线表
+   滚动执行。
 
 ## 长期方向(不承诺排期)
 
@@ -166,4 +181,15 @@
 ## 版本策略
 
 - M3 为 v0.1(第一个可用版本);M4 为 v0.2;M5 为 v0.3;M6 为 v1.0
-- v1.0 门槛:契约冻结(仅新增演进)、双发行版端到端、备份恢复文档、安全基线审查完成
+- **v1.0(2026-09-18 定案:就地落地)**:门槛四项——契约冻结(仅新增演进)、
+  双发行版端到端、备份恢复文档、安全基线审查——2026-09 前全部达成;落地时
+  的实际交付已远超门槛:三方言四镜像真机全链(虚拟介质 + PXE 双载体)、
+  shim+grubnet Secure Boot、零注册入门、装机通路工程收尾(syslog sink /
+  共享池缓存 / OACK 容忍 / apt 信任收尾)。曾一度把 tag 延后至"PXE 增强 +
+  BiosSetter 完成",2026-09-18 复议取消(前提消失、动机被现有路径覆盖),
+  边界外移项见"下一阶段"。
+- **v1.1 方向**:BMC 能力接口(BiosSetter 起步,两段式确认契约随行)+
+  PXE 余项(UefiHttp、外部 DHCP+TFTP 逃生门)+ Windows unattend;契约
+  仅新增演进(向后兼容字段/端点),破坏性变更进 v2 讨论。
+- 发布流程:`git tag vX.Y.Z && goreleaser release --clean`(amd64/arm64,
+  版本与 commit 经 ldflags 注入)。

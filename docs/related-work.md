@@ -105,7 +105,9 @@ TFTP + HTTP 脚本,硬件记录按 MAC 匹配):
 - curtin 的源写在 `/etc/apt/sources.list.d/<文件>` 且支持 **per-file
   `signed-by`**——比 mammoth 现行的全局 `Acquire::AllowInsecureRepositories`
   更干净:post-install 写一个带 signed-by 的自持源文件、撤掉全局容忍,
-  target 的 apt 回到正确签名姿态。**近期行动项**(post-install 一段);
+  target 的 apt 回到正确签名姿态。**✅ 已落地(2026-09-17)**:post-install
+  把 apt-setup 池行原地改写为显式 signed-by(容忍无条件 rm;钥匙保留
+  trusted.gpg.d;deb822 形态跳过改写);
 - curtin 的 apt 配置跑在"镜像解包之后"的 target(完整 /proc)——这解释了
   MAAS 为何不会踩到 mammoth 在 d-i chroot 里 update-grub 暴毙的问题,
   印证"装完再配置"的时序优势。
@@ -123,7 +125,10 @@ bootloader 文件名、内核参数、架构、版本范围),社区维护、**�
 无 SB)、声明式 Install Spec(network v2/storage 三档)、六阶段证据化
 流水线、零注册入门(pending_machines→claim)。
 
-行动清单:①近期:netboot syslog sink + `syslog=` 内核参数;②近期:
-post-install 改写 sources.list.d + signed-by,撤全局 insecure 容忍;
+行动清单:①近期:netboot syslog sink + `syslog=` 内核参数;②~~近期:
+post-install 改写 sources.list.d + signed-by,撤全局 insecure 容忍~~
+**✅ 已落地(2026-09-17)**:post-install 原地改写 apt-setup 池行为显式
+`signed-by=`(钥匙保留 trusted.gpg.d,容忍文件无条件 rm;deb822 形态跳过),
+ubuntu late-commands 同步补容忍清除(双方言对称);
 ③中期:agent initramfs 安装路径试点(修正本文件开头的方言坚持结论);
 ④数据化 distro 签名(OSDriver → JSON)。

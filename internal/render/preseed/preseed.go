@@ -115,15 +115,21 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// Two seed carriers, one body: the netboot variant differs only in its
 	// install-source section (HTTP pool mirror instead of the CD mount).
 	seedName, bootArgs := "preseed.cfg", kernelArgs
+	// The archive codename the pool sources carry (d-i mirror/suite and the
+	// post-install signed-by rewrite use the same value).
+	poolSuite := ""
 	if in.Netboot != nil {
+		if poolSuite, err = d.suite(); err != nil {
+			return nil, render.BootParams{}, fmt.Errorf("%s: %w", d.distro, err)
+		}
 		seedName = "preseed-netboot.cfg"
 		bootArgs = netbootKernelArgs(in.AnswerBaseURL, seedName, in.Network, in.Hostname)
 	}
 
 	answers := []render.AnswerFile{
-		{Name: seedName, Content: d.preseed(in, target, recipe, net, in.Netboot)},
+		{Name: seedName, Content: d.preseed(in, target, recipe, net, in.Netboot, poolSuite)},
 		{Name: "run/mammoth/pre-install.sh", Content: preInstallScript(in, target)},
-		{Name: "run/mammoth/post-install.sh", Content: postInstallScript(d.distro, in)},
+		{Name: "run/mammoth/post-install.sh", Content: postInstallScript(d.distro, poolSuite, in)},
 	}
 	if target.dynamic {
 		answers = append(answers, render.AnswerFile{
@@ -145,7 +151,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 // prompts are preseeded away. Over PXE the source is the HTTP pool unpacked
 // from the same ISO under the boot tree: the mirror points there (dists/ +
 // pool/), keeping the offline semantics with no upstream mirror.
-func (d *Driver) preseed(in render.InstallInputs, t target, recipe, net string, nb *render.NetbootInputs) string {
+func (d *Driver) preseed(in render.InstallInputs, t target, recipe, net string, nb *render.NetbootInputs, poolSuite string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Mammoth — task %s / machine %s\n", in.TaskToken, in.MachineID)
 	if nb == nil {
@@ -183,8 +189,8 @@ func (d *Driver) preseed(in render.InstallInputs, t target, recipe, net string, 
 		b.WriteString("d-i apt-setup/cdrom/set-next boolean false\n")
 		b.WriteString("d-i apt-setup/cdrom/set-double boolean false\n\n")
 	} else {
-		suite, err := d.suite()
-		if err != nil {
+		suite := poolSuite
+		if suite == "" {
 			// Rendered seeds are already validated upstream (suite mapping is
 			// driver-static); this guard keeps the template total.
 			suite = "stable"

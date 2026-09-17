@@ -173,6 +173,12 @@ func TestRenderAutoinstallWipeAndBond(t *testing.T) {
 	if !strings.Contains(late, "node-u1") {
 		t.Errorf("hostname missing")
 	}
+	// Symmetric with the debian post-install: a provisioned system must
+	// never keep the pool's offline-apt tolerance (defense in depth — the
+	// casper carrier stages no pool today, so this is a no-op there).
+	if !strings.Contains(late, "rm -f /target/etc/apt/apt.conf.d/99mammoth-offline") {
+		t.Errorf("offline-apt tolerance cleanup missing:\n%s", late)
+	}
 
 	if boot.KernelArgs != "autoinstall ds=nocloud-net;s=file:///cdrom/" {
 		t.Errorf("boot params wrong: %q", boot.KernelArgs)

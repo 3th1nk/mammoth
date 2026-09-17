@@ -117,6 +117,11 @@ func TestRenderPreseedWipeAndStaticIP(t *testing.T) {
 			t.Errorf("post-install.sh missing %q", want)
 		}
 	}
+	// The ISO carrier stages no pool: apt-setup configured no mirror and no
+	// pool key ships, so the signed-by rewrite section must be absent.
+	if strings.Contains(post, "signed-by") {
+		t.Errorf("ISO-carrier post-install must not carry the pool signed-by rewrite:\n%s", post)
+	}
 	if !strings.Contains(pre, `\"detail\":\"pre_install failed\"`) {
 		t.Errorf("pre-install.sh failtrap missing: %s", pre)
 	}
@@ -436,6 +441,29 @@ func TestNetbootPoolKeyInjection(t *testing.T) {
 	// post-install strips the tolerance file the key deb shipped.
 	if !strings.Contains(post, "rm -f /target/etc/apt/apt.conf.d/99mammoth-offline") {
 		t.Errorf("post-install.sh missing the offline-apt cleanup:\n%s", post)
+	}
+	// The signed-by retirement: apt-setup's pool line (which trusts the
+	// global keyring) is rewritten into a self-contained source with an
+	// explicit signed-by, so the provisioned apt needs no tolerance under
+	// any verification generation (trixie's sqv ignores trusted.gpg.d keys
+	// for unsigned-by lines). URL metacharacters stay escaped for the
+	// literal sed match.
+	for _, want := range []string{
+		"if [ -f /target/etc/apt/trusted.gpg.d/mammoth-pool.gpg ]; then",
+		`s|^deb \(10\.0\.0\.1/netboot/files/tokd \)|deb [signed-by=/etc/apt/trusted.gpg.d/mammoth-pool.gpg] \1|`,
+	} {
+		if !strings.Contains(post, want) {
+			t.Errorf("post-install.sh missing the signed-by rewrite %q:\n%s", want, post)
+		}
+	}
+}
+
+// The apt source the signed-by rewrite matches literally: host + path,
+// scheme stripped, BRE metacharacters escaped — an IP address in the pool
+// URL is the common deployment shape.
+func TestAptSourceURLEscaping(t *testing.T) {
+	if got := sedPatternEscape(aptSourceURL("http://10.0.0.1/netboot/files/tokd")); got != `10\.0\.0\.1/netboot/files/tokd` {
+		t.Errorf("escaped apt source = %q", got)
 	}
 }
 

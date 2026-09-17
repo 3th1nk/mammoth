@@ -9,9 +9,9 @@
 package autoinstall
 
 import (
-	"net"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/3th1nk/mammoth/internal/render"
@@ -91,6 +91,14 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// environment); curl/wget are not guaranteed there.
 	var late []string
 	late = append(late, "echo mammoth-install-finished")
+	// Defense-in-depth mirror of the debian post-install cleanup: the signed
+	// pool's key deb (builder.StageNetbootPool, shared builder machinery)
+	// ships an apt tolerance file for the INSTALLER's mirror verification,
+	// and a provisioned system must never keep a permanently permissive apt
+	// (an unsigned public mirror would pass silently). The casper carrier
+	// stages no pool today, so this is a no-op there — cheap symmetry that
+	// stays correct if the pool ever reaches a casper-carried target.
+	late = append(late, "rm -f /target/etc/apt/apt.conf.d/99mammoth-offline")
 	// The one-time password, crypt-hashed: subiquity stores identity.password
 	// VERBATIM in /etc/shadow (a plain string there matches no login), and
 	// chpasswd -e consumes the same hash for root (both users unreachable

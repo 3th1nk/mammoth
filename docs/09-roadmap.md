@@ -148,30 +148,43 @@
 > 也被 `SetBootDevice(PXE, oneshot)` 现有路径覆盖——UefiHttp、外部
 > DHCP+TFTP 逃生门、BMC 能力接口、Windows unattend、arm64 引导链全部外移
 > v1.x,不阻塞冻结。
+>
+> **顺序按真机可得性重排(2026-09-18)**:当前仅一台真机(2288H V5),qemu/
+> fake 可先行项前置(agent 试点/BMC 读接口/声明化/逃生门/arm64 链路),
+> 强真机或外部条件依赖项显式隔离进第 5 项,不占当前序列。
 
-1. **BMC 能力接口**(v1.1 主体):BiosSetter(根治 BIOS 前置)→ FirmwareInventory
-   (固件基线核对)→ NIST 800-88 擦盘合规(见 related-work);高危动作引入
-   **两段式确认契约**(请求显式确认标志 + 服务端二次校验),做成 API 策略
-   开关供全自动化调用方关闭;
-2. **PXE 增强余项**(v1.1):UefiHttp(Redfish HTTP Boot,厂商 OEM URI 各异)、
-   外部 DHCP+TFTP 逃生门(mammoth 不能当 PXE 服务的部署形态)、arm64 引导链
-   (ipxe-aa64.efi / shim+grubnet aa64,opt 93 = 0x000B;信创混合机群刚需,
-   无真机前 option 93 固件观测先行积累);~~ubuntu/debian PXE 化~~ ✅ 已入
-   v1.0(2026-09-17 真机闭环);
-3. **发行版扩展**:Windows unattend → uniontechos(blocked,等 UOS 支持,
-   不主动排期);~~ubuntu 24.04~~ ✅ 已入 v1.0(现有驱动直接可用,已入
-   回归基线 runbooks/test-baselines.md);
-4. **agent initramfs 安装路径试点**(中期,related-work §1 修正结论):自有
-   最小 agent(分区 + 从池装内核/包),六阶段流水线与声明式 spec 原样承载,
-   preseed/kickstart 方言降级为兼容模式——与"方言抽象的价值在兼容存量,
-   不应阻碍自持安装路径"的修正呼应;先试点再定去留;
-5. **发行版接入声明化**(related-work §4,Cobbler 式):distro 签名(载体
-   内核/initrd 相对路径、内核参数、bootloader 形态)收敛为数据文件,接入
-   新发行版从写 Go 变成写声明;与 4 联动评估落地顺序;
-6. **例行回归**(维护窗口,不占版本边界):CentOS7/Kylin/rocky10-PXE/
-   22.04-crypt 复验轮、真机 relay 回归(跨 VLAN,giaddr 应答已有单测)、
-   共享二层地址治理(线下协调)——绑定 runbooks/test-baselines.md 基线表
-   滚动执行。
+1. **agent initramfs 安装路径试点**(related-work §1 修正结论,提前:qemu
+   全程可验且架构红利最大——减少未来所有发行版接入对真机联调的依赖面):
+   自有最小 agent(分区 + 从池装内核/包),六阶段流水线与声明式 spec 原样
+   承载,preseed/kickstart 方言降级为兼容模式;试点不碰真机,结论决定
+   去留与所需 API 形态;
+2. **BMC 能力接口**(v1.1 主体,按风险拆序):**FirmwareInventory**(纯读,
+   先行热身)→ **BiosSetter**(高危动作引入两段式确认契约——请求显式确认
+   标志 + 服务端二次校验,做成 API 策略开关供全自动化调用方关闭;fake 先
+   行开发,攒 2288H 回归窗口一次落)→ **NIST 800-88 擦盘**(破坏性,移队
+   尾,等把握窗口顺带测,LSI secure erase 支持未知);两段式契约的 API 形
+   态在 1 的结论之后定稿,避免返工;
+3. **发行版接入声明化**(跟随 1,顺序不能反:distro 签名表的字段形态取决
+   于 agent 路径结论;Cobbler 式数据文件,载体内核/initrd 相对路径、内核
+   参数、bootloader 形态——接入新发行版从写 Go 变成写声明);
+4. **PXE 余项的 qemu 可验部分**:外部 DHCP+TFTP 逃生门(mammoth 不能当
+   PXE 服务的部署形态;网桥 + dnsmasq 同型验证)、arm64 引导链(qemu
+   AAVMF + TCG 源级验链路,opt 93 = 0x000B,真机回归后补;信创混合机群
+   刚需,无真机前 option 93 固件观测先行积累);~~ubuntu/debian PXE 化~~
+   ✅ 已入 v1.0(2026-09-17 真机闭环);
+5. **等条件组(不排期,条件触发)**:
+   - **UefiHttp**(Redfish HTTP Boot)——等多厂商真机(OEM URI 各异,单台
+     华为验不出跨厂商);
+   - **Windows unattend**——等镜像与真机窗口(qemu 可先验 winpe 引导与
+     应答前半,LSI 卷驱动差异要真机);
+   - **复验轮**——22.04-crypt(性价比最高: crypt 修复仅 24.04 轮覆盖过,
+     2288H 半天可补,**真机窗口第一件事**)+ Kylin/rocky10-PXE;2288H 单
+     机轮装顺序覆盖(22/24/rocky9 已证明此模式可行);
+   - **真机 relay 回归**——等网络设备配 ip helper 的协调窗口(giaddr 应答
+     已有单测,见 11-pxe-walkthrough §4);
+   - **uniontechos**——blocked,等 UOS 支持,不主动排期;
+   - **共享二层地址治理**(邻机占址归属/装机段划段)——线下协调;复验与
+     relay 回归绑 runbooks/test-baselines.md 基线表滚动执行。
 
 ## 长期方向(不承诺排期)
 
@@ -188,8 +201,10 @@
   共享池缓存 / OACK 容忍 / apt 信任收尾)。曾一度把 tag 延后至"PXE 增强 +
   BiosSetter 完成",2026-09-18 复议取消(前提消失、动机被现有路径覆盖),
   边界外移项见"下一阶段"。
-- **v1.1 方向**:BMC 能力接口(BiosSetter 起步,两段式确认契约随行)+
-  PXE 余项(UefiHttp、外部 DHCP+TFTP 逃生门)+ Windows unattend;契约
-  仅新增演进(向后兼容字段/端点),破坏性变更进 v2 讨论。
+- **v1.1 方向**(按真机可得性,见"下一阶段"):agent initramfs 试点结论 +
+  BMC 能力接口(FirmwareInventory → BiosSetter,两段式确认契约随行)+
+  PXE 余项 qemu 可验部分(外部 DHCP+TFTP 逃生门、arm64 链路);UefiHttp/
+  Windows/复验轮视真机窗口随 v1.x 增量;契约仅新增演进(向后兼容字段/
+  端点),破坏性变更进 v2 讨论。
 - 发布流程:`git tag vX.Y.Z && goreleaser release --clean`(amd64/arm64,
   版本与 commit 经 ldflags 注入)。

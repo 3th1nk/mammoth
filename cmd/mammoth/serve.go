@@ -31,7 +31,6 @@ import (
 	"github.com/3th1nk/mammoth/internal/render"
 	"github.com/3th1nk/mammoth/internal/render/agent"
 	"github.com/3th1nk/mammoth/internal/render/autoinstall"
-	"github.com/3th1nk/mammoth/internal/render/distros"
 	"github.com/3th1nk/mammoth/internal/render/kickstart"
 	"github.com/3th1nk/mammoth/internal/render/preseed"
 	"github.com/3th1nk/mammoth/internal/store"
@@ -182,30 +181,28 @@ func serve(args []string) error {
 		mediaUploader = mediaRelay
 	}
 
-	// Distro drivers register from the DECLARATIONS
-	// (internal/render/distros/distros.json — docs/06-install-pipeline.md
-	// §5): adding a distro of a known family is a JSON entry, zero Go. The
-	// loader validates at init (unknown family/layout, duplicate names,
-	// missing family payloads are startup-fatal); the switch here is the
-	// only place that knows which Go type serves which family.
+	// Distro drivers register here; adding a distro never touches the
+	// orchestration layer (docs/06-install-pipeline.md §5). "uniontechos"
+	// (UOS Server V20) is anaconda-based with an RHEL-style install tree —
+	// it belongs to the kickstart dialect, NOT preseed (ISO inspected:
+	// AppStream/BaseOS/isolinux, no debian-installer layout).
 	renderReg := render.NewRegistry()
-	for _, decl := range distros.Declarations() {
-		var d render.OSDriver
-		switch decl.Family {
-		case "kickstart":
-			d = kickstart.New(decl.Name)
-		case "autoinstall":
-			d = autoinstall.New(decl.Name)
-		case "preseed":
-			d = preseed.New(decl.Name)
-		case "agent":
-			// The agent install path (docs/12-agent-initramfs.md): no
-			// distro installer — the mammoth agent initramfs consumes the
-			// declarative spec directly and installs from the package pool.
-			d = agent.New(decl.Name)
-		default:
-			return fmt.Errorf("distro %q: family %q has no driver construction (validated declarations must stay in sync with this switch)", decl.Name, decl.Family)
-		}
+	for _, d := range []render.OSDriver{
+		kickstart.New("rocky9"),
+		kickstart.New("rocky10"),
+		kickstart.New("centos7"),
+		kickstart.New("kylinv10"),
+		kickstart.New("kylinv11"),
+		kickstart.New("uniontechos"),
+		autoinstall.New("ubuntu22"),
+		autoinstall.New("ubuntu24"),
+		preseed.New("debian12"),
+		preseed.New("debian13"),
+		// The agent install path pilot (docs/12-agent-initramfs.md): no
+		// distro installer — the mammoth agent initramfs consumes the
+		// declarative spec directly and installs from the package pool.
+		agent.New("alpine"),
+	} {
 		if err := renderReg.Register(d); err != nil {
 			return err
 		}

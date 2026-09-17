@@ -15,7 +15,6 @@ import (
 	"strings"
 
 	"github.com/3th1nk/mammoth/internal/render"
-	"github.com/3th1nk/mammoth/internal/render/distros"
 )
 
 // Driver is the ubuntu22 autoinstall driver.
@@ -34,15 +33,8 @@ func (d *Driver) Distro() string {
 	return d.distro
 }
 func (d *Driver) SupportedArchs() []render.Arch {
-	var out []render.Arch
-	for _, a := range distros.ArchsFor(d.Distro()) {
-		out = append(out, render.Arch(a))
-	}
-	return out
+	return []render.Arch{render.ArchAMD64, render.ArchARM64}
 }
-
-// Family reports the declarative family (docs/06-install-pipeline.md §5).
-func (d *Driver) Family() string { return "autoinstall" }
 
 // KeepPartitionSupport: subiquity/curtin can keep a whole disk (skip it in
 // the storage config) but block-level partition reuse needs curtin surgery —

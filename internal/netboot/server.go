@@ -7,12 +7,15 @@ import (
 	"io/fs"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"golang.org/x/net/ipv4"
 	"golang.org/x/sys/unix"
+
+	"github.com/3th1nk/mammoth/internal/obs"
 )
 
 // Options configures one netboot service instance.
@@ -56,6 +59,14 @@ type Options struct {
 	// an IP lease before it will fetch anything. nil keeps the pure proxy
 	// model (the site DHCP owns addresses). See DHCPPool.
 	DHCP *DHCPPool
+	// SyslogPort is the installer-log sink port (514): d-i forwards its
+	// ramfs syslog here via the syslog= kernel argument, and lines that
+	// resolve to an armed netboot entry are logged with task_id so the
+	// TaskLogTee files them into task_logs. Zero means the default 514.
+	// Binding failures degrade to a warning — the sink is a diagnostic,
+	// never a lifeline (unlike DHCP/TFTP there is no boot stranded by its
+	// absence).
+	SyslogPort int
 	// Log receives service diagnostics; nil defaults to slog.Default().
 	Log *slog.Logger
 }
@@ -98,6 +109,9 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 	if opts.TFTPPort == 0 {
 		opts.TFTPPort = 69
 	}
+	if opts.SyslogPort == 0 {
+		opts.SyslogPort = 514
+	}
 	log := opts.Log
 	if log == nil {
 		log = slog.Default()
@@ -125,14 +139,31 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 		return nil, fmt.Errorf("netboot: bind tftp :%d: %w", opts.TFTPPort, err)
 	}
 	s.closers = []ioCloser{dhcpConn, proxyConn, tftpConn}
+	// The installer-log sink: a busy port (a site rsyslogd, a missing
+	// privilege on an exotic deployment) costs diagnostics, not boots —
+	// degrade to a warning where DHCP/TFTP above abort startup.
+	var syslogConn *net.UDPConn
+	if syslogConn, err = net.ListenUDP("udp4", &net.UDPAddr{Port: opts.SyslogPort}); err != nil {
+		log.Warn("netboot: installer syslog sink unavailable (install logs stay lost with the ramfs)",
+			"port", opts.SyslogPort, "err", err.Error())
+		syslogConn = nil
+	} else {
+		s.closers = append(s.closers, syslogConn)
+	}
 
 	udpLog := func(format string, args ...any) { s.logf(format, args...) }
 
 	dhcpDone := make(chan struct{})
 	proxyDone := make(chan struct{})
 	tftpDone := make(chan struct{})
+	syslogDone := make(chan struct{})
 	go s.serveDHCP(ctx, dhcpConn, dhcpDone)
 	go s.serveProxy(ctx, proxyConn, proxyDone)
+	if syslogConn != nil {
+		go s.serveSyslog(ctx, syslogConn, syslogDone)
+	} else {
+		close(syslogDone)
+	}
 	// Dynamic TFTP rendering: grubnet fetches its config over TFTP before its
 	// network stack is fully up. Debian grubnet's prefix is (tftp)/grub/ and —
 	// under proxyDHCP, where net_default_server stays empty — it falls straight
@@ -174,6 +205,7 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 		<-dhcpDone
 		<-proxyDone
 		<-tftpDone
+		<-syslogDone
 		// A ctx cancellation is the normal shutdown path — report nil so
 		// callers can distinguish "stopped on purpose" from a fault.
 		if err := ctx.Err(); errors.Is(err, context.Canceled) {
@@ -207,6 +239,60 @@ func (s *Server) serveDHCP(ctx context.Context, conn *net.UDPConn, done chan<- s
 func (s *Server) serveProxy(ctx context.Context, conn *net.UDPConn, done chan<- struct{}) {
 	defer close(done)
 	s.serveUDP(ctx, conn, s.opts.ProxyPort)
+}
+
+// serveSyslog drains the installer-log sink: d-i forwards its ramfs syslog
+// here via the syslog= kernel argument (related-work §2 — the installer
+// environment dies with the ramfs, and the update-grub post-mortem nearly
+// ran out of evidence without these lines). A line whose sender resolves to
+// an armed netboot entry (pool lease IP → MAC → entry) is logged with
+// task_id, which the TaskLogTee files into task_logs — `jobs logs` then
+// shows the installer's own view of the install. Unresolvable senders are
+// still logged (source IP only): foreign DHCP clients and enrollment
+// probes chatter here too.
+func (s *Server) serveSyslog(ctx context.Context, conn *net.UDPConn, done chan<- struct{}) {
+	defer close(done)
+	buf := make([]byte, 2048) // BSD syslog datagrams stay under 1KiB; headroom for 5424
+	for {
+		n, addr, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			continue
+		}
+		msg := parseSyslog(buf[:n])
+		if msg == "" {
+			continue
+		}
+		args := []any{"syslog_src", addr.IP.String()}
+		if s.opts.DHCP != nil && s.opts.Resolver != nil {
+			if mac := s.opts.DHCP.macFor(addr.IP); mac != "" {
+				if e, terr := s.opts.Resolver.Entry(ctx, mac); terr == nil && e != nil && e.TaskID != "" {
+					args = append(args, obs.FieldTaskID, e.TaskID)
+				}
+			}
+		}
+		s.log.Info(msg, args...)
+	}
+}
+
+// parseSyslog extracts the message body from a syslog datagram: the BSD
+// form ("<PRI>Mmm dd hh:mm:ss host tag: msg") the installers emit, tolerant
+// of RFC 5424 and bare lines — the sink is a diagnostic, never a parser
+// contract. Empty when nothing usable remains; oversized lines are capped.
+func parseSyslog(b []byte) string {
+	msg := strings.TrimSpace(string(b))
+	if strings.HasPrefix(msg, "<") {
+		if end := strings.Index(msg, ">"); end > 0 {
+			msg = strings.TrimSpace(msg[end+1:])
+		}
+	}
+	const maxLine = 1024
+	if len(msg) > maxLine {
+		return msg[:maxLine]
+	}
+	return msg
 }
 
 func (s *Server) serveUDP(ctx context.Context, conn *net.UDPConn, port int) {

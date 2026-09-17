@@ -27,6 +27,7 @@ Mammoth 是一个自包含的裸金属服务器安装/重装引擎:以 `{带外�
 | [operations.md](operations.md) | 运维手册:备份恢复、介质服务形态、部署注意 |
 | [security-baseline.md](security-baseline.md) | 安全基线:鉴权、凭证加密、介质生命周期、审查余项 |
 | [compat/patterns.md](compat/patterns.md) | 跨厂商装机共性模式(P1 控制器卷名/P2 DHCP 竞态/P3 参数截断…)——新机型/新方言自查清单 |
+| [runbooks/test-baselines.md](runbooks/test-baselines.md) | 整机回归基线:主流服务器镜像矩阵/镜像类型×载体法则/寻址核对单/通过标准 |
 | [related-work.md](related-work.md) | 与 Ironic/Metal3/Tinkerbell/Pixiecore 的对照与借鉴 |
 | [compat/](compat/README.md) | 厂商兼容矩阵(huawei 实录)与发行版支持矩阵(distros) |
 | [runbooks/](runbooks/) | 真机回归操作清单(按方言;ubuntu22 首篇) |

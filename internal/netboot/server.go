@@ -229,12 +229,16 @@ func (s *Server) serveUDP(ctx context.Context, conn *net.UDPConn, port int) {
 		if reply == nil {
 			continue
 		}
-		wcm := &ipv4.ControlMessage{}
+		// A datagram without control info (arrived before SetControlMessage
+		// took effect, or sent without pktinfo) reads back cm == nil — the
+		// reply then leaves via the routing table instead of the arrival
+		// interface, which broadcast replies cannot afford to rely on.
+		ifindex := 0
 		if cm != nil {
-			wcm.IfIndex = cm.IfIndex
+			ifindex = cm.IfIndex
 		}
-		s.logf("dhcp: request from %s (ifindex %d) -> reply to %s", addr, cm.IfIndex, to)
-		if _, err := pc.WriteTo(reply, wcm, to); err != nil {
+		s.logf("dhcp: request from %s (ifindex %d) -> reply to %s", addr, ifindex, to)
+		if _, err := pc.WriteTo(reply, &ipv4.ControlMessage{IfIndex: ifindex}, to); err != nil {
 			s.logf("dhcp: reply to %s: %v", to, err)
 		}
 	}

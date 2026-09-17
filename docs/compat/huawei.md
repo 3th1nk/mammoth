@@ -259,6 +259,17 @@ autoinstall early-commands 按 size 锚点现场重识别并改写 storage 配�
 Redfish 侧 `ID_SERIAL_SHORT` 与 `ID_SCSI_SERIAL`(lsblk SERIAL 列)是两个不同
 的值,subiquity 探测取后者——serial 匹配须以实测探测语义为准。
 
+**复发记录(2026-09-17,PXE 载体)**:同一问题在 debian13/ubuntu22 PXE 真机
+联调时第三次踩中——autoinstall 渲染仍回落 `/dev/LogicalDrive0`,curtin 报
+`matched no disk`。教训已固化为两条:
+1. **机制问题不许留"联调手段"尾巴**:盘查改名 sda 是当时跑通的方式,不是
+   修复;任何"正式机制二选一"的 TODO 必须落在代码层,否则换一个载体/方言
+   必然复发。现已在 autoinstall 驱动层落地:无 serial 时按 size 从带内快照
+   解析内核设备名(唯一匹配才接受,多义时报错要求重探),不再透传控制器名;
+2. **方言间已知防御必须共享**:rocky9 %pre 的 size±1%+serial 解析是同类
+   问题的第一个修法,但没有沉淀到其他方言。新方言实现设备落盘时,必须对照
+   compat 的"已知安装器-盘查不一致"清单逐条实现等价防御。
+
 ### 安装时长与进度判断(虚拟光驱形态)
 
 - 实测全程 ~3h(引导→curtin 完成):数据复制 ~2h(2.6GB squashfs ÷ 实测

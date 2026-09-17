@@ -61,6 +61,10 @@ func (d *Driver) Distro() string {
 	return d.distro
 }
 
+// Family reports the installer family for the support matrix
+// (docs/06-install-pipeline.md §5).
+func (d *Driver) Family() string { return "kickstart" }
+
 // dialectExtras covers installer deltas between distro members of the same
 // kickstart package. UOS Server's anaconda (33.16 UOS build) crashes in its
 // Finish phase with "max() arg is an empty sequence" under a fully

@@ -72,12 +72,12 @@ type Machine struct {
 	// Firmware is the controller's firmware inventory (migration 00008,
 	// docs/07-bmc.md §6) — nil until a discovery with the capability
 	// succeeds.
-	Firmware json.RawMessage
-	PowerState      string // on | off | unknown
-	State           string // registering | discovering | ready | error
-	LastError       *ErrorInfo
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	Firmware   json.RawMessage
+	PowerState string // on | off | unknown
+	State      string // registering | discovering | ready | error
+	LastError  *ErrorInfo
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 	// PXE responder observations (docs/08-data-model.md machines, migration
 	// 00006): the firmware architecture the client last announced (option 93
 	// label: bios | ia32 | uefi-x64 | uefi-arm64) and when. Observation

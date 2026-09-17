@@ -37,6 +37,10 @@ func New(distro string) *Driver { return &Driver{distro: distro} }
 func (d *Driver) Distro() string                { return d.distro }
 func (d *Driver) SupportedArchs() []render.Arch { return []render.Arch{render.ArchAMD64} }
 
+// Family reports the installer family for the support matrix
+// (docs/06-install-pipeline.md §5).
+func (d *Driver) Family() string { return "agent" }
+
 // KeepPartitionSupport: the pilot agent rebuilds every target disk from the
 // declared table — block-level reuse (keep: partitions/preserve) is not
 // implemented yet. Submit-time gates reject keep usage for this driver.

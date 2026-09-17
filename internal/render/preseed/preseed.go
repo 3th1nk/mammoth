@@ -31,6 +31,10 @@ func New(distro string) *Driver { return &Driver{distro: distro} }
 func (d *Driver) Distro() string                { return d.distro }
 func (d *Driver) SupportedArchs() []render.Arch { return []render.Arch{render.ArchAMD64} }
 
+// Family reports the installer family for the support matrix
+// (docs/06-install-pipeline.md §5).
+func (d *Driver) Family() string { return "preseed" }
+
 // KeepPartitionSupport: d-i can keep a whole disk (it never becomes a
 // partman-auto target) but block-level partition reuse needs partman surgery
 // — declared partial; keep: partitions is rejected at submit and at render

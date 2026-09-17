@@ -170,9 +170,13 @@
    行开发,攒 2288H 回归窗口一次落)→ **NIST 800-88 擦盘**(破坏性,移队
    尾,等把握窗口顺带测,LSI secure erase 支持未知);两段式契约的 API 形
    态在 1 的结论之后定稿,避免返工;
-3. **发行版接入声明化**(跟随 1,顺序不能反:distro 签名表的字段形态取决
-   于 agent 路径结论;Cobbler 式数据文件,载体内核/initrd 相对路径、内核
-   参数、bootloader 形态——接入新发行版从写 Go 变成写声明);
+3. ~~**发行版接入声明化**~~ **✅ 已评估并收敛(2026-09-18)**——曾全量
+   落地 distros.json(12 发行版声明化),评估后同日 revert 收敛为类型化
+   Go 注册表:接入成本在模板 Go + 真机验证而非注册面(三方言连环修为
+   证),声明文件是假性降本。保留收益:`distros[].family` 契约导出、
+   agent 包集参数留驱动内、ubuntu 架构修正(amd64-only,live-server 无
+   arm64 介质)。完整决策记录见 docs/06 §6;池能力建模(boot_pool vs
+   system_pool)结论留在 docs/12 §6 备用;
 4. **PXE 余项的 qemu 可验部分**:外部 DHCP+TFTP 逃生门(mammoth 不能当
    PXE 服务的部署形态;网桥 + dnsmasq 同型验证)、arm64 引导链(qemu
    AAVMF + TCG 源级验链路,opt 93 = 0x000B,真机回归后补;信创混合机群

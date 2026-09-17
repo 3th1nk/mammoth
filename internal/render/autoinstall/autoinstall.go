@@ -32,9 +32,15 @@ func (d *Driver) Distro() string {
 	}
 	return d.distro
 }
-func (d *Driver) SupportedArchs() []render.Arch {
-	return []render.Arch{render.ArchAMD64, render.ArchARM64}
-}
+
+// SupportedArchs is amd64-only: ubuntu live-server ships no arm64 media —
+// the former table over-claimed arm64 (an arm64 ubuntu needs a different
+// carrier and medium, not this driver).
+func (d *Driver) SupportedArchs() []render.Arch { return []render.Arch{render.ArchAMD64} }
+
+// Family reports the installer family for the support matrix
+// (docs/06-install-pipeline.md §5).
+func (d *Driver) Family() string { return "autoinstall" }
 
 // KeepPartitionSupport: subiquity/curtin can keep a whole disk (skip it in
 // the storage config) but block-level partition reuse needs curtin surgery —

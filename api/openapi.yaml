@@ -1170,6 +1170,13 @@ components:
           description: Network boot (PXE/iPXE) support level for install
             submissions with boot.strategy=pxe (docs/06-install-pipeline.md §6).
           enum: [full, partial, none]
+        family:
+          type: string
+          description: Installer family riding this distro
+            (docs/06-install-pipeline.md §5) — which answer-file dialect or
+            agent path renders the spec. Absent for third-party drivers
+            without the capability.
+          enum: [kickstart, autoinstall, preseed, agent]
 
     Problem:
       type: object

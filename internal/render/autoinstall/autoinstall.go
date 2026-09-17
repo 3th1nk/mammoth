@@ -119,6 +119,16 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		"keyboard": map[string]any{
 			"layout": "us",
 		},
+		// subiquity refuses to start an unattended install without identity
+		// ("neither identity nor user-data provided" — it checks BEFORE
+		// curtin ever runs, so the late-command chpasswd alone is not enough;
+		// real-hardware finding, PXE carrier). The password here is the same
+		// one-time value the late command re-applies on the target.
+		"identity": map[string]any{
+			"hostname": in.Hostname,
+			"username": "mammoth",
+			"password": in.RootPassword,
+		},
 		"ssh": map[string]any{
 			"install-server": true,
 			"allow-pw":       true,

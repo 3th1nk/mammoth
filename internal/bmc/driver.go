@@ -73,3 +73,27 @@ type VolumeCreator interface {
 type PhysicalDriveEnumerator interface {
 	PhysicalDrives(ctx context.Context, addr string, cred Credentials) ([]DiskView, error)
 }
+
+// FirmwareComponent is one firmware inventory entry (docs/07-bmc.md §6):
+// a controller-side firmware image and its version. Id carries the
+// vendor's own identity (Redfish Id — stable across reads); Name and
+// Version are informational and may be empty on vendors that report
+// presence without a version.
+type FirmwareComponent struct {
+	ID      string `json:"id"`
+	Name    string `json:"name,omitempty"`
+	Version string `json:"version,omitempty"`
+}
+
+// FirmwareInventoryProvider is the optional read-only capability of listing
+// the controller's firmware inventory (Redfish SoftwareInventory under the
+// UpdateService; the first of the v1.1 BMC capability interfaces — pure
+// read, the warm-up before any write-capable interface). Drivers without it
+// simply don't implement the interface; discovery leaves the machine's
+// firmware view empty rather than failing.
+type FirmwareInventoryProvider interface {
+	// FirmwareInventory lists the firmware components the controller
+	// reports. Best-effort data: implementations should prefer a partial
+	// list over an error when some entries fail to decode.
+	FirmwareInventory(ctx context.Context, addr string, cred Credentials) ([]FirmwareComponent, error)
+}

@@ -31,6 +31,10 @@ type BMC struct {
 
 	Volumes []bmc.VolumeSpec
 
+	// FirmwareList scripts the firmware inventory the controller reports
+	// (docs/07-bmc.md §6); defaultFirmware fills a plausible pair.
+	FirmwareList []bmc.FirmwareComponent
+
 	// Failures scripts error injection: set before the call under test.
 	FailOps map[string]error
 
@@ -67,6 +71,7 @@ func (d *Driver) Add(addr string) *BMC {
 		Power:          bmc.PowerStateOff,
 		ConsoleBaseURL: "https://fake.bmc/console",
 		Hardware:       defaultHardware(serial),
+		FirmwareList:   defaultFirmware(),
 	}
 	d.bmcs[addr] = b
 	return b
@@ -89,6 +94,15 @@ func defaultHardware(serial string) *bmc.HardwareView {
 			{Name: "eno2", MAC: "aa:bb:cc:dd:ee:02", SpeedMbps: 25000, LinkUp: true, PCIAddress: "0000:0c:00.0"},
 		},
 		Coverage: bmc.CoverageFull,
+	}
+}
+
+// defaultFirmware scripts the controller's own firmware entries so
+// discovery and the machine firmware view have stable data.
+func defaultFirmware() []bmc.FirmwareComponent {
+	return []bmc.FirmwareComponent{
+		{ID: "BMC", Name: "MammothSim iBMC", Version: "1.0.0-fake"},
+		{ID: "BIOS", Name: "MammothSim BIOS", Version: "5.49-fake"},
 	}
 }
 
@@ -269,6 +283,18 @@ func (d *Driver) PhysicalDrives(_ context.Context, addr string, _ bmc.Credential
 		return nil, nil
 	}
 	return append([]bmc.DiskView(nil), b.Hardware.Disks...), nil
+}
+
+// FirmwareInventory reports the scripted firmware inventory (the
+// FirmwareInventoryProvider optional capability).
+func (d *Driver) FirmwareInventory(_ context.Context, addr string, _ bmc.Credentials) ([]bmc.FirmwareComponent, error) {
+	b, err := d.get(addr, "firmware_inventory")
+	if err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]bmc.FirmwareComponent(nil), b.FirmwareList...), nil
 }
 
 func (d *Driver) CollectInventory(_ context.Context, addr string, _ bmc.Credentials) (bmc.HardwareView, error) {

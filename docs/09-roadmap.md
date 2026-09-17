@@ -158,8 +158,14 @@
    自有最小 agent(分区 + 从池装内核/包),六阶段流水线与声明式 spec 原样
    承载,preseed/kickstart 方言降级为兼容模式;试点不碰真机,结论决定
    去留与所需 API 形态;
-2. **BMC 能力接口**(v1.1 主体,按风险拆序):**FirmwareInventory**(纯读,
-   先行热身)→ **BiosSetter**(高危动作引入两段式确认契约——请求显式确认
+2. **BMC 能力接口**(v1.1 主体,按风险拆序):~~**FirmwareInventory**~~
+   **✅ 已落地(2026-09-18)**——`FirmwareInventoryProvider` 可选能力接口
+   (driver.go,VolumeCreator 同型)+ redfish 实装(UpdateService→
+   FirmwareInventory 宽容 walk,取数器注入纯函数可测)+ fake 脚本化
+   (FirmwareList 字段 + FailOps)+ discover 采集落 machines.firmware
+   (迁移 00008)+ 契约只追加 `machine.firmware`(gen 再生,ipmi 缺能力
+   即无数据盘查不失败);qemu 冒烟全链(注册→盘查→API 出固件)。→
+   **BiosSetter**(高危动作引入两段式确认契约——请求显式确认
    标志 + 服务端二次校验,做成 API 策略开关供全自动化调用方关闭;fake 先
    行开发,攒 2288H 回归窗口一次落)→ **NIST 800-88 擦盘**(破坏性,移队
    尾,等把握窗口顺带测,LSI secure erase 支持未知);两段式契约的 API 形

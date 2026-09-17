@@ -1383,6 +1383,24 @@ components:
           type: string
           description: The machine's own (in-band) address, used by the inband_ssh probe.
 
+    FirmwareInventory:
+      type: array
+      items:
+        $ref: '#/components/schemas/FirmwareComponent'
+
+    FirmwareComponent:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+          description: The controller's own stable identity for the component.
+        name:
+          type: string
+        version:
+          type: string
+          description: Informational; empty on vendors reporting presence without a version.
+
     MachineCreate:
       type: object
       required: [bmc]
@@ -1444,6 +1462,15 @@ components:
           nullable: true
         hardware:
           $ref: '#/components/schemas/HardwareView'
+        firmware:
+          description: |
+            Controller firmware inventory (docs/07-bmc.md §6), collected with
+            the spec view by discovery. Null until a discovery with the
+            pure-read capability (Redfish SoftwareInventory) succeeds; the
+            ipmi protocol reports none.
+          allOf:
+            - $ref: '#/components/schemas/FirmwareInventory'
+          nullable: true
         power_state:
           $ref: '#/components/schemas/PowerState'
         state:

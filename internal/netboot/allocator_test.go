@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"net"
 	"testing"
 )
@@ -284,5 +285,46 @@ func TestDHCPPoolReserveFree(t *testing.T) {
 	// Exhaustion: all four addresses claimed.
 	if _, ok := pool.ReserveFree("52:54:00:00:00:cc", nil); ok {
 		t.Fatal("exhausted pool handed out an address")
+	}
+}
+
+// The pool leases only MACs with an armed netboot entry: foreign DHCP
+// clients on the wire (site VMs, stray servers) must not drain it
+// (2288H machine room: a 2-address pool died mid-install to foreign
+// REQUESTs). Without a Resolver the allowlist is skipped — legacy shape.
+func TestPoolModeIgnoresUnknownMACs(t *testing.T) {
+	pool, _ := NewDHCPPool(net.IPv4(192, 168, 77, 200), net.IPv4(192, 168, 77, 200), nil, net.IPv4(192, 168, 77, 1))
+	s := testServer(t, Options{
+		NextServer: []byte{192, 168, 77, 1},
+		BaseURL:    "http://192.168.77.1:8080",
+		DHCP:       pool,
+		Resolver: ResolverFunc(func(_ context.Context, mac string) (*Entry, error) {
+			if mac == "02:00:00:00:00:00" {
+				return &Entry{MAC: mac}, nil
+			}
+			return nil, errors.New("unknown")
+		}),
+	})
+	var mac [6]byte
+	copy(mac[:], []byte{0x50, 0x1d, 0x93, 0xd8, 0xc6, 0x97})
+	pxeOpts := []option{
+		option{optVendorClass, []byte("PXEClient:Arch:00007:UNDI:003016")},
+		option{optArch, u16opt(7)},
+	}
+
+	// Armed MAC: leased.
+	setBroadcastFlag(discover(0x21, mac, pxeOpts...))
+	reply, _ := s.handle(discover(0x21, mac, pxeOpts...), 67, &net.UDPAddr{IP: net.IPv4zero, Port: 68})
+	if reply == nil {
+		t.Fatal("armed MAC got no lease")
+	}
+
+	// Foreign MAC (no entry): silently ignored — the pool keeps its
+	// addresses for the machines it installs.
+	var foreign [6]byte
+	copy(foreign[:], []byte{0x00, 0x0c, 0x29, 0x9e, 0xd1, 0xc1})
+	reply, _ = s.handle(discover(0x22, foreign, pxeOpts...), 67, &net.UDPAddr{IP: net.IPv4zero, Port: 68})
+	if reply != nil {
+		t.Fatal("foreign MAC was leased")
 	}
 }

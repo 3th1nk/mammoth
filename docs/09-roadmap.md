@@ -201,7 +201,8 @@
   共享池缓存 / OACK 容忍 / apt 信任收尾)。曾一度把 tag 延后至"PXE 增强 +
   BiosSetter 完成",2026-09-18 复议取消(前提消失、动机被现有路径覆盖),
   边界外移项见"下一阶段"。
-- **v1.1 方向**(按真机可得性,见"下一阶段"):agent initramfs 试点结论 +
+- **v1.1 方向**(按真机可得性,见"下一阶段"):agent initramfs 试点 ✅
+  (docs/12;真机回归待 2288H 窗口)+
   BMC 能力接口(FirmwareInventory → BiosSetter,两段式确认契约随行)+
   PXE 余项 qemu 可验部分(外部 DHCP+TFTP 逃生门、arm64 链路);UefiHttp/
   Windows/复验轮视真机窗口随 v1.x 增量;契约仅新增演进(向后兼容字段/

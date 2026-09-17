@@ -158,6 +158,16 @@ type ProbeResult struct {
 
 // UpdateProbeResult backfills probe results — the discover flow writes here.
 // Absent identity fields keep their previous value (COALESCE semantics).
+// SetSSHAddress updates the machine's in-band address (the post-install
+// completion report knows the machine's live address as the source of the
+// request — the one fact no spec or snapshot can guarantee, since addressing
+// may be DHCP, reserved or declared).
+func (r *MachineRepo) SetSSHAddress(ctx context.Context, id, addr string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE machines SET ssh_address = $2, updated_at = now() WHERE id = $1`, id, addr)
+	return err
+}
+
 func (r *MachineRepo) UpdateProbeResult(ctx context.Context, id string, p ProbeResult) error {
 	var hw any
 	if len(p.Hardware) > 0 {

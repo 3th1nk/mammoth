@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
@@ -62,6 +63,17 @@ func (s *Server) ReportInstallComplete(ctx context.Context, request gen.ReportIn
 	}
 	if err := s.Jobs.RecordInstallComplete(ctx, task.ID, status, detail); err != nil {
 		return nil, err
+	}
+	// The report's source address is the machine's live address — the one
+	// fact no spec or addressing scheme can guarantee (DHCP, reserved or
+	// declared). Recording it keeps verify_ready and later in-band probes
+	// pointed at reality. Best-effort: a loopback/absent peer leaves the
+	// recorded address untouched.
+	if ip := net.ParseIP(ClientIPFromContext(ctx)); ip != nil && ip.IsPrivate() && !ip.IsLoopback() {
+		if uerr := s.Machines.SetSSHAddress(ctx, task.MachineID, ip.String()); uerr == nil {
+			obs.FromContext(ctx).InfoContext(ctx, "machine ssh address refreshed from completion report",
+				obs.FieldMachineID, task.MachineID, "ssh_address", ip.String())
+		}
 	}
 	s.Events.Append(ctx, "task", task.ID, "task.install_reported", map[string]any{
 		"status": status, "detail": detail,

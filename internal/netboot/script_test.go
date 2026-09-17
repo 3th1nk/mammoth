@@ -212,3 +212,27 @@ func TestGRUBHTTPHost(t *testing.T) {
 		t.Errorf("host without port = %q", h)
 	}
 }
+
+// The ubuntu kernel args carry "ds=nocloud-net;s=…" — an unescaped semicolon
+// is GRUB's command separator and truncates the linux line there (2288H:
+// the kernel booted with no ip=/BOOTIF/nfsroot at all). sanitizeArgs must
+// escape it; whitespace collapsing stays.
+func TestSanitizeArgsEscapesSemicolon(t *testing.T) {
+	in := "autoinstall ds=nocloud-net;s=http://10.0.0.1:8080/render/toku/ ip=198.51.100.180::198.51.100.248:255.255.255.0:::off BOOTIF=01-02-00-00-00-00-00"
+	want := `autoinstall ds=nocloud-net\;s=http://10.0.0.1:8080/render/toku/ ip=198.51.100.180::198.51.100.248:255.255.255.0:::off BOOTIF=01-02-00-00-00-00-00`
+	if got := sanitizeArgs(in); got != want {
+		t.Fatalf("sanitizeArgs:\n got %q\nwant %q", got, want)
+	}
+	// The rendered grub.cfg keeps the whole line intact after unescaping.
+	cfg := RenderGRUB(&Entry{MAC: "02:00:00:00:00:00", TaskID: "tsk", Token: "toku",
+		Kernel: "vmlinuz", Initrd: "initrd.img", KernelArgs: in}, "http://10.0.0.1:8080")
+	if !strings.Contains(cfg, `\;s=`) {
+		t.Fatalf("grub.cfg lost the escaped separator:\n%s", cfg)
+	}
+	if strings.Contains(cfg, "nocloud-net;s=") {
+		t.Fatalf("grub.cfg leaked an unescaped separator (args after it would be dropped):\n%s", cfg)
+	}
+	if strings.Contains(cfg, "  ") {
+		t.Fatalf("grub.cfg has double spaces:\n%s", cfg)
+	}
+}

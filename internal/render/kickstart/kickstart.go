@@ -66,17 +66,62 @@ func (d *Driver) Distro() string {
 func (d *Driver) Family() string { return "kickstart" }
 
 // dialectExtras covers installer deltas between distro members of the same
-// kickstart package. UOS Server's anaconda (33.16 UOS build) crashes in its
-// Finish phase with "max() arg is an empty sequence" under a fully
-// unattended kickstart — its Finish task groups expect an EULA ack and a
-// created user. Both commands are harmless no-ops on standard RHEL-lineage
-// anaconda (and the eula command is skipped with a warning where absent).
+// kickstart package. UOS Server's anaconda (33.16 UOS build) wants an EULA
+// ack and a created user. Both commands are harmless no-ops on standard
+// RHEL-lineage anaconda (and the eula command is skipped with a warning
+// where absent).
 func (d *Driver) dialectExtras() string {
 	switch d.distro {
 	case "uniontechos":
 		return "eula --agreed\nuser --name=uos --password=Uos@2024 --plaintext --groups=wheel"
 	}
 	return ""
+}
+
+// displayDirective / instTextArg: keep uniontechos on the graphical
+// frontend. Two UOS-specific defects make text mode a bad place:
+// historically mammoth baked `text`/inst.text into every kickstart-lineage
+// boot, and in the qemu reproduction the text-mode run's autopart produced
+// a FAT16 partition where graphical mode produced a proper swap — landing
+// the install in the no-swap Finish crash anyway (scripts/uos-dev/ has the
+// five-round matrix). Graphical is the verified-good path; the rest of the
+// family keeps text (rocky9/kylin completed real-hardware runs under it).
+func (d *Driver) displayDirective() string {
+	if d.distro == "uniontechos" {
+		return "graphical"
+	}
+	return "text"
+}
+
+func (d *Driver) instTextArg() string {
+	if d.distro == "uniontechos" {
+		return ""
+	}
+	return " inst.text"
+}
+
+// declaresSwap reports whether any declared partition is a swap (the
+// `fs: swap` form renders as `part swap ...`; the mount spelling is
+// accepted too).
+func declaresSwap(in render.InstallInputs) bool {
+	swap := func(p render.ResolvedPartition) bool {
+		return p.FS == "swap" || p.Mount == "swap"
+	}
+	for _, disk := range in.Disks {
+		for _, p := range disk.Partitions {
+			if swap(p) {
+				return true
+			}
+		}
+	}
+	for _, r := range in.Raid {
+		for _, p := range r.Partitions {
+			if swap(p) {
+				return true
+			}
+		}
+	}
+	return false
 }
 func (d *Driver) SupportedArchs() []render.Arch {
 	return []render.Arch{render.ArchAMD64, render.ArchARM64}
@@ -185,7 +230,7 @@ var ksTemplate = template.Must(template.New("ks").Funcs(template.FuncMap{
 	"failtrap": failtrap,
 }).Parse(`# Mammoth — task {{.TaskToken}} / machine {{.MachineID}}
 # Rendered by the mammoth server; fetched via inst.ks over the task-token URL.
-text
+{{.DisplayMode}}
 reboot
 lang en_US.UTF-8
 keyboard us
@@ -739,6 +784,20 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		wipe = nil     // clearpart is emitted by the include for all disks
 	}
 
+	// UOS's customized bootloader module crashes when the installed system
+	// carries no swap: their resume= boot-arg task runs
+	// `max(swap_devices, ...)` unguarded on x86 (an operator-precedence slip
+	// in `is_x86() or is_loongarch() and swap_devices`, so the emptiness
+	// check never binds) and an empty swap list kills the Finish task group
+	// with "max() arg is an empty sequence" — reproduced in qemu against the
+	// exact ISO the 2288H run used (scripts/uos-dev/). If nothing in the
+	// spec declared a swap partition, append a modest one; anaconda picks
+	// the drive, which keeps this safe for the dynamic-%include path too.
+	// Upstream-lineage installers don't run this code and are untouched.
+	if d.distro == "uniontechos" && !declaresSwap(in) {
+		partLines = append(partLines, "part swap --fstype=swap --size=2048")
+	}
+
 	// kickstart's `url` command speaks only http/https/ftp — an NFS-hosted
 	// ISO installs via the `nfs` command (dir = the file's directory;
 	// anaconda scans it for the ISO) or inst.repo on the kernel command line.
@@ -755,6 +814,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		"MachineID":             in.MachineID,
 		"Hostname":              in.Hostname,
 		"HostnameViaNetworkCmd": d.HostnameViaNetworkCmd(),
+		"DisplayMode":           d.displayDirective(),
 		"RootPassword":          in.RootPassword,
 		"SSHPublicKeys":         in.SSHPublicKeys,
 		"ImageSource":           in.ImageSource,
@@ -828,7 +888,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if early == "" {
 		early = "ip=dhcp"
 	}
-	kernelArgs := fmt.Sprintf("inst.ks=%s inst.repo=%s inst.text", primaryURL, repo)
+	kernelArgs := fmt.Sprintf("inst.ks=%s inst.repo=%s%s", primaryURL, repo, d.instTextArg())
 	if early != "" {
 		kernelArgs = early + " " + kernelArgs
 	}

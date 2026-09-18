@@ -13,7 +13,7 @@
 | **银河麒麟 V10**(Server V10 SP3 2403) | `kylinv10` | Anaconda(RHEL8 代际 + NM 1.18) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`) | MAC(渲染层带 NM 修复段) | ⚠️ 受限:静态网络自动化卡死在 NM(见注记);**中文 NFS 路径经 anaconda 层已验证可用** |
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
 | Debian 12 | `debian12` | debian-installer | preseed(`file=/cdrom/preseed.cfg`) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | 无(netcfg 不按 MAC 选口,单接口) | ✅ 真机跑通 |
-| 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,待真机复核) | MAC → 接口名在 %pre 安装期解析 | **blocked**(见下) |
+| 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,真机复验随窗口) | MAC → 接口名在 %pre 安装期解析 | **根因已修复**(text 前端缺陷,见下;待真机复验) |
 | Windows | — | Setup | unattend | full(目标) | — | 未开始 |
 
 ## 保留分区支持语义(SupportLevel)
@@ -170,17 +170,46 @@ mini.iso)提供驱动支持。
 - **风险**:绑定一个上游停止演进的安装器,后续无人修复——变体需在文档与
   capabilities 中如实标注支持边界。
 
-### uniontechos 状态:blocked(UOS 定制 anaconda)
+### uniontechos 根因已定位并修复(2026-09-18 qemu 复现闭环,真机复验随窗口)
 
-- **现象**:全自动 kickstart(安装树/包/分区/网络全部正确,489 包安装完成)下,
-  UOS 定制 anaconda(33.16.4.15)在 Finish 阶段崩溃:
+- **现象(历史)**:全自动 kickstart(安装树/包/分区/网络全部正确,489 包
+  安装完成)下,UOS 定制 anaconda(33.16.4.15)在 Finish 阶段崩溃:
   `dasbus.error.DBusError: max() arg is an empty sequence`(task_proxy.Finish);
-- **已排除**:`bootloader --location=mbr`(去除后同样崩溃)、`eula --agreed` +
-  `user` 注入(同样崩溃)——崩溃源在 UOS 定制 anaconda 的 Finish 任务组内部,
-  kickstart 参数层无法绕过;
-- **恢复路径**:拿 anaconda-tb 深层帧定位空任务组所属的 UOS 定制模块
-  (需 UOS 官方支持或 anaconda 定制源码),或等待 UOS 新版修复;
-- 引导/介质/包装配等其余链路均正常(包安装完成、只差 Finish 收尾)。
+  bootloader/eula/user 注入等 kickstart 参数层试验均无法绕过——因为真正的
+  变量根本不在 kickstart 内容里。
+- **根因(2026-09-18 qemu 五轮对照 + stage2 源码定位,代码级实锤)**:
+  UOS 定制 anaconda 的 bootloader 模块在 resume= boot-arg 任务里
+  `max(swap_devices, key=...)` **无空序列保护**——守卫条件写作
+  `if blivet.arch.is_x86() or blivet.arch.is_loongarch() and swap_devices:`,
+  运算符优先级使空列表检查永不生效(≡ `if is_x86():`)。**x86 + 安装结果
+  无 swap 分区 = Finish 任务组必崩**("max() arg is an empty sequence" 从
+  Storage 模块经 dasbus 传回 UI 的 task_proxy.Finish)。五轮矩阵:
+  | ks 形态 | 显示模式 | 安装结果 swap | 结论 |
+  |---------|---------|---------------|------|
+  | 手写 autopart | 图形(SATA/USB 两轮) | 0x82 4G | ✅ 全绿(装后自举) |
+  | mammoth ks(显式分区) | text | 无 | ❌ 崩(与真机同栈) |
+  | 手写 autopart + inst.text | text | **0x06 FAT16(非 swap!)** | ❌ 崩 |
+  | mammoth ks(显式分区) | 图形 | 无 | ❌ 崩(证伪"仅 text") |
+  - 载体无关:SATA / USB CDROM(iBMC 虚拟介质形态)结论一致;
+  - 历史排除试验失效的原因:真机恒为 text 模式(mammoth 引导参数硬编码
+    `inst.text`),全部试验都在"无 swap 崩溃"下跑,变量无效;
+  - 附带发现:**text 模式下 UOS autopart 产出 FAT16 而非 swap**(图形模式
+    同 ks 产出 0x82)——text 前端本身也不可靠;
+  - 代码位置:stage2(rootfs.img)内
+    `usr/lib64/python3.6/site-packages/pyanaconda/modules/storage/bootloader/base.py:737`;
+  - 证据:scripts/uos-dev/(qemu 复现 rig),traceback 存档于运行目录
+    anaconda-crash-traceback.txt。1050a(md5 da805754…8641,与真机同版)。
+- **修复(kickstart 驱动 dialect 层,回归钉
+  `TestRenderUniontechosRunsGraphical`)**:
+  1. **无 swap 自动补齐**:spec 未声明 swap 时追加
+     `part swap --fstype=swap --size=2048`(直击 max(swap_devices) 崩溃点;
+     用户已声明 swap 则原样尊重);
+  2. **uniontechos 固定 graphical、引导参数去 `inst.text`**:text 模式下
+     UOS autopart 连 swap 都建错(上表第 4 行),graphical 是经验证的可靠
+     路径;家族其余成员保持 text(rocky9/kylin text 真机跑通,行为不变)。
+- **恢复路径**:真机复验随 2288H 窗口(虚拟介质一轮,预期直接通过);
+  1050u2a(新版 ISO)qemu 筛版进行中——若通过,真机窗口可直接以 u2a 复验
+  并顺带完成 PXE 支持级"待真机复核"的清账。
 
 ### 新增发行版
 

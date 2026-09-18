@@ -57,6 +57,37 @@ func (s *Server) GetNetbootScript(ctx context.Context, request gen.GetNetbootScr
 	return gen.GetNetbootScript200TextResponse(netboot.RenderScript(e, s.ExternalURL)), nil
 }
 
+// serveGrubByMAC answers the external-PXE trampoline's configfile fetch
+// (grub expands ${net_default_mac} into the path). Mirrors the builtin
+// TFTP render hook: pending entry → per-MAC config; none → the exit
+// fallback that hands control back to the firmware boot order.
+func (s *Server) serveGrubByMAC(c *gin.Context) {
+	ctx := c.Request.Context()
+	mac := netboot.NormalizeMAC(c.Param("mac"))
+	if mac == "" {
+		c.Data(http.StatusOK, "text/plain; charset=utf-8",
+			[]byte(netboot.NoEntryGRUB(c.Param("mac"))))
+		return
+	}
+	e, err := s.Netboot.Entry(ctx, mac)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	if e == nil {
+		c.Data(http.StatusOK, "text/plain; charset=utf-8",
+			[]byte(netboot.NoEntryGRUB(mac)))
+		return
+	}
+	s.Events.Append(ctx, "task", e.TaskID, "task.netboot_grub_served", map[string]any{
+		"mac": mac, "kind": e.Kind,
+	})
+	obs.FromContext(ctx).InfoContext(ctx, "netboot grub config served",
+		obs.FieldTaskID, e.TaskID, "mac", mac, "kind", e.Kind)
+	c.Data(http.StatusOK, "text/plain; charset=utf-8",
+		[]byte(netboot.RenderGRUB(e, s.ExternalURL)))
+}
+
 // FetchNetbootFile serves the per-task boot tree. Two grant shapes live in
 // the entry: flat file names (kernel/initrd) and subtree grants
 // (Extra value "dir:apks" → everything under tree/apks/, for the probe's

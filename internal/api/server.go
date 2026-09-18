@@ -120,6 +120,15 @@ func New(d Deps, apiToken string) *gin.Engine {
 			_ = resp.VisitFetchNetbootFileResponse(c.Writer)
 		})
 	}
+	// Per-MAC GRUB config over HTTP — the external-PXE escape hatch's
+	// dynamic half (docs/operations.md §pxe-external): the site TFTP serves
+	// a static trampoline that configfiles (http,mammoth)/netboot/grub/<mac>
+	// with grub's ${net_default_mac} expansion, landing here where the same
+	// render as the builtin TFTP hook applies (entry → config, none → exit
+	// to disk). Public like the other /netboot machine-face routes.
+	router.GET("/netboot/grub/:mac", func(c *gin.Context) {
+		srv.serveGrubByMAC(c)
+	})
 	// Shared pool trees (content-addressed by the image sha256, docs §3.3):
 	// the tree holds public distro content — the official ISO unpack plus
 	// mammoth's pool signing key deb — so the sha in the path is an address,

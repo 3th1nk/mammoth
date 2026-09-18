@@ -183,8 +183,17 @@
    agent 包集参数留驱动内、ubuntu 架构修正(amd64-only,live-server 无
    arm64 介质)。完整决策记录见 docs/06 §6;池能力建模(boot_pool vs
    system_pool)结论留在 docs/12 §6 备用;
-4. **PXE 余项的 qemu 可验部分**:外部 DHCP+TFTP 逃生门(mammoth 不能当
-   PXE 服务的部署形态;网桥 + dnsmasq 同型验证)、arm64 引导链(qemu
+4. **PXE 余项的 qemu 可验部分**:~~外部 DHCP+TFTP 逃生门~~ **✅ 已落地并
+   qemu 同型验证(2026-09-18)**——`MAMMOTH_PXE_MODE=external`:mammoth
+   零 UDP 绑定(纯 HTTP 面),站点 dnsmasq 承担真 DHCP+TFTP,静态 kit
+   (NBP+grub 模块+两枚蹦床+dnsmasq 模板)启动时导出到
+   MediaDir/netboot/external-tftp;客户端自报身份缝合动态决策(iPXE
+   ${net0/mac} → /netboot/script?mac=、grub ${net_default_mac} → 新增
+   /netboot/grub/<mac> HTTP 端点,与 builtin TFTP 渲染同源);SB 链保持
+   (shim/grub Debian 签名不变);代价:option 93 观测失效(enroll 不受
+   影响)。docker 网桥+dnsmasq+UEFI guest 经外部链完成 alpine agent 全装
+   (六阶段绿),harness scripts/pxe-dev/external-e2e.sh;部署文档
+   operations.md §4.5.1。arm64 引导链(qemu
    AAVMF + TCG 源级验链路,opt 93 = 0x000B,真机回归后补;信创混合机群
    刚需,无真机前 option 93 固件观测先行积累);~~ubuntu/debian PXE 化~~
    ✅ 已入 v1.0(2026-09-17 真机闭环);

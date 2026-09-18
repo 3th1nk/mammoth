@@ -114,9 +114,10 @@ func TestRenderUniontechosRunsGraphical(t *testing.T) {
 	in := render.InstallInputs{
 		AnswerBaseURL: "https://m/render/t", CompleteURL: "https://m/render/t/complete",
 		ImageSource: "file:///run/install/repo", BootDrive: "sda",
-		Disks: []render.ResolvedDisk{{Device: "sda", Wipe: true, Partitions: []render.ResolvedPartition{
-			{Mount: "/", FS: "xfs", Grow: true},
-		}}},
+		Disks: []render.ResolvedDisk{{Device: "sda", Wipe: true, SizeBytes: 214748364800,
+			Partitions: []render.ResolvedPartition{
+				{Mount: "/", FS: "xfs", Grow: true},
+			}}},
 	}
 	answers, boot, err := d.RenderAnswers(in, render.MachineView{ID: "mch_x"})
 	if err != nil {
@@ -134,9 +135,16 @@ func TestRenderUniontechosRunsGraphical(t *testing.T) {
 	}
 	// No swap declared: UOS's customized bootloader module crashes the
 	// Finish task group on `max(swap_devices)` over an empty sequence, so
-	// the driver must append one.
-	if !strings.Contains(ks, "part swap --fstype=swap --size=2048") {
-		t.Errorf("uniontechos without a declared swap must get one appended")
+	// the driver must append one — pinned to the boot disk and inside the
+	// grow budget (an unpinned line outside the budget pushed the total
+	// request past the disk on the real 2288H: "Unable to allocate
+	// requested partition scheme").
+	if !strings.Contains(ks, "part swap --fstype=swap --ondisk=sda --size=2048") {
+		t.Errorf("uniontechos without a declared swap must get one appended to the boot disk")
+	}
+	// The grow partition's explicit size must have shrunk by the swap.
+	if !strings.Contains(ks, "part / --fstype=xfs --ondisk=sda --size=202240") {
+		t.Errorf("grow partition must carry the explicit size with the 2G swap deducted from the budget")
 	}
 
 	// A spec that declares its own swap is honored as-is — no second one.

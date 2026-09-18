@@ -13,7 +13,7 @@
 | **银河麒麟 V10**(Server V10 SP3 2403) | `kylinv10` | Anaconda(RHEL8 代际 + NM 1.18) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`) | MAC(渲染层带 NM 修复段) | ⚠️ 受限:静态网络自动化卡死在 NM(见注记);**中文 NFS 路径经 anaconda 层已验证可用** |
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
 | Debian 12 | `debian12` | debian-installer | preseed(`file=/cdrom/preseed.cfg`) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | 无(netcfg 不按 MAC 选口,单接口) | ✅ 真机跑通 |
-| 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,真机复验随窗口) | MAC → 接口名在 %pre 安装期解析 | **full(真机闭环 2026-09-19,虚拟介质零人工)**;⚠️ **方言约束:仅图形前端可用**——text 模式(text 指令/inst.text)下 UOS anaconda 自动分区建出 FAT16 而非 swap 且 Finish 组崩溃,驱动已强制 graphical(见下方根因节) |
+| 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(真机复核 2026-09-19) | MAC → 接口名在 %pre 安装期解析 | **full(真机闭环 2026-09-19:虚拟介质 + PXE 双通路零人工)**;⚠️ **方言约束:仅图形前端可用**——text 模式(text 指令/inst.text)下 UOS anaconda 自动分区建出 FAT16 而非 swap 且 Finish 组崩溃,驱动已强制 graphical(见下方根因节) |
 | Windows | — | Setup | unattend | full(目标) | — | 未开始 |
 
 ## 保留分区支持语义(SupportLevel)
@@ -222,8 +222,8 @@ mini.iso)提供驱动支持。
   - 附带:介质目录迁 /data(18G 的 / 放不下 8.2G ISO 拷贝;nfs:// 源
     EnsureISO 会落本地);水位闸显示错误顺修;1050u2a 的 33.19 anaconda
     在 qemu TCG 下 Storage 模块 600s 启动超时,qemu 不可筛。
-- **恢复路径**:~~真机复验~~ **✅ 已闭环**;1050u2a 复验与 PXE 支持级
-  "待真机复核"随下一窗口顺带。
+- **恢复路径**:~~真机复验~~ **✅ 已闭环(虚拟介质 + PXE 双通路)**;
+  仅余 1050u2a 复验随下一窗口顺带。
 - **⚠️ 长期方言约束(已由驱动强制,人工排查/手写 ks 时必须遵守)**:
   uniontechos **只能用图形前端**(`graphical` 指令、内核参数**不得带
   `inst.text`**)。text 模式两处已证实的坑:①Finish 任务组
@@ -242,7 +242,8 @@ mini.iso)提供驱动支持。
 
 | 发行版 | PXE 支持级 | 说明 |
 |--------|-----------|------|
-| rocky9 / centos7 / kylinv10 / kylinv11 / uniontechos | full | anaconda/dracut 内核对网络引导原生;`inst.repo=nfs:` 安装源复用 nfsx 导出,`inst.ks=` 走 HTTP,与 ISO 通路零差异 |
+| rocky9 / centos7 / kylinv10 / kylinv11 | full | anaconda/dracut 内核对网络引导原生;`inst.repo=nfs:` 安装源复用 nfsx 导出,`inst.ks=` 走 HTTP,与 ISO 通路零差异 |
+| uniontechos | full(**真机复核 2026-09-19**,2288H 零人工闭环,~6 min:NFS 线速 vs 虚拟光驱 35 min) | 同 kickstart 家族机制(shim 链 + per-MAC cfg + `inst.repo=nfs:`);装机期静态网内核参数(ifname 钉 MAC)与虚拟介质轮共用 |
 | rocky10(UEFI-only 媒体) | full | 引导文件同为 `images/pxeboot/*`,UEFI 侧无虞;BIOS 引导上游已移除(镜像 UEFI-only),不做 BIOS PXE。驱动声明 `FirmwareUEFIOnly`,派给观测为 BIOS 固件的机器在提交期即被 `SCHEMA_FIRMWARE_MISMATCH` 拒绝(不阻塞同批其他机器) |
 | ubuntu22/24 | full(**真机闭环 2026-09-17**,2288H:22.04 零人工重装 + 24.04 重装+重启自举+SSH 钥匙直通) | casper kernel/initrd 从 ISO 提取;**NFS squashfs 源**——ISO 解包至共享池树,casper `netboot=nfs nfsroot=` 挂载 live root,不做整 ISO 进内存(4GB 级 tmpfs 写满教训);nfsopts 强制 `tcp,v3`(klibc nfsmount 默认 UDP,现代 nfsd 无 v3/UDP);`BOOTIF=01-<mac>` 按 MAC 钉设备(udev 改名致 ipconfig 打空);内核参数分号转义(GRUB 把 `;` 当命令分隔符,`ds=nocloud-net;s=` 之后参数全丢);spec 静态网络翻译为 ip= 内核参数(site-DHCP 共存环境 mammoth 不做地址权威);**qemu 实测注记**:casper NFS 语法为 `boot=nfs nfsroot=host:/path`(冒号必需);macOS nfsd(UDP-only)不可作验证宿主,真机 Linux nfsd 无此限制 |
 | debian12/13 | full(**真机闭环 2026-09-17**,debian13 trixie,2288H:零人工六阶段全绿、重启无人值守自举) | **载体 = d-i 官方 netboot.tar.gz**(`MAMMOTH_PXE_DI_NETBOOT`;ISO 自带 initrd 为 cdrom flavour,网络上不可用);**安装源 = ISO 解包为签名 HTTP 池**(mammoth 池钥匙重签 Release,armor detached;钥匙经 mammoth-key deb 随 debootstrap 进 target——trixie 无 apt-udeb,apt-setup 的 verify 在 chroot /target 跑),preseed mirror 指向池——离线语义保持,不上游镜像;装后收尾:池行显式 signed-by、容忍配置清除、update-grub 兜底;**实测注记**:netinst 池裁剪 netboot 专用 udeb(kernel-modules-di 等),纯 ISO 池需 archive 补齐(fill-udebs 机制);netcfg 走内核参数(preseed/url 在 netcfg 后加载);by-hash 货栈需回填(ISO 声明 Acquire-By-Hash 却不带货栈) |

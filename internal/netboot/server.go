@@ -67,6 +67,17 @@ type Options struct {
 	// never a lifeline (unlike DHCP/TFTP there is no boot stranded by its
 	// absence).
 	SyslogPort int
+	// ExternalOnly is the escape-hatch mode for deployment shapes where
+	// mammoth cannot be the PXE service (containerized without privileged
+	// UDP, or an operations team that owns DHCP/TFTP): only HTTP is served
+	// by mammoth, an external DHCP+TFTP (dnsmasq) delivers the static boot
+	// chain, and client identity self-reports through the trampolines the
+	// ExportExternalKit materializes (iPXE ${net0/mac} → /netboot/script,
+	// grub ${net_default_mac} → /netboot/grub). No DHCP is seen, so option-93
+	// firmware observation never fires; the script endpoint's enrollment
+	// fallback still works (identity is client-supplied). ExportExternalKit
+	// is the companion the deployment ships to the TFTP root.
+	ExternalOnly bool
 	// Log receives service diagnostics; nil defaults to slog.Default().
 	Log *slog.Logger
 }
@@ -97,8 +108,10 @@ type ioCloser interface{ Close() error }
 // external escape hatch, a silent downgrade would strand machines at the
 // PXE prompt.
 func Start(ctx context.Context, opts Options) (*Server, error) {
-	if v4 := opts.NextServer.To4(); v4 == nil {
-		return nil, fmt.Errorf("netboot: NextServer must be an IPv4 address")
+	if !opts.ExternalOnly {
+		if v4 := opts.NextServer.To4(); v4 == nil {
+			return nil, fmt.Errorf("netboot: NextServer must be an IPv4 address")
+		}
 	}
 	if opts.DHCPPort == 0 {
 		opts.DHCPPort = 67
@@ -121,6 +134,37 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 		log:   log,
 		nbpOK: map[string]bool{},
 		done:  make(chan error, 1),
+	}
+
+	if opts.ExternalOnly {
+		// Escape hatch: no UDP ownership. The syslog sink still binds —
+		// diagnostics only, same degradation semantics as builtin mode.
+		s.closers = []ioCloser{}
+		syslogDone := make(chan struct{})
+		if syslogConn, serr := net.ListenUDP("udp4", &net.UDPAddr{Port: opts.SyslogPort}); serr != nil {
+			log.Warn("netboot: installer syslog sink unavailable (install logs stay lost with the ramfs)",
+				"port", opts.SyslogPort, "err", serr.Error())
+			close(syslogDone)
+		} else {
+			s.closers = append(s.closers, syslogConn)
+			go s.serveSyslog(ctx, syslogConn, syslogDone)
+		}
+		go func() {
+			<-ctx.Done()
+			for _, c := range s.closers {
+				c.Close()
+			}
+			// Mirror the builtin shutdown: ctx cancellation reports nil.
+			if err := ctx.Err(); errors.Is(err, context.Canceled) {
+				s.done <- nil
+			} else {
+				s.done <- ctx.Err()
+			}
+		}()
+		log.Info("netboot service started (external: DHCP/TFTP owned by the site; mammoth serves HTTP only)",
+			"base_url", opts.BaseURL,
+			"syslog_port", opts.SyslogPort)
+		return s, nil
 	}
 
 	dhcpConn, err := listenReuse(opts.DHCPPort)

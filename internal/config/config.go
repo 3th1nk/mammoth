@@ -144,9 +144,16 @@ type Config struct {
 	// are deployment concerns — see docs/operations.md.
 	PXEEnabled    bool
 	PXENextServer string // mammoth's IPv4 on the provisioning L2 (DHCP next-server); derived from ExternalURL when it is an IP literal
-	PXEDHCPPort   int    // proxyDHCP listen (default 67)
-	PXETFTPPort   int    // NBP transfer (default 69)
-	PXEProxyPort  int    // PXE boot-server discovery (default 4011)
+	// PXEMode selects who owns the UDP side of PXE (MAMMOTH_PXE_MODE):
+	// builtin (default) — mammoth's proxyDHCP+TFTP; external — the escape
+	// hatch for shapes where mammoth cannot be the PXE service (site
+	// dnsmasq owns DHCP+TFTP, mammoth serves HTTP only; the static kit is
+	// exported to MediaDir/netboot/external-tftp at startup,
+	// docs/operations.md §pxe-external).
+	PXEMode      string
+	PXEDHCPPort  int // proxyDHCP listen (default 67)
+	PXETFTPPort  int // NBP transfer (default 69)
+	PXEProxyPort int // PXE boot-server discovery (default 4011)
 	// PXESyslogPort is the installer-log sink port (MAMMOTH_PXE_SYSLOG_PORT,
 	// default 514): d-i forwards its ramfs syslog here via the syslog= kernel
 	// argument, and lines that resolve to an armed task land in task_logs —
@@ -304,6 +311,7 @@ func FromEnv() (Config, error) {
 	applyBool(&c.RamdiskEnabled, "MAMMOTH_RAMDISK_ENABLED", &errs)
 	applyBool(&c.NFSExportEnabled, "MAMMOTH_NFS_EXPORT", &errs)
 	applyBool(&c.PXEEnabled, "MAMMOTH_PXE_ENABLED", &errs)
+	applyString(&c.PXEMode, "MAMMOTH_PXE_MODE", &errs)
 	applyString(&c.PXENextServer, "MAMMOTH_PXE_NEXT_SERVER", &errs)
 	applyString(&c.PXEDHCPPool, "MAMMOTH_PXE_DHCP_POOL", &errs)
 	applyString(&c.PXEDHCPRouter, "MAMMOTH_PXE_DHCP_ROUTER", &errs)
@@ -321,11 +329,22 @@ func FromEnv() (Config, error) {
 	if c.DatabaseURL == "" {
 		return c, fmt.Errorf("config: MAMMOTH_DATABASE_URL is required")
 	}
+	switch c.PXEMode {
+	case "":
+		c.PXEMode = "builtin"
+	case "builtin", "external":
+	default:
+		return c, fmt.Errorf("config: invalid MAMMOTH_PXE_MODE %q (want builtin|external)", c.PXEMode)
+	}
+	if c.PXEMode == "external" && c.PXEDHCPPool != "" {
+		return c, fmt.Errorf("config: MAMMOTH_PXE_MODE=external owns no DHCP — unset MAMMOTH_PXE_DHCP_POOL (the site dnsmasq serves leases)")
+	}
 	// PXE needs an IPv4 next-server for the DHCP replies. Derive it from
 	// ExternalURL when that is an IP literal; otherwise require it — a
 	// hostname cannot go into siaddr/option 66, and failing at configure
-	// time beats failing on the first PXE boot.
-	if c.PXEEnabled && c.PXENextServer == "" {
+	// time beats failing on the first PXE boot. External mode never speaks
+	// DHCP (the site server fills next-server), so no requirement there.
+	if c.PXEEnabled && c.PXEMode == "builtin" && c.PXENextServer == "" {
 		if host, _, splitErr := net.SplitHostPort(strings.TrimSuffix(c.ExternalURL, "/")); splitErr == nil {
 			c.PXENextServer = host
 		} else if u, uerr := url.Parse(c.ExternalURL); uerr == nil {

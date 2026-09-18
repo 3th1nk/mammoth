@@ -179,6 +179,46 @@ iPXE 脚本),默认关闭。启用清单:
    `netboot_enabled` 与任务事件的 `task.netboot_registered`,再抓 DHCP
    (DISCOVER 是否到达、OFFER 是否回出)。
 
+### 4.5.1 外部 DHCP+TFTP 逃生门(MAMMOTH_PXE_MODE=external)
+
+mammoth 不可能总当 PXE 服务:容器化部署拿不到特权 UDP、或站点网络归运维
+团队管。external 模式把 mammoth 缩到纯 HTTP 面,UDP 侧(真 DHCP + TFTP)
+交給站点 dnsmasq——**mammoth 零 UDP 绑定**,引导项注册、per-MAC 决策、
+ enrollment、装机链路全部不变。
+
+```sh
+MAMMOTH_PXE_ENABLED=true
+MAMMOTH_PXE_MODE=external        # builtin(默认)| external
+# MAMMOTH_PXE_NEXT_SERVER 与 MAMMOTH_PXE_DHCP_POOL 在此模式下不需要(也不允许)
+```
+
+启动时 mammoth 把**静态 TFTP kit** 导出到 `MediaDir/netboot/external-tftp/`:
+
+```
+undionly.kpxe            # BIOS:PXE ROM → iPXE
+shimx64.efi grubx64.efi  # UEFI x64 Secure Boot 链(Microsoft/Debian 签名)
+grub/x86_64-efi/…        # grubnet 模块表
+boot.ipxe                # iPXE 蹦床:chain .../netboot/script?mac=${net0/mac}
+grub/grub.cfg            # grub 蹦床:configfile (http,mammoth)/netboot/grub/${net_default_mac}
+dnsmasq.conf.example     # 站点 dnsmasq 配置模板(tag 路由已写好)
+```
+
+部署三步:①把 kit 目录同步给站点 TFTP(如 dnsmasq 的 tftp-root);②按
+`dnsmasq.conf.example` 配站点 dnsmasq(真实地址池 + tag 路由:BIOS→
+undionly→iPXE→蹦床,UEFI x64→shim→grub→蹦床,iPXE 类→boot.ipxe);
+③蹦床里的 HTTP 地址已按 `MAMMOTH_EXTERNAL_URL` 填好,保证客户端可达即可。
+
+原理:**客户端自报身份**。mammoth 不参与 DHCP 就看不到 MAC,两个蹦床让
+客户端把 MAC 放进 URL——iPXE 展开 `${net0/mac}`,grub 展开
+`${net_default_mac}`——落回与 builtin 模式完全相同的 HTTP 端点
+(`/netboot/script?mac=`、`/netboot/grub/<mac>`),entry 注册、enroll
+回落、无 entry 即退出回盘的语义原样生效。**模式代价**:mammoth 看不到
+DHCP,option 93 固件观测不工作(观测档案不更新);多 NIC 主机上 iPXE 的
+`net0` 未必是 PXE 出口网卡,错位时查无 entry、机器回盘(蹦床注释已注明)。
+
+qemu 同型验证(网桥 + dnsmasq + UEFI guest 经此链完成 alpine agent 全装)
+见 `scripts/pxe-dev/external-e2e.sh`。
+
 ## 4.6 HTTPS 终止(生产)
 
 mammoth 自身监听 HTTP(distroless 内无证书管理),生产要求 HTTPS 在反向代理

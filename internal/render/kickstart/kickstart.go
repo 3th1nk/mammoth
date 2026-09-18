@@ -606,6 +606,41 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		}
 		return "", false
 	}
+	// UOS's customized bootloader module crashes when the installed system
+	// carries no swap: their resume= boot-arg task runs
+	// `max(swap_devices, ...)` unguarded on x86 (an operator-precedence slip
+	// in `is_x86() or is_loongarch() and swap_devices`, so the emptiness
+	// check never binds) and an empty swap list kills the Finish task group
+	// with "max() arg is an empty sequence" — reproduced in qemu against the
+	// exact ISO the 2288H run used (scripts/uos-dev/). The swap is injected
+	// into the boot drive's partition list BEFORE the part lines are built,
+	// so the grow math reserves room for it: a bare `part swap` appended
+	// after the lines (no --ondisk, no budget) pushed the total request past
+	// the disk on the real 2288H and anaconda rejected the whole scheme with
+	// "Unable to allocate requested partition scheme". Skipped when the spec
+	// declares its own swap; non-uniontechos drivers are untouched.
+	if d.distro == "uniontechos" && !declaresSwap(in) {
+		idx := -1
+		for i := range in.Disks {
+			if in.Disks[i].Wipe && in.Disks[i].Device == in.BootDrive {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			for i := range in.Disks {
+				if in.Disks[i].Wipe {
+					idx = i
+					break
+				}
+			}
+		}
+		if idx >= 0 {
+			parts := append([]render.ResolvedPartition(nil), in.Disks[idx].Partitions...)
+			in.Disks[idx].Partitions = append(parts,
+				render.ResolvedPartition{Mount: "swap", FS: "swap", SizeMB: 2048})
+		}
+	}
 	for _, disk := range in.Disks {
 		switch {
 		case disk.KeepDisk:
@@ -782,20 +817,6 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		storageShellText = storageShell(dyn, wipe, dynMemberLines, bootDrive)
 		bootDrive = "" // the bootloader line moves into the include
 		wipe = nil     // clearpart is emitted by the include for all disks
-	}
-
-	// UOS's customized bootloader module crashes when the installed system
-	// carries no swap: their resume= boot-arg task runs
-	// `max(swap_devices, ...)` unguarded on x86 (an operator-precedence slip
-	// in `is_x86() or is_loongarch() and swap_devices`, so the emptiness
-	// check never binds) and an empty swap list kills the Finish task group
-	// with "max() arg is an empty sequence" — reproduced in qemu against the
-	// exact ISO the 2288H run used (scripts/uos-dev/). If nothing in the
-	// spec declared a swap partition, append a modest one; anaconda picks
-	// the drive, which keeps this safe for the dynamic-%include path too.
-	// Upstream-lineage installers don't run this code and are untouched.
-	if d.distro == "uniontechos" && !declaresSwap(in) {
-		partLines = append(partLines, "part swap --fstype=swap --size=2048")
 	}
 
 	// kickstart's `url` command speaks only http/https/ftp — an NFS-hosted

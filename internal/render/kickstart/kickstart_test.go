@@ -104,6 +104,57 @@ func TestRenderWipeStorageAndBond(t *testing.T) {
 	}
 }
 
+// UOS's customized anaconda crashes in the Finish task group under the
+// text frontend (max() arg is an empty sequence — reproduced in qemu,
+// scripts/uos-dev/): uniontechos must render graphical and must not carry
+// inst.text on the kernel command line, while the rest of the family keeps
+// text. This is the regression pin for the uniontechos unlock.
+func TestRenderUniontechosRunsGraphical(t *testing.T) {
+	d := New("uniontechos")
+	in := render.InstallInputs{
+		AnswerBaseURL: "https://m/render/t", CompleteURL: "https://m/render/t/complete",
+		ImageSource: "file:///run/install/repo", BootDrive: "sda",
+		Disks: []render.ResolvedDisk{{Device: "sda", Wipe: true, Partitions: []render.ResolvedPartition{
+			{Mount: "/", FS: "xfs", Grow: true},
+		}}},
+	}
+	answers, boot, err := d.RenderAnswers(in, render.MachineView{ID: "mch_x"})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	ks := answers[0].Content
+	if strings.Contains(boot.KernelArgs, "inst.text") {
+		t.Errorf("uniontechos must not boot with inst.text (text frontend crashes the Finish group): %q", boot.KernelArgs)
+	}
+	if !strings.Contains(ks, "\ngraphical\n") {
+		t.Errorf("uniontechos kickstart must run graphical: %q", ks[:120])
+	}
+	if strings.Contains(ks, "\ntext\n") {
+		t.Errorf("uniontechos kickstart must not carry the text directive")
+	}
+	// No swap declared: UOS's customized bootloader module crashes the
+	// Finish task group on `max(swap_devices)` over an empty sequence, so
+	// the driver must append one.
+	if !strings.Contains(ks, "part swap --fstype=swap --size=2048") {
+		t.Errorf("uniontechos without a declared swap must get one appended")
+	}
+
+	// A spec that declares its own swap is honored as-is — no second one.
+	in2 := in
+	in2.Disks = []render.ResolvedDisk{{Device: "sda", Wipe: true,
+		Partitions: []render.ResolvedPartition{
+			{Mount: "/", FS: "xfs", Grow: true},
+			{FS: "swap", SizeMB: 4096},
+		}}}
+	answers2, _, err := d.RenderAnswers(in2, render.MachineView{ID: "mch_x"})
+	if err != nil {
+		t.Fatalf("render with declared swap: %v", err)
+	}
+	if got := strings.Count(answers2[0].Content, "--fstype=swap"); got != 1 {
+		t.Errorf("declared swap must be honored exactly once, got %d", got)
+	}
+}
+
 func TestRenderStaticAddressAndCIDR(t *testing.T) {
 	d := New("rocky9")
 	in := render.InstallInputs{

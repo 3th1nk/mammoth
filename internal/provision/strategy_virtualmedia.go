@@ -73,7 +73,7 @@ func (s *virtualMediaStrategy) prepare(ctx context.Context, b *bootSession) erro
 	if avail, ok := freeMB(e.MediaDir); ok && avail < int64(isoStat.Size()/1048576) {
 		return classifiedErr("MEDIA_NO_SPACE", true,
 			"media repo %s needs ~%d MB free for the boot ISO, %d MB available",
-			e.MediaDir, isoStat.Size()/1048576, avail/1048576)
+			e.MediaDir, isoStat.Size()/1048576, avail)
 	}
 	if berr := buildBootISO(ctx, distroISO, outputPath, b.Boot.KernelArgs, seed, buildWork); berr != nil {
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,

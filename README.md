@@ -87,7 +87,7 @@ flowchart TD
 | rocky 10 | kickstart | DVD ISO, UEFI-only layout | same | same | qemu ✅ · real pending |
 | centos 7 | kickstart | minimal ISO | same ISO | same | ✅ vMedia |
 | kylin V10 / V11 | kickstart | DVD ISO | same ISO | same | pending |
-| UOS | kickstart | DVD ISO | same ISO | NFS ISO | ✅ vMedia |
+| UOS | kickstart | DVD ISO | same ISO | NFS ISO | ✅ both |
 | ubuntu 22.04 / 24.04 | autoinstall | **live-server** ISO (casper, repacked) | **live-server** ISO (squashfs over NFS) | unpacked ISO tree over NFS | ✅ both |
 | debian 12 / 13 | preseed | **netinst** ISO (repacked) | **netinst** ISO (signed HTTP pool) **+ official netboot.tar.gz** + staged udebs | HTTP pool (checksum-complete, by-hash backfilled) | ✅ both |
 

@@ -36,6 +36,9 @@ func (s *Server) PerformMachineAction(ctx context.Context, request gen.PerformMa
 	if err != nil {
 		return nil, err
 	}
+	if err := s.validateBiosConfirm(actionRaw, aType); err != nil {
+		return nil, err
+	}
 	jobType := "power"
 	flow := provision.FlowPower
 	if aType == "discover" {
@@ -380,11 +383,37 @@ func encodeAction(body *gen.ActionRequest) (json.RawMessage, string, error) {
 	_ = json.Unmarshal(b, &probe)
 	switch probe.Type {
 	case "discover", "power_on", "power_off", "soft_off", "reboot", "hard_reboot",
-		"cycle", "set_boot_device", "mount_media", "eject_media":
+		"cycle", "set_boot_device", "mount_media", "eject_media", "set_bios_attributes":
 		return b, probe.Type, nil
 	default:
 		return nil, "", verr("SCHEMA_INVALID_ACTION", "unknown action type %q", probe.Type)
 	}
+}
+
+// validateBiosConfirm is the two-stage contract's API half (docs/07-bmc.md
+// §6): a set_bios_attributes request must be non-empty and, when the
+// deployment policy requires it, carry the explicit confirm flag. The
+// runner adds the live-table validation on top (unknown names are rejected
+// there, against the controller's actual attribute registry).
+func (s *Server) validateBiosConfirm(actionRaw json.RawMessage, aType string) error {
+	if aType != "set_bios_attributes" {
+		return nil
+	}
+	var a struct {
+		Attributes map[string]any `json:"attributes"`
+		Confirm    bool           `json:"confirm"`
+	}
+	if err := json.Unmarshal(actionRaw, &a); err != nil {
+		return verr("SCHEMA_INVALID_ACTION", "action is not valid: %v", err)
+	}
+	if len(a.Attributes) == 0 {
+		return verr("SCHEMA_INVALID_ACTION", "set_bios_attributes requires a non-empty attributes object")
+	}
+	if s.BiosConfirmRequired && !a.Confirm {
+		return verrStatus(422, "BIOS_CONFIRM_REQUIRED",
+			"set_bios_attributes is high-risk and requires \"confirm\": true (deployment policy %q)", "required")
+	}
+	return nil
 }
 
 // validateInstallSpec: the structural half of the storage constraints from

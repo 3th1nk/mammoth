@@ -59,6 +59,9 @@ type Deps struct {
 	// in capabilities (empty/false when the netboot path is not configured).
 	BootStrategyDefault string
 	NetbootEnabled      bool
+	// BiosConfirmRequired gates set_bios_attributes submissions (two-stage
+	// confirmation, docs/07-bmc.md §6); surfaced in capabilities.
+	BiosConfirmRequired bool
 
 	// Visibility is the lease window used when re-enqueueing retried tasks.
 	Visibility time.Duration
@@ -226,6 +229,12 @@ func (s *Server) GetCapabilities(ctx context.Context, _ gen.GetCapabilitiesReque
 	if s.NetbootEnabled {
 		out.NetbootEnabled = &s.NetbootEnabled
 	}
+	biosConfirm := "required"
+	if !s.BiosConfirmRequired {
+		biosConfirm = "optional"
+	}
+	out.BiosSetConfirm = (*gen.CapabilitiesBiosSetConfirm)(str(biosConfirm))
+
 	return gen.GetCapabilities200JSONResponse(out), nil
 }
 

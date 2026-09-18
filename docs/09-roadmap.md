@@ -164,12 +164,18 @@
    FirmwareInventory 宽容 walk,取数器注入纯函数可测)+ fake 脚本化
    (FirmwareList 字段 + FailOps)+ discover 采集落 machines.firmware
    (迁移 00008)+ 契约只追加 `machine.firmware`(gen 再生,ipmi 缺能力
-   即无数据盘查不失败);qemu 冒烟全链(注册→盘查→API 出固件)。→
-   **BiosSetter**(高危动作引入两段式确认契约——请求显式确认
-   标志 + 服务端二次校验,做成 API 策略开关供全自动化调用方关闭;fake 先
-   行开发,攒 2288H 回归窗口一次落)→ **NIST 800-88 擦盘**(破坏性,移队
-   尾,等把握窗口顺带测,LSI secure erase 支持未知);两段式契约的 API 形
-   态在 1 的结论之后定稿,避免返工;
+   即无数据盘查不失败);qemu 冒烟全链(注册→盘查→API 出固件)。
+   **BiosSetter ✅ 已落地(2026-09-18,fake 先行,真机回归随 2288H 窗口)**——
+   `BiosSetter` 可选能力(Bios 属性表读 + @Redfish.Settings 设置对象
+   PATCH:ETag If-Match、读改写保 pending、202 任务轮询;redfish 实装 +
+   fake 脚本化);两段式确认契约定稿(高危动作范式,NIST 800-88 沿用):
+   请求 `confirm:true`(默认策略缺省 422 BIOS_CONFIRM_REQUIRED 不建 job,
+   MAMMOTH_BIOS_CONFIRM=optional 供全自动调用方关第一道)+ runner 活表
+   二次校验(永在):未知属性整体拒 BIOS_ATTRIBUTE_UNKNOWN、同值 no-op
+   不下发、只写真差集;`GET /machines/{id}/bios` 活读端点;契约追加
+   ActionSetBiosAttributes / BiosView / Capabilities.bios_set_confirm;
+   冒烟全链绿。→ **NIST 800-88 擦盘**(破坏性,移队尾,等把握窗口顺带
+   测,LSI secure erase 支持未知);
 3. ~~**发行版接入声明化**~~ **✅ 已评估并收敛(2026-09-18)**——曾全量
    落地 distros.json(12 发行版声明化),评估后同日 revert 收敛为类型化
    Go 注册表:接入成本在模板 Go + 真机验证而非注册面(三方言连环修为

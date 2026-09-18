@@ -273,6 +273,35 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
 
+  /api/v1/machines/{id}/bios:
+    get:
+      operationId: getMachineBios
+      tags: [machines]
+      summary: Live BIOS attribute table
+      description: |
+        Reads the controller's BIOS attribute table synchronously (the same
+        out-of-band path the actions use; docs/07-bmc.md §6). Values keep
+        the vendor's own JSON types and attribute names.
+      parameters:
+        - $ref: '#/components/parameters/machineId'
+      responses:
+        '200':
+          description: Current attribute table.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BiosView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '502':
+          description: BMC error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
   /api/v1/machines/{id}/console:
     parameters:
       - $ref: '#/components/parameters/machineId'
@@ -1136,6 +1165,13 @@ components:
         version:
           type: string
           description: Contract version served by this instance.
+        bios_set_confirm:
+          type: string
+          description: The set_bios_attributes confirmation policy
+            (docs/07-bmc.md §6) — required rejects submissions without the
+            explicit confirm flag; optional keeps only the runner-side
+            live-table validation.
+          enum: [required, optional]
         resources:
           type: array
           items:
@@ -1609,6 +1645,38 @@ components:
         ramdisk is optional (docs/05-inventory.md §4) and requires the
         alpine carrier (MAMMOTH_PROBE_ALPINE_ISO) with MAMMOTH_RAMDISK_ENABLED.
 
+    BiosView:
+      type: object
+      required: [attributes]
+      properties:
+        attributes:
+          type: object
+          additionalProperties: true
+          description: The controller's attribute table (vendor keys, vendor JSON value types).
+
+    ActionSetBiosAttributes:
+      type: object
+      description: |
+        Write pending BIOS attribute values (docs/07-bmc.md §6). HIGH-RISK:
+        the two-stage contract requires the explicit confirm flag unless the
+        deployment sets MAMMOTH_BIOS_CONFIRM=optional; the runner re-reads
+        the live attribute table and rejects unknown names. Values are
+        pending — the BMC applies them at the next boot.
+      required: [type, attributes]
+      properties:
+        type:
+          type: string
+          enum: [set_bios_attributes]
+        attributes:
+          type: object
+          description: Attribute names per the controller's own registry; values keep the vendor's JSON types.
+          additionalProperties: true
+          minProperties: 1
+        confirm:
+          type: boolean
+          default: false
+          description: Explicit high-risk confirmation; required by the default policy.
+
     ActionRequest:
       oneOf:
         - $ref: '#/components/schemas/ActionDiscover'
@@ -1621,6 +1689,7 @@ components:
         - $ref: '#/components/schemas/ActionSetBootDevice'
         - $ref: '#/components/schemas/ActionMountMedia'
         - $ref: '#/components/schemas/ActionEjectMedia'
+        - $ref: '#/components/schemas/ActionSetBiosAttributes'
       discriminator:
         propertyName: type
         mapping:
@@ -1634,6 +1703,7 @@ components:
           set_boot_device: '#/components/schemas/ActionSetBootDevice'
           mount_media: '#/components/schemas/ActionMountMedia'
           eject_media: '#/components/schemas/ActionEjectMedia'
+          set_bios_attributes: '#/components/schemas/ActionSetBiosAttributes'
 
     ActionDiscover:
       type: object

@@ -35,6 +35,12 @@ type BMC struct {
 	// (docs/07-bmc.md §6); defaultFirmware fills a plausible pair.
 	FirmwareList []bmc.FirmwareComponent
 
+	// BIOS is the simulated BIOS attribute table (docs/07-bmc.md §6);
+	// defaultBIOS fills a plausible set. Writes apply immediately and
+	// reject unknown attribute names (the protocol-fidelity the two-stage
+	// validation tests against).
+	BIOS map[string]any
+
 	// Failures scripts error injection: set before the call under test.
 	FailOps map[string]error
 
@@ -72,6 +78,7 @@ func (d *Driver) Add(addr string) *BMC {
 		ConsoleBaseURL: "https://fake.bmc/console",
 		Hardware:       defaultHardware(serial),
 		FirmwareList:   defaultFirmware(),
+		BIOS:           defaultBIOS(),
 	}
 	d.bmcs[addr] = b
 	return b
@@ -94,6 +101,17 @@ func defaultHardware(serial string) *bmc.HardwareView {
 			{Name: "eno2", MAC: "aa:bb:cc:dd:ee:02", SpeedMbps: 25000, LinkUp: true, PCIAddress: "0000:0c:00.0"},
 		},
 		Coverage: bmc.CoverageFull,
+	}
+}
+
+// defaultBIOS scripts a plausible attribute table so the bios read/write
+// path has stable data.
+func defaultBIOS() map[string]any {
+	return map[string]any{
+		"BootMode":           "UEFI",
+		"SrIovEnable":        false,
+		"VTdSupport":         true,
+		"PowerRestorePolicy": "LastState",
 	}
 }
 
@@ -295,6 +313,43 @@ func (d *Driver) FirmwareInventory(_ context.Context, addr string, _ bmc.Credent
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return append([]bmc.FirmwareComponent(nil), b.FirmwareList...), nil
+}
+
+// BiosAttributes reports the scripted BIOS attribute table (BiosSetter
+// read side).
+func (d *Driver) BiosAttributes(_ context.Context, addr string, _ bmc.Credentials) (map[string]any, error) {
+	b, err := d.get(addr, "bios_attributes")
+	if err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make(map[string]any, len(b.BIOS))
+	for k, v := range b.BIOS {
+		out[k] = v
+	}
+	return out, nil
+}
+
+// SetBiosAttributes applies the requested values immediately, rejecting
+// unknown attribute names the way a controller's attribute registry does.
+func (d *Driver) SetBiosAttributes(_ context.Context, addr string, _ bmc.Credentials, attrs map[string]any) error {
+	b, err := d.get(addr, "set_bios_attributes")
+	if err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for k := range attrs {
+		if _, ok := b.BIOS[k]; !ok {
+			return &bmc.Error{Kind: bmc.KindProtocolError, Op: "set_bios_attributes",
+				Detail: "unknown BIOS attribute: " + k}
+		}
+	}
+	for k, v := range attrs {
+		b.BIOS[k] = v
+	}
+	return nil
 }
 
 func (d *Driver) CollectInventory(_ context.Context, addr string, _ bmc.Credentials) (bmc.HardwareView, error) {

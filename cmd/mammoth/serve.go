@@ -356,6 +356,7 @@ func serve(args []string) error {
 		ExternalURL:         strings.TrimSuffix(cfg.ExternalURL, "/"),
 		BootStrategyDefault: cfg.BootStrategyDefault,
 		NetbootEnabled:      cfg.PXEEnabled && cfg.Mode.RunsNetboot(),
+		BiosConfirmRequired: cfg.BiosConfirmRequired,
 	}
 
 	errCh := make(chan error, 4)

@@ -97,3 +97,21 @@ type FirmwareInventoryProvider interface {
 	// list over an error when some entries fail to decode.
 	FirmwareInventory(ctx context.Context, addr string, cred Credentials) ([]FirmwareComponent, error)
 }
+
+// BiosSetter is the optional capability of reading and changing the
+// server's BIOS configuration through the Redfish Bios resource (attribute
+// table, vendor-neutral keys — docs/07-bmc.md §6). This is a HIGH-RISK
+// capability: wrong attribute values can brick boot. The pipeline layers
+// protections around it (two-stage confirmation, live-table validation);
+// the driver itself only speaks the protocol.
+type BiosSetter interface {
+	// BiosAttributes returns the current attribute table. Values are the
+	// vendor's own JSON types (bool/string/number) keyed by the vendor's
+	// attribute names.
+	BiosAttributes(ctx context.Context, addr string, cred Credentials) (map[string]any, error)
+	// SetBiosAttributes writes the given attributes as PENDING values —
+	// Redfish Bios semantics apply them at the next boot, not live. Keys
+	// must exist in the vendor's attribute table; unknown or read-only
+	// attributes are a protocol-level rejection.
+	SetBiosAttributes(ctx context.Context, addr string, cred Credentials, attrs map[string]any) error
+}

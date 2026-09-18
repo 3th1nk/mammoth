@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -254,12 +256,109 @@ func (e *Executor) runPowerAction(ctx context.Context, task *store.Task, job *st
 		})
 		return err
 
+	case "set_bios_attributes":
+		if len(a.Attributes) == 0 {
+			return classifiedErr("SCHEMA_INVALID_ACTION", false, "set_bios_attributes requires a non-empty attributes object")
+		}
+		return e.setBiosAttributes(ctx, task, addr, cred, proto, a.Attributes)
+
 	case "discover":
 		return e.runDiscover(ctx, task, job)
 
 	default:
 		return classifiedErr("SCHEMA_INVALID_ACTION", false, "unknown action type %s", a.Type)
 	}
+}
+
+// setBiosAttributes runs the two-stage contract's server side (docs/07-bmc.md
+// §6): re-read the LIVE attribute table, reject unknown names outright, skip
+// no-ops, and write only the real diff as pending values (applied at next
+// boot by Redfish semantics).
+func (e *Executor) setBiosAttributes(ctx context.Context, task *store.Task, addr string, cred bmc.Credentials, proto bmc.Protocol, requested map[string]any) error {
+	res, err := e.BMC.Do(ctx, addr, cred, proto, "bios_attributes", func(ctx context.Context, d bmc.Driver) (any, error) {
+		bs, ok := d.(bmc.BiosSetter)
+		if !ok {
+			return nil, &bmc.Error{Kind: bmc.KindUnsupported, Op: "bios_attributes"}
+		}
+		return bs.BiosAttributes(ctx, addr, cred)
+	})
+	if err != nil {
+		return err
+	}
+	current := res.(map[string]any)
+	diff, unknown, noops := biosDiff(current, requested)
+	if len(unknown) > 0 {
+		return classifiedErr("BIOS_ATTRIBUTE_UNKNOWN", false,
+			"attributes not in the controller's table: %v", unknown)
+	}
+	if len(diff) == 0 {
+		e.Events.Append(ctx, "task", task.ID, "task.bios_attributes", map[string]any{
+			"applied": []string{}, "noop": noops,
+			"note": "requested values already match the live table",
+		})
+		return nil
+	}
+	if _, err := e.BMC.Do(ctx, addr, cred, proto, "set_bios_attributes", func(ctx context.Context, d bmc.Driver) (any, error) {
+		bs, ok := d.(bmc.BiosSetter)
+		if !ok {
+			return nil, &bmc.Error{Kind: bmc.KindUnsupported, Op: "set_bios_attributes"}
+		}
+		return nil, bs.SetBiosAttributes(ctx, addr, cred, diff)
+	}); err != nil {
+		return err
+	}
+	e.Events.Append(ctx, "task", task.ID, "task.bios_attributes", map[string]any{
+		"applied": sortedKeys(diff), "noop": noops,
+		"note": "pending values — the BMC applies them at the next boot",
+	})
+	return nil
+}
+
+// biosDiff computes the write set against the live table: entries whose
+// current value already equals the request are no-ops; names missing from
+// the live table are rejected outright. Values compare by JSON round-trip —
+// vendor tables carry mixed JSON types (bool/string/number) and 1 != true
+// must not slip through as equal.
+func biosDiff(current, requested map[string]any) (diff map[string]any, unknown []string, noops int) {
+	diff = map[string]any{}
+	for k, want := range requested {
+		have, ok := current[k]
+		if !ok {
+			unknown = append(unknown, k)
+			continue
+		}
+		if jsonEqual(have, want) {
+			noops++
+			continue
+		}
+		diff[k] = want
+	}
+	sort.Strings(unknown)
+	return diff, unknown, noops
+}
+
+// jsonEqual compares two arbitrary JSON values semantically.
+func jsonEqual(a, b any) bool {
+	ab, aerr := json.Marshal(a)
+	bb, berr := json.Marshal(b)
+	if aerr != nil || berr != nil {
+		return false
+	}
+	var av, bv any
+	if json.Unmarshal(ab, &av) != nil || json.Unmarshal(bb, &bv) != nil {
+		return false
+	}
+	// numbers: normalize through float64 (json round-trip already does)
+	return reflect.DeepEqual(av, bv)
+}
+
+func sortedKeys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // refreshPowerState persists the observed state after a power action.

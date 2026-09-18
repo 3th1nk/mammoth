@@ -59,6 +59,11 @@ type action struct {
 	// Boot names the ramdisk probe's carrier (pxe | virtual_media); empty
 	// follows the deployment default (docs/06-install-pipeline.md §3.3).
 	Boot string `json:"boot,omitempty"`
+	// Attributes carries the set_bios_attributes payload (docs/07-bmc.md
+	// §6); Confirm is the two-stage confirmation flag — required unless the
+	// deployment policy says optional (API-side gate).
+	Attributes map[string]any `json:"attributes,omitempty"`
+	Confirm    bool           `json:"confirm,omitempty"`
 }
 
 func decodeAction(raw json.RawMessage) (action, error) {

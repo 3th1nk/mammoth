@@ -252,6 +252,28 @@ func (s *Server) GetMachineConsole(ctx context.Context, request gen.GetMachineCo
 	return gen.GetMachineConsole200JSONResponse(gen.ConsoleURL{Url: url}), nil
 }
 
+// GetMachineBios live-reads the controller's BIOS attribute table
+// (docs/07-bmc.md §6). A synchronous BMC read like the console endpoint —
+// the machine face cannot hold state that may be stale on the BMC.
+func (s *Server) GetMachineBios(ctx context.Context, request gen.GetMachineBiosRequestObject) (gen.GetMachineBiosResponseObject, error) {
+	cred, addr, proto, err := s.outOfBandFor(ctx, string(request.Id))
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.BMC.Do(ctx, addr, cred, proto, "bios_attributes", func(ctx context.Context, d bmc.Driver) (any, error) {
+		bs, ok := d.(bmc.BiosSetter)
+		if !ok {
+			return nil, &bmc.Error{Kind: bmc.KindUnsupported, Op: "bios_attributes"}
+		}
+		return bs.BiosAttributes(ctx, addr, cred)
+	})
+	if err != nil {
+		return nil, err
+	}
+	attrs, _ := res.(map[string]any)
+	return gen.GetMachineBios200JSONResponse(gen.BiosView{Attributes: attrs}), nil
+}
+
 // outOfBandFor resolves machine → (decrypted credentials, address, protocol).
 func (s *Server) outOfBandFor(ctx context.Context, machineID string) (bmc.Credentials, string, bmc.Protocol, error) {
 	m, err := s.Machines.Get(ctx, machineID)

@@ -43,6 +43,40 @@ func TestFirmwareInventory(t *testing.T) {
 	})
 }
 
+// The BIOS two-stage contract's fake side: live table read, unknown-name
+// rejection, immediate apply, scripted failure.
+func TestBiosSetter(t *testing.T) {
+	d := New()
+	ctx := context.Background()
+	if _, ok := bmc.Driver(d).(bmc.BiosSetter); !ok {
+		t.Fatalf("fake must implement BiosSetter")
+	}
+
+	attrs, err := d.BiosAttributes(ctx, "fake://bios-a", bmc.Credentials{})
+	if err != nil || attrs["BootMode"] != "UEFI" {
+		t.Fatalf("defaults wrong: %v %v", attrs, err)
+	}
+	if err := d.SetBiosAttributes(ctx, "fake://bios-a", bmc.Credentials{},
+		map[string]any{"SrIovEnable": true, "NoSuchAttr": 1}); err == nil {
+		t.Fatalf("unknown attribute must be rejected")
+	}
+	if err := d.SetBiosAttributes(ctx, "fake://bios-a", bmc.Credentials{},
+		map[string]any{"SrIovEnable": true}); err != nil {
+		t.Fatalf("SetBiosAttributes: %v", err)
+	}
+	attrs, _ = d.BiosAttributes(ctx, "fake://bios-a", bmc.Credentials{})
+	if attrs["SrIovEnable"] != true {
+		t.Fatalf("write not visible on read: %+v", attrs)
+	}
+
+	card := d.Add("fake://bios-b")
+	card.FailOps = map[string]error{"set_bios_attributes": errFake{}}
+	if err := d.SetBiosAttributes(ctx, "fake://bios-b", bmc.Credentials{},
+		map[string]any{"BootMode": "Legacy"}); err == nil {
+		t.Fatalf("expected scripted failure")
+	}
+}
+
 type errFake struct{}
 
 func (errFake) Error() string { return "scripted" }

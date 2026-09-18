@@ -30,6 +30,10 @@ type PhysicalDriveEnumerator interface {  // RAID 成员选择需要物理盘视
 type FirmwareInventoryProvider interface { // 固件清单(纯读,v1.1 能力接口第一项,先行热身)
     FirmwareInventory(ctx, addr, cred) ([]FirmwareComponent, error)
 }
+type BiosSetter interface {                // BIOS 属性表读/写(Redfish Bios,高危)
+    BiosAttributes(ctx, addr, cred) (map[string]any, error)             // 活表读
+    SetBiosAttributes(ctx, addr, cred, attrs map[string]any) error      // 写 pending(下次生效)
+}
 ```
 
 已实装的驱动侧适配(实录见 [compat/huawei.md](compat/huawei.md)):标准
@@ -57,6 +61,24 @@ Reset 拒绝时以 `ForceRestart` 重试重启类动作;自签名 TLS 经
 | 硬件盘查 | ✅ Storage/Ethernet/Processor/Memory(宽容解析违规固件) | ⚠️ 有限(FRU/传感器) |
 | RAID 卷管理 | ✅ `VolumeCreator`(标准载荷被拒时走 OEM 载荷,如华为 DriveID) | ❌ |
 | 固件清单 | ✅ `FirmwareInventoryProvider`(UpdateService/FirmwareInventory,宽容解析,缺链接/坏条目降级) | ❌(能力缺失即无数据,盘查不失败) |
+| BIOS 配置 | ✅ `BiosSetter`(Bios 属性表读 / @Redfish.Settings 设置对象 PATCH,ETag If-Match,读改写保 pending,202 任务轮询) | ❌ |
+
+### 6.1 BiosSetter 两段式确认契约(高危动作范式的定稿形态)
+
+`set_bios_attributes` 动作(v1.1 第一个写能力)确立高危动作的契约范式,
+后续 Bios 助写类/擦盘类动作沿用它:
+
+1. **请求显式确认**:请求体必须带 `"confirm": true`(ActionSetBiosAttributes),
+   默认策略下缺省即 422 `BIOS_CONFIRM_REQUIRED`——提交期拒绝,不建 job;
+2. **服务端二次校验**(runner 内,策略开关关不掉):重读控制器**活表**,
+   不在表中的属性名整体拒绝(`BIOS_ATTRIBUTE_UNKNOWN`,带全量名单),
+   与活值相同的条目计 no-op 不下发,只把真实差集作为 pending 写入
+   (Redfish 语义:下次启动生效);
+3. **策略开关**:`MAMMOTH_BIOS_CONFIRM=optional` 供全自动化调用方关闭
+   第一道(提交侧确认标志);第二道(活表校验)永在。策略值经
+   capabilities 的 `bios_set_confirm` 导出;
+4. **活读面**:`GET /machines/{id}/bios` 同步返回当前属性表(console
+   先例的同步 BMC 读,契约声明 502)。
 | 一次性引导 | ✅ | ✅ |
 
 选择逻辑(`protocol: auto`):

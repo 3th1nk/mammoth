@@ -36,6 +36,9 @@ scripts/uos-dev/uos-qemu.sh boot && ssh -p 2222 root@localhost
 - **图形保真**:崩溃栈在 task_proxy(UI↔安装任务经 DBus),不赌 text
   模式,图形安装器跑在 VGA 上(`-display none` 不影响 screendump);
   `shot` 子命令经 monitor socket `screendump` + sips 转 PNG。
+  ⚠️ **UOS 只能用图形前端**:text 模式(text 指令/inst.text)下 Finish
+  任务组恒崩(`max()` 空序列)且 autopart 建出 FAT16 而非 swap——
+  mammoth 驱动已强制 graphical;人工手写 ks 排查时同样必须遵守。
 - **观测三通道**:串口日志(主进程消息)、`inst.syslog=10.0.2.2:5141`
   (rsyslog 转发,host nc 收)、`inst.sshd` + hostfwd 2222(崩溃后
   `/tmp/anaconda-tb-*` 取证)。

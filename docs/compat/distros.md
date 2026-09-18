@@ -13,7 +13,7 @@
 | **银河麒麟 V10**(Server V10 SP3 2403) | `kylinv10` | Anaconda(RHEL8 代际 + NM 1.18) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`) | MAC(渲染层带 NM 修复段) | ⚠️ 受限:静态网络自动化卡死在 NM(见注记);**中文 NFS 路径经 anaconda 层已验证可用** |
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
 | Debian 12 | `debian12` | debian-installer | preseed(`file=/cdrom/preseed.cfg`) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | 无(netcfg 不按 MAC 选口,单接口) | ✅ 真机跑通 |
-| 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,真机复验随窗口) | MAC → 接口名在 %pre 安装期解析 | **full(真机闭环 2026-09-19,虚拟介质零人工)** |
+| 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,真机复验随窗口) | MAC → 接口名在 %pre 安装期解析 | **full(真机闭环 2026-09-19,虚拟介质零人工)**;⚠️ **方言约束:仅图形前端可用**——text 模式(text 指令/inst.text)下 UOS anaconda 自动分区建出 FAT16 而非 swap 且 Finish 组崩溃,驱动已强制 graphical(见下方根因节) |
 | Windows | — | Setup | unattend | full(目标) | — | 未开始 |
 
 ## 保留分区支持语义(SupportLevel)
@@ -224,6 +224,14 @@ mini.iso)提供驱动支持。
     在 qemu TCG 下 Storage 模块 600s 启动超时,qemu 不可筛。
 - **恢复路径**:~~真机复验~~ **✅ 已闭环**;1050u2a 复验与 PXE 支持级
   "待真机复核"随下一窗口顺带。
+- **⚠️ 长期方言约束(已由驱动强制,人工排查/手写 ks 时必须遵守)**:
+  uniontechos **只能用图形前端**(`graphical` 指令、内核参数**不得带
+  `inst.text`**)。text 模式两处已证实的坑:①Finish 任务组
+  `max(swap_devices)` 空序列崩溃(UOS 定制 bootloader 模块的运算符
+  优先级笔误,与 swap 是否存在无关地恒崩);②autopart 在 text 前端下
+  建出 0x06 FAT16 而非 swap(五轮矩阵第 4 行)。qemu 复现见
+  scripts/uos-dev/;若未来有人提议"headless 场景换 text 模式",先读
+  本节与该矩阵——UOS 的 text 前端在 33.16 定制版上是坏的。
 
 ### 新增发行版
 

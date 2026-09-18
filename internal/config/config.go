@@ -120,6 +120,10 @@ type Config struct {
 	// may set MAMMOTH_BIOS_CONFIRM=optional to skip the flag (the runner's
 	// live-table validation always stays on).
 	BiosConfirmRequired bool
+	// EraseConfirmRequired gates the erase_drives action's two-stage
+	// confirmation (docs/07-bmc.md §6.2) the same way, via
+	// MAMMOTH_ERASE_CONFIRM — the most destructive action in the surface.
+	EraseConfirmRequired bool
 
 	// DevFakeBMCDelay slows the fake BMC/inband drivers to exercise
 	// heartbeat/lease/reaper paths (acceptance flow; a test knob, not a
@@ -307,6 +311,16 @@ func FromEnv() (Config, error) {
 		c.BiosConfirmRequired = false
 	default:
 		errs = append(errs, fmt.Errorf("MAMMOTH_BIOS_CONFIRM must be required|optional"))
+	}
+	// MAMMOTH_ERASE_CONFIRM gates erase_drives the same way (docs/07-bmc.md
+	// §6.2); required (default) keeps the submit-side confirm flag.
+	switch getenv("MAMMOTH_ERASE_CONFIRM", "required") {
+	case "required":
+		c.EraseConfirmRequired = true
+	case "optional":
+		c.EraseConfirmRequired = false
+	default:
+		errs = append(errs, fmt.Errorf("MAMMOTH_ERASE_CONFIRM must be required|optional"))
 	}
 	applyBool(&c.RamdiskEnabled, "MAMMOTH_RAMDISK_ENABLED", &errs)
 	applyBool(&c.NFSExportEnabled, "MAMMOTH_NFS_EXPORT", &errs)

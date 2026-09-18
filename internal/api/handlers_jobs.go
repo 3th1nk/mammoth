@@ -39,6 +39,9 @@ func (s *Server) PerformMachineAction(ctx context.Context, request gen.PerformMa
 	if err := s.validateBiosConfirm(actionRaw, aType); err != nil {
 		return nil, err
 	}
+	if err := s.validateEraseConfirm(actionRaw, aType); err != nil {
+		return nil, err
+	}
 	jobType := "power"
 	flow := provision.FlowPower
 	if aType == "discover" {
@@ -383,7 +386,8 @@ func encodeAction(body *gen.ActionRequest) (json.RawMessage, string, error) {
 	_ = json.Unmarshal(b, &probe)
 	switch probe.Type {
 	case "discover", "power_on", "power_off", "soft_off", "reboot", "hard_reboot",
-		"cycle", "set_boot_device", "mount_media", "eject_media", "set_bios_attributes":
+		"cycle", "set_boot_device", "mount_media", "eject_media", "set_bios_attributes",
+		"erase_drives":
 		return b, probe.Type, nil
 	default:
 		return nil, "", verr("SCHEMA_INVALID_ACTION", "unknown action type %q", probe.Type)
@@ -412,6 +416,39 @@ func (s *Server) validateBiosConfirm(actionRaw json.RawMessage, aType string) er
 	if s.BiosConfirmRequired && !a.Confirm {
 		return verrStatus(422, "BIOS_CONFIRM_REQUIRED",
 			"set_bios_attributes is high-risk and requires \"confirm\": true (deployment policy %q)", "required")
+	}
+	return nil
+}
+
+// validateEraseConfirm is the two-stage contract's API half for the most
+// destructive action in the contract (docs/07-bmc.md §6.2): erase_drives
+// must name at least one drive (serials or all) and, when the deployment
+// policy requires it, carry the explicit confirm flag. The runner adds the
+// live-table validation on top: any serial missing from the controller's
+// physical-drive view aborts the request before the first erase starts.
+func (s *Server) validateEraseConfirm(actionRaw json.RawMessage, aType string) error {
+	if aType != "erase_drives" {
+		return nil
+	}
+	var a struct {
+		Serials []string `json:"serials"`
+		All     bool     `json:"all"`
+		Confirm bool     `json:"confirm"`
+	}
+	if err := json.Unmarshal(actionRaw, &a); err != nil {
+		return verr("SCHEMA_INVALID_ACTION", "action is not valid: %v", err)
+	}
+	if len(a.Serials) == 0 && !a.All {
+		return verr("SCHEMA_INVALID_ACTION",
+			"erase_drives requires serials or all=true")
+	}
+	if len(a.Serials) > 0 && a.All {
+		return verr("SCHEMA_INVALID_ACTION",
+			"erase_drives takes serials or all, not both")
+	}
+	if s.EraseConfirmRequired && !a.Confirm {
+		return verrStatus(422, "DRIVE_ERASE_CONFIRM_REQUIRED",
+			"erase_drives is destructive and irreversible — it requires \"confirm\": true (deployment policy %q)", "required")
 	}
 	return nil
 }

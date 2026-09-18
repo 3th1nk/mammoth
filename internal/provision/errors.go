@@ -64,6 +64,11 @@ type action struct {
 	// deployment policy says optional (API-side gate).
 	Attributes map[string]any `json:"attributes,omitempty"`
 	Confirm    bool           `json:"confirm,omitempty"`
+	// Serials / All carry the erase_drives payload (docs/07-bmc.md §6.2):
+	// explicit serials, or every physical drive the controller reports.
+	// Confirm gates it the same two-stage way.
+	Serials []string `json:"serials,omitempty"`
+	All     bool     `json:"all,omitempty"`
 }
 
 func decodeAction(raw json.RawMessage) (action, error) {

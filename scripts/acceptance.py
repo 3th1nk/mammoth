@@ -228,6 +228,40 @@ def main():
                 machine["state"] == "ready" and machine["bmc"].get("vendor") == "acme",
                 f"state={machine['state']} vendor={machine['bmc'].get('vendor')}")
 
+    # 3.1 NIST 800-88 secure erase (two-stage confirm + live-table
+    # validation, docs/07-bmc.md §6.2)
+    print("· drive erase (two-stage)")
+    status, caps0 = c.get("/api/v1")
+    ok &= check("capabilities expose drive_erase_confirm",
+                caps0.get("drive_erase_confirm") == "required", str(caps0.get("drive_erase_confirm")))
+    status, rej = c.post(f"/api/v1/machines/{machines[0]}/actions",
+                         {"type": "erase_drives", "serials": ["S6XPN0001"]})
+    ok &= check("erase_drives without confirm → 422, no job",
+                status == 422 and rej.get("code") == "DRIVE_ERASE_CONFIRM_REQUIRED",
+                f"{status} {rej.get('code')}")
+    status, drives = c.get(f"/api/v1/machines/{machines[0]}/drives")
+    ok &= check("GET drives live table",
+                status == 200 and any(d.get("serial") == "S6XPN0001" for d in drives.get("drives", [])),
+                str(drives)[:100])
+    status, erej = c.post(f"/api/v1/machines/{machines[0]}/actions",
+                          {"type": "erase_drives", "serials": ["NOPE"], "confirm": True})
+    ok &= check("erase_drives unknown serial → 202 job (runner rejects)",
+                status == 202, f"{status}")
+    _, etasks = wait_job(c, erej["id"], {"failed", "succeeded"}, timeout=60)
+    eerr = (etasks[0].get("error") or {}) if etasks else {}
+    ok &= check("runner rejects serial not on live table (nothing erased)",
+                etasks and etasks[0]["state"] == "failed" and eerr.get("code") == "DRIVE_SERIAL_UNKNOWN",
+                f"{eerr.get('code')}")
+    status, ejob = c.post(f"/api/v1/machines/{machines[0]}/actions",
+                          {"type": "erase_drives", "serials": ["S6XPN0001"], "confirm": True})
+    ok &= check("erase_drives with confirm → 202 job", status == 202, f"{status}")
+    ejf, _ = wait_job(c, ejob["id"], {"failed", "succeeded"}, timeout=60)
+    ok &= check("erase_drives succeeded",
+                ejf and ejf.get("summary", {}).get("succeeded") == 1, str(ejf.get("summary", {})))
+    status, ev1 = c.get("/api/v1/events?page_size=50&type=task.drive_erase")
+    erased = any("S6XPN0001" in str(e.get("payload", {})) for e in ev1.get("items", []))
+    ok &= check("task.drive_erase event with serials", erased, str(ev1.get("items", [])[:1]))
+
     # 3.4 partition-level discovery (M2): a machine WITH ssh access configured
     # but unreachable in-band must yield an explicit classified error — never
     # a hanging task — while keeping its ready spec view. A machine without

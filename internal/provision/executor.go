@@ -262,6 +262,9 @@ func (e *Executor) runPowerAction(ctx context.Context, task *store.Task, job *st
 		}
 		return e.setBiosAttributes(ctx, task, addr, cred, proto, a.Attributes)
 
+	case "erase_drives":
+		return e.eraseDrives(ctx, task, addr, cred, proto, a.Serials, a.All)
+
 	case "discover":
 		return e.runDiscover(ctx, task, job)
 
@@ -312,6 +315,103 @@ func (e *Executor) setBiosAttributes(ctx context.Context, task *store.Task, addr
 		"note": "pending values — the BMC applies them at the next boot",
 	})
 	return nil
+}
+
+// eraseDrives runs the two-stage contract's server side for NIST 800-88
+// media sanitization (docs/07-bmc.md §6.2): re-read the controller's LIVE
+// physical-drive table, reject any serial not on it BEFORE touching
+// anything, then hand the resolved set to the controller's secure erase.
+// The drive list is the audit trail — it lands in the task event.
+func (e *Executor) eraseDrives(ctx context.Context, task *store.Task, addr string, cred bmc.Credentials, proto bmc.Protocol, requested []string, all bool) error {
+	res, err := e.BMC.Do(ctx, addr, cred, proto, "physical_drives", func(ctx context.Context, d bmc.Driver) (any, error) {
+		pde, ok := d.(bmc.PhysicalDriveEnumerator)
+		if !ok {
+			return nil, &bmc.Error{Kind: bmc.KindUnsupported, Op: "physical_drives"}
+		}
+		return pde.PhysicalDrives(ctx, addr, cred)
+	})
+	if err != nil {
+		return err
+	}
+	live := res.([]bmc.DiskView)
+
+	serials, err := resolveEraseTargets(live, requested, all)
+	if err != nil {
+		return err
+	}
+
+	san, err := e.BMC.Do(ctx, addr, cred, proto, "secure_erase", func(ctx context.Context, d bmc.Driver) (any, error) {
+		de, ok := d.(bmc.DriveEraser)
+		if !ok {
+			return nil, &bmc.Error{Kind: bmc.KindUnsupported, Op: "secure_erase"}
+		}
+		return de.SecureErase(ctx, addr, cred, serials)
+	})
+	if err != nil {
+		return err
+	}
+	results, _ := san.([]bmc.SanitizeResult)
+	methods := map[string]string{}
+	for _, r := range results {
+		if r.Method != "" {
+			methods[r.Serial] = r.Method
+		}
+	}
+	e.Events.Append(ctx, "task", task.ID, "task.drive_erase", map[string]any{
+		"erased":  serials,
+		"methods": methods,
+		"note":    "controller secure erase completed — data unrecoverable (NIST 800-88 media sanitization)",
+	})
+	return nil
+}
+
+// resolveEraseTargets pins the requested serials against the live physical
+// drive table BEFORE anything is erased: unknown serials reject the whole
+// request (nothing touched), all=true expands to every live serial, and
+// duplicates collapse preserving order — the event and the erase sequence
+// never repeat a serial because the request did.
+func resolveEraseTargets(live []bmc.DiskView, requested []string, all bool) ([]string, error) {
+	liveSerials := make([]string, 0, len(live))
+	liveSet := map[string]bool{}
+	for _, disk := range live {
+		if disk.Serial != "" && !liveSet[disk.Serial] {
+			liveSet[disk.Serial] = true
+			liveSerials = append(liveSerials, disk.Serial)
+		}
+	}
+
+	serials := requested
+	if all {
+		serials = liveSerials
+		if len(serials) == 0 {
+			return nil, classifiedErr("SCHEMA_INVALID_ACTION", false,
+				"erase_drives all=true but the controller reports no erasable drives")
+		}
+	}
+	if len(serials) == 0 {
+		return nil, classifiedErr("SCHEMA_INVALID_ACTION", false,
+			"erase_drives requires serials or all=true")
+	}
+	seen := map[string]bool{}
+	unique := make([]string, 0, len(serials))
+	for _, s := range serials {
+		if !seen[s] {
+			seen[s] = true
+			unique = append(unique, s)
+		}
+	}
+	var missing []string
+	for _, s := range unique {
+		if !liveSet[s] {
+			missing = append(missing, s)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return nil, classifiedErr("DRIVE_SERIAL_UNKNOWN", false,
+			"drives not on the controller's live table — nothing erased: %v", missing)
+	}
+	return unique, nil
 }
 
 // biosDiff computes the write set against the live table: entries whose

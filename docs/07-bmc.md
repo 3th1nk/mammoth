@@ -34,6 +34,11 @@ type BiosSetter interface {                // BIOS 属性表读/写(Redfish Bios
     BiosAttributes(ctx, addr, cred) (map[string]any, error)             // 活表读
     SetBiosAttributes(ctx, addr, cred, attrs map[string]any) error      // 写 pending(下次生效)
 }
+type DriveEraser interface {               // 物理盘安全擦除(Redfish #Drive.SecureErase,最高危)
+    SecureErase(ctx, addr, cred, serials []string) ([]SanitizeResult, error)
+    // serials 先全部对活表解析,任一未知即整体拒绝——绝不擦一半;
+    // 返回逐盘结果(厂商上报的擦除机制/时间戳,供 NIST 800-88 记录)。
+}
 ```
 
 已实装的驱动侧适配(实录见 [compat/huawei.md](compat/huawei.md)):标准
@@ -62,6 +67,8 @@ Reset 拒绝时以 `ForceRestart` 重试重启类动作;自签名 TLS 经
 | RAID 卷管理 | ✅ `VolumeCreator`(标准载荷被拒时走 OEM 载荷,如华为 DriveID) | ❌ |
 | 固件清单 | ✅ `FirmwareInventoryProvider`(UpdateService/FirmwareInventory,宽容解析,缺链接/坏条目降级) | ❌(能力缺失即无数据,盘查不失败) |
 | BIOS 配置 | ✅ `BiosSetter`(Bios 属性表读 / @Redfish.Settings 设置对象 PATCH,ETag If-Match,读改写保 pending,202 任务轮询) | ❌ |
+| 安全擦除 | ✅ `DriveEraser`(逐盘 `#Drive.SecureErase` 动作,serial 先全量解析再下发,202 任务轮询) | ❌ |
+| 一次性引导 | ✅ | ✅ |
 
 ### 6.1 BiosSetter 两段式确认契约(高危动作范式的定稿形态)
 
@@ -79,7 +86,34 @@ Reset 拒绝时以 `ForceRestart` 重试重启类动作;自签名 TLS 经
    capabilities 的 `bios_set_confirm` 导出;
 4. **活读面**:`GET /machines/{id}/bios` 同步返回当前属性表(console
    先例的同步 BMC 读,契约声明 502)。
-| 一次性引导 | ✅ | ✅ |
+
+### 6.2 DriveEraser 两段式确认契约(NIST 800-88 介质擦除)
+
+`erase_drives` 动作(v1.1 第二个写能力,全契约中破坏性最高的动作)沿
+§6.1 范式落盘侧 NIST 800-88 media sanitization——退役/重用途场景的数据
+销毁,对象是控制器的**物理盘**(RAID 卷优先呈现时经由 PhysicalDrives
+可见的成员池),不是装机语义的 wipe(那属于渲染层 wipe 档):
+
+1. **请求显式确认**:请求体必须带 `"confirm": true`(ActionEraseDrives,
+   `serials` 与 `all` 二选一),默认策略下缺省即 422
+   `DRIVE_ERASE_CONFIRM_REQUIRED`——提交期拒绝,不建 job;
+   `MAMMOTH_ERASE_CONFIRM=optional` 供全自动调用方关第一道(策略值经
+   capabilities 的 `drive_erase_confirm` 导出);
+2. **服务端二次校验**(runner 内,策略开关关不掉):重读控制器**活盘表**
+   (`PhysicalDrives`),不在表中的 serial 整体拒绝
+   (`DRIVE_SERIAL_UNKNOWN`,带全量名单)——解析先于擦除,绝不擦一半;
+   `all=true` 展开为活表全量(serial 缺失的盘不进集合);重复 serial
+   去重保序,事件与擦除序列不因请求重复而重复;
+3. **驱动层**:逐盘 POST `#Drive.SecureErase` 动作 target,202 任务轮询
+   (volume/bios 先例);盘未声明该动作即 BMC_UNSUPPORTED——控制器擦不了
+   就必须让调用方知道(NIST 800-88 要求有方法、有记录);
+4. **活读面与记录**:`GET /machines/{id}/drives` 同步返回物理盘表
+   (serial 即 `erase_drives` 的身份);完成后发 `task.drive_erase` 事件,
+   携带 erased serials 与厂商上报的擦除机制(method: block erase /
+   crypto erase / overwrite,信息性)——即 NIST 800-88 的 sanitization
+   record 底稿。实际擦除机制是厂商策略,驱动如实转述、不替控制器承诺
+   Clear 还是 Purge 档;LSI 卷的 secure erase 支持度随真机窗口核验
+   (见 compat/huawei.md 回归表)。
 
 选择逻辑(`protocol: auto`):
 

@@ -13,7 +13,7 @@
 | **银河麒麟 V10**(Server V10 SP3 2403) | `kylinv10` | Anaconda(RHEL8 代际 + NM 1.18) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`) | MAC(渲染层带 NM 修复段) | ⚠️ 受限:静态网络自动化卡死在 NM(见注记);**中文 NFS 路径经 anaconda 层已验证可用** |
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
 | Debian 12 | `debian12` | debian-installer | preseed(`file=/cdrom/preseed.cfg`) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | 无(netcfg 不按 MAC 选口,单接口) | ✅ 真机跑通 |
-| 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,真机复验随窗口) | MAC → 接口名在 %pre 安装期解析 | **根因已修复**(text 前端缺陷,见下;待真机复验) |
+| 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,真机复验随窗口) | MAC → 接口名在 %pre 安装期解析 | **full(真机闭环 2026-09-19,虚拟介质零人工)** |
 | Windows | — | Setup | unattend | full(目标) | — | 未开始 |
 
 ## 保留分区支持语义(SupportLevel)
@@ -207,9 +207,23 @@ mini.iso)提供驱动支持。
   2. **uniontechos 固定 graphical、引导参数去 `inst.text`**:text 模式下
      UOS autopart 连 swap 都建错(上表第 4 行),graphical 是经验证的可靠
      路径;家族其余成员保持 text(rocky9/kylin text 真机跑通,行为不变)。
-- **恢复路径**:真机复验随 2288H 窗口(虚拟介质一轮,预期直接通过);
-  1050u2a(新版 ISO)qemu 筛版进行中——若通过,真机窗口可直接以 u2a 复验
-  并顺带完成 PXE 支持级"待真机复核"的清账。
+- **真机闭环(2026-09-19,2288H V5 / iBMC 6.41,虚拟介质)**:六阶段全绿
+  **零人工干预**——无人值守首启 + SSH 凭据直通(hostname uos-2288h)+
+  swap sda4 2G 激活 + 分区与 spec 一致(EFI 512M/boot 1G// 3.6T)。**真机
+  首验暴露并修复了两层 qemu 未覆盖的缺陷**:
+  1. 装机网络:机房无站点 DHCP + 双口 LOM,`ip=dhcp` 的 dracut DHCP 落在
+     未插线的 eno2 上,ks 永远拉不到——spec 声明静态网络(MAC 钉 eno1 +
+     池段地址)即解(三层寻址策略既有语义,装机期与装后一致);
+  2. swap 预算(首次修复的真机回归):`part swap` 追加在主 ks 体(无
+     --ondisk、不计 growSizeMB),显式容量场景总请求超盘 ~1.5G,anaconda
+     "Unable to allocate requested partition scheme" 落回交互 hub(qemu
+     测试盘无容量走 --grow 兜底,未暴露)——swap 注入 boot 盘分区列表
+     头部、随行生成 --ondisk/$Dn 且计入 grow 预算即解(f951f98);
+  - 附带:介质目录迁 /data(18G 的 / 放不下 8.2G ISO 拷贝;nfs:// 源
+    EnsureISO 会落本地);水位闸显示错误顺修;1050u2a 的 33.19 anaconda
+    在 qemu TCG 下 Storage 模块 600s 启动超时,qemu 不可筛。
+- **恢复路径**:~~真机复验~~ **✅ 已闭环**;1050u2a 复验与 PXE 支持级
+  "待真机复核"随下一窗口顺带。
 
 ### 新增发行版
 

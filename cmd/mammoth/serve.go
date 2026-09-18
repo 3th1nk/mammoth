@@ -268,17 +268,31 @@ func serve(args []string) error {
 					Extra: e.Extra,
 				}, nil
 			}), 15*time.Second)
+		// Escape-hatch mode (MAMMOTH_PXE_MODE=external): materialize the
+		// static TFTP kit the site dnsmasq serves — NBP binaries, grub
+		// modules, and the two self-identifying trampolines. Export failure
+		// is fatal: an incomplete kit strands machines at the PXE prompt
+		// exactly like a failed bind would in builtin mode.
+		if cfg.PXEMode == "external" {
+			kitDir := filepath.Join(cfg.MediaDir, "netboot", "external-tftp")
+			if kerr := netboot.ExportExternalKit(kitDir, pxe.Files, strings.TrimSuffix(cfg.ExternalURL, "/")); kerr != nil {
+				return fmt.Errorf("netboot: external kit export: %w", kerr)
+			}
+			logger.InfoContext(ctx, "external PXE kit exported",
+				"dir", kitDir, "note", "serve this directory from the site TFTP; dnsmasq.conf.example inside is ready to edit")
+		}
 		nb, nerr := netboot.Start(ctx, netboot.Options{
-			DHCPPort:   cfg.PXEDHCPPort,
-			ProxyPort:  cfg.PXEProxyPort,
-			TFTPPort:   cfg.PXETFTPPort,
-			SyslogPort: cfg.PXESyslogPort,
-			NextServer: nextServer,
-			BaseURL:    strings.TrimSuffix(cfg.ExternalURL, "/"),
-			NBPs:       pxe.Files,
-			Resolver:   nbResolver,
-			DHCP:       dhcpPool,
-			Log:        logger,
+			ExternalOnly: cfg.PXEMode == "external",
+			DHCPPort:     cfg.PXEDHCPPort,
+			ProxyPort:    cfg.PXEProxyPort,
+			TFTPPort:     cfg.PXETFTPPort,
+			SyslogPort:   cfg.PXESyslogPort,
+			NextServer:   nextServer,
+			BaseURL:      strings.TrimSuffix(cfg.ExternalURL, "/"),
+			NBPs:         pxe.Files,
+			Resolver:     nbResolver,
+			DHCP:         dhcpPool,
+			Log:          logger,
 			// macOS/vmnet verification setups: limited broadcast leaves via
 			// the default interface, so offer a directed one (config.go).
 			BroadcastAddr: net.ParseIP(cfg.PXEBroadcastAddr),

@@ -138,3 +138,15 @@ kernel,全是发往 siaddr/ExternalURL 的单播,路由可达 + 防火墙放行�
 netboot 服务监听 :67/:69/:4011 是全接口的,一台 mammoth 天然服务多个装机
 L2;"单 L2 单应答者"约束仍成立——每个 VLAN 只能有一个应答者,同机与站点
 DHCP 不可共存(UDP 67 排他,见 operations.md §4.5 第 1 条)。
+
+## 5. 外部 DHCP+TFTP:逃生门形态(2026-09-18)
+
+builtin 模式的接力链(mammoth 亲历三跳:proxyDHCP→TFTP→HTTP)在 mammoth
+拿不到特权 UDP 的部署形态下走不通。external 模式(`MAMMOTH_PXE_MODE=
+external`)把前三跳交给站点 dnsmasq,mammoth 只剩 HTTP;接力点用**客户端
+自报身份**缝合——静态 TFTP 蹦床(iPXE `${net0/mac}`、grub
+`${net_default_mac}`)把 MAC 带进 URL,落回 builtin 的同两个 HTTP 端点。
+部署细节与模式代价(option 93 观测失效)见
+[operations.md](operations.md) §4.5.1;qemu 网桥 + dnsmasq 同型验证
+(UEFI guest 经站点 DHCP+TFTP 完成 alpine agent 全装,六阶段绿)脚本在
+`scripts/pxe-dev/external-e2e.sh`。

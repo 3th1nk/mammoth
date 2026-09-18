@@ -114,6 +114,12 @@ type Config struct {
 
 	// Vendor compatibility matrix override directory (docs/compat/README.md).
 	CompatDir string
+	// BiosConfirmRequired gates the set_bios_attributes action's two-stage
+	// confirmation (docs/07-bmc.md §6): true (default) rejects requests
+	// without the explicit confirm flag at submit; automation deployments
+	// may set MAMMOTH_BIOS_CONFIRM=optional to skip the flag (the runner's
+	// live-table validation always stays on).
+	BiosConfirmRequired bool
 
 	// DevFakeBMCDelay slows the fake BMC/inband drivers to exercise
 	// heartbeat/lease/reaper paths (acceptance flow; a test knob, not a
@@ -203,6 +209,7 @@ func FromEnv() (Config, error) {
 		LogLevel:              getenv("MAMMOTH_LOG_LEVEL", "info"),
 		LogFormat:             getenv("MAMMOTH_LOG_FORMAT", "json"),
 		RunnerConcurrency:     10,
+		BiosConfirmRequired:   true,
 		HeartbeatInterval:     10 * time.Second,
 		VisibilityTimeout:     30 * time.Second,
 		HeartbeatTimeout:      60 * time.Second,
@@ -283,6 +290,17 @@ func FromEnv() (Config, error) {
 	applyDuration(&c.DevFakeBMCDelay, "MAMMOTH_FAKE_BMC_DELAY", &errs)
 
 	applyBool(&c.BMCTLSInsecure, "MAMMOTH_BMC_TLS_INSECURE", &errs)
+	// MAMMOTH_BIOS_CONFIRM=optional disables the submit-side confirm flag
+	// requirement (two-stage contract, docs/07-bmc.md §6); anything other
+	// than "optional"/"required" is a startup error.
+	switch getenv("MAMMOTH_BIOS_CONFIRM", "required") {
+	case "required":
+		c.BiosConfirmRequired = true
+	case "optional":
+		c.BiosConfirmRequired = false
+	default:
+		errs = append(errs, fmt.Errorf("MAMMOTH_BIOS_CONFIRM must be required|optional"))
+	}
 	applyBool(&c.RamdiskEnabled, "MAMMOTH_RAMDISK_ENABLED", &errs)
 	applyBool(&c.NFSExportEnabled, "MAMMOTH_NFS_EXPORT", &errs)
 	applyBool(&c.PXEEnabled, "MAMMOTH_PXE_ENABLED", &errs)

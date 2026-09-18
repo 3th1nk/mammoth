@@ -107,8 +107,9 @@ func Classify(op string, err error) *Error {
 // (which often only see a non-200 status without structured errors).
 var ErrAuthFailedSentinel = errors.New("bmc: authentication failed")
 
-// httpStatusKind maps an HTTP status from a Redfish exchange to an error kind.
-func httpStatusKind(op string, status int, body string) *Error {
+// HttpStatusKind maps an HTTP status from a Redfish exchange to an error
+// kind (nil when the status is not an error).
+func HttpStatusKind(op string, status int, body string) *Error {
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return opErr(op, KindAuthFailed, nil, http.StatusText(status))

@@ -8,8 +8,9 @@
 > PXE 已 succeeded;shim+grubnet Secure Boot 闭环;零注册入门与设备档案
 > 全链交付(option 93 观测、enroll/pending_machines/claim、固件门禁)。
 > SQLite 最小部署形态已评估并放弃(见 10 §D2),存储收敛为 PostgreSQL-only。
-> 余项:uniontechos(见 compat/distros.md)、relay 真机回归、arm64 引导链
-> (见 M7 余项与下一阶段 2)。
+> 余项:uniontechos(见 compat/distros.md)、relay 真机回归;arm64 引导链
+> 本机可验部分已闭环(2026-09-18:SB 签名链 qemu 验证 + 源码比对,见
+> 下一阶段 4),投递层与端到端回归待 ARM 真机。
 
 里程碑按"每阶段交付物独立可用"的依赖关系排序。M1 之前没有任何东西能对用户产生价值,
 因此 M0 的唯一目标是让最通用的能力先跑起来。
@@ -193,10 +194,26 @@
    (shim/grub Debian 签名不变);代价:option 93 观测失效(enroll 不受
    影响)。docker 网桥+dnsmasq+UEFI guest 经外部链完成 alpine agent 全装
    (六阶段绿),harness scripts/pxe-dev/external-e2e.sh;部署文档
-   operations.md §4.5.1。arm64 引导链(qemu
-   AAVMF + TCG 源级验链路,opt 93 = 0x000B,真机回归后补;信创混合机群
-   刚需,无真机前 option 93 固件观测先行积累);~~ubuntu/debian PXE 化~~
-   ✅ 已入 v1.0(2026-09-17 真机闭环);
+   operations.md §4.5.1。
+   **arm64 引导链(2026-09-18 落地:资产+代码+SB 链 qemu 验证,投递层单测+同构外推,真机待补)**——
+   Secure Boot 链对齐 x64:nbpARM64 从 unsigned ipxe-arm64.efi 切
+   shimaa64.efi(Microsoft 签名)→ grubaa64.efi(Debian 签名 grubnetaa64
+   改名)+ grub/arm64-efi/*.lst 模块清单(shim-signed/grub-efi-arm64-signed/
+   grub-efi-arm64-bin trixie 三包,与 x64 pinned 同版本;fetch 脚本扩展双
+   arch + bin 包,PROVENANCE 补录);external kit 同步导出 arm64 链,
+   dnsmasq example 增 efi-aarch64 标签(client-arch 11);builtin
+   proxyDHCP 的 opt 93=11 路径同源切换。**qemu 验证了 SB 签名链**:
+   AAVMF secboot + VARS.ms(Secure Boot ON)从磁盘引导 shimaa64 →
+   验签 grubaa64 → GRUB 2.12 运行(Debian 官方固件,harness
+   scripts/pxe-dev/arm64-sb-chain.sh)。**投递层(UDP 67/69)在 qemu
+   aarch64 上不可验——上游架构边界:ArmVirtQemu.dsc 明言
+   "NETWORK_SNP_ENABLE is IA32/X64/EBC only",arm64 虚拟固件没有
+   UEFI PXE 栈**(SNP/UNDI 是 x86 生态产物);该层与 x64 共享代码,由
+   单测(opt 93=11→shimaa64 断言)+ x64 真机链同构性覆盖;实现正确性
+   经上游源码比对(shim 二阶段命名/grub per-MAC cfg 查找序/RFC 4578
+   arch 11/Ironic·MAAS·boots 的 arm64 映射)逐点核对。
+   **真机回归待 ARM 机器**。信创混合机群刚需;下一项 NIST 800-88(队尾)。
+   ~~ubuntu/debian PXE 化~~ ✅ 已入 v1.0(2026-09-17 真机闭环);
 5. **等条件组(不排期,条件触发)**:
    - **UefiHttp**(Redfish HTTP Boot)——等多厂商真机(OEM URI 各异,单台
      华为验不出跨厂商);

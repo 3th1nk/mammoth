@@ -175,8 +175,22 @@
    二次校验(永在):未知属性整体拒 BIOS_ATTRIBUTE_UNKNOWN、同值 no-op
    不下发、只写真差集;`GET /machines/{id}/bios` 活读端点;契约追加
    ActionSetBiosAttributes / BiosView / Capabilities.bios_set_confirm;
-   冒烟全链绿。→ **NIST 800-88 擦盘**(破坏性,移队尾,等把握窗口顺带
-   测,LSI secure erase 支持未知);
+   冒烟全链绿。
+   **NIST 800-88 擦盘 ✅ 已落地(2026-09-18,fake 先行,真机窗口随
+   BiosSetter 回归顺带)**——`DriveEraser` 可选能力(逐盘 Redfish
+   `#Drive.SecureErase`,serial 先全量解析再下发、绝不擦一半,202 任务
+   轮询;redfish 实装 + fake 脚本化,默认支持可脚本关闭);`erase_drives`
+   动作沿两段式范式:请求 `confirm:true`(缺省 422
+   DRIVE_ERASE_CONFIRM_REQUIRED,MAMMOTH_ERASE_CONFIRM=optional 关第一道)+
+   runner 活盘表二次校验(永在):未知 serial 整体拒
+   DRIVE_SERIAL_UNKNOWN、all=true 展开活表、重复 serial 去重保序;
+   `GET /machines/{id}/drives` 活读端点(serial 即擦除身份);
+   `task.drive_erase` 事件携带 erased serials + 厂商上报擦除机制
+   (NIST 800-88 sanitization record 底稿);契约追加
+   ActionEraseDrives / DrivesView / Capabilities.drive_erase_confirm;
+   单测(fake/redfish/provision)+ acceptance 冒烟全绿(422 门禁 /
+   未知 serial 拒 / confirm 走通 / 事件落库)。真机回归:iBMC 对 LSI 卷
+   的 secure erase 支持度未知,随把握窗口顺带测。
 3. ~~**发行版接入声明化**~~ **✅ 已评估并收敛(2026-09-18)**——曾全量
    落地 distros.json(12 发行版声明化),评估后同日 revert 收敛为类型化
    Go 注册表:接入成本在模板 Go + 真机验证而非注册面(三方言连环修为
@@ -212,7 +226,8 @@
    单测(opt 93=11→shimaa64 断言)+ x64 真机链同构性覆盖;实现正确性
    经上游源码比对(shim 二阶段命名/grub per-MAC cfg 查找序/RFC 4578
    arch 11/Ironic·MAAS·boots 的 arm64 映射)逐点核对。
-   **真机回归待 ARM 机器**。信创混合机群刚需;下一项 NIST 800-88(队尾)。
+   **真机回归待 ARM 机器**。信创混合机群刚需;~~下一项 NIST 800-88~~
+   ✅ 已落地(见第 2 项,2026-09-18 fake 先行)。
    ~~ubuntu/debian PXE 化~~ ✅ 已入 v1.0(2026-09-17 真机闭环);
 5. **等条件组(不排期,条件触发)**:
    - **UefiHttp**(Redfish HTTP Boot)——等多厂商真机(OEM URI 各异,单台
@@ -245,9 +260,10 @@
   边界外移项见"下一阶段"。
 - **v1.1 方向**(按真机可得性,见"下一阶段"):agent initramfs 试点 ✅
   (docs/12;真机回归待 2288H 窗口)+
-  BMC 能力接口(FirmwareInventory → BiosSetter,两段式确认契约随行)+
-  PXE 余项 qemu 可验部分(外部 DHCP+TFTP 逃生门、arm64 链路);UefiHttp/
-  Windows/复验轮视真机窗口随 v1.x 增量;契约仅新增演进(向后兼容字段/
+  BMC 能力接口(FirmwareInventory ✅ → BiosSetter ✅ → NIST 800-88 擦盘 ✅,
+  两段式确认契约随行)+
+  PXE 余项 qemu 可验部分(外部 DHCP+TFTP 逃生门 ✅、arm64 链路 ✅ qemu 可验);
+  UefiHttp/Windows/复验轮视真机窗口随 v1.x 增量;契约仅新增演进(向后兼容字段/
   端点),破坏性变更进 v2 讨论。
 - 发布流程:`git tag vX.Y.Z && goreleaser release --clean`(amd64/arm64,
   版本与 commit 经 ldflags 注入)。

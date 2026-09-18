@@ -77,6 +77,46 @@ func TestBiosSetter(t *testing.T) {
 	}
 }
 
+// The secure-erase contract's fake side: capability scripting, serial
+// resolution against the scripted hardware, erased-serial recording.
+func TestSecureErase(t *testing.T) {
+	d := New()
+	ctx := context.Background()
+	if _, ok := bmc.Driver(d).(bmc.DriveEraser); !ok {
+		t.Fatalf("fake must implement DriveEraser")
+	}
+
+	// Default controllers support secure erase (drive purge actions are the
+	// norm); scripting EraseSupport=false simulates a controller that
+	// cannot.
+	nope := d.Add("fake://erase-none")
+	nope.EraseSupport = false
+	if _, err := d.SecureErase(ctx, "fake://erase-none", bmc.Credentials{}, []string{"S6XPN0001"}); err == nil {
+		t.Fatalf("erase without EraseSupport must be unsupported")
+	}
+
+	card := d.Add("fake://erase-b")
+	card.EraseSupport = true
+	if _, err := d.SecureErase(ctx, "fake://erase-b", bmc.Credentials{}, []string{"GHOST"}); err == nil {
+		t.Fatalf("unknown serial must be rejected before anything is erased")
+	}
+	if len(card.ErasedSerials) != 0 {
+		t.Fatalf("nothing erased on rejection: %v", card.ErasedSerials)
+	}
+	res, err := d.SecureErase(ctx, "fake://erase-b", bmc.Credentials{}, []string{"S6XPN0001"})
+	if err != nil || len(res) != 1 || res[0].Serial != "S6XPN0001" {
+		t.Fatalf("erase failed: %v %v", res, err)
+	}
+	if len(card.ErasedSerials) != 1 || card.ErasedSerials[0] != "S6XPN0001" {
+		t.Fatalf("erased serials not recorded: %v", card.ErasedSerials)
+	}
+
+	card.FailOps = map[string]error{"secure_erase": errFake{}}
+	if _, err := d.SecureErase(ctx, "fake://erase-b", bmc.Credentials{}, []string{"S6XPN0001"}); err == nil {
+		t.Fatalf("expected scripted failure")
+	}
+}
+
 type errFake struct{}
 
 func (errFake) Error() string { return "scripted" }

@@ -62,6 +62,9 @@ type Deps struct {
 	// BiosConfirmRequired gates set_bios_attributes submissions (two-stage
 	// confirmation, docs/07-bmc.md §6); surfaced in capabilities.
 	BiosConfirmRequired bool
+	// EraseConfirmRequired gates erase_drives submissions (two-stage
+	// confirmation, docs/07-bmc.md §6.2); surfaced in capabilities.
+	EraseConfirmRequired bool
 
 	// Visibility is the lease window used when re-enqueueing retried tasks.
 	Visibility time.Duration
@@ -243,6 +246,11 @@ func (s *Server) GetCapabilities(ctx context.Context, _ gen.GetCapabilitiesReque
 		biosConfirm = "optional"
 	}
 	out.BiosSetConfirm = (*gen.CapabilitiesBiosSetConfirm)(str(biosConfirm))
+	eraseConfirm := "required"
+	if !s.EraseConfirmRequired {
+		eraseConfirm = "optional"
+	}
+	out.DriveEraseConfirm = (*gen.CapabilitiesDriveEraseConfirm)(str(eraseConfirm))
 
 	return gen.GetCapabilities200JSONResponse(out), nil
 }

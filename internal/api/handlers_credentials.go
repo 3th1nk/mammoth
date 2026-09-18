@@ -274,6 +274,45 @@ func (s *Server) GetMachineBios(ctx context.Context, request gen.GetMachineBiosR
 	return gen.GetMachineBios200JSONResponse(gen.BiosView{Attributes: attrs}), nil
 }
 
+// GetMachineDrives live-reads the controller's physical drive table
+// (docs/07-bmc.md §6.2). Serials here are the identity erase_drives
+// consumes; a synchronous BMC read like the console/bios endpoints.
+func (s *Server) GetMachineDrives(ctx context.Context, request gen.GetMachineDrivesRequestObject) (gen.GetMachineDrivesResponseObject, error) {
+	cred, addr, proto, err := s.outOfBandFor(ctx, string(request.Id))
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.BMC.Do(ctx, addr, cred, proto, "physical_drives", func(ctx context.Context, d bmc.Driver) (any, error) {
+		pde, ok := d.(bmc.PhysicalDriveEnumerator)
+		if !ok {
+			return nil, &bmc.Error{Kind: bmc.KindUnsupported, Op: "physical_drives"}
+		}
+		return pde.PhysicalDrives(ctx, addr, cred)
+	})
+	if err != nil {
+		return nil, err
+	}
+	disks, _ := res.([]bmc.DiskView)
+	drives := make([]gen.DriveEntry, 0, len(disks))
+	for _, disk := range disks {
+		item := gen.DriveEntry{Name: disk.Name}
+		if disk.Serial != "" {
+			item.Serial = &disk.Serial
+		}
+		if disk.SizeBytes != 0 {
+			item.SizeBytes = &disk.SizeBytes
+		}
+		if disk.Medium != "" {
+			item.Medium = &disk.Medium
+		}
+		if disk.Protocol != "" {
+			item.Protocol = &disk.Protocol
+		}
+		drives = append(drives, item)
+	}
+	return gen.GetMachineDrives200JSONResponse(gen.DrivesView{Drives: drives}), nil
+}
+
 // outOfBandFor resolves machine → (decrypted credentials, address, protocol).
 func (s *Server) outOfBandFor(ctx context.Context, machineID string) (bmc.Credentials, string, bmc.Protocol, error) {
 	m, err := s.Machines.Get(ctx, machineID)

@@ -302,6 +302,36 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
 
+  /api/v1/machines/{id}/drives:
+    get:
+      operationId: getMachineDrives
+      tags: [machines]
+      summary: Live physical drive table of the controller
+      description: |
+        Reads the storage controller's physical drives synchronously (the
+        same out-of-band path the actions use; docs/07-bmc.md §6.2). Serials
+        here are the identity erase_drives consumes — read first, erase
+        second.
+      parameters:
+        - $ref: '#/components/parameters/machineId'
+      responses:
+        '200':
+          description: Current physical drive table.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DrivesView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '502':
+          description: BMC error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
   /api/v1/machines/{id}/console:
     parameters:
       - $ref: '#/components/parameters/machineId'
@@ -1172,6 +1202,12 @@ components:
             explicit confirm flag; optional keeps only the runner-side
             live-table validation.
           enum: [required, optional]
+        drive_erase_confirm:
+          type: string
+          description: The erase_drives confirmation policy (docs/07-bmc.md
+            §6.2) — same two-stage shape as bios_set_confirm, for the most
+            destructive action in the contract.
+          enum: [required, optional]
         resources:
           type: array
           items:
@@ -1654,6 +1690,64 @@ components:
           additionalProperties: true
           description: The controller's attribute table (vendor keys, vendor JSON value types).
 
+    DrivesView:
+      type: object
+      required: [drives]
+      properties:
+        drives:
+          type: array
+          items:
+            $ref: '#/components/schemas/DriveEntry'
+
+    DriveEntry:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: The controller's presentation name for the drive.
+        serial:
+          type: string
+          description: The identity erase_drives consumes.
+        size_bytes:
+          type: integer
+          format: int64
+        medium:
+          type: string
+          description: ssd | hdd | unknown.
+        protocol:
+          type: string
+
+    ActionEraseDrives:
+      type: object
+      description: |
+        Issue the controller's secure erase on physical drives — NIST 800-88
+        media sanitization at the controller level (docs/07-bmc.md §6.2).
+        THE MOST DESTRUCTIVE ACTION IN THE CONTRACT: data is unrecoverable
+        by design. Two-stage confirmation applies — the explicit confirm
+        flag unless the deployment sets MAMMOTH_ERASE_CONFIRM=optional, and
+        the runner re-reads the live drive table, rejecting any serial not
+        on it before touching anything. Declare exactly one of serials or
+        all.
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [erase_drives]
+        serials:
+          type: array
+          items:
+            type: string
+          description: Physical drive serials per the controller's live table (GET /machines/{id}/drives).
+          minItems: 1
+        all:
+          type: boolean
+          description: Erase every physical drive the controller reports; resolved against the live table at execution.
+        confirm:
+          type: boolean
+          default: false
+          description: Explicit high-risk confirmation; required by the default policy.
+
     ActionSetBiosAttributes:
       type: object
       description: |
@@ -1690,6 +1784,7 @@ components:
         - $ref: '#/components/schemas/ActionMountMedia'
         - $ref: '#/components/schemas/ActionEjectMedia'
         - $ref: '#/components/schemas/ActionSetBiosAttributes'
+        - $ref: '#/components/schemas/ActionEraseDrives'
       discriminator:
         propertyName: type
         mapping:
@@ -1704,6 +1799,7 @@ components:
           mount_media: '#/components/schemas/ActionMountMedia'
           eject_media: '#/components/schemas/ActionEjectMedia'
           set_bios_attributes: '#/components/schemas/ActionSetBiosAttributes'
+          erase_drives: '#/components/schemas/ActionEraseDrives'
 
     ActionDiscover:
       type: object

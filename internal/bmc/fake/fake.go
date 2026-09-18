@@ -41,6 +41,15 @@ type BMC struct {
 	// validation tests against).
 	BIOS map[string]any
 
+	// ErasedSerials records what SecureErase has destroyed on this
+	// controller (docs/07-bmc.md §6.2); unknown serials are rejected with
+	// the same "resolve before touching" semantics the redfish driver
+	// implements. EraseSupport defaults to true (secure-erase actions are
+	// the norm on controllers that expose drive resources); script it off
+	// to simulate a controller whose drives cannot be purged.
+	ErasedSerials []string
+	EraseSupport  bool
+
 	// Failures scripts error injection: set before the call under test.
 	FailOps map[string]error
 
@@ -79,6 +88,7 @@ func (d *Driver) Add(addr string) *BMC {
 		Hardware:       defaultHardware(serial),
 		FirmwareList:   defaultFirmware(),
 		BIOS:           defaultBIOS(),
+		EraseSupport:   true,
 	}
 	d.bmcs[addr] = b
 	return b
@@ -350,6 +360,46 @@ func (d *Driver) SetBiosAttributes(_ context.Context, addr string, _ bmc.Credent
 		b.BIOS[k] = v
 	}
 	return nil
+}
+
+// SecureErase implements the bmc.DriveEraser capability: record the erased
+// serials. All serials must be present in the scripted hardware before
+// anything is marked erased — the resolve-before-touching contract.
+func (d *Driver) SecureErase(_ context.Context, addr string, _ bmc.Credentials, serials []string) ([]bmc.SanitizeResult, error) {
+	b, err := d.get(addr, "secure_erase")
+	if err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.EraseSupport {
+		return nil, &bmc.Error{Kind: bmc.KindUnsupported, Op: "secure_erase",
+			Detail: "controller drives carry no secure-erase action"}
+	}
+	if b.Hardware != nil {
+		live := map[string]bool{}
+		for _, disk := range b.Hardware.Disks {
+			if disk.Serial != "" {
+				live[disk.Serial] = true
+			}
+		}
+		var missing []string
+		for _, s := range serials {
+			if !live[s] {
+				missing = append(missing, s)
+			}
+		}
+		if len(missing) > 0 {
+			return nil, &bmc.Error{Kind: bmc.KindProtocolError, Op: "secure_erase",
+				Detail: "serials not found on the controller — nothing erased: " + strings.Join(missing, ",")}
+		}
+	}
+	results := make([]bmc.SanitizeResult, 0, len(serials))
+	for _, s := range serials {
+		b.ErasedSerials = append(b.ErasedSerials, s)
+		results = append(results, bmc.SanitizeResult{Serial: s, Method: "fake-purge"})
+	}
+	return results, nil
 }
 
 func (d *Driver) CollectInventory(_ context.Context, addr string, _ bmc.Credentials) (bmc.HardwareView, error) {

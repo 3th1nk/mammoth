@@ -98,6 +98,30 @@ type FirmwareInventoryProvider interface {
 	FirmwareInventory(ctx context.Context, addr string, cred Credentials) ([]FirmwareComponent, error)
 }
 
+// SanitizeResult reports what one drive's secure erase actually did, for
+// the NIST 800-88 sanitization record (docs/07-bmc.md §6.2): which purge
+// mechanism the controller applied and when it finished.
+type SanitizeResult struct {
+	Serial    string `json:"serial"`
+	Method    string `json:"method,omitempty"` // vendor-reported (block erase / crypto erase / overwrite); informational
+	StartedAt string `json:"started_at,omitempty"`
+	EndedAt   string `json:"ended_at,omitempty"`
+}
+
+// DriveEraser is the optional capability of issuing the controller's
+// secure erase on physical drives — the BMC-side half of NIST 800-88 media
+// sanitization (docs/07-bmc.md §6.2). This is the most destructive
+// capability in the surface: erased data is unrecoverable by design. The
+// pipeline layers the two-stage confirmation and live-drive validation
+// around it; the driver only speaks the protocol.
+type DriveEraser interface {
+	// SecureErase erases the physical drives identified by serial — the
+	// same identity PhysicalDriveEnumerator reports. Implementations must
+	// resolve every serial BEFORE touching any drive: one unknown serial
+	// aborts the whole request rather than erasing a subset.
+	SecureErase(ctx context.Context, addr string, cred Credentials, serials []string) ([]SanitizeResult, error)
+}
+
 // BiosSetter is the optional capability of reading and changing the
 // server's BIOS configuration through the Redfish Bios resource (attribute
 // table, vendor-neutral keys — docs/07-bmc.md §6). This is a HIGH-RISK

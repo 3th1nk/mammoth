@@ -362,15 +362,16 @@ func serve(args []string) error {
 		Logger:      logger,
 		Visibility:  cfg.VisibilityTimeout,
 
-		Netboot:             nbResolver,
-		NetbootRepo:         netbootRepo,
-		Pending:             pendingRepo,
-		Enroll:              enroll,
-		MediaDir:            cfg.MediaDir,
-		ExternalURL:         strings.TrimSuffix(cfg.ExternalURL, "/"),
-		BootStrategyDefault: cfg.BootStrategyDefault,
-		NetbootEnabled:      cfg.PXEEnabled && cfg.Mode.RunsNetboot(),
-		BiosConfirmRequired: cfg.BiosConfirmRequired,
+		Netboot:              nbResolver,
+		NetbootRepo:          netbootRepo,
+		Pending:              pendingRepo,
+		Enroll:               enroll,
+		MediaDir:             cfg.MediaDir,
+		ExternalURL:          strings.TrimSuffix(cfg.ExternalURL, "/"),
+		BootStrategyDefault:  cfg.BootStrategyDefault,
+		NetbootEnabled:       cfg.PXEEnabled && cfg.Mode.RunsNetboot(),
+		BiosConfirmRequired:  cfg.BiosConfirmRequired,
+		EraseConfirmRequired: cfg.EraseConfirmRequired,
 	}
 
 	errCh := make(chan error, 4)

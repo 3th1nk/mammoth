@@ -9,15 +9,19 @@ import (
 
 // NBP file names inside the embedded NBPs filesystem (assets/pxe).
 const (
-	nbpBIOS  = "undionly.kpxe"  // BIOS chainloader, rides the NIC's UNDI ROM
-	nbpX64   = "shimx64.efi"    // UEFI x64 Secure Boot chain: shim (Microsoft-signed) loads grubx64.efi (Debian-signed grubnet)
-	nbpARM64 = "ipxe-arm64.efi" // UEFI aarch64 (unsigned; Secure Boot support pending)
+	nbpBIOS  = "undionly.kpxe" // BIOS chainloader, rides the NIC's UNDI ROM
+	nbpX64   = "shimx64.efi"   // UEFI x64 Secure Boot chain: shim (Microsoft-signed) loads grubx64.efi (Debian-signed grubnet)
+	nbpARM64 = "shimaa64.efi"  // UEFI aarch64 Secure Boot chain: same shape as x64 — shim (Microsoft-signed) loads grubaa64.efi (Debian-signed grubnetaa64)
 )
 
-// grubX64 is the shim second stage: the firmware loads shimx64.efi, which
-// fetches grubx64.efi from the same TFTP directory by convention. It is
-// served from the same embedded FS but never named as the DHCP bootfile.
-const grubX64 = "grubx64.efi"
+// grubX64 and grubARM64 are the shim second stages: the firmware loads
+// shimx64.efi / shimaa64.efi, which fetch grubx64.efi / grubaa64.efi from
+// the same TFTP directory by convention. They are served from the same
+// embedded FS but never named as the DHCP bootfile.
+const (
+	grubX64   = "grubx64.efi"
+	grubARM64 = "grubaa64.efi"
+)
 
 // nbpFor maps a firmware architecture to its network boot program.
 func nbpFor(a Arch) string {

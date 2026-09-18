@@ -222,7 +222,8 @@ func (p *DHCPPool) lease(mac string) net.IP {
 // lease IP, because Debian grubnet requests the fixed path /grub/grub.cfg
 // (proxyDHCP leaves net_default_server empty, so the per-MAC filename
 // variants are never tried).
-func (p *DHCPPool) macFor(ip net.IP) string {	if p == nil || ip == nil {
+func (p *DHCPPool) macFor(ip net.IP) string {
+	if p == nil || ip == nil {
 		return ""
 	}
 	v4 := ip.To4()

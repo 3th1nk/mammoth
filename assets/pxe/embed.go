@@ -9,10 +9,11 @@ package pxe
 import "embed"
 
 // Files holds the NBP binaries: undionly.kpxe (BIOS), ipxe-amd64.efi and
-// ipxe-arm64.efi (UEFI, unsigned — plain UEFI only), the Secure Boot chain
-// shimx64.efi + grubx64.efi (UEFI x64, Microsoft/Debian signed), and grubnet's
-// module-list tables under grub/x86_64-efi/ (command/crypto/fs/terminal.lst
+// ipxe-arm64.efi (UEFI, unsigned — plain UEFI only), the Secure Boot chains
+// shimx64.efi + grubx64.efi (UEFI x64) and shimaa64.efi + grubaa64.efi (UEFI
+// aarch64, all Microsoft/Debian signed), and grubnet's module-list tables
+// under grub/x86_64-efi/ and grub/arm64-efi/ (command/crypto/fs/terminal.lst
 // etc.) that grubnet fetches from its (tftp)/grub/ prefix.
 //
-//go:embed undionly.kpxe ipxe-amd64.efi ipxe-arm64.efi shimx64.efi grubx64.efi grub/x86_64-efi
+//go:embed undionly.kpxe ipxe-amd64.efi ipxe-arm64.efi shimx64.efi grubx64.efi shimaa64.efi grubaa64.efi grub/x86_64-efi grub/arm64-efi
 var Files embed.FS

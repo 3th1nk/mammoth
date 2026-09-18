@@ -156,6 +156,9 @@ func TestNBPPresenceGate(t *testing.T) {
 	if nbpFor(ArchX64) != "shimx64.efi" {
 		t.Errorf("x64 NBP = %q, want the shim chain", nbpFor(ArchX64))
 	}
+	if nbpFor(ArchARM64) != "shimaa64.efi" {
+		t.Errorf("arm64 NBP = %q, want the shim chain", nbpFor(ArchARM64))
+	}
 }
 
 func TestRenderGRUB(t *testing.T) {

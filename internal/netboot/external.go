@@ -20,7 +20,9 @@ import (
 //	          boot.ipxe (static) → chain .../netboot/script?mac=${net0/mac}
 //	UEFI x64  DHCP → TFTP shimx64.efi → grubx64.efi → TFTP grub/grub.cfg
 //	          (static) → configfile (http,mammoth)/netboot/grub/${net_default_mac}
-//	          — shim/grub stay the Debian-signed pair, so Secure Boot holds.
+//	UEFI aa64 DHCP → TFTP shimaa64.efi → grubaa64.efi → same grub trampoline
+//	          — both shim/grub pairs stay the Debian-signed sets, so Secure
+//	          Boot holds on either architecture.
 //
 // Everything after the trampolines is the builtin machinery: the script
 // endpoint resolves the MAC against the entry registry (with the enrollment
@@ -44,6 +46,8 @@ func ExportExternalKit(dir string, nbps fs.FS, baseURL string) error {
 		"undionly.kpxe":        nil,
 		"shimx64.efi":          nil,
 		"grubx64.efi":          nil,
+		"shimaa64.efi":         nil,
+		"grubaa64.efi":         nil,
 		"boot.ipxe":            []byte(externalIPXETrampoline(ipxeBase)),
 		"grub/grub.cfg":        []byte(externalGRUBTrampoline(host)),
 		"dnsmasq.conf.example": []byte(ExternalDnsmasqExample(host, ipxeBase)),
@@ -64,17 +68,23 @@ func ExportExternalKit(dir string, nbps fs.FS, baseURL string) error {
 		}
 	}
 	// grubnet's module tables under its (tftp)/grub/ prefix — the whole
-	// subtree, same layout the builtin TFTP serves.
-	return fs.WalkDir(nbps, "grub/x86_64-efi", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
+	// subtree, same layout the builtin TFTP serves, for both architectures
+	// (x64 and aarch64 grubnet fetch the same (tftp)/grub/ paths).
+	for _, arch := range []string{"x86_64-efi", "arm64-efi"} {
+		if err := fs.WalkDir(nbps, "grub/"+arch, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			dest := filepath.Join(dir, filepath.FromSlash(path))
+			if d.IsDir() {
+				return os.MkdirAll(dest, 0o755)
+			}
+			return copyFSFile(nbps, path, dest)
+		}); err != nil {
 			return err
 		}
-		dest := filepath.Join(dir, filepath.FromSlash(path))
-		if d.IsDir() {
-			return os.MkdirAll(dest, 0o755)
-		}
-		return copyFSFile(nbps, path, dest)
-	})
+	}
+	return nil
 }
 
 func copyFSFile(fsys fs.FS, name, dest string) error {
@@ -142,16 +152,19 @@ enable-tftp
 tftp-root=/srv/mammoth-external-tftp
 
 # Client classes: iPXE announces option 175; UEFI x64 arrives with client
-# arch 7 (EFI BC) or 9 (EFI x86-64).
+# arch 7 (EFI BC) or 9 (EFI x86-64); UEFI aarch64 with arch 11.
 dhcp-match=set:ipxe,175
 dhcp-match=set:efi64,option:client-arch,7
 dhcp-match=set:efi64,option:client-arch,9
+dhcp-match=set:efi-aarch64,option:client-arch,11
 
 # BIOS, first boot: PXE ROM gets the undiom layer that turns it into iPXE.
-dhcp-boot=tag:!ipxe,tag:!efi64,undionly.kpxe,,<tftp-server>
+dhcp-boot=tag:!ipxe,tag:!efi64,tag:!efi-aarch64,undionly.kpxe,,<tftp-server>
 # UEFI x64, Secure Boot chain: Microsoft-signed shim loads Debian-signed grubnet.
 dhcp-boot=tag:efi64,tag:!ipxe,shimx64.efi,,<tftp-server>
-# iPXE (both chains, second boot): the static trampoline self-identifies
+# UEFI aarch64, Secure Boot chain: same shape, the aa64 signed pair.
+dhcp-boot=tag:efi-aarch64,tag:!ipxe,shimaa64.efi,,<tftp-server>
+# iPXE (all chains, second boot): the static trampoline self-identifies
 # with ${net0/mac} and chains to mammoth's per-MAC script over HTTP.
 dhcp-boot=tag:ipxe,boot.ipxe,,<tftp-server>
 

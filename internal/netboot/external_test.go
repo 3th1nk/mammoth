@@ -23,9 +23,10 @@ func TestExportExternalKit(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		"undionly.kpxe", "shimx64.efi", "grubx64.efi",
+		"undionly.kpxe", "shimx64.efi", "grubx64.efi", "shimaa64.efi", "grubaa64.efi",
 		"boot.ipxe", "grub/grub.cfg", "dnsmasq.conf.example",
 		"grub/x86_64-efi/command.lst", "grub/x86_64-efi/fs.lst",
+		"grub/arm64-efi/command.lst", "grub/arm64-efi/fs.lst",
 	} {
 		if fi, err := os.Stat(filepath.Join(dir, name)); err != nil || fi.IsDir() {
 			t.Errorf("kit file %s missing: %v", name, err)
@@ -43,9 +44,11 @@ func TestExportExternalKit(t *testing.T) {
 	dnsmasq, _ := os.ReadFile(filepath.Join(dir, "dnsmasq.conf.example"))
 	for _, want := range []string{
 		"dhcp-match=set:ipxe,175",
+		"dhcp-match=set:efi-aarch64,option:client-arch,11",
 		"dhcp-boot=tag:efi64,tag:!ipxe,shimx64.efi",
+		"dhcp-boot=tag:efi-aarch64,tag:!ipxe,shimaa64.efi",
 		"dhcp-boot=tag:ipxe,boot.ipxe",
-		"dhcp-boot=tag:!ipxe,tag:!efi64,undionly.kpxe",
+		"dhcp-boot=tag:!ipxe,tag:!efi64,tag:!efi-aarch64,undionly.kpxe",
 	} {
 		if !strings.Contains(string(dnsmasq), want) {
 			t.Errorf("dnsmasq example missing %q", want)

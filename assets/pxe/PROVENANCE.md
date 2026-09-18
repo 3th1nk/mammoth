@@ -71,6 +71,7 @@ signature, so a cross-distro mix breaks the chain.
 |---|---|---|
 | `shimx64.efi` | `/usr/lib/shim/shimx64.efi.signed` (Microsoft-signed shim, UEFI x64) | `e103c5d02657879f141b086ed703584d28bb9e2721b423333be085ee1b4d397b` |
 | `grubx64.efi` | `/usr/lib/grub/x86_64-efi-signed/grubnetx64.efi.signed` (Debian-signed GRUB network boot; renamed for shim's second-stage lookup) | `193a143635fa41834232954a9efae4b7c61488cc5025e803ea32deca9c4f9200` |
+| `grub/x86_64-efi/*.lst` | `/usr/lib/grub/x86_64-efi/*.lst` (module-list tables for grubnet's `(tftp)/grub/` prefix) | per-file content of the trixie `grub-efi-amd64-bin` .deb (version not pinned when first added; re-align via the fetch script's module-tables step) |
 
 ### Licensing
 
@@ -87,3 +88,32 @@ scripts/fetch-secureboot-bins.sh <shim> <grub>   # bump: pass new Debian package
 
 After a bump, update the two `.deb` sha256 above and `NOTICE` if the license
 text changed.
+
+### Arm64 chain (shimaa64 + grubnetaa64)
+
+The UEFI aarch64 Secure Boot chain mirrors x64 exactly: `shimaa64.efi`
+(Microsoft-signed shim) loads `grubaa64.efi` (Debian-signed GRUB network
+boot, renamed from `grubnetaa64.efi.signed` for shim's second-stage
+lookup). Same distro pairing rule as x64 — shim and GRUB must come from the
+same distro.
+
+| | |
+|---|---|
+| shim package | `shim-signed` **1.51~1+deb13u1+16.1-2~deb13u1** (arm64) |
+| shim .deb | <https://deb.debian.org/debian/pool/main/s/shim-signed/shim-signed_1.51~1+deb13u1+16.1-2~deb13u1_arm64.deb> |
+| shim .deb sha256 | `e228a68b298865e0f1b35f93dac8fc9644a47bde3487419efe305777e2d4a1f0` |
+| grub signed package | `grub-efi-arm64-signed` **1+2.12+9+deb13u2** (arm64) |
+| grub signed .deb | <https://deb.debian.org/debian/pool/main/g/grub-efi-arm64-signed/grub-efi-arm64-signed_1+2.12+9+deb13u2_arm64.deb> |
+| grub signed .deb sha256 | `488a67e0910789b701baaa9c5a6bb3091479df3d673ce01e35383773045e4eac` |
+| grub module tables package | `grub-efi-arm64-bin` **2.12-9+deb13u2** (arm64) |
+| module tables .deb | <https://deb.debian.org/debian/pool/main/g/grub2/grub-efi-arm64-bin_2.12-9+deb13u2_arm64.deb> |
+| module tables .deb sha256 | `303d92f7c7b02bce7c57efdc2c4f0fb1bf2040133546148a373d5b4eb8b94adc` |
+
+| This directory | Extracted from | sha256 |
+|---|---|---|
+| `shimaa64.efi` | `/usr/lib/shim/shimaa64.efi.signed` (Microsoft-signed shim, UEFI aarch64) | `e5446d2a09dfae3fa476e7635e3d25733afefa3c821932c0684e1f57b60a4744` |
+| `grubaa64.efi` | `/usr/lib/grub/arm64-efi-signed/grubnetaa64.efi.signed` (Debian-signed GRUB network boot; renamed for shim's second-stage lookup) | `9640d7178fbe2ba1de642ef45ee4d0adc5f4baeddb0a71d1697a412bff959a0b` |
+| `grub/arm64-efi/*.lst` | `/usr/lib/grub/arm64-efi/*.lst` (module-list tables for grubnet's `(tftp)/grub/` prefix) | per-file content of the pinned `grub-efi-arm64-bin` .deb |
+
+Licensing is identical to the x64 chain (shim GPL-2.0-only Red Hat; GRUB
+GPL-3.0-or-later FSF) — the same NOTICE paragraph covers both.

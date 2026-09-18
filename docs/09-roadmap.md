@@ -8,7 +8,8 @@
 > PXE 已 succeeded;shim+grubnet Secure Boot 闭环;零注册入门与设备档案
 > 全链交付(option 93 观测、enroll/pending_machines/claim、固件门禁)。
 > SQLite 最小部署形态已评估并放弃(见 10 §D2),存储收敛为 PostgreSQL-only。
-> 余项:uniontechos(见 compat/distros.md)、relay 真机回归;arm64 引导链
+> 余项:relay 真机回归;uniontechos 已真机闭环(2026-09-19,1050u2a 复验
+> 随窗口);arm64 引导链
 > 本机可验部分已闭环(2026-09-18:SB 签名链 qemu 验证 + 源码比对,见
 > 下一阶段 4),投递层与端到端回归待 ARM 真机。
 
@@ -239,7 +240,8 @@
      机轮装顺序覆盖(22/24/rocky9 已证明此模式可行);
    - **真机 relay 回归**——等网络设备配 ip helper 的协调窗口(giaddr 应答
      已有单测,见 11-pxe-walkthrough §4);
-   - **uniontechos**——blocked,等 UOS 支持,不主动排期;
+   - ~~**uniontechos**~~ **✅ 已闭环(2026-09-19 真机,见第 2 项)**;剩余
+     1050u2a 复验与 PXE 复核随下一窗口顺带;
    - **共享二层地址治理**(邻机占址归属/装机段划段)——线下协调;复验与
      relay 回归绑 runbooks/test-baselines.md 基线表滚动执行。
 

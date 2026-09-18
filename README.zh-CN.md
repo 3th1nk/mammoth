@@ -83,7 +83,7 @@ flowchart TD
 | rocky 10 | kickstart | DVD ISO,UEFI-only 布局 | 同上 | 同上 | qemu ✅ · 真机待验 |
 | centos 7 | kickstart | minimal ISO | 同 ISO | 同上 | ✅ 虚拟介质 |
 | kylin V10 / V11 | kickstart | DVD ISO | 同 ISO | 同上 | 待验 |
-| UOS | kickstart | DVD ISO | — | — | 受阻(厂商) |
+| UOS | kickstart | DVD ISO | 同源 ISO | NFS ISO | ✅ 虚拟介质 |
 | ubuntu 22.04 / 24.04 | autoinstall | **live-server** ISO(casper,重打包) | **live-server** ISO(squashfs 走 NFS) | 解包 ISO 树走 NFS | ✅ 双载体 |
 | debian 12 / 13 | preseed | **netinst** ISO(重打包) | **netinst** ISO(签名 HTTP 池)**+ 官方 netboot.tar.gz** + 暂存 udebs | HTTP 池(校验和完整、by-hash 回填) | ✅ 双载体 |
 

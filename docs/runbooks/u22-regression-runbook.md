@@ -85,6 +85,7 @@ EOF
 
 - **debian12**:✅ 2026-09-12 真机通过(netinst,~6min);注意
   `MAMMOTH_EXTERNAL_URL` 用 **http**(d-i busybox wget 的 TLS 受限);
-- **uniontechos(UOS)**:**blocked**——ISO 实测为 anaconda 定制(RHEL 系树,
-  非 d-i),已归 kickstart 方言;Finish 阶段崩溃待 UOS 支持
-  (见 [compat/distros.md](../compat/distros.md))。
+- **uniontechos(UOS)**:✅ 2026-09-19 真机闭环(虚拟介质零人工六阶段绿)
+  ——ISO 实测为 anaconda 定制(RHEL 系树,非 d-i),归 kickstart 方言;
+  曾 blocked 的 Finish 崩溃已定位为 UOS 定制 anaconda 无 swap 崩溃并修复
+  (根因全录见 [compat/distros.md](../compat/distros.md))。

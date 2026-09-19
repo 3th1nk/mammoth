@@ -63,6 +63,7 @@ const (
 	layoutDebianDI isoLayout = "debian-di" // debian-installer (/install.amd | /install)
 	layoutAlpine   isoLayout = "alpine"    // alpine standard (/boot, syslinux.cfg; probe media)
 	layoutRHEL10   isoLayout = "rhel10"    // RHEL10-lineage UEFI-only (no isolinux; /images/eltorito.img)
+	layoutWindows  isoLayout = "windows"   // Windows Server (/sources/install.wim; bootmgr, no config to patch)
 )
 
 // Layout is the exported handle for a boot-layout family (media-space
@@ -86,6 +87,9 @@ func DetectLayout(ctx context.Context, xorrisoPath, isoPath string) (Layout, str
 	if rhel10Layout(ctx, xorriso, isoPath) {
 		return layoutRHEL10, "", nil
 	}
+	if windowsLayout(ctx, xorriso, isoPath) {
+		return layoutWindows, "", nil
+	}
 	// Alpine (standard/virt): a /boot/vmlinuz-<flavor> tree nobody else
 	// ships. The flavor doubles as the config installDir (kernel/initrd are
 	// named by it). Classification is needed beyond the probe builder now —
@@ -104,7 +108,7 @@ func DetectLayout(ctx context.Context, xorrisoPath, isoPath string) (Layout, str
 // (as opposed to a selective boot-media assembly).
 func (l Layout) FullRepack() bool {
 	switch l {
-	case layoutCasper, layoutDebianDI, layoutRHEL10, layoutAlpine:
+	case layoutCasper, layoutDebianDI, layoutRHEL10, layoutAlpine, layoutWindows:
 		return true
 	}
 	return false
@@ -382,6 +386,121 @@ func rhel10Layout(ctx context.Context, xorrisoOverride, iso string) bool {
 	return probe("/images/eltorito.img") && !probe("/isolinux/isolinux.bin")
 }
 
+// sevenZip locates a 7-Zip binary: "7zz" (the newer 7-Zip standalone) or
+// "7z" (p7zip). The error surfaces at invocation with the tried names.
+func sevenZip() string {
+	for _, exe := range []string{"7zz", "7z"} {
+		if p, err := exec.LookPath(exe); err == nil {
+			return p
+		}
+	}
+	return "7z"
+}
+
+// windowsLayout reports the Windows Server media shape: /sources/install.wim
+// is the discriminator no other family ships (boot.wim coexists; split
+// .swm media is out of scope). The probe MUST force the UDF view (-tUDF):
+// a Windows media's ISO9660 tree carries only a lone README — install.wim
+// is >4 GiB and UDF-only, and xorriso cannot read UDF directory trees
+// (real-media finding: cn_windows_server_2019, 2026-09-19). bootmgr needs
+// no mammoth boot arguments — Windows Setup finds autounattend.xml at the
+// medium root natively.
+func windowsLayout(ctx context.Context, _ string, iso string) bool {
+	out, err := exec.CommandContext(ctx, sevenZip(), "l", "-tUDF", iso).CombinedOutput()
+	return err == nil && strings.Contains(strings.ToLower(string(out)), "sources/install.wim")
+}
+
+// windowsVolumeID reads the volume label straight from the ISO9660 Primary
+// Volume Descriptor (LBA 16, bytes 40..71) — present even in UDF-bridge
+// media, tool-independent, xorriso-version-proof. Fallback label keeps the
+// build alive if the read misfires (the label is cosmetic for unattended
+// setup).
+func windowsVolumeID(iso string) string {
+	const fallback = "MAMMOTH_WIN"
+	f, err := os.Open(iso)
+	if err != nil {
+		return fallback
+	}
+	defer f.Close()
+	pvd := make([]byte, 2048)
+	if _, err := f.ReadAt(pvd, 32768); err != nil {
+		return fallback
+	}
+	if string(pvd[1:6]) != "CD001" || pvd[0] != 1 {
+		return fallback
+	}
+	id := strings.TrimRight(string(pvd[40:72]), " ")
+	if id == "" {
+		return fallback
+	}
+	return id
+}
+
+// windowsAssemblyArgs builds the canonical mkisofs argument set for a
+// Windows media: El Torito pairs straight from the extracted tree
+// (boot/etfsboot.com BIOS + efi/microsoft/boot/efisys.bin UEFI, both plain
+// files on every Server media), UDF is load-bearing (install.wim >4 GiB is
+// unreachable through plain ISO9660), and the volume label replays from the
+// source PVD so the rebuilt medium keeps the media's own identity.
+func windowsAssemblyArgs(outputPath, volid string) []string {
+	return []string{
+		"-o", outputPath,
+		"-V", volid,
+		// install.wim exceeds the 4 GiB ISO9660 ceiling: -allow-limited-size
+		// opts into the wrapped ISO9660 size while the UDF view carries the
+		// true size — the UDF view is what Windows Setup reads.
+		"-allow-limited-size",
+		"-iso-level", "3", "-J", "-joliet-long", "-D", "-N", "-udf",
+		"-b", "boot/etfsboot.com", "-no-emul-boot", "-c", "boot.cat",
+		"-boot-load-size", "8",
+		"-eltorito-alt-boot", "-e", "efi/microsoft/boot/efisys.bin", "-no-emul-boot",
+	}
+}
+
+// injectWindowsSetupComplete adds the driver's SetupComplete.cmd (a seed
+// file) into the install.wim image the unattend installs (%WINDIR%\Setup\
+// Scripts\ — Windows runs it as SYSTEM before first logon, so this is
+// where the completion callback and declared static network land; the wim
+// edit needs wimlib, not xorriso; the builder image ships both).
+// v1 contract: the unattend selects SERVERSTANDARDCORE (docs/compat/
+// distros.md §windows), so the injection targets that image by name —
+// wimlib's update does not accept an ALL selector (1.13: "Cannot specify
+// all images for this action").
+func injectWindowsSetupComplete(ctx context.Context, work string, seed map[string]string) error {
+	content, ok := seed["mammoth/SetupComplete.cmd"]
+	if !ok || content == "" {
+		return nil // defensive: the windows driver always renders it
+	}
+	wim := filepath.Join(work, "sources", "install.wim")
+	info, err := exec.CommandContext(ctx, "wimlib-imagex", "info", wim).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("wimlib-imagex info: %w: %s", err, tail(info, 400))
+	}
+	// info lists "Index: N" blocks followed by "Name: ..."; find the
+	// Standard Core image index.
+	idx := ""
+	for _, line := range strings.Split(string(info), "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "Index:") {
+			idx = strings.TrimSpace(strings.TrimPrefix(t, "Index:"))
+		} else if strings.HasPrefix(t, "Name:") &&
+			strings.Contains(strings.ToUpper(t), "SERVERSTANDARDCORE") && idx != "" {
+			break
+		}
+	}
+	if idx == "" {
+		return fmt.Errorf("windows: SERVERSTANDARDCORE image not found in install.wim (SKU contract mismatch)")
+	}
+	src := filepath.Join(work, "mammoth", "SetupComplete.cmd")
+	cmd := exec.CommandContext(ctx, "wimlib-imagex", "update", wim, idx,
+		"--command=add "+src+" /Windows/Setup/Scripts/SetupComplete.cmd")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("wimlib-imagex update (builder image must ship wimlib): %w: %s", err, tail(out, 400))
+	}
+	return nil
+}
+
 // debianInstallDir returns the d-i kernel directory name ("install.amd" on
 // Debian; "install" kept for derivatives/UOS) or "" when the image carries
 // no debian-installer layout. Callers MUST probe casper first — Ubuntu
@@ -429,26 +548,35 @@ func rebuildPatchedISO(ctx context.Context, opt BootMediaOptions, kernelArgs str
 	}
 
 	// Reproduce parameters straight from the image (label, El Torito entries,
-	// MBR/GPT layout) — distro-version proof.
-	report, err := exec.CommandContext(ctx, xorriso, "-indev", opt.ISOPath,
-		"-report_el_torito", "as_mkisofs").CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("el torito report: %w: %s", err, tail(report, 400))
-	}
+	// MBR/GPT layout) — distro-version proof. Windows skips this entirely:
+	// its hidden El Torito images make the report fail fatally on older
+	// xorriso (1.4.8, real-media finding) and the assembly args are
+	// canonical anyway — only the volume label is replayed, read directly
+	// from the ISO9660 PVD.
 	var mkisofsArgs []string
-	scanner := bufio.NewScanner(strings.NewReader(string(report)))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "'") && !strings.HasPrefix(line, "\"") {
-			continue // report preamble lines
+	volid := ""
+	if layout == layoutWindows {
+		volid = windowsVolumeID(opt.ISOPath)
+	} else {
+		report, err := exec.CommandContext(ctx, xorriso, "-indev", opt.ISOPath,
+			"-report_el_torito", "as_mkisofs").CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("el torito report: %w: %s", err, tail(report, 400))
 		}
-		mkisofsArgs = append(mkisofsArgs, splitQuoted(line)...)
+		scanner := bufio.NewScanner(strings.NewReader(string(report)))
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if !strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "'") && !strings.HasPrefix(line, "\"") {
+				continue // report preamble lines
+			}
+			mkisofsArgs = append(mkisofsArgs, splitQuoted(line)...)
+		}
+		// debian-cd's report references HOST-side helpers (-isohybrid-mbr
+		// /usr/lib/ISOLINUX/isohdpfx.bin) or the SOURCE image via an --interval
+		// spec with a relative path — neither exists at assembly time.
+		mkisofsArgs = rewriteIsohybridMbr(mkisofsArgs, work, opt.ISOPath)
 	}
-	// debian-cd's report references HOST-side helpers (-isohybrid-mbr
-	// /usr/lib/ISOLINUX/isohdpfx.bin) or the SOURCE image via an --interval
-	// spec with a relative path — neither exists at assembly time.
-	mkisofsArgs = rewriteIsohybridMbr(mkisofsArgs, work, opt.ISOPath)
 
 	// Full extract. ISO9660 extraction preserves read-only modes — grant
 	// owner write over the tree or the grub.cfg patch below fails.
@@ -456,8 +584,18 @@ func rebuildPatchedISO(ctx context.Context, opt BootMediaOptions, kernelArgs str
 	// ISO root's recorded mode (0644, no search bit) to the target directory
 	// and its own subsequent opens then fail with "openfdat ...: permission
 	// denied". It temporarily chmods restored dirs so extraction completes.
-	extract, err := exec.CommandContext(ctx, xorriso, "-osirrox", "on:auto_chmod_on", "-indev", opt.ISOPath,
-		"-extract", "/", work).CombinedOutput()
+	// Full extract. Windows media goes through 7-Zip with the forced UDF
+	// view — osirrox cannot see the UDF-only tree (see windowsLayout).
+	// All other families keep xorriso osirrox.
+	var extract []byte
+	var err error
+	if layout == layoutWindows {
+		extract, err = exec.CommandContext(ctx, sevenZip(), "x", "-tUDF", "-y",
+			"-o"+work, opt.ISOPath).CombinedOutput()
+	} else {
+		extract, err = exec.CommandContext(ctx, xorriso, "-osirrox", "on:auto_chmod_on", "-indev", opt.ISOPath,
+			"-extract", "/", work).CombinedOutput()
+	}
 	if err != nil {
 		_ = os.WriteFile("/tmp/extract-debug.log", extract, 0o644)
 		return "", fmt.Errorf("extract distro iso: %w: %s", err, tail(extract, 600))
@@ -497,16 +635,37 @@ func rebuildPatchedISO(ctx context.Context, opt BootMediaOptions, kernelArgs str
 		}
 	}
 
+	if layout == layoutWindows {
+		if err := injectWindowsSetupComplete(ctx, work, opt.SeedFiles); err != nil {
+			return "", err
+		}
+	}
 	if err := patchBootConfigs(work, kernelArgs, layout, installDir); err != nil {
 		return "", err
 	}
 
-	args := append([]string{"-as", "mkisofs", "-o", opt.OutputPath}, mkisofsArgs...)
-	args = append(args, work)
-	out, err := exec.CommandContext(ctx, xorriso, args...).CombinedOutput()
+	var asmExe string
+	var asmArgs []string
+	if layout == layoutWindows {
+		// Windows assembly uses genisoimage, NOT xorriso: libisofs cannot
+		// write UDF in any version (-as mkisofs rejects -udf, real-media
+		// finding on 1.4.8 AND 1.5.8) and UDF is load-bearing — install.wim
+		// (4.3 GiB) exceeds the ISO9660 byte-size ceiling, so a plain
+		// ISO9660 medium is unreadable to Windows Setup. genisoimage -udf
+		// is the two-decade-standard Windows-media path on Linux; El Torito
+		// pairs straight from the extracted tree (boot/etfsboot.com BIOS +
+		// efi/microsoft/boot/efisys.bin UEFI), volume label replays from
+		// the source PVD.
+		asmExe = "genisoimage"
+		asmArgs = append(windowsAssemblyArgs(opt.OutputPath, volid), work)
+	} else {
+		asmExe = xorriso
+		asmArgs = append(append([]string{"-as", "mkisofs", "-o", opt.OutputPath}, mkisofsArgs...), work)
+	}
+	out, err := exec.CommandContext(ctx, asmExe, asmArgs...).CombinedOutput()
 	if err != nil {
-		_ = os.WriteFile("/tmp/asm-debug.log", append(out, []byte(fmt.Sprintf("\nARGS: %v\n", args))...), 0o644)
-		return "", fmt.Errorf("xorriso: %w: %s", err, tail(out, 400))
+		_ = os.WriteFile("/tmp/asm-debug.log", append(out, []byte(fmt.Sprintf("\nARGS: %s %v\n", asmExe, asmArgs))...), 0o644)
+		return "", fmt.Errorf("%s: %w: %s", asmExe, err, tail(out, 400))
 	}
 	// The work tree (gigabytes of extracted ISO) never outlives the build —
 	// in server deployments it lives INSIDE the media export.
@@ -529,6 +688,12 @@ func rebuildPatchedISO(ctx context.Context, opt BootMediaOptions, kernelArgs str
 // EFI/boot/grub.cfg is patched too when present, so derivatives that ship
 // one don't resurrect a menu without the mammoth args.
 func patchBootConfigs(work, kernelArgs string, layout isoLayout, installDir string) error {
+	if layout == layoutWindows {
+		// bootmgr consumes no mammoth arguments: the unattend is found at
+		// the medium root by name, and the El Torito replay below keeps the
+		// media's own etfsboot/efisys boot entries intact.
+		return nil
+	}
 	for rel, content := range bootConfigs(kernelArgs, layout, installDir) {
 		dest := filepath.Join(work, filepath.FromSlash(rel))
 		if layout == layoutDebianDI && !fileExists(filepath.Join(work, filepath.FromSlash(rel))) {

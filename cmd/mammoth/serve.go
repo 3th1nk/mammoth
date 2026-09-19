@@ -33,6 +33,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/render/autoinstall"
 	"github.com/3th1nk/mammoth/internal/render/kickstart"
 	"github.com/3th1nk/mammoth/internal/render/preseed"
+	"github.com/3th1nk/mammoth/internal/render/windows"
 	"github.com/3th1nk/mammoth/internal/store"
 	"github.com/3th1nk/mammoth/internal/store/queue"
 	"github.com/3th1nk/mammoth/internal/version"
@@ -198,6 +199,9 @@ func serve(args []string) error {
 		autoinstall.New("ubuntu24"),
 		preseed.New("debian12"),
 		preseed.New("debian13"),
+		// Windows Server unattend (docs/compat/distros.md §windows): v1 is
+		// virtual-media + UEFI-only — SetupComplete carries the callback.
+		windows.New("windows2019"),
 		// The agent install path pilot (docs/12-agent-initramfs.md): no
 		// distro installer — the mammoth agent initramfs consumes the
 		// declarative spec directly and installs from the package pool.

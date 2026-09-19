@@ -65,7 +65,7 @@ type NetbootInputs struct {
 	// content-addressed unpack (<ExternalURL>/netboot/store/<sha256>/iso).
 	PoolURL string
 	// NFSRootURL is the NFS install-source tree in casper's nfsroot form
-	// (host:/path — MediaNFSBase + the shared pool-store path).
+	// (host:/path — MediaBaseURI + the shared pool-store path).
 	NFSRootURL string
 	// PoolPublicKey is the binary OpenPGP keyring of the pool signing key —
 	// the HTTP pool is a signed offline mirror, and the installer's apt needs

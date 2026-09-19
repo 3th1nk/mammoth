@@ -746,7 +746,7 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 			// PoolURL points at the shared unpacked-ISO tree (/iso) — d-i's
 			// mirror directory and casper's http fallback both root there.
 			PoolURL:    fmt.Sprintf("%s/netboot/store/%s/iso", strings.TrimSuffix(e.ExternalURL, "/"), sha),
-			NFSRootURL: nfsRootFor(e.MediaNFSBase, filepath.Join(PoolStoreDirName, sha, "iso")),
+			NFSRootURL: nfsRootFor(e.MediaBaseURI, filepath.Join(PoolStoreDirName, sha, "iso")),
 		}
 		// Reserve the machine's pool address now: DHCP-carrier installs (the
 		// casper carrier) hand it to the installer as a static ip= argument —
@@ -1586,12 +1586,4 @@ func snapshotDiskSize(sd snapPartition) int64 {
 		}
 	}
 	return last
-}
-
-// mediaURIFor returns the BMC-accessible URI for a media file name.
-func (e *Executor) mediaURIFor(filename string) string {
-	if e.MediaNFSBase == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s/%s", strings.TrimSuffix(e.MediaNFSBase, "/"), filename)
 }

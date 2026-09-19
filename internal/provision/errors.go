@@ -39,6 +39,19 @@ func Classified(err error) store.ErrorInfo {
 	return store.ErrorInfo{Code: "INSTALL_INTERNAL", Message: err.Error(), Retryable: true}
 }
 
+// AsClassified reports whether err carries a classified triple (errInfo) and
+// returns it. Unlike Classified it does NOT fold bmc.Error or unknown errors
+// into a default — the API error mapper needs the distinction (bmc failures
+// surface as 502 with their own code; unknown errors must stay 500, only
+// classified rejections are 422s).
+func AsClassified(err error) (store.ErrorInfo, bool) {
+	var ei *errInfo
+	if errors.As(err, &ei) {
+		return ei.ErrorInfo, true
+	}
+	return store.ErrorInfo{}, false
+}
+
 func classifiedErr(code string, retryable bool, format string, args ...any) error {
 	return &errInfo{ErrorInfo: store.ErrorInfo{
 		Code: code, Message: fmt.Sprintf(format, args...), Retryable: retryable,

@@ -12,6 +12,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/3th1nk/mammoth/internal/bmc"
+	"github.com/3th1nk/mammoth/internal/obs"
+	"github.com/3th1nk/mammoth/internal/provision"
 	"github.com/3th1nk/mammoth/internal/store"
 )
 
@@ -73,6 +75,15 @@ func writeError(c *gin.Context, err error) {
 			problem(c, status, appErr.Code(), "Request rejected", err.Error(), false)
 			return
 		}
+		// provision's classified triple (install-plan's LAYOUT_*/RENDER_FAILED/
+		// SCHEMA_*, …) carries no Code() method — map it explicitly instead of
+		// letting it degrade to a 500 that hides the actual rejection.
+		if ci, ok := provision.AsClassified(err); ok {
+			problem(c, http.StatusUnprocessableEntity, ci.Code, "Request rejected", ci.Message, ci.Retryable)
+			return
+		}
+		obs.FromContext(c.Request.Context()).WarnContext(c.Request.Context(),
+			"unmapped error → 500", "err", err.Error())
 		problem(c, http.StatusInternalServerError, "SCHEMA_INTERNAL", "Internal error",
 			"unexpected server error", false)
 	}

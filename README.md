@@ -167,10 +167,55 @@ curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
 curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
   -d '{"bmc":{"address":"fake://n1","protocol":"fake","credential_id":"cred_..."}}' \
   localhost:8080/api/v1/machines
-# 3. power it on (async: 202 + job)
+# 3. dry-run the install plan (read-only resolution: which disk the
+#    selector picks, whether keep hits the snapshot — no boot burned)
+curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
+  -d '{"spec":{"image":{"distro":"rocky9"},"storage":{"disks":[{"select":{"match":{"size":"largest"}},"wipe":true}]}}}' \
+  localhost:8080/api/v1/machines/mch_.../install-plan
+
+# 4. batch install (the complete Install Spec: one intent, rendered into
+#    the distro's dialect)
+curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
+  -d '{
+    "type": "install",
+    "targets": {"machine_ids": ["mch_a", "mch_b"]},
+    "spec": {
+      "image":  {"source": "https://mirror.example/rocky9.iso", "distro": "rocky9"},
+      "storage": {"disks": [{
+          "select": {"match": {"type": "nvme", "size": "largest"}},
+          "wipe": true,
+          "partitions": [
+            {"size": "512M", "fs": "vfat", "mount": "/boot/efi", "flags": ["esp"]},
+            {"size": "1G",   "fs": "xfs",  "mount": "/boot"},
+            {"size": "rest", "fs": "xfs",  "mount": "/"}]}]},
+      "network": [{
+          "match": {"mac": "aa:bb:cc:dd:ee:01"}, "set_name": "eno1",
+          "addresses": ["172.16.1.11/24"],
+          "routes": [{"to": "default", "via": "172.16.1.1"}],
+          "nameservers": {"addresses": ["10.0.0.53"]}}],
+      "identity": {"hostname_pattern": "node-{index}"},
+      "access":   {"ssh_keys": ["ssh-ed25519 AAA you@host"]},
+      "scripts":  [{"stage": "post_install", "content_base64": "ZWNobyBkb25lCg=="}],
+      "boot":     {"strategy": "virtual_media"}
+    },
+    "policy": {"concurrency": 2, "on_task_failure": "continue"}
+  }'
+# → 202 + job_id;both machines install concurrently, one failure does not
+#   block the batch
+# → root password defaults to a per-task random, delivered once via the
+#   task.root_password event
+# → keep semantics: disks[].keep: disk|partitions + preserve (by snapshot
+#   partition number; support matrix in docs/06 §5, install-plan pre-checks)
+# → bond/vlan, software+hardware RAID, the pxe carrier: full surface in docs/04
+
+# 5. generic out-of-band actions (power/media/boot-device — first-class API
+#    decoupled from installs)
 curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
   -d '{"type":"power_on"}' localhost:8080/api/v1/machines/mch_.../actions
-# 4. watch the job
+
+# 6. watch the job (event stream: SSE /api/v1/events; full scripted
+#    acceptance: scripts/acceptance.py — it plays the fake machines, fetching
+#    answer files and reporting completion)
 curl -s -H "$TOKEN" localhost:8080/api/v1/jobs/job_...
 ```
 

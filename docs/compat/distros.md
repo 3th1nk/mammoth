@@ -294,6 +294,12 @@ mini.iso)提供驱动支持。
 RAID 拒绝、bond/vlan 拒绝、用户脚本拒绝、非默认路由拒绝、FirmwareSupport=uefi_only
 (渲染面是 ESP+MSR 形态,BIOS 机提交即拒)。SKU 固定 SERVERSTANDARDCORE。
 
-**待验证**:qemu winpe 引导与应答前半(路线图既定 qemu 可验范围)→ 2288H 真机
+**qemu 已验证(2026-09-19/20,TCG)**:OVMF→bootmgfw→WinPE 引导链、autounattend
+被完整受理(WillShowUI=OnError 下零交互 UI)。**真机教训(2026-09-20)**:Server 2019
+的 Setup 要求 UserData 内 **<ProductKey> 元素存在**(空 Key + /IMAGE/NAME 选 SKU),
+缺失即弹 "无法从无人参与应答文件读取 <ProductKey> 设置" 中止——已修复并 golden 钉住。
+TCG 全装挂机因固件交互窗口(UEFI Shell→bootx64→press-any-key→BCD 菜单)的定时
+盲发不可靠,收口于应答受理层;装机闭环与 SetupComplete 回调验证并入 2288H 真机窗口。
+**待真机**:2288H
 (LSI SAS3508:2019 有 inbox MegaRAID 驱动,预期免注入;若 WinPE 不识别再走
 boot.wim 驱动注入)。iBMC 6.41 虚拟介质挂 5GB ISO:UOS 8.2G 已实证可行。

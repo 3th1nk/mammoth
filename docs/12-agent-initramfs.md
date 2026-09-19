@@ -182,3 +182,20 @@ keep 任何形态(SupportLevel=none,提交门禁即拒)、xfs 等 ext4/vfat/swap
 **对 API 形态的影响**:无契约变更(distro 自由字符串 + 能力接口门禁
 足够)。未来若 agent 路径转正,值得考虑的仅是:plan 的 JSON 面可挂到
 install-plan 端点作 dry-run 产物(dialect: "agent" 的渲染预览)。
+
+## 真机闭环(2026-09-19,2288H V5 / LSI LogicalDrive0,✅)
+
+六阶段全绿零人工:LSI 3.6T 卷装机 + 无人值守自举 + SSH 钥匙直通
+(agent-2288h)。真机暴露并当日修复:
+
+1. **控制器卷盘名解析缺位**(0bede94):plan 把 Redfish 名(LogicalDrive0)
+   直接当内核设备名,sfdisk 报 cannot open——kickstart %pre 与 autoinstall
+   resolve-disk 均有 size±1% 解析,agent 路径补齐(plan 携带 size_bytes,
+   runtime resolve_disks 解析并同步重写分区键);内核名直通不解析;
+2. **诊断链固化**(迭代九轮的真金):storage/sfdisk 全去静默进 err 文件 +
+   sfdisk 瞬态重试、log 双写文件、bail 上报携带 script 版本 + err/log
+   轨迹——控制台/KVM 不可靠时(慢 init 或断连)回调详情是唯一信道;
+3. 排障过程的教训:**spec 缺 network 字段是 agent 装机静默挂死的形态**
+   (回调不可达),基线注记见 runbooks/test-baselines.md;**部署链的
+   pkill 自匹配陷阱**会导致"以为部署了其实服务还是旧二进制"(ISO 内容
+   与二进制版本核对是排障第一课)。

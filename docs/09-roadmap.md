@@ -254,6 +254,21 @@
 - 多机 Raid/LVM 拓扑编排
 - gRPC 内部面间协议(当前为队列 + DB,足够)
 
+- **vMedia 安装器 syslog 通道(观测面,定案待实施,2026-09-20)**——业务形态
+  (左阶段树+右完整日志流)已定,唯一实质缺口是默认载体的 install_os 日志密度:
+  安装器远程日志(`syslog=` 内核参数 → 514/udp sink → task_logs)目前仅 debian
+  netboot 渲染。实施定案(全部事实已核):①渲染层——kickstart 系加
+  `inst.syslog=<host>`、casper/autoinstall 加 `syslog=<host>`,host 推导照抄
+  preseed.netbootKernelArgs 的 AnswerBaseURL hostname 模式(preseed.go:84),
+  vMedia 与 PXE 两路 KernelArgs 都带;②sink 归因——现状 serveSyslog 走
+  DHCP.macFor(租约反查)→Resolver.Entry→task_id(netboot/server.go:297),
+  vMedia 无租约,需扩展 IP→task 归因(共享注册表:provision 在 boot 阶段注册
+  spec 声明地址+TTL,netboot sink 读;或 opts 加 IPResolver 接口);③sink 存活
+  门禁——serveSyslog 随 netboot 服务起,`MAMMOTH_PXE_ENABLED=false` 的纯
+  vMedia 部署需确认 sink 独立存活(escape hatch 已保证 external 模式仍绑);
+  ④契约不动——日志仍走 task_logs,UI 按 stage 字段客户端着色,左树右流
+  无需新 API(轮询 cursor 即近实时,logs SSE 属后续可选)。
+
 ## 已评估并排除的方向(决策记录,避免重新论证)
 
 - **办公电脑批量安装(非服务器镜像场景),2026-09-19 评估,不做**——骨架复用率

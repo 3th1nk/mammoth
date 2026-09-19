@@ -42,7 +42,7 @@ The gopher in mammoth fur at the top says the same thing: a small binary
 
 ## At a glance
 
-**One pipeline, three onboarding paths, two boot carriers, four installer
+**One pipeline, three inventory paths, two boot carriers, four installer
 dialects.**
 
 ```mermaid

@@ -22,7 +22,6 @@ func (d *Driver) FirmwareInventory(ctx context.Context, addr string, cred bmc.Cr
 	if err != nil {
 		return nil, err
 	}
-	defer c.Logout()
 
 	get := func(url string) ([]byte, error) {
 		resp, err := c.Get(url)

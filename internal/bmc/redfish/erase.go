@@ -34,11 +34,10 @@ func (d *Driver) SecureErase(ctx context.Context, addr string, cred bmc.Credenti
 	if err != nil {
 		return nil, err
 	}
-	defer c.Logout()
 
 	drives, err := controllerDrives(ctx, c)
 	if err != nil {
-		return nil, bmc.Classify(op, err)
+		return nil, d.classify(op, err)
 	}
 	bySerial := map[string]controllerDrive{}
 	for _, dr := range drives {

@@ -1924,7 +1924,10 @@ components:
           $ref: '#/components/schemas/SizeSpec'
         fs:
           type: string
-          enum: [vfat, xfs, ext4, swap]
+          enum: [vfat, xfs, ext4, swap, ntfs, fat32]
+          description: ntfs/fat32 belong to the windows2019 dialect
+            (docs/compat/distros.md §windows); the Linux dialects reject
+            them at render time.
         mount:
           type: string
         flags:

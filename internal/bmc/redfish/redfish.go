@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/stmcginnis/gofish"
@@ -27,10 +28,43 @@ type Driver struct {
 	Insecure bool
 	// Timeout bounds a single HTTP exchange against the BMC.
 	Timeout time.Duration
+
+	// Session cache: controllers rate-limit session creation (iBMC 6.41
+	// answers 400 after a handful of rapid POSTs — a boot stage's mount /
+	// eject / boot-set / power burst exhausts it and the stage dies with
+	// BMC_AUTH_FAILED). Sessions are reused per address+user under a short
+	// TTL; auth-kind operation failures invalidate the entry so the next
+	// call reconnects. The Registry serializes per address, so a cached
+	// client is never used concurrently.
+	sessMu    sync.Mutex
+	sessCache map[string]*sessEntry
+}
+
+// sessTTL bounds a cached client's reuse window (kept well under typical
+// controller session idle timeouts).
+const sessTTL = 5 * time.Minute
+
+type sessEntry struct {
+	client  *gofish.APIClient
+	expires time.Time
 }
 
 func New(insecure bool, timeout time.Duration) *Driver {
-	return &Driver{Insecure: insecure, Timeout: timeout}
+	return &Driver{Insecure: insecure, Timeout: timeout, sessCache: map[string]*sessEntry{}}
+}
+
+// classify wraps bmc.Classify with session-cache invalidation: an auth-kind
+// failure means the cached session died server-side — drop it so the next
+// call reconnects instead of hammering a dead token.
+func (d *Driver) classify(op string, err error) error {
+	if e, ok := err.(*bmc.Error); ok && e.Kind == bmc.KindAuthFailed {
+		// The cached session died server-side; drop everything —
+		// reconnection is cheap relative to the failure.
+		d.sessMu.Lock()
+		d.sessCache = map[string]*sessEntry{}
+		d.sessMu.Unlock()
+	}
+	return bmc.Classify(op, err)
 }
 
 func (d *Driver) Name() bmc.Protocol { return bmc.ProtocolRedfish }
@@ -43,9 +77,26 @@ func (d *Driver) Name() bmc.Protocol { return bmc.ProtocolRedfish }
 // continues with the pre-authenticated token.
 func (d *Driver) connect(ctx context.Context, addr string, cred bmc.Credentials) (*gofish.APIClient, error) {
 	base := normalizeHost(addr)
+	key := base + "|" + cred.Username
+
+	d.sessMu.Lock()
+	if e, ok := d.sessCache[key]; ok && time.Now().Before(e.expires) {
+		cl := e.client
+		d.sessMu.Unlock()
+		return cl, nil
+	}
+	d.sessMu.Unlock()
+
 	httpClient := makeHTTPClient(d.Timeout, d.Insecure)
 
-	session, err := d.createSession(ctx, httpClient, base, cred)
+	// The connection outlives the caller's context (cached clients are
+	// reused across stages), so the handshake runs on a fresh one — gofish
+	// binds the ConnectContext to every later request, and a caller-scoped
+	// ctx would cancel all of them once its stage ends. Per-request
+	// duration stays bounded by the HTTP client's Timeout.
+	connCtx := context.Background()
+
+	session, err := d.createSession(connCtx, httpClient, base, cred)
 	if err != nil {
 		return nil, err
 	}
@@ -63,10 +114,13 @@ func (d *Driver) connect(ctx context.Context, addr string, cred bmc.Credentials)
 		cfg.Password = cred.Password
 		cfg.BasicAuth = true
 	}
-	client, err := gofish.ConnectContext(ctx, cfg)
+	client, err := gofish.ConnectContext(connCtx, cfg)
 	if err != nil {
 		return nil, bmc.Classify("connect", err)
 	}
+	d.sessMu.Lock()
+	d.sessCache[key] = &sessEntry{client: client, expires: time.Now().Add(sessTTL)}
+	d.sessMu.Unlock()
 	return client, nil
 }
 
@@ -84,11 +138,11 @@ func (d *Driver) createSession(ctx context.Context, httpClient *http.Client, bas
 	const op = "session"
 	rootReq, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/redfish/v1/", nil)
 	if err != nil {
-		return nil, bmc.Classify(op, err)
+		return nil, d.classify(op, err)
 	}
 	rootResp, err := httpClient.Do(rootReq)
 	if err != nil {
-		return nil, bmc.Classify(op, err)
+		return nil, d.classify(op, err)
 	}
 	defer rootResp.Body.Close()
 	rootRaw, _ := io.ReadAll(rootResp.Body)
@@ -108,12 +162,12 @@ func (d *Driver) createSession(ctx context.Context, httpClient *http.Client, bas
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/redfish/v1/SessionService/Sessions", bytes.NewReader(body))
 	if err != nil {
-		return nil, bmc.Classify(op, err)
+		return nil, d.classify(op, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, bmc.Classify(op, err)
+		return nil, d.classify(op, err)
 	}
 	defer resp.Body.Close()
 
@@ -144,7 +198,6 @@ func (d *Driver) Probe(ctx context.Context, addr string, cred bmc.Credentials) (
 	if err != nil {
 		return bmc.BMCInfo{}, err
 	}
-	defer c.Logout()
 
 	info := bmc.BMCInfo{Protocol: bmc.ProtocolRedfish, PowerState: bmc.PowerStateUnknown}
 
@@ -175,7 +228,6 @@ func (d *Driver) PowerState(ctx context.Context, addr string, cred bmc.Credentia
 	if err != nil {
 		return bmc.PowerStateUnknown, err
 	}
-	defer c.Logout()
 
 	systems, err := c.Service.Systems()
 	if err != nil {
@@ -199,7 +251,6 @@ func (d *Driver) SetPower(ctx context.Context, addr string, cred bmc.Credentials
 	if err != nil {
 		return err
 	}
-	defer c.Logout()
 
 	resetType, ok := resetTypeFor(action)
 	if !ok {
@@ -316,7 +367,6 @@ func (d *Driver) SetBootDevice(ctx context.Context, addr string, cred bmc.Creden
 	if err != nil {
 		return err
 	}
-	defer c.Logout()
 
 	target, ok := bootTargetFor(dev)
 	if !ok {
@@ -403,10 +453,12 @@ func (d *Driver) MountMedia(ctx context.Context, addr string, cred bmc.Credentia
 	if err != nil {
 		return err
 	}
-	defer c.Logout()
 
 	vms, verr := managersVirtualMedia(c)
-	if verr != nil || len(vms) == 0 {
+	if verr != nil {
+		return verr
+	}
+	if len(vms) == 0 {
 		return &bmc.Error{Kind: bmc.KindUnsupported, Op: "mount_media", Detail: "no virtual media resource"}
 	}
 	// Slot fallback (the pattern Ironic's redfish boot interface is built
@@ -463,7 +515,6 @@ func (d *Driver) EjectMedia(ctx context.Context, addr string, cred bmc.Credentia
 	if err != nil {
 		return err
 	}
-	defer c.Logout()
 
 	vms, verr := managersVirtualMedia(c)
 	if verr != nil || len(vms) == 0 {
@@ -521,7 +572,9 @@ func managersVirtualMedia(c *gofish.APIClient) ([]*redfish.VirtualMedia, error) 
 	for _, m := range managers {
 		vms, err := m.VirtualMedia()
 		if err != nil {
-			continue
+			// surface the walk error — an empty collection is
+			// indistinguishable from a dead session otherwise
+			return nil, bmc.Classify("virtual_media", err)
 		}
 		all = append(all, vms...)
 	}

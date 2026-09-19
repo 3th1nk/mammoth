@@ -23,7 +23,6 @@ func (d *Driver) CollectInventory(ctx context.Context, addr string, cred bmc.Cre
 	if err != nil {
 		return bmc.HardwareView{}, err
 	}
-	defer c.Logout()
 
 	hw := bmc.HardwareView{Coverage: bmc.CoverageFull}
 

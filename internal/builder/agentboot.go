@@ -414,23 +414,28 @@ write_network_config() {
 }
 
 configure_target() {
+    log "config: hostname/hosts"
     echo "$MAMMOTH_HOSTNAME" > "$TARGET/etc/hostname"
     printf '127.0.0.1\tlocalhost %s\n::1\tlocalhost\n' "$MAMMOTH_HOSTNAME" > "$TARGET/etc/hosts"
     # root password: sha512-crypt (busybox cryptpw; openssl passwd -6 as the
     # fallback), written into shadow — a plaintext shadow entry would make
     # the machine unloginnable (ubuntu22 real-hardware finding, mirrored).
+    log "config: root password hash"
     hash=$(busybox cryptpw -m sha512 "$MAMMOTH_ROOT_PASSWORD" 2>/dev/null)
     [ -n "$hash" ] || hash=$(openssl passwd -6 "$MAMMOTH_ROOT_PASSWORD" 2>/dev/null)
     [ -n "$hash" ] || return 1
     awk -F: -v h="$hash" 'BEGIN{OFS=":"} $1=="root"{$2=h} {print}' "$TARGET/etc/shadow" > "$TARGET/etc/shadow.new" \
         && mv "$TARGET/etc/shadow.new" "$TARGET/etc/shadow" || return 1
+    log "config: ssh keys + permit root login"
     if [ -n "$MAMMOTH_SSH_KEYS" ]; then
         mkdir -p "$TARGET/root/.ssh" && chmod 700 "$TARGET/root/.ssh"
         printf '%s\n' "$MAMMOTH_SSH_KEYS" > "$TARGET/root/.ssh/authorized_keys"
         chmod 600 "$TARGET/root/.ssh/authorized_keys"
     fi
     printf 'PermitRootLogin yes\n' >> "$TARGET/etc/ssh/sshd_config"
+    log "config: network"
     write_network_config || return 1
+    log "config: openrc runlevels (chroot)"
     # openrc runlevels: a bare apk --root install enables nothing
     for s in devfs dmesg mdev hwdrivers; do chroot "$TARGET" rc-update add "$s" sysinit >/dev/console 2>&1; done
     for s in hwclock modules sysctl hostname bootmisc syslog networking; do chroot "$TARGET" rc-update add "$s" boot >/dev/console 2>&1; done
@@ -486,7 +491,9 @@ find_plan || bail plan "agent-plan.sh not found (media scan + ${BASE:-<no base>}
 log "plan loaded: $(cat "$DISKS" | tr '\n' ' ')"
 bootstrap_tools || bail tools "agent tooling install failed"
 run_stage pre_install || bail pre_install "script failed"
-apply_storage || bail storage "partition/format/mount failed"
+if ! apply_storage 2>>/tmp/mammoth-storage.err; then
+    bail storage "partition/format/mount failed: $(tail -c 220 /tmp/mammoth-storage.err 2>/dev/null | tr '\n' ' ' | tr -d '"\\')"
+fi
 install_base || bail packages "base install from pool failed"
 configure_target || bail config "system configuration failed"
 install_bootloader || bail bootloader "bootloader install failed"

@@ -60,11 +60,10 @@ func (d *Driver) PhysicalDrives(ctx context.Context, addr string, cred bmc.Crede
 	if err != nil {
 		return nil, err
 	}
-	defer c.Logout()
 
 	drives, err := controllerDrives(ctx, c)
 	if err != nil {
-		return nil, bmc.Classify(op, err)
+		return nil, d.classify(op, err)
 	}
 	out := make([]bmc.DiskView, 0, len(drives))
 	for _, dr := range drives {
@@ -88,7 +87,6 @@ func (d *Driver) CreateVolume(ctx context.Context, addr string, cred bmc.Credent
 	if err != nil {
 		return "", err
 	}
-	defer c.Logout()
 
 	if len(spec.MemberSerials) == 0 {
 		return "", &bmc.Error{Kind: bmc.KindUnsupported, Op: op,
@@ -97,12 +95,12 @@ func (d *Driver) CreateVolume(ctx context.Context, addr string, cred bmc.Credent
 
 	st, err := firstVolumeStorage(c)
 	if err != nil {
-		return "", bmc.Classify(op, err)
+		return "", d.classify(op, err)
 	}
 
 	drives, err := controllerDrives(ctx, c)
 	if err != nil {
-		return "", bmc.Classify(op, err)
+		return "", d.classify(op, err)
 	}
 	bySerial := map[string]controllerDrive{}
 	for _, dr := range drives {
@@ -164,14 +162,14 @@ func (d *Driver) CreateVolume(ctx context.Context, addr string, cred bmc.Credent
 		}
 		return d.postVolumeTask(ctx, c, op, volumesURL, huawei, spec.Name)
 	}
-	return "", bmc.Classify(op, perr)
+	return "", d.classify(op, perr)
 }
 
 // postVolumeTask POSTs a vendor-shaped payload and settles the task.
 func (d *Driver) postVolumeTask(ctx context.Context, c *gofish.APIClient, op, volumesURL string, payload map[string]any, requested string) (string, error) {
 	resp, err := c.Post(volumesURL, payload)
 	if err != nil {
-		return "", bmc.Classify(op, err)
+		return "", d.classify(op, err)
 	}
 	raw, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
@@ -181,7 +179,7 @@ func (d *Driver) postVolumeTask(ctx context.Context, c *gofish.APIClient, op, vo
 	}
 	st, err := firstVolumeStorage(c)
 	if err != nil {
-		return "", bmc.Classify(op, err)
+		return "", d.classify(op, err)
 	}
 	return d.settleVolumeTask(ctx, c, op, string(raw), st)
 }
@@ -202,7 +200,7 @@ func (d *Driver) settleVolumeTask(ctx context.Context, c *gofish.APIClient, op s
 	}
 	after, err := listVolumeNames(ctx, c, st)
 	if err != nil {
-		return "", bmc.Classify(op, err)
+		return "", d.classify(op, err)
 	}
 	if len(after) == 0 {
 		return "", &bmc.Error{Kind: bmc.KindProtocolError, Op: op,

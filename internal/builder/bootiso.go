@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -462,6 +463,35 @@ func windowsAssemblyArgs(outputPath, volid string) []string {
 	}
 }
 
+// winCacheLocks serializes first extractions and stale re-injections per
+// cache dir — the pool-store idiom (provision.poolStoreMu): a batch of
+// same-distro windows machines otherwise races N extractions into one
+// address, and the stale re-inject's remove+rename window must not overlap
+// a concurrent reader's hardlink farm.
+var winCacheLocks sync.Map
+
+func lockWinCache(dir string) func() {
+	v, _ := winCacheLocks.LoadOrStore(dir, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// windowsCacheHeadroom refuses a FIRST extraction before moving gigabytes
+// into a full volume (the extract tree + wim rewrite transiently cost ~9G;
+// the same lesson as the per-task boot tree's third disk-full).
+func windowsCacheHeadroom(dir string) error {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return nil // unknown: let the build try and fail loudly
+	}
+	freeMB := int64(st.Bavail) * int64(st.Bsize) / 1048576
+	if freeMB < 9216 {
+		return fmt.Errorf("windows: cache volume %s needs ~9 GiB free for the first prepared-tree build, %d MB available", dir, freeMB)
+	}
+	return nil
+}
+
 // windowsInjectorVersion guards the prepared-tree cache — bump when the
 // injected script pair, its destinations or the SKU contract change, and
 // stale trees re-inject on the next build.
@@ -592,9 +622,15 @@ func ensureWindowsTree(ctx context.Context, opt BootMediaOptions, seed map[strin
 	dir := filepath.Join(opt.CacheDir, "pool-store", sha, "win")
 	tree := filepath.Join(dir, "tree")
 	marker := filepath.Join(dir, "injector")
+	unlock := lockWinCache(dir)
+	defer unlock()
 	if fileExists(filepath.Join(tree, "sources", "install.wim")) {
 		if b, rerr := os.ReadFile(marker); rerr == nil && strings.TrimSpace(string(b)) == windowsInjectorVersion {
-			return tree, nil // cache hit: the whole extract+inject cost is gone
+			// cache hit: the whole extract+inject cost is gone; touch for
+			// the pool-store TTL sweep's liveness
+			now := time.Now()
+			_ = os.Chtimes(filepath.Join(tree, "sources", "install.wim"), now, now)
+			return tree, nil
 		}
 		// stale injection: re-inject into a hardlink copy, atomic rename
 		tmp := filepath.Join(dir, fmt.Sprintf(".tmp-%d", os.Getpid()))
@@ -615,6 +651,9 @@ func ensureWindowsTree(ctx context.Context, opt BootMediaOptions, seed map[strin
 		}
 		_ = os.WriteFile(marker, []byte(windowsInjectorVersion), 0o644)
 		return tree, nil
+	}
+	if err := windowsCacheHeadroom(opt.CacheDir); err != nil {
+		return "", err
 	}
 	tmp := filepath.Join(dir, fmt.Sprintf(".tmp-%d", os.Getpid()))
 	_ = os.RemoveAll(tmp)

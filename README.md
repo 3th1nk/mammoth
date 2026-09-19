@@ -8,7 +8,7 @@
 # Mammoth
 
 > A self-contained bare-metal provisioning engine.
-> Send in an address and a credential, get back a machine that runs.
+> Give it an out-of-band address and a credential — or let the machine introduce itself — and get back a machine that runs.
 
 [**中文**](README.zh-CN.md)
 

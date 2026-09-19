@@ -16,7 +16,49 @@ and [brand-board.png](brand-board.png).
 | `ref-gopher01c.svg` | Reference: the original Go gopher vector the mark derives from |
 
 Color system: Go cyan `#00ADD8`, shadow `#0089AC`, ivory `#FFF7E8`, ink `#0E2A3A`.
-Wordmark: "mammoth", Inter Black, lowercase; tagline "Evolutionary Go Engineering".
+Wordmark: "mammoth", Inter Black, lowercase. Primary tagline: **"The mammoth
+task, tamed."** (the zh tagline is the product's own promise: "输入一个地址和
+一份凭证,还你一台能跑起来的机器"); secondary: "Evolutionary Go Engineering".
+
+## Brand story — the heartbeat under the ice
+
+English calls a colossal chore **a mammoth task** — and provisioning a fleet
+of bare-metal servers is exactly that chore: burned USB sticks, KVM sessions
+at 3 a.m., kickstart debugging by hand.
+
+A server without an OS is a mammoth frozen in permafrost. But there is still
+a heartbeat under the ice: the BMC, the out-of-band chip that keeps pulsing
+even when the machine is "dead". Mammoth follows that heartbeat to find the
+machine, inventories its skeleton, listens to your declared intent, then
+carries the heavy lifting alone — repacking ISOs, mounting virtual media, the
+DHCP/PXE dance, three installer dialects, verification and callback. It moves
+the way its ice-age namesake does: unhurried, stubborn, reliable — interrupted
+tasks are picked up and retried, and every step leaves a footprint.
+
+Send in an address and a credential; get back a machine that runs.
+
+**The mammoth task, tamed.**
+
+The mark itself tells the story in one picture: a gopher in mammoth fur — a
+small single binary (distroless, self-contained) doing mammoth-sized work.
+
+### Metaphor map
+
+Keep metaphors out of user-facing APIs; at most one or two may surface as
+internal codenames. The map exists to keep docs, talks and naming consistent.
+
+| Metaphor | Product fact |
+|----------|--------------|
+| frozen mammoth | a bare-metal server with no OS |
+| heartbeat under the ice | the BMC out-of-band channel (Redfish, IPMI fallback) |
+| awakening | install / reinstall the OS |
+| skeleton inventory | hardware & partition-layout inventory |
+| your wish | declarative Install Spec |
+| trunk sniffing | zero-registration (PXE probe tree → pending → claim) |
+| carrying the load | ISO repacking, virtual media, DHCP/PXE, installer dialects |
+| unhurried gait | task queue + heartbeat + reaper + at-least-once delivery |
+| footprints | structured logs, SSE/Webhook events |
+| the herd | batch provisioning |
 
 ## Provenance & license
 

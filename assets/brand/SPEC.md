@@ -4,7 +4,10 @@
 > 基于 Renée French 官方 Gopher 矢量（CC BY 3.0），改造为猛犸造型。  
 > 原版 SVG 来自 keygx/Go-gopher-Vector；社区参考 Jaeger、gohornet「保留五官 + 叠加外部特征」范式。
 
-**字标**：mammoth，Inter Black，全小写。**Tagline**：Evolutionary Go Engineering · 猛犸型 Go 工程品牌
+**字标**：mammoth，Inter Black，全小写。  
+**主 Tagline**：The mammoth task, tamed.（中文主句即 tagline：输入一个地址和一份凭证，还你一台能跑起来的机器。）  
+**副标语**：Evolutionary Go Engineering（类别描述，降级使用）  
+**品牌故事**：《冰层下的心跳》，见 [README.md](README.md) 的 Brand story 一节
 
 ## 文件清单
 

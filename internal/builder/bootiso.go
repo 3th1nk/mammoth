@@ -16,6 +16,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -144,7 +145,21 @@ func BuildBootISO(ctx context.Context, opt BootMediaOptions, kernelArgs string) 
 	if layout.FullRepack() {
 		buildSem <- struct{}{}
 		defer func() { <-buildSem }()
-		return rebuildPatchedISO(ctx, opt, kernelArgs, layout, installDir)
+		out, err := rebuildPatchedISO(ctx, opt, kernelArgs, layout, installDir)
+		if err != nil && layout == layoutWindows && opt.CacheDir != "" {
+			// Self-heal: the assembly reads the ENTIRE prepared tree, so a
+			// partially deleted / externally corrupted cache surfaces here.
+			// Invalidate and rebuild once from the source ISO — the next
+			// state after this is either a good build or an honest
+			// source-level error.
+			if dir, derr := windowsCacheDir(opt); derr == nil {
+				_ = os.RemoveAll(filepath.Join(dir, "tree"))
+				if out2, err2 := rebuildPatchedISO(ctx, opt, kernelArgs, layout, installDir); err2 == nil {
+					return out2, nil
+				}
+			}
+		}
+		return out, err
 	}
 
 	work := opt.WorkDir
@@ -601,6 +616,14 @@ func extractWindowsTree(ctx context.Context, iso, dst string) error {
 // extraction and the wim rewrite entirely (pool-store conventions: sha
 // addressing, tmp+rename atomicity, 7-day idle sweep inherited). Empty
 // CacheDir keeps the legacy per-task temp behavior.
+func windowsCacheDir(opt BootMediaOptions) (string, error) {
+	sha, err := FileSHA256(opt.ISOPath)
+	if err != nil {
+		return "", fmt.Errorf("windows: iso sha: %w", err)
+	}
+	return filepath.Join(opt.CacheDir, "pool-store", sha, "win"), nil
+}
+
 func ensureWindowsTree(ctx context.Context, opt BootMediaOptions, seed map[string]string) (string, error) {
 	if opt.CacheDir == "" {
 		tree := opt.OutputPath + ".winbuild"
@@ -615,42 +638,47 @@ func ensureWindowsTree(ctx context.Context, opt BootMediaOptions, seed map[strin
 		}
 		return tree, nil
 	}
-	sha, err := FileSHA256(opt.ISOPath)
+	dir, err := windowsCacheDir(opt)
 	if err != nil {
-		return "", fmt.Errorf("windows: iso sha: %w", err)
+		return "", err
 	}
-	dir := filepath.Join(opt.CacheDir, "pool-store", sha, "win")
 	tree := filepath.Join(dir, "tree")
 	marker := filepath.Join(dir, "injector")
+	wimPath := filepath.Join(tree, "sources", "install.wim")
 	unlock := lockWinCache(dir)
 	defer unlock()
-	if fileExists(filepath.Join(tree, "sources", "install.wim")) {
-		if b, rerr := os.ReadFile(marker); rerr == nil && strings.TrimSpace(string(b)) == windowsInjectorVersion {
-			// cache hit: the whole extract+inject cost is gone; touch for
-			// the pool-store TTL sweep's liveness
-			now := time.Now()
-			_ = os.Chtimes(filepath.Join(tree, "sources", "install.wim"), now, now)
+	if m := readWinMarker(marker); m != nil && fileExists(wimPath) {
+		if st, serr := os.Stat(wimPath); serr == nil && st.Size() == m.WimBytes {
+			if m.Injector == windowsInjectorVersion {
+				// cache hit: the whole extract+inject cost is gone; touch
+				// for the pool-store TTL sweep's liveness
+				now := time.Now()
+				_ = os.Chtimes(wimPath, now, now)
+				return tree, nil
+			}
+			// stale injection: re-inject into a hardlink copy, atomic rename
+			tmp := filepath.Join(dir, fmt.Sprintf(".tmp-%d", os.Getpid()))
+			_ = os.RemoveAll(tmp)
+			if err := hardlinkTree(tree, tmp); err != nil {
+				return "", err
+			}
+			if err := writeWindowsScripts(tmp, seed); err != nil {
+				return "", err
+			}
+			if err := injectWindowsSetupScripts(ctx, tmp, seed); err != nil {
+				_ = os.RemoveAll(tmp)
+				return "", err
+			}
+			_ = os.RemoveAll(tree)
+			if rerr := os.Rename(tmp, tree); rerr != nil {
+				return "", rerr
+			}
+			writeWinMarker(marker, wimPath)
 			return tree, nil
 		}
-		// stale injection: re-inject into a hardlink copy, atomic rename
-		tmp := filepath.Join(dir, fmt.Sprintf(".tmp-%d", os.Getpid()))
-		_ = os.RemoveAll(tmp)
-		if err := hardlinkTree(tree, tmp); err != nil {
-			return "", err
-		}
-		if err := writeWindowsScripts(tmp, seed); err != nil {
-			return "", err
-		}
-		if err := injectWindowsSetupScripts(ctx, tmp, seed); err != nil {
-			_ = os.RemoveAll(tmp)
-			return "", err
-		}
+		// size drift (partial deletion / truncated wim): the tree cannot be
+		// trusted — drop it and rebuild from the source ISO below
 		_ = os.RemoveAll(tree)
-		if rerr := os.Rename(tmp, tree); rerr != nil {
-			return "", rerr
-		}
-		_ = os.WriteFile(marker, []byte(windowsInjectorVersion), 0o644)
-		return tree, nil
 	}
 	if err := windowsCacheHeadroom(opt.CacheDir); err != nil {
 		return "", err
@@ -675,8 +703,38 @@ func ensureWindowsTree(ctx context.Context, opt BootMediaOptions, seed map[strin
 	} else if rerr := os.Rename(tmp, tree); rerr != nil {
 		return "", rerr
 	}
-	_ = os.WriteFile(marker, []byte(windowsInjectorVersion), 0o644)
+	writeWinMarker(marker, wimPath)
 	return tree, nil
+}
+
+// winMarker is the prepared-tree validity record: injector version (bump
+// forces re-injection) + the prepared wim's byte size (a hit must match —
+// catches partial deletions and external truncation, the "someone rm'd
+// files" failure mode that presence checks cannot see).
+type winMarker struct {
+	Injector string `json:"injector"`
+	WimBytes int64  `json:"wim_bytes"`
+}
+
+func readWinMarker(path string) *winMarker {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var m winMarker
+	if json.Unmarshal(b, &m) != nil || m.WimBytes <= 0 || m.Injector == "" {
+		return nil
+	}
+	return &m
+}
+
+func writeWinMarker(path, wimPath string) {
+	st, err := os.Stat(wimPath)
+	if err != nil {
+		return
+	}
+	b, _ := json.Marshal(winMarker{Injector: windowsInjectorVersion, WimBytes: st.Size()})
+	_ = os.WriteFile(path, b, 0o644)
 }
 
 // hardlinkTree materializes dst as a hardlink farm of src (instant, zero

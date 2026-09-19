@@ -156,10 +156,49 @@ curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
 curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
   -d '{"bmc":{"address":"fake://n1","protocol":"fake","credential_id":"cred_..."}}' \
   localhost:8080/api/v1/machines
-# 3. 开机(异步:202 + job)
+# 3. 试算安装方案(只读:select 解析到哪块盘、keep 是否命中快照,不烧引导)
+curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
+  -d '{"spec":{"image":{"distro":"rocky9"},"storage":{"disks":[{"select":{"match":{"size":"largest"}},"wipe":true}]}}}' \
+  localhost:8080/api/v1/machines/mch_.../install-plan
+
+# 4. 批量安装(完整 Install Spec:一份意图,按发行版落地方言)
+curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
+  -d '{
+    "type": "install",
+    "targets": {"machine_ids": ["mch_a", "mch_b"]},
+    "spec": {
+      "image":  {"source": "https://mirror.example/rocky9.iso", "distro": "rocky9"},
+      "storage": {"disks": [{
+          "select": {"match": {"type": "nvme", "size": "largest"}},
+          "wipe": true,
+          "partitions": [
+            {"size": "512M", "fs": "vfat", "mount": "/boot/efi", "flags": ["esp"]},
+            {"size": "1G",   "fs": "xfs",  "mount": "/boot"},
+            {"size": "rest", "fs": "xfs",  "mount": "/"}]}]},
+      "network": [{
+          "match": {"mac": "aa:bb:cc:dd:ee:01"}, "set_name": "eno1",
+          "addresses": ["172.16.1.11/24"],
+          "routes": [{"to": "default", "via": "172.16.1.1"}],
+          "nameservers": {"addresses": ["10.0.0.53"]}}],
+      "identity": {"hostname_pattern": "node-{index}"},
+      "access":   {"ssh_keys": ["ssh-ed25519 AAA you@host"]},
+      "scripts":  [{"stage": "post_install", "content_base64": "ZWNobyBkb25lCg=="}],
+      "boot":     {"strategy": "virtual_media"}
+    },
+    "policy": {"concurrency": 2, "on_task_failure": "continue"}
+  }'
+# → 202 + job_id;两台机器并发装机,单机失败不阻塞批次
+# → root 密码缺省按任务随机,经 task.root_password 事件一次性投递
+# → 数据盘保留:disks[].keep: disk|partitions + preserve(按快照分区号;
+#   支持矩阵见 docs/06 §5,试算可预检 keep 是否命中)
+# → bond/vlan、软件+硬件 RAID、pxe 载体等完整面见 docs/04
+
+# 5. 开机/关机/挂载介质等通用带外动作(与安装解耦的一等公民 API)
 curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
   -d '{"type":"power_on"}' localhost:8080/api/v1/machines/mch_.../actions
-# 4. 观察 job
+
+# 6. 观察 job(事件流:SSE /api/v1/events;验收全流程:scripts/acceptance.py,
+#    它扮演 fake 机器取应答文件并回报完成)
 curl -s -H "$TOKEN" localhost:8080/api/v1/jobs/job_...
 ```
 

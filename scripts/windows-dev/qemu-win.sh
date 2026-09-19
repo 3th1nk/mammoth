@@ -73,7 +73,8 @@ logf() { tail -3 $DIR/qemu/qemu.log; tail -3 $DIR/qemu/sink.log 2>/dev/null; }
 
 case "${1:-}" in
   boot) boot;; keys) keys;; dump) dump "${2:?n}";; watch) watch "$@";;
+  enter) mon x "sendkey ret";;  # the BCD menu needs ENTER (space enters bootmgr but does not choose)
   sink) sink;; kill) killvm;; log) logf;;
   cycle) killvm; sink; boot; sleep 8; keys; watch "${2:-60}";;
-  *) echo "usage: $0 {boot|keys|dump <n>|watch <rounds>|sink|kill|log|cycle [rounds]}"; exit 1;;
+  *) echo "usage: $0 {boot|keys|enter|dump <n>|watch <rounds>|sink|kill|log|cycle [rounds]}"; exit 1;;
 esac

@@ -408,9 +408,11 @@ func TestRenderNetbootCasperArgs(t *testing.T) {
 		t.Errorf("user-data missing from netboot render: %+v", answers)
 	}
 
-	// Static network + PXE translates to static ip= kernel arguments (and
-	// the netplan section already carries the declaration for the target) —
+	// Static network + PXE translates to static ip= kernel arguments —
 	// the site-DHCP-safe shape: mammoth never becomes the address authority.
+	// The declaration lands on the TARGET via a late-command netplan write
+	// (subiquity otherwise inherits the installer environment's addressing);
+	// pinned by TestRenderAutoinstallPXETargetNetplan.
 	static := base
 	static.Netboot = &render.NetbootInputs{NFSRootURL: "10.0.0.1:/export/netboot/toku/iso"}
 	static.Network = []render.NetworkEntry{{
@@ -524,5 +526,72 @@ func TestStorageResolvesControllerVolumeBySize(t *testing.T) {
 	}
 	if !strings.Contains(ud, "resolve-disk.sh") {
 		t.Errorf("early-command for the resolver missing:\n%s", ud)
+	}
+}
+
+// PXE + static spec: the target's netplan is what subiquity/curtin generate
+// from the installer environment — in pool-armed installs that inheritance
+// carried the pool lease instead of the declared address (22.04-crypt round,
+// 2026-09-19: installed .212, spec said .211). A late-command must pin the
+// declared network into the target: drop the generated netplan files, write
+// the spec verbatim. DHCP-only specs and virtual-media installs have no
+// declared address to defend and stay untouched.
+func TestRenderAutoinstallPXETargetNetplan(t *testing.T) {
+	d := New("ubuntu22")
+	in := baseNetbootInputs()
+	in.Netboot = &render.NetbootInputs{NFSRootURL: "10.0.0.1:/export/netboot/tokn/iso"}
+	in.Network = []render.NetworkEntry{{
+		Match:     &render.NetMatch{MAC: "aa:bb:cc:dd:ee:09"},
+		Addresses: []string{"172.16.1.21/24"},
+		Routes:    []render.NetRoute{{To: "default", Via: "172.16.1.1"}},
+	}}
+	answers, boot, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	_, ud := fetchUser(t, answers)
+	auto := ud["autoinstall"].(map[string]any)
+	late := strings.Join(toStrSlice(auto["late-commands"]), "\n")
+	for _, want := range []string{
+		"rm -f /target/etc/netplan/00-installer-config.yaml /target/etc/netplan/50-cloud-init.yaml",
+		"cat > /target/etc/netplan/99-mammoth.yaml <<'MAMMOTH_NETPLAN'",
+		"addresses:",
+		"172.16.1.21/24",
+		"gateway4: 172.16.1.1",
+		"macaddress: aa:bb:cc:dd:ee:09",
+		"MAMMOTH_NETPLAN\nchmod 600 /target/etc/netplan/99-mammoth.yaml",
+	} {
+		if !strings.Contains(late, want) {
+			t.Errorf("target netplan enforcement missing %q:\n%s", want, late)
+		}
+	}
+	if !strings.Contains(boot.NetbootKernelArgs, "ip=172.16.1.21::172.16.1.1:255.255.255.0:::off") {
+		t.Errorf("static ip= argument wrong: %q", boot.NetbootKernelArgs)
+	}
+
+	// Virtual media: no installer ip= environment to leak — no target write.
+	vm := in
+	vm.Netboot = nil
+	answersVM, _, err := d.RenderAnswers(vm, render.MachineView{})
+	if err != nil {
+		t.Fatalf("virtual-media render: %v", err)
+	}
+	_, udVM := fetchUser(t, answersVM)
+	autoVM := udVM["autoinstall"].(map[string]any)
+	if lateVM := strings.Join(toStrSlice(autoVM["late-commands"]), "\n"); strings.Contains(lateVM, "99-mammoth.yaml") {
+		t.Errorf("virtual-media render must not write target netplan:\n%s", lateVM)
+	}
+
+	// DHCP-only spec over PXE: no declared address to defend — no write.
+	dhcpOnly := in
+	dhcpOnly.Network = []render.NetworkEntry{{Match: &render.NetMatch{MAC: "aa:bb:cc:dd:ee:09"}}}
+	answersDH, _, err := d.RenderAnswers(dhcpOnly, render.MachineView{})
+	if err != nil {
+		t.Fatalf("dhcp render: %v", err)
+	}
+	_, udDH := fetchUser(t, answersDH)
+	autoDH := udDH["autoinstall"].(map[string]any)
+	if lateDH := strings.Join(toStrSlice(autoDH["late-commands"]), "\n"); strings.Contains(lateDH, "99-mammoth.yaml") {
+		t.Errorf("dhcp-only spec must not write target netplan:\n%s", lateDH)
 	}
 }

@@ -7,7 +7,7 @@
 **字标**：mammoth，Inter Black，全小写。  
 **主 Tagline**：The mammoth task, tamed.（中文主句即 tagline：输入一个地址和一份凭证，还你一台能跑起来的机器。）  
 **副标语**：Evolutionary Go Engineering（类别描述，降级使用）  
-**品牌故事**：《冰层下的心跳》，见 [README.md](README.md) 的 Brand story 一节
+**品牌故事**：《冰层下的心跳》，英文全文见 [README.md](README.md) 的 Brand story 一节；中文精简版见根 [README.zh-CN.md](../../README.zh-CN.md)「为什么叫 Mammoth」
 
 ## 文件清单
 

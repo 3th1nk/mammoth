@@ -3,7 +3,10 @@
 This directory is the **canonical, complete brand source pack** for the
 mammoth gopher — the upstream design workspace is no longer maintained;
 everything lives here from now on. The visual spec sheet is [SPEC.md](SPEC.md)
-and [brand-board.png](brand-board.png).
+and [brand-board.png](brand-board.png). Language split: this README is the
+canonical English brand doc; SPEC.md is the Chinese design spec (verbatim
+from the original pack), and the condensed Chinese story lives in the root
+[README.zh-CN.md](../../README.zh-CN.md) ("为什么叫 Mammoth").
 
 | File | Use |
 |------|-----|
@@ -16,9 +19,13 @@ and [brand-board.png](brand-board.png).
 | `ref-gopher01c.svg` | Reference: the original Go gopher vector the mark derives from |
 
 Color system: Go cyan `#00ADD8`, shadow `#0089AC`, ivory `#FFF7E8`, ink `#0E2A3A`.
-Wordmark: "mammoth", Inter Black, lowercase. Primary tagline: **"The mammoth
-task, tamed."** (the zh tagline is the product's own promise: "给它一个带外地址和一份凭证
-——或者让机器自己找上门——还你一台能跑起来的机器"); secondary: "Evolutionary Go Engineering".
+Wordmark: "mammoth", Inter Black, lowercase.
+
+Taglines:
+
+- Primary (EN): **"The mammoth task, tamed."**
+- Product promise (zh): 「给它一个带外地址和一份凭证——或者让机器自己找上门——还你一台能跑起来的机器。」
+- Secondary: "Evolutionary Go Engineering"
 
 ## Brand story — the heartbeat under the ice
 
@@ -31,7 +38,7 @@ a heartbeat under the ice: the BMC, the out-of-band chip that keeps pulsing
 even when the machine is "dead". Mammoth follows that heartbeat to find the
 machine, inventories its skeleton, listens to your declared intent, then
 carries the heavy lifting alone — repacking ISOs, mounting virtual media, the
-DHCP/PXE dance, three installer dialects, verification and callback. It moves
+DHCP/PXE dance, four installer dialects, verification and callback. It moves
 the way its ice-age namesake does: unhurried, stubborn, reliable — interrupted
 tasks are picked up and retried, and every step leaves a footprint.
 

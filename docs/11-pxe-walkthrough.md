@@ -139,6 +139,27 @@ netboot 服务监听 :67/:69/:4011 是全接口的,一台 mammoth 天然服务�
 L2;"单 L2 单应答者"约束仍成立——每个 VLAN 只能有一个应答者,同机与站点
 DHCP 不可共存(UDP 67 排他,见 operations.md §4.5 第 1 条)。
 
+### 4.6 现场排障速查:PXE 客户端错误码与抓包入口(2026-09-19)
+
+客户端侧错误码是第一诊断线索(网卡 ROM 在放弃前会告诉你死在哪一跳):
+
+| 客户端报错 | 死点 | 典型原因 |
+|-----------|------|---------|
+| PXE-E53(No boot filename) | 收到 DHCP 但无 bootfile | proxy 模式无引导项(未武装/非白名单 MAC);外部模式站点 DHCP 缺 66/67 |
+| PXE-E55(ProxyDHCP no reply on 4011) | 4011 无人应答 | proxyDHCP 未起/被防火墙挡;mammoth 未启用 PXE |
+| PXE-E32(TFTP open timeout) | TFTP 首包拿不到 | next-server 不可达、TFTP 根目录缺文件、站点 DHCP option 43 编码错误把 NBP 路径弄丢(见下) |
+| PXE-E99 / 卡图形 logo | NBP 拉完但跑不起来 | Secure Boot 拒签(应走 shim 链)、架构不匹配(arm64 机器发了 x64 NBP——option 93 观测可查) |
+
+抓包永远是 PXE 排障的第一工具(比读 BMC/固件文档快):
+
+```bash
+tcpdump -ni <装机口> 'udp port 67 or udp port 69 or udp port 4011'
+```
+
+看四样:DISCOVER 是否到达(链路/ VLAN 问题)、OFFER 是否带 next-server+
+filename( mammoth 应答内容)、TFTP RRQ 是否出现(引导项是否生效)、ACK0
+是否缺失(X722 形态,tftp 容忍已覆盖)。
+
 ## 5. 外部 DHCP+TFTP:逃生门形态(2026-09-18)
 
 builtin 模式的接力链(mammoth 亲历三跳:proxyDHCP→TFTP→HTTP)在 mammoth

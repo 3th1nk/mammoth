@@ -208,6 +208,12 @@ dnsmasq.conf.example     # 站点 dnsmasq 配置模板(tag 路由已写好)
 undionly→iPXE→蹦床,UEFI x64→shim→grub→蹦床,iPXE 类→boot.ipxe);
 ③蹦床里的 HTTP 地址已按 `MAMMOTH_EXTERNAL_URL` 填好,保证客户端可达即可。
 
+> **站点 DHCP 为 Windows Server 的注意项**:Windows DHCP 的 option 43 需按
+> TLV 十六进制串填写(值 `060 01 03 0A 04 00 <next-server-IP>` 形态,即
+> PXEClient 子项 6/10),填成明文字符串客户端会静默忽略引导路径并报
+> PXE-E32;option 66/67 在 Windows 界面里名称带前导零(066/067),值填
+> mammoth 地址与 NBP 路径即可(多数 UEFI ROM 认 66/67,不强制 43)。
+
 原理:**客户端自报身份**。mammoth 不参与 DHCP 就看不到 MAC,两个蹦床让
 客户端把 MAC 放进 URL——iPXE 展开 `${net0/mac}`,grub 展开
 `${net_default_mac}`——落回与 builtin 模式完全相同的 HTTP 端点

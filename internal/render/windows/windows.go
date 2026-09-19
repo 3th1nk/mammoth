@@ -513,8 +513,15 @@ func unattendXML(imageName, hostname, password string, plan diskPlan) string {
           </InstallTo>
         </OSImage>
       </ImageInstall>
+      <!-- empty ProductKey: Server 2019 setup REQUIRES the element to be
+           present even with /IMAGE/NAME edition selection — its absence
+           aborts unattend with "cannot read the <ProductKey> setting"
+           (real-media finding, 2026-09-20) -->
       <UserData>
         <AcceptEula>true</AcceptEula>
+        <ProductKey>
+          <Key></Key>
+        </ProductKey>
       </UserData>
     </component>
   </settings>

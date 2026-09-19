@@ -17,8 +17,8 @@ and [brand-board.png](brand-board.png).
 
 Color system: Go cyan `#00ADD8`, shadow `#0089AC`, ivory `#FFF7E8`, ink `#0E2A3A`.
 Wordmark: "mammoth", Inter Black, lowercase. Primary tagline: **"The mammoth
-task, tamed."** (the zh tagline is the product's own promise: "输入一个地址和
-一份凭证,还你一台能跑起来的机器"); secondary: "Evolutionary Go Engineering".
+task, tamed."** (the zh tagline is the product's own promise: "给它一个带外地址和一份凭证
+——或者让机器自己找上门——还你一台能跑起来的机器"); secondary: "Evolutionary Go Engineering".
 
 ## Brand story — the heartbeat under the ice
 
@@ -35,7 +35,8 @@ DHCP/PXE dance, three installer dialects, verification and callback. It moves
 the way its ice-age namesake does: unhurried, stubborn, reliable — interrupted
 tasks are picked up and retried, and every step leaves a footprint.
 
-Send in an address and a credential; get back a machine that runs.
+Give it an out-of-band address and a credential — or let the machine
+introduce itself — and get back a machine that runs.
 
 **The mammoth task, tamed.**
 

@@ -35,19 +35,23 @@ func TestRenderWindowsUEFIUnattend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
-	if len(answers) != 2 {
-		t.Fatalf("answers = %d, want autounattend.xml + mammoth/SetupComplete.cmd", len(answers))
+	if len(answers) != 4 {
+		t.Fatalf("answers = %d, want autounattend + SetupComplete pair + task.json", len(answers))
 	}
-	var unattend, setup string
+	var unattend, setup, ps1, task string
 	for _, a := range answers {
 		switch a.Name {
 		case "autounattend.xml":
 			unattend = a.Content
 		case SetupCompleteSeedName:
 			setup = a.Content
+		case CompletePS1SeedName:
+			ps1 = a.Content
+		case TaskJSONSeedName:
+			task = a.Content
 		}
 	}
-	if unattend == "" || setup == "" {
+	if unattend == "" || setup == "" || ps1 == "" || task == "" {
 		t.Fatalf("missing answer files: %+v", answers)
 	}
 
@@ -85,19 +89,33 @@ func TestRenderWindowsUEFIUnattend(t *testing.T) {
 		t.Errorf("answer url wrong: %q", boot.AnswerURL)
 	}
 
-	// SetupComplete: callback + primary/secondary addresses + DNS, NIC
-	// bound by normalized MAC (Get-NetAdapter display form).
+	// SetupComplete pair is generic (sha-cacheable wim injection); the
+	// per-task contract lives in task.json — NIC by normalized MAC,
+	// primary ip carries the gateway, secondaries ride along, DNS on top.
+	if !strings.Contains(setup, "mammoth-complete.ps1") {
+		t.Errorf("SetupComplete.cmd must launch the generic ps1:\n%s", setup)
+	}
+	if strings.Contains(setup, "10.0.2.2") {
+		t.Errorf("per-task URL leaked into the generic launcher (breaks wim caching)")
+	}
 	for _, want := range []string{
-		`-Uri 'http://10.0.2.2:8080/render/tokw/complete'`,
-		`"status\":\"ok\"`,
-		`Get-NetAdapter`,
-		`-eq 'AA-BB-CC-DD-EE-0A'`,
-		`-IPAddress '172.16.1.50' -PrefixLength 24 -DefaultGateway '172.16.1.1'`,
-		`-IPAddress '172.16.1.51' -PrefixLength 24`,
-		`-ServerAddresses '10.0.0.53','10.0.0.54'`,
+		`mammoth\task.json`, `Get-NetAdapter`, `New-NetIPAddress`,
+		`Set-DnsClientServerAddress`, `$cfg.complete_url`,
 	} {
-		if !strings.Contains(setup, want) {
-			t.Errorf("SetupComplete.cmd missing %q:\n%s", want, setup)
+		if !strings.Contains(ps1, want) {
+			t.Errorf("mammoth-complete.ps1 missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		`"complete_url":"http://10.0.2.2:8080/render/tokw/complete"`,
+		`"mac":"AA-BB-CC-DD-EE-0A"`,
+		`"ip":"172.16.1.50","prefix":"24"`,
+		`"gateway":"172.16.1.1"`,
+		`"ip":"172.16.1.51","prefix":"24"`,
+		`"dns":["10.0.0.53","10.0.0.54"]`,
+	} {
+		if !strings.Contains(task, want) {
+			t.Errorf("task.json missing %q:\n%s", want, task)
 		}
 	}
 }

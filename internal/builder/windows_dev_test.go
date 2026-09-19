@@ -63,6 +63,7 @@ func TestDevWindowsBuildChain(t *testing.T) {
 	out, err := BuildBootISO(context.Background(), BootMediaOptions{
 		ISOPath: iso, OutputPath: filepath.Join(outDir, "boot-dev.iso"),
 		SeedFiles: seed, Timeout: 0,
+		CacheDir: os.Getenv("MAMMOTH_WIN_CACHE"),
 	}, boot.KernelArgs)
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -95,7 +96,7 @@ func TestDevWindowsBuildChain(t *testing.T) {
 	}
 	grep("wimlib-imagex", "extract", wim, "Windows Server 2019 SERVERSTANDARDCORE",
 		"/Windows/Setup/Scripts/SetupComplete.cmd", "--dest-dir="+filepath.Join(extract, "sc"), "--no-acls")
-	sc, err2 := os.ReadFile(filepath.Join(extract, "sc", "Windows", "Setup", "Scripts", "SetupComplete.cmd"))
+	sc, err2 := os.ReadFile(filepath.Join(extract, "sc", "SetupComplete.cmd"))
 	if err2 != nil {
 		t.Fatalf("SetupComplete.cmd not extractable from the installed image: %v", err2)
 	}

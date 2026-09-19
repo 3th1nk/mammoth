@@ -21,13 +21,14 @@ func ensureISO(ctx context.Context, sourceURL, cacheDir string) (string, error) 
 	return builder.EnsureISO(ctx, sourceURL, cacheDir)
 }
 
-func buildBootISO(ctx context.Context, isoPath, outputPath, kernelArgs string, seedFiles map[string]string, workDir string) error {
+func buildBootISO(ctx context.Context, isoPath, outputPath, kernelArgs string, seedFiles map[string]string, workDir, cacheDir string) error {
 	_, err := builder.BuildBootISO(ctx, builder.BootMediaOptions{
 		ISOPath:    isoPath,
 		OutputPath: outputPath,
-		Timeout:    10 * time.Minute,
+		Timeout:    30 * time.Minute, // windows cache-miss chain: extract+wim+assembly ≈ 9 min on the deployment host
 		SeedFiles:  seedFiles,
 		WorkDir:    workDir,
+		CacheDir:   cacheDir,
 	}, kernelArgs)
 	return err
 }

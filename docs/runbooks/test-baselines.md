@@ -4,6 +4,17 @@
 > 使不同时间、不同操作者的测试结果可比。README 的"回归基线"表是本文件的
 > 摘要;细节与判定标准在此。
 
+## 0. spec 口径注记(真机轮实证,2026-09-19)
+
+- **ubuntu(autoinstall)的 /boot/efi 必须是 ESP**——curtin 按 flag 定型,
+  不像 anaconda 从挂载点推断;漏写会得到 "did not create needed bootloader
+  partition"。渲染层已自动补(见 normalizeESP),手写 spec 时也建议显式;
+- **ubuntu PXE 装机的 spec 必须带 network 声明**——无声明时安装环境经
+  池 DHCP 取址,subiquity 继承进 target 的地址随池租约漂移(真机实证
+  spec .211 → 实装 .212),与"spec 静态 > 池 > DHCP"的三层寻址相悖;
+- agent(alpine)spec 同上必须带 network——plan 无网络则装后回调不可达
+  (回调 curl 带 10s 超时,自恢复重启,但完成状态丢失)。
+
 ## 1. 基线矩阵
 
 | # | 家族 | 发行版 | 镜像(最新点版本) | 镜像类型 | 载体覆盖 | 真机状态 |

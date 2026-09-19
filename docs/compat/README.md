@@ -58,9 +58,34 @@ Ironic 的 redfish 通用驱动与 sushy 库沉淀了十年厂商坑。mammoth �
 | OEM 专有虚拟介质动作(无标准动作) | Huawei VmmControl(仅 NFS/CIFS) | ✅ 已实现:OEM 回退 + 任务轮询 + 应用内重试;OEM 路径按槽位资源动态发现 |
 | Image URL 缺 TransferProtocolType 被拒(部分 BMC 不在错误里带 RelatedProperties) | Cisco C845A / OpenBMC(sushy `is_transfer_protocol_required`) | ⚠️ 预警:当前媒体 URI 走 nfs://(scheme 即协议),不触发;引入 HTTP 直链介质时需补参数重发 |
 | RAID 建卷前须清外来配置(foreign config),作业分 real-time 与重启级 | Dell iDRAC(drac OEM) | ⚠️ 预警:`configure_raid` 阶段 Redfish Volume 创建已实现,遇 iDRAC 需 OEM 清配置 + 作业等待;华为卷名忽略已处理(按重扫绑定) |
-| 并发 session 数受限、认证失败后 session 不可复用 | Supermicro(会话数)、通用 | ⚠️ 预警:registry 已同址串行(天然限流);遇 AccessError 重建会话即可 |
+| 会话创建速率限制(连发 2 个即 400)/并发 session 数受限 | **Huawei iBMC 6.41(2026-09-19 实测)**、Supermicro(会话数)、通用 | ✅ 已吸收:redfish 会话按 addr+user 缓存(TTL 5min),认证类失败失效重连;registry 同址串行天然限流 |
 | reboot 后立即读电源状态拿到旧值 | 通用(power.py 等待 15s) | ✅ 等价:verify_ready/probe 轮询语义天然覆盖 |
 
 上游参考:Ironic `ironic/drivers/modules/redfish/`、sushy `connector.py`
 (ETag/重试)、`virtual_media.py`(PATCH 插入/协议探测)及各 bug/story
 引用(bug 2031595、story 2008504)。
+
+## 三大 BMC 适配面清单(iDRAC / iLO / iBMC;竞品经验 + 预检项)
+
+引擎的厂商适配形态:**单 redfish 驱动 + OEM 内联回退 + 可选能力接口 + 本矩阵**
+——不做 per-vendor driver 拆分(Ironic 按 WS-MAN/Redfish 协议分裂是历史成因;
+mammoth redfish-only,回退内联即可)。适配面按七张面枚举,每面标注三大厂商
+已知形态(来源:Ironic drac/ilo 模块、sushy、MAAS power drivers、实测):
+
+| 适配面 | Huawei iBMC(实测✅) | Dell iDRAC(到货预检) | HPE iLO(到货预检) |
+|--------|----------------------|----------------------|---------------------|
+| 会话 | 速率限制→会话缓存(✅ 4c116ba) | 会话数上限~6;OEM LSOM… 标准 POST 即可 | 并发受限;iLO4 Redfish 弱,备 IPMI 路径 |
+| 电源 | ResetType 子集预读+回退(✅) | ForceRestart 一般可用;iDRAC 自身卡死走 Manager.Reset | **POST 期间拒管理操作**(先 ForceOff 再配置);ResetType 子集预读 |
+| 引导 | Boot PATCH 带 ETag(✅) | BootSourceOverrideMode(UEFI/Legacy)必须显式;持久 vs 一次性语义差异 | Once 支持 ✓;注意 OverrideEnabled 取值形态 |
+| 虚拟介质 | 标准 → OEM VmmControl(NFS/CIFS)回退(✅);高频挂载劣化→Manager.Reset 恢复(✅) | 实时挂载可用,但"引导到介质"在部分固件需 LC 作业;Eject+insert 间 500(已吸收重试) | InsertMedia 走 URI 直拉;旧 iLO4 走 OEM;槽位枚举照常 |
+| BIOS 写 | /Bios/Settings + 当前 ETag + 显式 Content-Type(✅ 4c116ba) | **LC 作业形态**:BIOS 属性写生成调度作业,重启后应用,作业需轮询(非 Redfish task)——BiosSetter 的 202 轮询路径预计要 OEM 作业扩展 | PATCH 属性表即可;同样 POST 期间被拒 |
+| 盘/RAID | DriveID OEM 建卷回退(✅);无 SecureErase 动作(✅ 如实不支持) | **外来配置清理 + LC 作业**(预警表已列);CSIOR 需开启否则盘查残缺 | HPE SmartArray 走 OEM;标准 Volume 少见 |
+| 盘查容忍 | ProcessorId 数字类型违规宽容(✅) | 一般规范 | 一般规范 |
+
+预检动作(新厂商到货 30 分钟):跑 discover(盘查+固件采集)→ power
+on/off → set_boot_device once → mount/eject → GET bios → GET drives,
+逐面对照本表;现象不在表内即新增行。
+
+上游参考补充:Ironic `ironic/drivers/drac.py` 与 `modules/drac/`(LC 作业、
+CSIOR)、`modules/ilo/`(虚拟介质/POST 拒操作)、MAAS `src/provisioningserver/
+drivers/power/`(电源驱动矩阵、power query 与部署解耦)。

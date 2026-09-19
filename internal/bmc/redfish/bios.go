@@ -27,7 +27,6 @@ func (d *Driver) BiosAttributes(ctx context.Context, addr string, cred bmc.Crede
 	if err != nil {
 		return nil, err
 	}
-	defer c.Logout()
 
 	get := func(url string) ([]byte, error) { return getRaw(c, url) }
 	raw, err := biosResource(get)
@@ -50,7 +49,6 @@ func (d *Driver) SetBiosAttributes(ctx context.Context, addr string, cred bmc.Cr
 	if err != nil {
 		return err
 	}
-	defer c.Logout()
 
 	get := func(url string) ([]byte, error) { return getRaw(c, url) }
 	biosRaw, err := biosResource(get)
@@ -62,9 +60,14 @@ func (d *Driver) SetBiosAttributes(ctx context.Context, addr string, cred bmc.Cr
 		return err
 	}
 
-	// The settings resource may require If-Match (iBMC requires it on the
-	// main resource; carry the settings object's own ETag when published).
-	headers := map[string]string{}
+	// The settings resource requires If-Match with its own CURRENT ETag
+	// (iBMC 6.41: the value advertised on the main Bios resource's
+	// @Redfish.Settings annotation goes stale — PATCH with it fails 412).
+	// Content-Type must be set explicitly: with custom headers gofish does
+	// not add it and iBMC answers 400 MalformedJSON to an untyped body.
+	// The pending resource starts empty and accepts a sparse delta (verified
+	// against iBMC 6.41: PATCH /Bios/Settings → 200, applied at next boot).
+	headers := map[string]string{"Content-Type": "application/json"}
 	settingsRaw := []byte{}
 	if resp, gerr := c.Get(settings); gerr == nil {
 		raw, rerr := io.ReadAll(resp.Body)
@@ -99,7 +102,7 @@ func (d *Driver) SetBiosAttributes(ctx context.Context, addr string, cred bmc.Cr
 
 	resp, err := c.PatchWithHeaders(settings, payload, headers)
 	if err != nil {
-		return bmc.Classify(op, err)
+		return d.classify(op, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {

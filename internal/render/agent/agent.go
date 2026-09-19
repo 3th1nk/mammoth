@@ -85,6 +85,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if err := validate(in); err != nil {
 		return nil, render.BootParams{}, fmt.Errorf("%s: %w", d.distro, err)
 	}
+	render.NormalizeESP(in.Disks)
 	base := strings.TrimSuffix(in.AnswerBaseURL, "/")
 	json, err := d.renderJSON(in)
 	if err != nil {

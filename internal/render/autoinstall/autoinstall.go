@@ -82,6 +82,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		return nil, render.BootParams{}, fmt.Errorf("%s: image source is required", d.distro)
 	}
 
+	render.NormalizeESP(in.Disks)
 	storage, dyn, err := d.storageConfig(in, m)
 	if err != nil {
 		return nil, render.BootParams{}, err

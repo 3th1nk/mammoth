@@ -187,6 +187,36 @@ func TestRenderAutoinstallWipeAndBond(t *testing.T) {
 
 // BIOS + GPT: a declared biosgrub partition renders as a raw bios_grub
 // partition (curtin refuses bootloader install without an explicit one).
+// /boot/efi without an explicit esp flag must be normalized: curtin types
+// the ESP by flag (unlike anaconda, which infers it from the mountpoint) —
+// a bare /boot/efi fails subiquity's "needed bootloader partition" check
+// (real-hardware 2288H).
+func TestRenderAutoESP(t *testing.T) {
+	d := New("ubuntu22")
+	in := render.InstallInputs{
+		AnswerBaseURL: "https://m/render/t", CompleteURL: "https://m/render/t/complete",
+		ImageSource: "https://mirror.example/ubuntu-22.04.iso",
+		Disks: []render.ResolvedDisk{{Device: "vda", Wipe: true, SizeBytes: 214748364800,
+			Partitions: []render.ResolvedPartition{
+				{Mount: "/boot/efi", FS: "vfat", SizeMB: 512},
+				{Mount: "/", FS: "ext4", Grow: true},
+			}}},
+	}
+	user, _, err := d.RenderAnswers(in, render.MachineView{ID: "mch_x"})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	var ud string
+	for _, a := range user {
+		if a.Name == "user-data" {
+			ud = a.Content
+		}
+	}
+	if !strings.Contains(ud, `"flag": "boot"`) || !strings.Contains(ud, `"grub_device": true`) {
+		t.Errorf("bare /boot/efi must render as a flagged ESP with grub_device")
+	}
+}
+
 func TestRenderBiosGrubPartition(t *testing.T) {
 	in := render.InstallInputs{
 		AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i",

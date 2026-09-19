@@ -201,6 +201,32 @@ type ResolvedPartition struct {
 	OnPart   string `json:"on_part,omitempty"` // full kernel name, e.g. sda1
 }
 
+// NormalizeESP auto-applies the esp flag to /boot/efi partitions that do
+// not carry it. Curtin (autoinstall) and the agent runtime require the flag
+// to type the partition as an EFI System Partition — unlike anaconda, which
+// infers it from the /boot/efi mountpoint (real-hardware 2288H: a bare
+// /boot/efi rendered a plain fat32 partition and subiquity rejected the
+// whole storage config with "did not create needed bootloader partition").
+// Mutates the slice elements in place; callers own the input view.
+func NormalizeESP(disks []ResolvedDisk) {
+	for i := range disks {
+		for j, p := range disks[i].Partitions {
+			if p.Mount == "/boot/efi" && !hasEspFlag(p.Flags) {
+				disks[i].Partitions[j].Flags = append(append([]string(nil), p.Flags...), "esp")
+			}
+		}
+	}
+}
+
+func hasEspFlag(flags []string) bool {
+	for _, f := range flags {
+		if f == "esp" {
+			return true
+		}
+	}
+	return false
+}
+
 // NetworkEntry is one network declaration (docs/04-install-spec.md §5.2).
 type NetworkEntry struct {
 	Match   *NetMatch `json:"match,omitempty"`

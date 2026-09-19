@@ -24,6 +24,22 @@ no built-in UI.**
   (rocky9 / ubuntu22 / debian12) closed-loop on real hardware; M7 PXE/iPXE
   network boot delivered and closed-loop on real hardware. ([roadmap](docs/09-roadmap.md))
 
+## Why the name Mammoth
+
+English calls a colossal chore **a mammoth task** — and provisioning a fleet
+of bare-metal servers is exactly that chore. A server with no OS is a mammoth
+frozen in permafrost, but there is still a heartbeat under the ice: the BMC,
+an out-of-band chip that keeps pulsing even when the machine is "dead".
+Mammoth follows that heartbeat, inventories the skeleton, listens to your
+declared intent, then carries the heavy lifting alone — repacking ISOs,
+virtual media, the DHCP/PXE dance, three installer dialects. Send in an
+address and a credential; get back a machine that runs.
+
+**The mammoth task, tamed.**
+
+The gopher in mammoth fur at the top says the same thing: a small binary
+(single, self-contained) doing mammoth-sized work.
+
 ## At a glance
 
 **One pipeline, three onboarding paths, two boot carriers, three installer

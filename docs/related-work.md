@@ -145,3 +145,60 @@ ubuntu late-commands 同步补容忍清除(双方言对称);
 发行版优先评估 agent 路径,方言保留为兼容模式;
 ④数据化 distro 签名(OSDriver → JSON)——已入 roadmap"下一阶段"
 第 3 项(跟随①定形态),与③联动评估。
+
+## 6. Windows 装机机制对照(2026-09-19,windows2019 v1 落地前定向调研)
+
+竞品分三条路线,没有第四条:
+
+### 路线 A:镜像整盘投放(image-based)——Ironic/Metal3、MAAS
+
+- **Ironic/Metal3**:IPA(Linux ramdisk)把 **预制的 Windows 整盘镜像**按 bitstream
+  写盘(direct deploy),不做分区不做安装器;镜像由
+  [cloudbase/windows-imaging-tools](https://github.com/cloudbase/windows-imaging-tools)
+  在 Windows 构建机上产出(Autounattend.xml 挂虚拟软盘装机 + sysprep + cloudbase-init
+  烘焙);首启配置交给 **cloudbase-init** 读 config-drive/metadata
+  ([教程](https://cloudbase.it/create-windows-openstack-images))。Glance 镜像带
+  os_type=windows + hw_firmware_type 属性。
+- **MAAS**:[packer-maas/windows](https://github.com/canonical/packer-maas/blob/main/windows/README.md)
+  产出定制整盘镜像(cloudbase-init 内烘),MAAS 3.x 解锁 Windows 部署需
+  **license/OID**——Windows 在 MAAS 是许可墙后的二等公民。
+- 本质:**金镜像工厂**模式。unattend 只活在镜像构建期;每次 Windows 版本/驱动集
+  变更都要重造镜像;镜像工厂本身需要 Windows 构建机 + ADK。
+
+### 路线 B:PXE → wimboot → WinPE——Foreman/Cobbler/Tinkerbell/FOG
+
+- 经典配方([Foreman](https://community.theforeman.org/t/windows-provisioning-on-bare-metal/11609)、
+  [Cobbler 文档](https://cobbler.readthedocs.io/en/latest/user-guide/windows.html)):
+  iPXE 链 **wimboot** → HTTP 拉 bootmgfw.efi/BCD/boot.wim → WinPE 起来后经
+  winpeshl.ini/startnet.cmd 挂 unattend → setup 源指向 install.wim 或网络共享。
+  unattend.xml 是模板引擎渲染(Foreman WAIK 模板)。
+- 代价:**BCD 精心构造** + boot.wim 驱动注入(DISM,Windows 工具链)——竞品为此普遍
+  保留一台 Windows 构建机;Tinkerbell 用 HookOS(Linux)落地,Windows 仍走
+  wimboot 链或镜像投放。
+
+### 路线 C:WDS(Windows 原生)——所有第三方都绕开
+
+依赖 AD/WDS 基础设施,跨引擎不可嵌入;且微软持续收紧 WDS 上 unattend 的玩法。
+
+### 对照结论:mammoth v1 的位置与 v1.x 行动清单
+
+1. **v1(虚拟介质 + 媒体根 autounattend)在竞品矩阵里是独一档**:零金镜像工厂、
+   零 Windows 构建机、零 BCD/wimboot 管道——用 BMC 挂载官方原盘 + Setup 原生
+   应答发现,把声明式 spec 翻译成 unattend,SetupComplete.cmd(wimlib 注入)承载
+   回调/网络。代价是接受 iBMC 虚拟介质传输与官方介质安装时长(与 UOS DVD 同量级,
+   真机已证明可行)。
+2. **镜像路线我们刻意不跟**:金镜像工厂与 mammoth"声明式意图 + 官方介质"的立约
+   方式相悖,维护成本(每版本×每驱动集×每语言)不适合个人/小团队维护的引擎;
+   若未来有大客户诉求,可在 v2 层以"整盘镜像投放"作为一个 install 动作形态接入
+   (agent 通路天然能 dd),不必改契约骨架。
+3. **v1.x 的 Windows PXE 直接抄路线 B 的 wimboot 配方**:mammoth 已有 iPXE 二段链
+   + netboot/files HTTP 树,wimboot 三件套(bootmgfw.efi/BCD/boot.wim)是纯文件
+   服务,`windowsLayout` 家族扩展即可承载;BCD 的 MAC/架构差异化是主要工作量。
+   boot.wim 驱动注入是 Linux 侧做不到的(DISM 是 Windows 工具链,wimlib 只能加
+   文件不能注册驱动)——所以 **WinPE 识别不了盘就退回虚拟介质路线**,这决定了
+   v1 虚拟介质先行的正确性;v1.x PXE 的前提是 inbox 驱动足够(LSI 3508 在
+   2019 inbox,预期成立)。
+4. **cloudbase-init 我们刻意不用**:竞品靠它 + metadata 服务做首启配置,而 mammoth
+   的哲学是 SetupComplete.cmd 自包含(spec 烘焙,无 metadata 依赖,与 Linux 方言
+   late-commands 同型)。代价是首启配置的表达力弱于 cloudbase-init userdata——
+   当前 spec 面本来就窄,成立。

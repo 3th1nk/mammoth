@@ -14,7 +14,7 @@
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
 | Debian 12 | `debian12` | debian-installer | preseed(`file=/cdrom/preseed.cfg`) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | 无(netcfg 不按 MAC 选口,单接口) | ✅ 真机跑通 |
 | 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(真机复核 2026-09-19) | MAC → 接口名在 %pre 安装期解析 | **full(真机闭环 2026-09-19:虚拟介质 + PXE 双通路零人工)**;⚠️ **方言约束:仅图形前端可用**——text 模式(text 指令/inst.text)下 UOS anaconda 自动分区建出 FAT16 而非 swap 且 Finish 组崩溃,驱动已强制 graphical(见下方根因节) |
-| Windows | — | Setup | unattend | full(目标) | — | 未开始 |
+| **Windows Server 2019** | `windows2019` | Windows Setup(bootmgr,`/sources/install.wim`) | **unattend**(autounattend.xml 媒体根自动发现,零内核参数) | **none**(v1) | MAC → SetupComplete.cmd 按 Get-NetAdapter MAC 绑定(装后 SYSTEM 首登录前落地) | 🔧 **v1 代码面就绪(2026-09-19,待 ISO 实测)**:虚拟介质 + UEFI-only;PXE 需 WinPE 链(v1.x);详见下方 windows 节 |
 
 ## 保留分区支持语义(SupportLevel)
 
@@ -266,3 +266,34 @@ mini.iso)提供驱动支持。
 - qemu 与 `netdev user` 的内建 DHCP 不可用于 proxyDHCP 验证(slirp 的
   DHCP 在 qemu 进程内,宿主收不到广播)——harness 用 Linux bridge +
   dnsmasq 作真 DHCP(只分地址,不配 dhcp-boot),见 scripts/pxe-dev/README。
+
+## Windows(v1:虚拟介质 + UEFI-only)
+
+> 2026-09-19 启动。选型依据:Windows 官方单一完整 ISO(Standard/Datacenter ×
+> Core/Desktop 同盘,装时按 /IMAGE/NAME 元数据选 SKU),无 Linux 式轻量 netboot;
+> 推荐裸金属默认 **Standard Core**。当前仅 2019 镜像(248),2022 待下载。
+
+**形态与机制**:
+
+- **驱动** `internal/render/windows`,`windows2019`(2022 后续为构造变体);产物两件:
+  `autounattend.xml`(媒体根,Setup 原生发现,KernelArgs 为空)+ `mammoth/SetupComplete.cmd`。
+- **Builder**:新布局家族 `windows`(识别 `/sources/install.wim`)。`rebuildPatchedISO`
+  的 El Torito 重放自动保真 etfsboot/efisys 引导记录;补充 `-udf -iso-level 3`
+  (install.wim >4GiB,UDF 是承重墙);`patchBootConfigs` 空操作(bootmgr 无参数可打)。
+- **完成回调**:SetupComplete.cmd 经 **wimlib** 注入 install.wim 全部镜像索引
+  (`/Windows/Setup/Scripts/SetupComplete.cmd`)——Windows 的 late-commands 对应物:
+  SYSTEM 身份、首登录前、网络栈已就绪。内容=完成回调 POST(PowerShell
+  Invoke-WebRequest)+ 声明式静态网络(按 Get-NetAdapter MAC 绑定 New-NetIPAddress/
+  Set-DnsClientServerAddress;安装期无网络契约,装后落网即 ubuntu late-command netplan
+  的同型)。verify 阶段零改动:未配 SSH 凭证时完成回调即验证面(既有语义)。
+- **分区**(UEFI GPT):ESP(声明则用其大小,未声明自动补 300MiB)+ MSR 16MiB(mammoth
+  自动插,spec 不可见)+ spec 其余分区(ntfs/fat32;Grow 仅限末分区→Extend);
+  InstallTo=OS 分位。BIOS/MBR 布局 v1 不渲染。
+
+**v1 边界(显式拒绝,不静默重释)**:PXE none(WinPE 链挂 v1.x)、keep none、
+RAID 拒绝、bond/vlan 拒绝、用户脚本拒绝、非默认路由拒绝、FirmwareSupport=uefi_only
+(渲染面是 ESP+MSR 形态,BIOS 机提交即拒)。SKU 固定 SERVERSTANDARDCORE。
+
+**待验证**:qemu winpe 引导与应答前半(路线图既定 qemu 可验范围)→ 2288H 真机
+(LSI SAS3508:2019 有 inbox MegaRAID 驱动,预期免注入;若 WinPE 不识别再走
+boot.wim 驱动注入)。iBMC 6.41 虚拟介质挂 5GB ISO:UOS 8.2G 已实证可行。

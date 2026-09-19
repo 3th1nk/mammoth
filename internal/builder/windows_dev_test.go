@@ -100,8 +100,17 @@ func TestDevWindowsBuildChain(t *testing.T) {
 	if err2 != nil {
 		t.Fatalf("SetupComplete.cmd not extractable from the installed image: %v", err2)
 	}
-	if !strings.Contains(string(sc), "render/devtok/complete") {
-		t.Errorf("SetupComplete.cmd lost the completion callback:\n%s", sc)
+	if !strings.Contains(string(sc), "mammoth-complete.ps1") {
+		t.Errorf("SetupComplete.cmd must launch the generic ps1 (per-task URL belongs to task.json):\n%s", sc)
+	}
+	// The per-task callback contract rides task.json on the output ISO.
+	grep("7z", "x", "-tUDF", "-y", "-o"+extract, out, "mammoth/task.json")
+	tj, terr := os.ReadFile(filepath.Join(extract, "mammoth", "task.json"))
+	if terr != nil {
+		t.Fatalf("task.json not extractable from the output ISO: %v", terr)
+	}
+	if !strings.Contains(string(tj), "render/devtok/complete") {
+		t.Errorf("task.json lost the completion callback:\n%s", tj)
 	}
 	t.Logf("windows build chain OK: %s", out)
 }

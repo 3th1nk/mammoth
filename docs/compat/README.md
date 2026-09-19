@@ -86,6 +86,21 @@ mammoth redfish-only,回退内联即可)。适配面按七张面枚举,每面标
 on/off → set_boot_device once → mount/eject → GET bios → GET drives,
 逐面对照本表;现象不在表内即新增行。
 
+### 固件底座视角:品牌之外的真正聚类
+
+BMC 怪癖按**固件底座**聚类而非服务器品牌(Ironic/sushy 同款经验:同底座
+怪癖跨品牌复现)。接触未知 BMC 时先判断底座,再对号入座:
+
+| 固件底座 | 常见品牌 | 已知形态 | mammoth 状态 |
+|----------|----------|----------|--------------|
+| 自研闭环(iBMC/iDRAC/iLO) | 华为/超聚变、Dell、HPE | 见上表 | iBMC 实战闭环;iDRAC/iLO 清单就绪 |
+| **AMI MegaRAC**(装机量最大 OEM 底座) | 超微、浪潮、华硕、大量信创整机(长城/宝德等) | 会话数限制、Redfish 完整度随代际浮动(x10/x11/x12)、IPMI 强 Redfish 弱的老机型 | 预警表已有会话限制行(代表整个底座);IPMI 兜底路径可用 |
+| **OpenBMC**(开源,增长中) | Meta/MSFT/IBM 主推,ASPEED 卡,IBM Power 全系 | virtual media 常 KVM-only 槽(预警已有);Host 管理接口部分非标;标准符合度偏好且迭代快 | 预警表已有;预计适配成本最低的底座 |
+| 其他专用(ASMI/FSP、XCC、AMT、HMC) | IBM Power、Lenovo、Intel vPro、小型机 | 各自封闭生态 | 低频;预检动作通用 |
+
+实际 encounter 概率分布(国内混合机群场景):iBMC 系 ≈ MegaRAC 系 > OpenBMC >
+ 长尾自研。任何未知 BMC 的答案都是同一句:跑一遍预检,对号入座。
+
 上游参考补充:Ironic `ironic/drivers/drac.py` 与 `modules/drac/`(LC 作业、
 CSIOR)、`modules/ilo/`(虚拟介质/POST 拒操作)、MAAS `src/provisioningserver/
 drivers/power/`(电源驱动矩阵、power query 与部署解耦)。

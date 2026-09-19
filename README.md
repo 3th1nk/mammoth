@@ -20,9 +20,15 @@ no built-in UI.**
 
 - Design documents: [docs/README.md](docs/README.md)
 - API contract (single source of truth): [api/openapi.yaml](api/openapi.yaml)
-- Status: **v1.0 ready** — M0~M6 delivered (contract frozen); three distros
-  (rocky9 / ubuntu22 / debian12) closed-loop on real hardware; M7 PXE/iPXE
-  network boot delivered and closed-loop on real hardware. ([roadmap](docs/09-roadmap.md))
+- Status: **v1.1.0 released** (2026-09-19) — v1.0 contract frozen (additive
+  only); four dialects closed-loop on real hardware: rocky9 / ubuntu22 /
+  debian12 + uniontechos (virtual media + PXE both carriers); M7 PXE/iPXE
+  network boot closed-loop on real hardware; agent-initramfs install path,
+  the BMC capability trio (firmware inventory / BIOS settings / NIST 800-88
+  drive erase), the external DHCP+TFTP escape hatch, and the arm64 boot chain
+  (SB signature chain qemu-verified). **windows2019 v1 code-complete**
+  (virtual media + UEFI-only; build chain validated on real media + OVMF boot
+  verified; real hardware pending). ([roadmap](docs/09-roadmap.md))
 
 ## Why the name Mammoth
 

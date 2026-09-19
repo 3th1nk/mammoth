@@ -18,8 +18,12 @@ Mammoth 通过带外控制器(BMC)接管机器,自动盘查硬件与磁盘布局
 
 - 设计文档:[docs/README.md](docs/README.md)
 - API 契约(唯一事实源):[api/openapi.yaml](api/openapi.yaml)
-- 状态:**v1.0 就绪** —— M0~M6 全部交付(契约冻结),三方言(rocky9 / ubuntu22 / debian12)
-  真机端到端闭环;M7 PXE/iPXE 网络引导已交付并真机闭环。([路线图](docs/09-roadmap.md))
+- 状态:**v1.1.0 已发布**(2026-09-19)——v1.0 契约冻结(仅新增演进);四方言
+  真机闭环:rocky9 / ubuntu22 / debian12 + uniontechos(虚拟介质 + PXE 双载体);
+  M7 PXE/iPXE 网络引导真机闭环;agent initramfs 安装路径、BMC 能力三部曲
+  (固件盘查 / BIOS 设置 / NIST 800-88 擦盘)、外部 DHCP+TFTP 逃生门、arm64
+  引导链(SB 签名链 qemu 验证)。**windows2019 v1 代码面就绪**(虚拟介质 +
+  UEFI-only,构建链真媒体实测 + OVMF 引导验证,真机待验)。([路线图](docs/09-roadmap.md))
 
 ## 为什么叫 Mammoth
 

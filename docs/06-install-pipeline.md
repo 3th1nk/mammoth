@@ -217,7 +217,7 @@ ubuntu 十八项连环修为证),声明文件只覆盖注册面、占比不足 5
 | Ubuntu Server 22.04/24.04 | subiquity | autoinstall | partial(keep: disk) | full(casper NFS squashfs 源:ISO 解包共享池树,`netboot=nfs` 挂 live root,不做整 ISO 进内存;PXE 阶段仅 DHCP,静态网声明翻译为 ip= 内核参数) | ✅ 真机闭环(ISO + PXE/casper NFS,2026-09-17) |
 | Debian 12/13 | debian-installer | preseed | partial(keep: disk) | full(载体 = d-i netboot.tar.gz `MAMMOTH_PXE_DI_NETBOOT`;安装源 = ISO 解包 HTTP 池,池钥匙签名 + debootstrap 进 target,离线语义保持) | ✅ 真机闭环(ISO + PXE/d-i netboot,debian13,2026-09-17) |
 | 统信服务器 V20(UOS) | anaconda 定制 | kickstart(同 rocky9 方言) | full(同 rocky9) | full(同 rocky9) | **✅ 真机闭环**(2026-09-19,虚拟介质 + PXE;根因与修复见 distros.md) |
-| Windows | Setup | unattend | full | 未开始 | 未开始 |
+| Windows Server 2019 | Setup(bootmgr) | unattend(autounattend.xml 媒体根自动发现 + SetupComplete wimlib 注入承载回调/网络) | **none**(WillWipeDisk 形态) | none(WinPE 链挂 v1.x) | 🔧 v1 代码面就绪(虚拟介质 + UEFI-only + Standard Core;qemu 引导与应答前半验证通过,2026-09-19;真机待验,见 compat/distros.md windows 节) |
 
 各方言能力差异(bond/vlan/软件 RAID/多安装盘/xfs 等)见
 [compat/distros.md](compat/distros.md) 实现注记与

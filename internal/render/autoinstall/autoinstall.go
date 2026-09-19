@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/3th1nk/mammoth/internal/render"
+	"gopkg.in/yaml.v3"
 )
 
 // Driver is the ubuntu22 autoinstall driver.
@@ -130,6 +131,29 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			continue
 		}
 		late = append(late, scriptLine(s))
+	}
+	// PXE real-hardware lesson (2026-09-19, the 22.04-crypt pool-armed
+	// round): the target's netplan is whatever subiquity/curtin generates
+	// from the INSTALLER environment — in pool-armed installs that
+	// inheritance carried the pool lease (.212) instead of the declared
+	// static address (.211): the spec-static-over-pool precedence diluted
+	// on the target side. Enforce the contract in the target: drop the
+	// generated netplan files and write the declared network verbatim —
+	// a static spec is user intent, the address it declares is the
+	// contract. Static specs only: a dhcp-only spec declares no address to
+	// defend (the pool-reservation path owns that case), and virtual-media
+	// installs have shown no dilution (no ip= environment to leak).
+	if in.Netboot != nil {
+		if _, ok := firstStaticNetwork(in.Network); ok {
+			netplanYAML, merr := yaml.Marshal(network)
+			if merr != nil {
+				return nil, render.BootParams{}, fmt.Errorf("%s: target netplan: %w", d.distro, merr)
+			}
+			late = append(late,
+				"rm -f /target/etc/netplan/00-installer-config.yaml /target/etc/netplan/50-cloud-init.yaml",
+				"mkdir -p /target/etc/netplan && cat > /target/etc/netplan/99-mammoth.yaml <<'MAMMOTH_NETPLAN'\n"+
+					string(netplanYAML)+"MAMMOTH_NETPLAN\nchmod 600 /target/etc/netplan/99-mammoth.yaml")
+		}
 	}
 	late = append(late, fmt.Sprintf(`python3 -c "import json,urllib.request;z=urllib.request.Request('%s',data=json.dumps({'status':'ok','detail':'autoinstall finished'}).encode(),headers={'Content-Type':'application/json'});urllib.request.urlopen(z,timeout=10)"`, in.CompleteURL))
 

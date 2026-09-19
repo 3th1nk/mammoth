@@ -201,6 +201,21 @@ NFS ISO 装包源,静态网络)。全链路打通过程中固化下来的事实:
 | debian12(preseed) | netinst 13.6(792M) | **6 min** | 修复 standard 任务集后全自动闭环 |
 | rocky10(kickstart) | Rocky 10.1 minimal(1.5G) | **~20 min** | UEFI-only 全量重打包介质;六阶段一次闭环(2026-09-13) |
 | centos7(kickstart) | CentOS 7.9 minimal(1.0G) | ~9 min | 四处老 anaconda 方言差异已内建;大盘需独立 /boot(2026-09-13) |
+### BIOS 属性写与安全擦除(2026-09-19,iBMC 6.41 实测)
+
+- **BiosSetter**:活读 ✓(/Bios 属性表 599 项);写 = PATCH **`/Bios/Settings`**
+  (资源标注的 SettingsObject)+ If-Match **当前** ETag(资源标注上的 ETag
+  会过期,PATCH 412)+ **显式 Content-Type: application/json**(无类型 body
+  被 iBMC 判 MalformedJSON 400)——200 同步返回 pending 值,下次启动生效;
+  并有 Oem.Huawei `#Settings.Revoke` 动作可撤销 pending。
+- **擦盘**:`#Drive.SecureErase` **未声明**(Chassis/Drives 盘资源无该动作)
+  ——iBMC 6.41 Redfish 层不支持控制器级安全擦除,erase_drives 如实
+  BMC_UNSUPPORTED;升级固件后预期零改动可用。
+- **会话速率限制**:SessionService 连发创建 2 个即 400(高频自动化必踩)
+  ——驱动已改会话复用(addr+user 缓存,TTL 5min,认证失败失效);
+  iBMC 虚拟介质子系统高频挂载后劣化(mount ConnectionFailed/挂起),
+  **Manager.Reset 重置管理控制器即恢复**(主机不受影响)。
+
 | uniontechos(kickstart) | UOS Server 1050a(8.2G) | ~35 min | 曾 blocked(UOS 定制 anaconda 无 swap Finish 崩溃,distros.md 有根因全录);六阶段全绿零人工、swap sda4 激活、无人值守首启 + SSH 直通(2026-09-19)。真机暴露双层缺陷:①无站点 DHCP 下 `ip=dhcp` 落在未插线 eno2——spec 静态网钉 MAC 即解;②自动 swap 未计入 grow 预算致 "Unable to allocate"(qemu 测试盘无容量未暴露)——swap 注入 boot 盘分区列表随行扣减即解(f951f98)。⚠️ 方言约束:仅图形前端可用(text 模式 Finish 组恒崩 + autopart 建错分区类型,驱动已强制 graphical,见 distros.md)。PXE 复核同日闭环(零人工 ~6 min,NFS 线速) |
 
 ### 回归暴露的 rocky9 驱动缺陷(均已修复)

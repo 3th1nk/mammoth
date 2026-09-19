@@ -42,6 +42,8 @@ for ch in keys:
 s.sendall(b"sendkey ret\n"); time.sleep(2)
 for i in range(60):
     s.sendall(b"sendkey spc\n"); time.sleep(0.5)
+for i in range(8):
+    s.sendall(b"sendkey ret\n"); time.sleep(1.5)
 print("KEYS_SENT")
 PYIN
 }

@@ -70,13 +70,17 @@ PYIN
   echo "SINK :8080 -> $DIR/qemu/sink.log"
 }
 
-killvm() { pkill -f "qemu-kvm|qemu-system" || true; sleep 2; echo KILLED; }
+killvm() { pkill -f "qemu-kvm|qemu-system" || true; fuser -k 8080/tcp 2>/dev/null; sleep 2; echo KILLED; }
 logf() { tail -3 $DIR/qemu/qemu.log; tail -3 $DIR/qemu/sink.log 2>/dev/null; }
 
 case "${1:-}" in
   boot) boot;; keys) keys;; dump) dump "${2:?n}";; watch) watch "$@";;
   enter) mon x "sendkey ret";;  # the BCD menu needs ENTER (space enters bootmgr but does not choose)
   sink) sink;; kill) killvm;; log) logf;;
-  cycle) killvm; sink; boot; sleep 8; keys; watch "${2:-60}";;
+  # cycle ordering lessons (2026-09-20): the sink needs qemu/ to exist (boot
+  # mkdirs it); keys must wait for the UEFI shell (~150s under TCG — sent too
+  # early they vanish); and the BCD menu needs ENTER after the space spam
+  # (space only enters bootmgr), retried a few times for menu-appear timing.
+  cycle) killvm; sink; boot; sleep 150; keys; sleep 60; enter; sleep 30; enter; watch "${2:-60}";;
   *) echo "usage: $0 {boot|keys|enter|dump <n>|watch <rounds>|sink|kill|log|cycle [rounds]}"; exit 1;;
 esac

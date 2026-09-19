@@ -233,8 +233,12 @@
 5. **等条件组(不排期,条件触发)**:
    - **UefiHttp**(Redfish HTTP Boot)——等多厂商真机(OEM URI 各异,单台
      华为验不出跨厂商);
-   - **Windows unattend**——等镜像与真机窗口(qemu 可先验 winpe 引导与
-     应答前半,LSI 卷驱动差异要真机);
+   - **Windows unattend**——**v1 代码面就绪(2026-09-19,见 compat/distros.md
+     windows 节)**:windows2019 驱动(autounattend.xml + SetupComplete.cmd
+     wimlib 注入)+ builder windows 布局家族(El Torito 重放 + UDF);虚拟
+     介质 + UEFI-only + Standard Core,回调式 verify 零改动。qemu 可先验
+     winpe 引导与应答前半(2019 ISO 在 248);LSI 卷驱动差异要真机;2022
+     等镜像(磁盘空间);PXE WinPE 链挂 v1.x;
    - **复验轮**——22.04-crypt(性价比最高: crypt 修复仅 24.04 轮覆盖过,
      2288H 半天可补,**真机窗口第一件事**)+ Kylin/rocky10-PXE;2288H 单
      机轮装顺序覆盖(22/24/rocky9 已证明此模式可行);

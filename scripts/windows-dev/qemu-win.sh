@@ -57,6 +57,7 @@ watch() {  # $2 rounds x 3 min screendump watchdog
 }
 
 sink() {  # completion-callback sink: log every POST (task.json -> SetupComplete)
+  [ -f $DIR/qemu/sink.pid ] && kill $(cat $DIR/qemu/sink.pid) 2>/dev/null
   python3 - > $DIR/qemu/sink.log 2>&1 <<'PYIN' &
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class H(BaseHTTPRequestHandler):
@@ -67,6 +68,7 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 HTTPServer(("0.0.0.0", 8080), H).serve_forever()
 PYIN
+  echo $! > $DIR/qemu/sink.pid
   echo "SINK :8080 -> $DIR/qemu/sink.log"
 }
 

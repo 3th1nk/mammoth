@@ -289,9 +289,19 @@ func renderSH(in render.InstallInputs) string {
 	fmt.Fprintf(&b, "MAMMOTH_PACKAGES=%s\n", shQuote("alpine-base linux-lts openssh"))
 	fmt.Fprintf(&b, "MAMMOTH_SSH_KEYS=%s\n", shQuote(strings.Join(sshKeys(in.SSHPublicKeys), "\n")))
 
-	b.WriteString("\n# disks: mammoth_disk <device>\n")
+	// disks: mammoth_disk <device> <size_bytes|-> — controller-named volumes
+	// (Redfish LogicalDriveN) have no kernel node; the runtime resolves them
+	// by size on the machine (same mechanism as the kickstart %pre resolver).
+	b.WriteString("\n# disks: mammoth_disk <device> <size_bytes|->\n")
 	for _, dsk := range in.Disks {
-		fmt.Fprintf(&b, "mammoth_disk %s\n", shQuote(dsk.Device))
+		// size rides along ONLY for controller-named volumes — the resolver's
+		// trigger. Kernel-named disks pass through untouched (no false
+		// resolution failures from Redfish capacity rounding).
+		size := "-"
+		if dsk.SizeBytes > 0 && !render.IsKernelDeviceName(dsk.Device) {
+			size = fmt.Sprintf("%d", dsk.SizeBytes)
+		}
+		fmt.Fprintf(&b, "mammoth_disk %s %s\n", shQuote(dsk.Device), shQuote(size))
 	}
 
 	b.WriteString("\n# partitions: mammoth_partition <device> <mount> <fs> <size_mb|-> <flags>\n")

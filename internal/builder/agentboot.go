@@ -120,13 +120,15 @@ func agentScript() string {
 # any failing command would kill the whole runtime silently (no report, no
 # shell). This runtime handles its own errors: strip the -e and re-exec. The
 # child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
+SCRIPT_VERSION="ab-v12"
 case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
+log "agent runtime $SCRIPT_VERSION starting"
 
 PLAN=/tmp/mammoth-plan.sh
 TARGET=/target
 BASE="$(sed -n 's/.*mammoth_base=\([^ ]*\).*/\1/p' /proc/cmdline)"
 
-log() { echo "[mammoth-agent] $*" > /dev/console; }
+log() { echo "[mammoth-agent] $*" > /dev/console; echo "[mammoth-agent] $*" >> /tmp/mammoth-log.txt 2>/dev/null; }
 
 # ── plan collectors (the plan sources with these defined) ──────────────────
 DISKS=/tmp/mammoth-disks
@@ -134,7 +136,7 @@ PARTS=/tmp/mammoth-parts
 NETS=/tmp/mammoth-nets
 SCRIPTS=/tmp/mammoth-scripts
 : > "$DISKS"; : > "$PARTS"; : > "$NETS"; : > "$SCRIPTS"
-mammoth_disk() { printf '%s\n' "$1" >> "$DISKS"; }
+mammoth_disk() { printf '%s|%s\n' "$1" "$2" >> "$DISKS"; }
 mammoth_partition() { printf '%s|%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" "$5" >> "$PARTS"; }
 mammoth_network() { printf '%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" >> "$NETS"; }
 mammoth_script() { printf '%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" >> "$SCRIPTS"; }
@@ -178,7 +180,7 @@ bringup_network() {
 }
 
 report() { # report <ok|failed> <detail>
-    DETAIL=$(printf '%s' "$2" | tr -d '"\\' | cut -c1-300)
+    DETAIL=$(printf '%s' "$2" | tr -d '"\\' | cut -c1-700)
     printf '{"status":"%s","detail":"%s"}' "$1" "$DETAIL" > /tmp/mammoth-report.json
     bringup_network || return 1
     for i in 1 2 3; do
@@ -192,7 +194,10 @@ report() { # report <ok|failed> <detail>
 
 bail() { # bail <stage> <detail>
     log "FATAL ($1): $2"
-    report failed "$1: $2"
+    ERRTRAIL=$(tail -c 400 /tmp/mammoth-storage.err 2>/dev/null | tr '\n' ' ' | tr -d '"\\')
+    LOGTRAIL=$(tail -c 400 /tmp/mammoth-log.txt 2>/dev/null | tr '\n' '|' | tr -d '"\\')
+    TMPTYPE=$(df -h /tmp 2>/dev/null | tail -1 | cut -d" " -f1)
+    report failed "$1: $2 [script: ${SCRIPT_VERSION:-unknown}] [err: ${ERRTRAIL:-none}] [log: ${LOGTRAIL:-none}] [tmpfs: ${TMPTYPE:-unknown}]"
     log "dropping to shell for diagnosis (BMC SOL)"
     exec /bin/sh
 }
@@ -299,18 +304,73 @@ mk_table() { # mk_table <disk> <uefi> — writes the sfdisk input and the
         n=$((n+1))
     done < "$PARTS"
     log "$disk: partitioning ($([ "$uefi" = 1 ] && echo gpt || echo dos))"
-    wipefs -a "/dev/$disk" >/dev/console 2>&1
-    sfdisk --force "/dev/$disk" < "$tbl" >/dev/console 2>&1 || return 1
+    wipefs -a "/dev/$disk" >>/tmp/mammoth-storage.err 2>&1
+    # transient-tolerant: an unclean prior shutdown leaves the controller
+    # briefly busy / the partition re-read failing — retry instead of
+    # dying silently (2288H: storage flaky only after unclean resets)
+    attempt=1
+    while : ; do
+        if sfdisk --force "/dev/$disk" < "$tbl" >>/tmp/mammoth-storage.err 2>&1; then
+            break
+        fi
+        if [ $attempt -ge 3 ]; then
+            log "storage: sfdisk $disk FAILED after $attempt attempts"
+            return 1
+        fi
+        log "storage: sfdisk attempt $attempt failed, retrying"
+        attempt=$((attempt+1))
+        sleep 3
+        mdev -s 2>/dev/null
+    done
+}
+
+resolve_disks() { # controller-named volumes have no kernel node — resolve
+                  # by size (±1%, min 64MiB tolerance), kickstart-%pre 同款
+    resolved=/tmp/mammoth-disks-kernel
+    : > "$resolved"
+    while IFS='|' read -r dsk size; do
+        [ -n "$dsk" ] || continue
+        node="$dsk"
+        if [ "$size" != "-" ] && [ -n "$size" ]; then
+            found=""
+            bestdiff=0
+            while read -r nm sz; do
+                [ "$nm" != "$dsk" ] || continue
+                diff=$((sz - size)); [ $diff -lt 0 ] && diff=$((-diff))
+                if [ -z "$found" ] || [ $diff -lt $bestdiff ]; then found=$nm; bestdiff=$diff; fi
+            done <<MAMMOTH_LSBLK
+$(lsblk -dnb -o NAME,SIZE,TYPE 2>/dev/null | awk '$3=="disk"{print $1, $2}')
+MAMMOTH_LSBLK
+            tol=$((size / 100)); [ $tol -lt 67108864 ] && tol=67108864
+            if [ -n "$found" ] && [ $bestdiff -le $tol ]; then
+                log "storage: resolved $dsk -> /dev/$found (off by $bestdiff bytes)"
+                node="$found"
+                # rewrite the partition collector too — its lines are keyed by
+                # the controller name and mk_table filters them by the
+                # resolved name
+                awk -F'|' -v d="$dsk" -v n="$node" 'BEGIN{OFS="|"} $1==d{$1=n} {print}' "$PARTS" > "$PARTS.new" \
+                    && mv "$PARTS.new" "$PARTS"
+            else
+                log "storage: cannot resolve $dsk (size $size, closest $found off by $bestdiff)"
+                return 1
+            fi
+        fi
+        echo "$node" >> "$resolved"
+    done < "$DISKS"
+    DISKS="$resolved"
 }
 
 apply_storage() {
+    resolve_disks || return 1
+    log "storage: partitioning $(cat "$DISKS" | tr '\n' ' ')"
     mkdir -p "$TARGET"
     uefi=0; [ -d /sys/firmware/efi ] && uefi=1
     while read -r disk; do
         [ -n "$disk" ] || continue
-        mk_table "$disk" "$uefi" || return 1
+        mk_table "$disk" "$uefi" >>/tmp/mammoth-storage.err 2>&1 || { log "storage: mk_table FAILED"; return 1; }
     done < "$DISKS"
     mdev -s 2>/dev/null
+    log "storage: table written"
     # format + mount: root first (fstab needs its mountpoint), then every
     # other declared partition in table order
     ROOT_NODE=""
@@ -320,9 +380,11 @@ apply_storage() {
             [ "$mount" = "/" ] || continue
             [ "$fs" = "swap" ] && continue
             node="/dev/$(partnode "$d" "$num")"
-            mkfs.ext4 -F "$node" >/dev/console 2>&1 || return 1
+            log "storage: mkfs $node"
+            mkfs.ext4 -F "$node" >>/tmp/mammoth-storage.err 2>&1 || { log "storage: mkfs FAILED"; return 1; }
             mkdir -p "$TARGET$mount"
-            mount "$node" "$TARGET$mount" || return 1
+            log "storage: mount $node"
+            mount "$node" "$TARGET$mount" >>/tmp/mammoth-storage.err 2>&1 || { log "storage: mount FAILED"; return 1; }
             # the fresh root is EMPTY — the alpine-baselayout skeleton (/etc,
             # /root, /var, …) only appears once apk installs alpine-base; the
             # fstab and key copies below need /etc to exist right now
@@ -343,15 +405,15 @@ apply_storage() {
             [ "$d" = "$disk" ] || continue
             node="/dev/$(partnode "$d" "$num")"
             if [ "$fs" = "swap" ]; then
-                mkswap "$node" >/dev/console 2>&1 || return 1
+                mkswap "$node" >>/tmp/mammoth-storage.err 2>&1 || { log "storage: mkswap $node FAILED"; return 1; }
                 uuid=$(blkid -s UUID -o value "$node")
                 echo "UUID=$uuid none swap sw 0 0" >> "$TARGET/etc/fstab"
                 continue
             fi
             [ "$mount" = "/" ] && continue
             case "$fs" in
-                ext4) mkfs.ext4 -F "$node" >/dev/console 2>&1 || return 1 ;;
-                vfat) mkfs.vfat -F 32 "$node" >/dev/console 2>&1 || return 1 ;;
+                ext4) mkfs.ext4 -F "$node" >>/tmp/mammoth-storage.err 2>&1 || { log "storage: mkfs.ext4 $node FAILED"; return 1; } ;;
+                vfat) mkfs.vfat -F 32 "$node" >>/tmp/mammoth-storage.err 2>&1 || { log "storage: mkfs.vfat $node FAILED"; return 1; } ;;
                 *) log "unsupported fs $fs"; return 1 ;;
             esac
             mkdir -p "$TARGET$mount"

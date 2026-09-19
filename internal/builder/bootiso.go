@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -49,6 +50,10 @@ type BootMediaOptions struct {
 	// only. The installer reads them from the CD with zero network dependency
 	// (the remote-seed path needs casper early networking, a known flake).
 	SeedFiles map[string]string
+	// CacheDir is the media repository root for cross-task caches
+	// (<CacheDir>/pool-store/<sha>/win — the prepared windows tree). Empty
+	// disables caching: the extract happens per task and dies with it.
+	CacheDir string
 	// Timeout bounds the whole build (default 10m).
 	Timeout time.Duration
 }
@@ -457,27 +462,34 @@ func windowsAssemblyArgs(outputPath, volid string) []string {
 	}
 }
 
-// injectWindowsSetupComplete adds the driver's SetupComplete.cmd (a seed
-// file) into the install.wim image the unattend installs (%WINDIR%\Setup\
-// Scripts\ — Windows runs it as SYSTEM before first logon, so this is
-// where the completion callback and declared static network land; the wim
-// edit needs wimlib, not xorriso; the builder image ships both).
-// v1 contract: the unattend selects SERVERSTANDARDCORE (docs/compat/
-// distros.md §windows), so the injection targets that image by name —
-// wimlib's update does not accept an ALL selector (1.13: "Cannot specify
-// all images for this action").
-func injectWindowsSetupComplete(ctx context.Context, work string, seed map[string]string) error {
-	content, ok := seed["mammoth/SetupComplete.cmd"]
-	if !ok || content == "" {
-		return nil // defensive: the windows driver always renders it
-	}
+// windowsInjectorVersion guards the prepared-tree cache — bump when the
+// injected script pair, its destinations or the SKU contract change, and
+// stale trees re-inject on the next build.
+const windowsInjectorVersion = "1"
+
+// windows seed-file contract between the driver and the wim injector.
+const (
+	winSetupCompleteSeed = "mammoth/SetupComplete.cmd"
+	winCompletePS1Seed   = "mammoth/mammoth-complete.ps1"
+)
+
+// injectWindowsSetupScripts adds the generic SetupComplete pair into the
+// install.wim image the unattend installs (%WINDIR%\Setup\Scripts\ —
+// Windows runs SetupComplete.cmd as SYSTEM before first logon; the pair is
+// generic so the prepared wim is cacheable, per-task variance arrives via
+// mammoth/task.json on the medium). The wim edit needs wimlib, not xorriso;
+// the builder image ships both. wimlib update takes ONE image (1.13 has no
+// ALL selector) and add refuses an existing destination — hence the
+// delete-then-add idempotency dance.
+func injectWindowsSetupScripts(ctx context.Context, work string, seed map[string]string) error {
 	wim := filepath.Join(work, "sources", "install.wim")
 	info, err := exec.CommandContext(ctx, "wimlib-imagex", "info", wim).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("wimlib-imagex info: %w: %s", err, tail(info, 400))
 	}
 	// info lists "Index: N" blocks followed by "Name: ..."; find the
-	// Standard Core image index.
+	// Standard Core image index (SKU order inside the media is NOT stable —
+	// zh-CN 2019 ships Core at index 1).
 	idx := ""
 	for _, line := range strings.Split(string(info), "\n") {
 		t := strings.TrimSpace(line)
@@ -491,20 +503,171 @@ func injectWindowsSetupComplete(ctx context.Context, work string, seed map[strin
 	if idx == "" {
 		return fmt.Errorf("windows: SERVERSTANDARDCORE image not found in install.wim (SKU contract mismatch)")
 	}
-	src := filepath.Join(work, "mammoth", "SetupComplete.cmd")
-	cmd := exec.CommandContext(ctx, "wimlib-imagex", "update", wim, idx,
-		"--command=add "+src+" /Windows/Setup/Scripts/SetupComplete.cmd")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("wimlib-imagex update (builder image must ship wimlib): %w: %s", err, tail(out, 400))
+	for _, f := range []struct{ seedName, dest string }{
+		{winSetupCompleteSeed, "/Windows/Setup/Scripts/SetupComplete.cmd"},
+		{winCompletePS1Seed, "/Windows/Setup/Scripts/mammoth-complete.ps1"},
+	} {
+		src := filepath.Join(work, filepath.FromSlash(f.seedName))
+		if _, serr := os.Stat(src); serr != nil {
+			return fmt.Errorf("windows: seed %s missing for wim injection", f.seedName)
+		}
+		del := exec.CommandContext(ctx, "wimlib-imagex", "update", wim, idx,
+			"--command=delete "+f.dest)
+		_ = del.Run() // first injection: nothing to delete
+		out, uerr := exec.CommandContext(ctx, "wimlib-imagex", "update", wim, idx,
+			"--command=add "+src+" "+f.dest).CombinedOutput()
+		if uerr != nil {
+			return fmt.Errorf("wimlib-imagex update (builder image must ship wimlib): %w: %s", uerr, tail(out, 400))
+		}
 	}
 	return nil
 }
 
-// debianInstallDir returns the d-i kernel directory name ("install.amd" on
-// Debian; "install" kept for derivatives/UOS) or "" when the image carries
-// no debian-installer layout. Callers MUST probe casper first — Ubuntu
-// live-server ships an /install/ directory too.
+// writeWindowsScripts materializes the generic script pair inside the tree
+// before wim injection (the injector reads them from the tree; the pair is
+// unlink+rewritten so a hardlinked farm never truncates the cache copy).
+func writeWindowsScripts(tree string, seed map[string]string) error {
+	for _, name := range []string{winSetupCompleteSeed, winCompletePS1Seed} {
+		content, ok := seed[name]
+		if !ok || content == "" {
+			return fmt.Errorf("windows: seed %s missing for wim injection", name)
+		}
+		dest := filepath.Join(tree, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return err
+		}
+		_ = os.Remove(dest)
+		if err := os.WriteFile(dest, []byte(content), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// extractWindowsTree pulls the full media tree through 7-Zip's forced UDF
+// view — osirrox cannot see the UDF-only tree (see windowsLayout).
+func extractWindowsTree(ctx context.Context, iso, dst string) error {
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	out, err := exec.CommandContext(ctx, sevenZip(), "x", "-tUDF", "-y",
+		"-o"+dst, iso).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("extract windows iso (7z -tUDF): %w: %s", err, tail(out, 400))
+	}
+	if err := exec.CommandContext(ctx, "chmod", "-R", "u+rwX", dst).Run(); err != nil {
+		if ferr := ensureRemovable(dst); ferr != nil {
+			return fmt.Errorf("grant write over extracted tree: %w", ferr)
+		}
+	}
+	return nil
+}
+
+// ensureWindowsTree returns the prepared (extracted + SetupComplete-injected)
+// windows tree for the source ISO, cached under
+// <CacheDir>/pool-store/<iso sha>/win/tree. The tree and the wim surgery are
+// pure ISO-sha derivatives — the injected pair is generic, per-task variance
+// rides task.json on the medium — so every task after the first skips the
+// extraction and the wim rewrite entirely (pool-store conventions: sha
+// addressing, tmp+rename atomicity, 7-day idle sweep inherited). Empty
+// CacheDir keeps the legacy per-task temp behavior.
+func ensureWindowsTree(ctx context.Context, opt BootMediaOptions, seed map[string]string) (string, error) {
+	if opt.CacheDir == "" {
+		tree := opt.OutputPath + ".winbuild"
+		if err := extractWindowsTree(ctx, opt.ISOPath, tree); err != nil {
+			return "", err
+		}
+		if err := writeWindowsScripts(tree, seed); err != nil {
+			return "", err
+		}
+		if err := injectWindowsSetupScripts(ctx, tree, seed); err != nil {
+			return "", err
+		}
+		return tree, nil
+	}
+	sha, err := FileSHA256(opt.ISOPath)
+	if err != nil {
+		return "", fmt.Errorf("windows: iso sha: %w", err)
+	}
+	dir := filepath.Join(opt.CacheDir, "pool-store", sha, "win")
+	tree := filepath.Join(dir, "tree")
+	marker := filepath.Join(dir, "injector")
+	if fileExists(filepath.Join(tree, "sources", "install.wim")) {
+		if b, rerr := os.ReadFile(marker); rerr == nil && strings.TrimSpace(string(b)) == windowsInjectorVersion {
+			return tree, nil // cache hit: the whole extract+inject cost is gone
+		}
+		// stale injection: re-inject into a hardlink copy, atomic rename
+		tmp := filepath.Join(dir, fmt.Sprintf(".tmp-%d", os.Getpid()))
+		_ = os.RemoveAll(tmp)
+		if err := hardlinkTree(tree, tmp); err != nil {
+			return "", err
+		}
+		if err := writeWindowsScripts(tmp, seed); err != nil {
+			return "", err
+		}
+		if err := injectWindowsSetupScripts(ctx, tmp, seed); err != nil {
+			_ = os.RemoveAll(tmp)
+			return "", err
+		}
+		_ = os.RemoveAll(tree)
+		if rerr := os.Rename(tmp, tree); rerr != nil {
+			return "", rerr
+		}
+		_ = os.WriteFile(marker, []byte(windowsInjectorVersion), 0o644)
+		return tree, nil
+	}
+	tmp := filepath.Join(dir, fmt.Sprintf(".tmp-%d", os.Getpid()))
+	_ = os.RemoveAll(tmp)
+	if err := extractWindowsTree(ctx, opt.ISOPath, tmp); err != nil {
+		return "", err
+	}
+	if err := writeWindowsScripts(tmp, seed); err != nil {
+		_ = os.RemoveAll(tmp)
+		return "", err
+	}
+	if err := injectWindowsSetupScripts(ctx, tmp, seed); err != nil {
+		_ = os.RemoveAll(tmp)
+		return "", err
+	}
+	if fileExists(tree) {
+		// lost the race: the winner's content is identical (same sha +
+		// injector version) — discard ours
+		_ = os.RemoveAll(tmp)
+	} else if rerr := os.Rename(tmp, tree); rerr != nil {
+		return "", rerr
+	}
+	_ = os.WriteFile(marker, []byte(windowsInjectorVersion), 0o644)
+	return tree, nil
+}
+
+// hardlinkTree materializes dst as a hardlink farm of src (instant, zero
+// data copy on the same filesystem); unlinkable files (cross-device) fall
+// back to plain copies. Callers must os.Remove a linked dest before
+// overwriting it — WriteFile on a hardlink truncates the shared inode.
+func hardlinkTree(src, dst string) error {
+	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, rerr := filepath.Rel(src, p)
+		if rerr != nil {
+			return rerr
+		}
+		t := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(t, 0o755)
+		}
+		if lerr := os.Link(p, t); lerr == nil {
+			return nil
+		}
+		in, rerr := os.ReadFile(p)
+		if rerr != nil {
+			return rerr
+		}
+		return os.WriteFile(t, in, 0o644)
+	})
+}
+
 func debianInstallDir(ctx context.Context, iso, xorrisoOverride string) string {
 	xorriso := xorrisoOverride
 	if xorriso == "" {
@@ -584,21 +747,28 @@ func rebuildPatchedISO(ctx context.Context, opt BootMediaOptions, kernelArgs str
 	// ISO root's recorded mode (0644, no search bit) to the target directory
 	// and its own subsequent opens then fail with "openfdat ...: permission
 	// denied". It temporarily chmods restored dirs so extraction completes.
-	// Full extract. Windows media goes through 7-Zip with the forced UDF
-	// view — osirrox cannot see the UDF-only tree (see windowsLayout).
+	// Full extract. Windows media goes through the cached prepared tree
+	// (7-Zip UDF view + wimlib injection, ISO-sha keyed — see
+	// ensureWindowsTree); every task after the first just hardlinks it.
 	// All other families keep xorriso osirrox.
 	var extract []byte
 	var err error
 	if layout == layoutWindows {
-		extract, err = exec.CommandContext(ctx, sevenZip(), "x", "-tUDF", "-y",
-			"-o"+work, opt.ISOPath).CombinedOutput()
+		var tree string
+		tree, err = ensureWindowsTree(ctx, opt, opt.SeedFiles)
+		if err == nil {
+			err = hardlinkTree(tree, work)
+		}
+		if err != nil {
+			return "", fmt.Errorf("windows prepared tree: %w", err)
+		}
 	} else {
 		extract, err = exec.CommandContext(ctx, xorriso, "-osirrox", "on:auto_chmod_on", "-indev", opt.ISOPath,
 			"-extract", "/", work).CombinedOutput()
-	}
-	if err != nil {
-		_ = os.WriteFile("/tmp/extract-debug.log", extract, 0o644)
-		return "", fmt.Errorf("extract distro iso: %w: %s", err, tail(extract, 600))
+		if err != nil {
+			_ = os.WriteFile("/tmp/extract-debug.log", extract, 0o644)
+			return "", fmt.Errorf("extract distro iso: %w: %s", err, tail(extract, 600))
+		}
 	}
 	// auto_chmod_on restores the ISO's recorded modes when it finishes — the
 	// tree comes back read-only-ish (dirs often WITHOUT the search bit). The
@@ -629,17 +799,16 @@ func rebuildPatchedISO(ctx context.Context, opt BootMediaOptions, kernelArgs str
 			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 				return "", err
 			}
+			// Unlink first: the windows farm hardlinks the cache tree, and
+			// WriteFile on a hardlinked dest would truncate the shared inode
+			// (corrupting the cache for every other task).
+			_ = os.Remove(dest)
 			if err := os.WriteFile(dest, []byte(content), 0o644); err != nil {
 				return "", fmt.Errorf("bake seed file %s: %w", name, err)
 			}
 		}
 	}
 
-	if layout == layoutWindows {
-		if err := injectWindowsSetupComplete(ctx, work, opt.SeedFiles); err != nil {
-			return "", err
-		}
-	}
 	if err := patchBootConfigs(work, kernelArgs, layout, installDir); err != nil {
 		return "", err
 	}

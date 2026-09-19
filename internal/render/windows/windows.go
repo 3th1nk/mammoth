@@ -19,6 +19,7 @@
 package windows
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -75,7 +76,11 @@ func (d *Driver) osImageName() string {
 // SetupCompleteSeedName is the ISO-root path the builder bakes the
 // completion/network script under; the builder injects it into every
 // install.wim image (wimlib) so it lands in %WINDIR%\Setup\Scripts\.
-const SetupCompleteSeedName = "mammoth/SetupComplete.cmd"
+const (
+	SetupCompleteSeedName = "mammoth/SetupComplete.cmd"
+	CompletePS1SeedName   = "mammoth/mammoth-complete.ps1"
+	TaskJSONSeedName      = "mammoth/task.json"
+)
 
 // RenderAnswers produces autounattend.xml + the SetupComplete.cmd source.
 func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([]render.AnswerFile, render.BootParams, error) {
@@ -112,14 +117,23 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	}
 
 	unattend := unattendXML(d.osImageName(), hostname, in.RootPassword, plan)
-	setupComplete := setupCompleteCmd(in.CompleteURL, in.Network)
+	task, terr := taskJSON(in.CompleteURL, in.Network)
+	if terr != nil {
+		return nil, render.BootParams{}, terr
+	}
 
 	// Windows Setup finds autounattend.xml at the boot medium root by
 	// itself (no ds=/inst.ks-style argument — BootParams.KernelArgs stays
 	// empty). Setup reboots on its own after applying the image.
+	// Per-task variance lives ONLY in task.json (ISO root): the SetupComplete
+	// pair is generic, so the builder's prepared install.wim is ISO-sha
+	// cacheable — task.json is consumed at first boot from the still-mounted
+	// medium (the medium is released only after the completion callback).
 	return []render.AnswerFile{
 			{Name: "autounattend.xml", Content: unattend},
-			{Name: SetupCompleteSeedName, Content: setupComplete},
+			{Name: SetupCompleteSeedName, Content: setupCompleteCmd()},
+			{Name: CompletePS1SeedName, Content: mammothCompletePS()},
+			{Name: TaskJSONSeedName, Content: task},
 		}, render.BootParams{
 			AnswerURL:           strings.TrimSuffix(in.AnswerBaseURL, "/") + "/autounattend.xml",
 			InstallerAutoReboot: true,
@@ -312,65 +326,100 @@ func validateNetwork(entries []render.NetworkEntry) error {
 	return nil
 }
 
-// setupCompleteCmd renders the script the builder injects into install.wim.
-// It runs as SYSTEM before first logon (network up, no UI): the completion
-// callback is the Windows analog of the Linux dialects' late-commands, and
-// the declared static addresses land here too — Windows has no pre-install
-// network contract (the install runs from local media), so the target-side
-// write IS the network config, matching the ubuntu late-command netplan
-// precedent.
-func setupCompleteCmd(completeURL string, entries []render.NetworkEntry) string {
-	var b strings.Builder
-	b.WriteString("@echo off\n")
-	b.WriteString("rem mammoth unattended setup — completion callback + declared network\n")
-	b.WriteString("rem runs as SYSTEM before first logon (docs/compat/distros.md §windows)\n")
-	b.WriteString(fmt.Sprintf(
-		"powershell -NoProfile -ExecutionPolicy Bypass -Command \"try{Invoke-WebRequest -Uri '%s' -Method POST -Body '{\\\"status\\\":\\\"ok\\\",\\\"detail\\\":\\\"windows setup finished\\\"}' -ContentType 'application/json' -UseBasicParsing -TimeoutSec 15}catch{}\"\n",
-		completeURL))
-	for _, e := range entries {
-		if len(e.Addresses) == 0 {
-			continue // DHCP entry: leave the interface at defaults
-		}
-		mac := normalizeMAC(e.Match.MAC)
-		addr := strings.SplitN(e.Addresses[0], "/", 2)
-		prefix := "24"
-		if len(addr) == 2 && addr[1] != "" {
-			prefix = addr[1]
-		}
-		var gw string
-		for _, r := range e.Routes {
-			if r.To == "default" || r.To == "0.0.0.0/0" {
-				gw = r.Via
-			}
-		}
-		b.WriteString(fmt.Sprintf(
-			"powershell -NoProfile -Command \"$n=Get-NetAdapter|Where-Object{$_.MacAddress -eq '%s'};if($n){New-NetIPAddress -InterfaceIndex $n.ifIndex -IPAddress '%s' -PrefixLength %s%s|Out-Null}\"\n",
-			mac, addr[0], prefix, gwClause(gw)))
-		// Secondary addresses ride the same interface, no gateway.
-		for _, extra := range e.Addresses[1:] {
-			a := strings.SplitN(extra, "/", 2)
-			pl := "32"
-			if len(a) == 2 && a[1] != "" {
-				pl = a[1]
-			}
-			b.WriteString(fmt.Sprintf(
-				"powershell -NoProfile -Command \"$n=Get-NetAdapter|Where-Object{$_.MacAddress -eq '%s'};if($n){New-NetIPAddress -InterfaceIndex $n.ifIndex -IPAddress '%s' -PrefixLength %s|Out-Null}\"\n",
-				mac, a[0], pl))
-		}
-		if len(e.Nameservers) > 0 {
-			b.WriteString(fmt.Sprintf(
-				"powershell -NoProfile -Command \"$n=Get-NetAdapter|Where-Object{$_.MacAddress -eq '%s'};if($n){Set-DnsClientServerAddress -InterfaceIndex $n.ifIndex -ServerAddresses '%s'}\"",
-				mac, strings.Join(e.Nameservers, "','")))
-		}
-	}
-	return b.String()
+// setupCompleteCmd is the GENERIC launcher injected into install.wim —
+// per-task content must never bake into it, or the sha-cached prepared wim
+// breaks (task variance arrives via mammoth/task.json on the medium).
+func setupCompleteCmd() string {
+	return "@echo off\n" +
+		"rem mammoth: config arrives via mammoth\\task.json on the install medium\n" +
+		"powershell -NoProfile -ExecutionPolicy Bypass -File \"%~dp0mammoth-complete.ps1\"\n"
 }
 
-func gwClause(gw string) string {
-	if gw == "" {
-		return ""
+// mammothCompletePS is the generic first-boot logic (SYSTEM, pre-logon):
+// read the per-task config from the still-mounted medium, land the declared
+// static network (the install ran from local media — the target-side write
+// IS the network config, ubuntu late-command netplan precedent), then fire
+// the completion callback — which is what releases that very medium.
+func mammothCompletePS() string {
+	return `# mammoth first-boot: completion callback + declared network.
+$ErrorActionPreference = "SilentlyContinue"
+$cfg = $null
+foreach ($d in (Get-PSDrive -PSProvider FileSystem).Root) {
+    $p = Join-Path $d "mammoth\task.json"
+    if (Test-Path $p) { $cfg = Get-Content $p -Raw | ConvertFrom-Json; break }
+}
+if ($cfg) {
+    foreach ($n in $cfg.network) {
+        $nic = Get-NetAdapter | Where-Object { $_.MacAddress -eq $n.mac }
+        if ($nic) {
+            $first = $true
+            foreach ($a in $n.ips) {
+                if ($first -and $n.gateway) {
+                    New-NetIPAddress -InterfaceIndex $nic.ifIndex -IPAddress $a.ip -PrefixLength ([int]$a.prefix) -DefaultGateway $n.gateway | Out-Null
+                } else {
+                    New-NetIPAddress -InterfaceIndex $nic.ifIndex -IPAddress $a.ip -PrefixLength ([int]$a.prefix) | Out-Null
+                }
+                $first = $false
+            }
+            if ($n.dns) { Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses $n.dns }
+        }
+    }
+    try {
+        Invoke-WebRequest -Uri $cfg.complete_url -Method POST -Body '{"status":"ok","detail":"windows setup finished"}' -ContentType 'application/json' -UseBasicParsing -TimeoutSec 15 | Out-Null
+    } catch {}
+}
+`
+}
+
+// taskConfig is the per-task runtime contract consumed at first boot.
+type taskConfig struct {
+	CompleteURL string       `json:"complete_url"`
+	Network     []taskNetNIC `json:"network,omitempty"`
+}
+
+type taskNetNIC struct {
+	MAC     string   `json:"mac"`
+	IPs     []taskIP `json:"ips"`
+	Gateway string   `json:"gateway,omitempty"`
+	DNS     []string `json:"dns,omitempty"`
+}
+
+type taskIP struct {
+	IP     string `json:"ip"`
+	Prefix string `json:"prefix"`
+}
+
+// taskJSON renders the per-task config (ISO root — the only per-task seed).
+func taskJSON(completeURL string, entries []render.NetworkEntry) (string, error) {
+	cfg := taskConfig{CompleteURL: completeURL}
+	for _, e := range entries {
+		if len(e.Addresses) == 0 {
+			continue
+		}
+		nic := taskNetNIC{MAC: normalizeMAC(e.Match.MAC)}
+		for i, a := range e.Addresses {
+			p := strings.SplitN(a, "/", 2)
+			prefix := "32"
+			if len(p) == 2 && p[1] != "" {
+				prefix = p[1]
+			}
+			nic.IPs = append(nic.IPs, taskIP{IP: p[0], Prefix: prefix})
+			if i == 0 {
+				for _, r := range e.Routes {
+					if r.To == "default" || r.To == "0.0.0.0/0" {
+						nic.Gateway = r.Via
+					}
+				}
+			}
+		}
+		nic.DNS = e.Nameservers
+		cfg.Network = append(cfg.Network, nic)
 	}
-	return " -DefaultGateway '" + gw + "'"
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return "", fmt.Errorf("windows: task.json: %w", err)
+	}
+	return string(b) + "\n", nil
 }
 
 // normalizeMAC maps a spec MAC (any separator) into Get-NetAdapter's

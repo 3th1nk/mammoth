@@ -216,7 +216,7 @@ ubuntu 十八项连环修为证),声明文件只覆盖注册面、占比不足 5
 | RHEL 系(Rocky/Alma) | Anaconda | kickstart | **full**(`%pre` + `--onpart/--noformat`) | full(`inst.repo=nfs:` 网络装机现成;rocky10 BIOS 待真机) | ✅ 真机闭环(Huawei 2288H V5) |
 | Ubuntu Server 22.04/24.04 | subiquity | autoinstall | partial(keep: disk) | full(casper NFS squashfs 源:ISO 解包共享池树,`netboot=nfs` 挂 live root,不做整 ISO 进内存;PXE 阶段仅 DHCP,静态网声明翻译为 ip= 内核参数) | ✅ 真机闭环(ISO + PXE/casper NFS,2026-09-17) |
 | Debian 12/13 | debian-installer | preseed | partial(keep: disk) | full(载体 = d-i netboot.tar.gz `MAMMOTH_PXE_DI_NETBOOT`;安装源 = ISO 解包 HTTP 池,池钥匙签名 + debootstrap 进 target,离线语义保持) | ✅ 真机闭环(ISO + PXE/d-i netboot,debian13,2026-09-17) |
-| 统信服务器 V20(UOS) | anaconda 定制 | kickstart(同 rocky9 方言) | full(同 rocky9) | full(同 rocky9) | **blocked**(Finish 阶段崩溃,见 distros.md) |
+| 统信服务器 V20(UOS) | anaconda 定制 | kickstart(同 rocky9 方言) | full(同 rocky9) | full(同 rocky9) | **✅ 真机闭环**(2026-09-19,虚拟介质 + PXE;根因与修复见 distros.md) |
 | Windows | Setup | unattend | full | 未开始 | 未开始 |
 
 各方言能力差异(bond/vlan/软件 RAID/多安装盘/xfs 等)见
@@ -236,3 +236,31 @@ ubuntu 十八项连环修为证),声明文件只覆盖注册面、占比不足 5
 
 `ForceRetry`(跳过失败 stage 强行续跑)仅限 `verify_ready`;其余 stage 的失败必须
 从该 stage 重跑——不存在"跳过校验"的选项。
+
+## 8. 决策记录:应答文件不开放调用方自定义(2026-09-19)
+
+调用方(集成方)通过 Install Spec 表达安装意图,**不提供自定义应答文件**
+(kickstart/autoinstall/preseed);应答文件是引擎的编译产物,不是接口。
+
+理由:
+
+1. **方言怪癖是引擎的核心资产**。inst.text 触发 UOS Finish 崩溃、明文密码
+   写 shadow、curtin 不推断 ESP、d-i 池签名/by-hash、casper 强制 TCP——
+   手写应答文件正是装机死掉的地方(全部真机实证,见 compat/distros.md 与
+   huawei.md)。开放自定义 = 怪癖转嫁为调用方心智 + 引擎支持负担;
+2. **应答文件与任务机制深度耦合**:完成回调 URL、%pre 漂移守卫、
+   resolve-disk 动态 include、逐任务 token 全部渲染期生成。承接外部文件
+   需要维护 N 个方言解析器做钩子注入,或不注入(回调永不到达,install_os
+   挂死)——两条路都不可接受;
+3. **保证体系以 spec 语义为前提**:六阶段、漂移守卫、快照绑定、固件门禁
+   在自定义文件下全部失效,故障仍归因引擎;
+4. **逃生需求已被受控机制覆盖**:`spec.scripts` 的 pre_install/post_install
+   (安装器环境与 target 双侧、expected_exit_codes)+ per-machine override
+   覆盖差异化。缺口出现的既定模式是**修驱动**而非暴露配置(UOS swap/
+   graphical、esp 自动补齐均为范本:修复对所有调用方透明生效)。
+
+重开条件(仅当):出现 scripts 机制无法表达的**整类**需求,且以独立形态
+交付、明确标注"引擎不保证六阶段语义"——在此之前,本边界视为定案。
+
+参照系:Ironic(deploy steps)、Tinkerbell(actions)、MAAS(curtin 声明)
+同为"意图 + 引擎独占渲染"路线;文件中心的 Cobble 是反面参照。

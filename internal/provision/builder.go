@@ -9,11 +9,11 @@ import (
 )
 
 // mediaURIFor returns the BMC-accessible URI for a media file name.
-func mediaURIFor(nfsBase, filename string) string {
-	if nfsBase == "" {
+func mediaURIFor(base, filename string) string {
+	if base == "" {
 		return ""
 	}
-	return strings.TrimSuffix(nfsBase, "/") + "/" + filename
+	return strings.TrimSuffix(base, "/") + "/" + filename
 }
 
 // ensureISO and buildBootISO wrap the builder package for the Executor.

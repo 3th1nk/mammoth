@@ -36,8 +36,6 @@ type Executor struct {
 	ExternalURL string
 	// MediaDir is the local media repository (boot ISOs land here).
 	MediaDir string
-	// MediaNFSBase is the NFS URI base the BMC uses to fetch media.
-	MediaNFSBase string
 	// BootSettleDelay waits between media mount and power-on — covers
 	// out-of-band media transfer tails (NFS relay pushes).
 	BootSettleDelay time.Duration

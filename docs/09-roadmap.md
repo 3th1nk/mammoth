@@ -260,12 +260,14 @@
   共享池缓存 / OACK 容忍 / apt 信任收尾)。曾一度把 tag 延后至"PXE 增强 +
   BiosSetter 完成",2026-09-18 复议取消(前提消失、动机被现有路径覆盖),
   边界外移项见"下一阶段"。
-- **v1.1 方向**(按真机可得性,见"下一阶段"):agent initramfs 试点 ✅
-  (docs/12;真机回归待 2288H 窗口)+
-  BMC 能力接口(FirmwareInventory ✅ → BiosSetter ✅ → NIST 800-88 擦盘 ✅,
-  两段式确认契约随行)+
-  PXE 余项 qemu 可验部分(外部 DHCP+TFTP 逃生门 ✅、arm64 链路 ✅ qemu 可验);
-  UefiHttp/Windows/复验轮视真机窗口随 v1.x 增量;契约仅新增演进(向后兼容字段/
-  端点),破坏性变更进 v2 讨论。
+- **v1.1.0 已发布(2026-09-19)**:agent initramfs ✅(docs/12;qemu 双固件 +
+  **真机闭环**,含控制器卷盘名解析)+
+  BMC 能力接口三部曲(FirmwareInventory ✅ → BiosSetter ✅ 真机写回归 →
+  NIST 800-88 擦盘 ✅ 真机结论,两段式确认契约随行)+
+  PXE(外部 DHCP+TFTP 逃生门 ✅、arm64 链路 ✅ qemu 可验)+
+  uniontechos ✅(根因定位修复,真机双通路闭环)+
+  驱动加固(会话复用、iBMC 6.41 写形态、NormalizeESP)。
+  剩余随 v1.x 增量:UefiHttp/Windows/复验轮(等真机窗口)、UOS 最新版复验
+  (等 ISO);契约仅新增演进(向后兼容字段/端点),破坏性变更进 v2 讨论。
 - 发布流程:`git tag vX.Y.Z && goreleaser release --clean`(amd64/arm64,
   版本与 commit 经 ldflags 注入)。

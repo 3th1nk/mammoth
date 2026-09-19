@@ -1,0 +1,28 @@
+{
+  "type": "install",
+  "targets": {"machine_ids": ["mch_0f1e2d3c4b5a"]},
+  "spec": {
+    "image": {
+      "source": "file:///data/os_iso/windows2019/cn_windows_server_2019_x64_dvd_4de40f33.iso",
+      "distro": "windows2019"
+    },
+    "storage": {
+      "disks": [{
+        "select": {"match": {"size": "largest"}},
+        "wipe": true,
+        "partitions": [
+          {"size": "300M", "fs": "vfat", "mount": "/boot/efi", "flags": ["esp"]},
+          {"size": "rest", "fs": "ntfs", "mount": "/"}
+        ]
+      }]
+    },
+    "network": [{
+      "match": {"mac": "02:00:00:00:00:00"},
+      "addresses": ["198.51.100.215/24"],
+      "routes": [{"to": "default", "via": "198.51.100.1"}],
+      "nameservers": {"addresses": ["198.51.100.3"]}
+    }],
+    "identity": {"hostname_pattern": "win-2288h"},
+    "boot": {"strategy": "virtual_media"}
+  }
+}

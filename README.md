@@ -32,7 +32,7 @@ frozen in permafrost, but there is still a heartbeat under the ice: the BMC,
 an out-of-band chip that keeps pulsing even when the machine is "dead".
 Mammoth follows that heartbeat, inventories the skeleton, listens to your
 declared intent, then carries the heavy lifting alone — repacking ISOs,
-virtual media, the DHCP/PXE dance, three installer dialects. Send in an
+virtual media, the DHCP/PXE dance, four installer dialects. Send in an
 address and a credential; get back a machine that runs.
 
 **The mammoth task, tamed.**
@@ -42,7 +42,7 @@ The gopher in mammoth fur at the top says the same thing: a small binary
 
 ## At a glance
 
-**One pipeline, three onboarding paths, two boot carriers, three installer
+**One pipeline, three onboarding paths, two boot carriers, four installer
 dialects.**
 
 ```mermaid
@@ -64,6 +64,7 @@ flowchart TD
         ks["kickstart<br/>rocky · centos · kylin · UOS"]
         ai["autoinstall<br/>ubuntu 22.04 / 24.04"]
         ps["preseed<br/>debian 12 / 13"]
+        wu["unattend<br/>windows 2019 (UEFI-only)"]
     end
     ver["5 · verify: completion report +<br/>in-band SSH probe (installer-aware)<br/>+ post-install layout snapshot"]
     reg --> rf
@@ -79,6 +80,7 @@ flowchart TD
     ks --> ver
     ai --> ver
     ps --> ver
+    wu --> ver
 ```
 
 ### PXE addressing: the DHCP decision framework
@@ -106,6 +108,7 @@ flowchart TD
 | UOS | kickstart | DVD ISO | same ISO | NFS ISO | ✅ both |
 | ubuntu 22.04 / 24.04 | autoinstall | **live-server** ISO (casper, repacked) | **live-server** ISO (squashfs over NFS) | unpacked ISO tree over NFS | ✅ both |
 | debian 12 / 13 | preseed | **netinst** ISO (repacked) | **netinst** ISO (signed HTTP pool) **+ official netboot.tar.gz** + staged udebs | HTTP pool (checksum-complete, by-hash backfilled) | ✅ both |
+| windows 2019 | unattend | official media repacked (root autounattend + SetupComplete wimlib injection, UDF bridge) | — (not in v1; WinPE chain deferred to v1.x) | — | qemu boot+unattend-accept ✅ · real pending |
 
 Rule of thumb: **netinst / minimal** = small installer with its own package
 pool (PXE-friendly); **DVD** = fully offline pool; **live-server** = ubuntu's
@@ -121,6 +124,7 @@ ISO content as a package source.
 | RHEL-like | Rocky 9.x minimal ISO | virtual_media ✅ · PXE ✅ |
 | Ubuntu-like | Ubuntu 22.04.5 & 24.04.x live-server ISO | virtual_media ✅ · PXE ✅ |
 | Debian-like | Debian 12 / 13 netinst ISO | virtual_media ✅ · PXE ✅ |
+| Windows-like | Windows Server 2019 (zh-CN MSDN) | virtual_media 🔧 (UEFI-only, Standard Core) · qemu boot+unattend-accept ✅ · real pending |
 | Extension | Rocky 10 (UEFI-only) · CentOS 7 (legacy) · Kylin V10/V11 · UOS | per-demand |
 
 Every regression run: six-stage pipeline green → unattended first boot →

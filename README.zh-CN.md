@@ -27,7 +27,7 @@ Mammoth 通过带外控制器(BMC)接管机器,自动盘查硬件与磁盘布局
 恰恰是运维圈公认的这种苦役。一台没有操作系统的服务器,像冰封在冻土里的猛犸;
 但冰层下仍有心跳:BMC 那颗不依赖磁盘的带外芯片,整机"死"了也仍在搏动。
 Mammoth 顺着这根心跳找到机器、盘点骨骼、听你声明它该成为的模样,然后独自
-扛下所有重活——重打包 ISO、虚拟介质、DHCP/PXE 的二层博弈、三种安装器方言。
+扛下所有重活——重打包 ISO、虚拟介质、DHCP/PXE 的二层博弈、四种安装器方言。
 你只需要给它一个地址和一份凭证,它还你一台能跑起来的机器。
 
 **The mammoth task, tamed.**
@@ -36,7 +36,7 @@ Mammoth 顺着这根心跳找到机器、盘点骨骼、听你声明它该成为
 
 ## 一图看懂
 
-**一条流水线,三条上电路径,两种引导载体,三种安装器方言。**
+**一条流水线,三条上电路径,两种引导载体,四种安装器方言。**
 
 ```mermaid
 flowchart TD
@@ -57,6 +57,7 @@ flowchart TD
         ks["kickstart<br/>rocky · centos · kylin · UOS"]
         ai["autoinstall<br/>ubuntu 22.04 / 24.04"]
         ps["preseed<br/>debian 12 / 13"]
+        wu["unattend<br/>windows 2019(UEFI-only)"]
     end
     ver["5 · 校验:完成回调 + 带内 SSH<br/>探测(识别安装器)<br/>+ 装后布局快照"]
     reg --> rf
@@ -72,6 +73,7 @@ flowchart TD
     ks --> ver
     ai --> ver
     ps --> ver
+    wu --> ver
 ```
 
 ### PXE 寻址:DHCP 决策框架
@@ -99,6 +101,7 @@ flowchart TD
 | UOS | kickstart | DVD ISO | 同源 ISO | NFS ISO | ✅ 双通路 |
 | ubuntu 22.04 / 24.04 | autoinstall | **live-server** ISO(casper,重打包) | **live-server** ISO(squashfs 走 NFS) | 解包 ISO 树走 NFS | ✅ 双载体 |
 | debian 12 / 13 | preseed | **netinst** ISO(重打包) | **netinst** ISO(签名 HTTP 池)**+ 官方 netboot.tar.gz** + 暂存 udebs | HTTP 池(校验和完整、by-hash 回填) | ✅ 双载体 |
+| windows 2019 | unattend | 官方原盘重打包(媒体根 autounattend + SetupComplete wimlib 注入,UDF bridge) | —(v1 未支持,WinPE 链挂 v1.x) | — | qemu 引导+应答前半 ✅ · 真机待验 |
 
 经验法则:**netinst / minimal** = 小安装器自带软件池(PXE 友好);
 **DVD** = 完全离线池;**live-server** = ubuntu 的安装器载体(casper);
@@ -113,6 +116,7 @@ flowchart TD
 | Ubuntu 系 | Ubuntu 22.04.5 与 24.04.x live-server ISO | virtual_media ✅ · PXE ✅ |
 | Debian 系 | Debian 12 / 13 netinst ISO | virtual_media ✅ · PXE ✅ |
 | 扩展 | Rocky 10(UEFI-only)· CentOS 7(legacy)· Kylin V10/V11 · UOS | 按需 |
+| Windows 系 | Windows Server 2019(zh-CN MSDN) | virtual_media 🔧(UEFI-only,Standard Core)· qemu 引导+应答前半 ✅ · 真机待验 |
 
 每轮回归:六阶段流水线全绿 → 无人值守首启 → 装机钥匙 SSH 探测。详见
 [docs/runbooks/test-baselines.md](docs/runbooks/test-baselines.md)。

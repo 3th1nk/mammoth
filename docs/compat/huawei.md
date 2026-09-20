@@ -329,6 +329,50 @@ iBMC 的挂载校验只读镜像头部,部分文件即可通过;固件在 POST �
 2. `MAMMOTH_BOOT_SETTLE_DELAY`(boot 阶段挂载与上电之间的等待,默认 0;
    中转分发部署建议 ≥ 推送耗时)。
 
+## Windows 虚拟介质 UEFI 引导不可用(iBMC 6.41,2026-09-20 真机定案)
+
+windows 介质在 2288H V5(iBMC 6.41 + BIOS 8.20)上经虚拟介质引导,UEFI 层
+**固件级失败**:SetBootDevice(Cd) 被 BIOS 正常受理并尝试虚拟 CD(呈现为
+"EFI USB Device (Virtual DVD-ROM VM 1.1.0)"),随即 `boot failed.` 落回
+磁盘——失败发生在装载 efisys 的 EFI 早期,无任何 Windows 画面。同通路
+对照:alpine 探针 ISO(270M)当日引导 4 次全成,UOS 8.2G 原盘同日重测
+引导成(出现安装选项界面)——**大小无辜,windows 介质内容特异**。
+
+已排除(每项均有实证):
+- 重打包产物:-builder 的 El Torito 重放把微软隐匿条目规范化为诚实形态
+  (efisys.bin 2880 扇区可见文件),同灭;原版隐匿形态(Ldsiz=1)也灭。
+- 取数通路:NFS 服务端挂载(抓包:mnt/fsinfo/getattr/lookup 全 ok)与
+  KVM 客户端重定向(ConnectedVia=Applet)同灭。
+- 挂载竞态:介质挂载后搁置 30 分钟再引导同灭(MAMMOTH_BOOT_SETTLE_DELAY
+  调大无意义——失败在 EFI 层,非读取竞态)。
+- override 形态:Once 与 Continuous 同灭;BIOS 属性 BootTypeOrder 含
+  DVDROMDrive、USBBoot=Enabled、BootOverrideUEFI=Disabled(与探针成功
+  时的配置完全一致,非变量)。
+- Manager.Reset:多次重置不影响 windows 引导结果(仅恢复挂载能力,
+  见"虚拟介质子系统高频挂载后劣化"条)。
+
+判定方法论(复用价值):①无介质/挂介质两次重启,测旧系统地址回归时长
+(两者一致 ⇒ BIOS 从未成功尝试过 CD);②"boot failed." 行会停留数秒,
+KVM 抓屏即可取证;③SEL/RunLog 无引导设备记录,屏幕是唯一证据源。
+
+workaround(按优先序):
+1. 物理 USB 盘(Rufus 式写 windows 介质)——最短路径,需人到现场;
+2. iBMC 升级后复验(预期根治;同日 NIST 擦盘亦发现 6.41 缺
+   `#Drive.SecureErase`,升级动机叠加);
+3. 设计解(建议入 v1.x builder):**Ventoy 式重打包**——把 El Torito
+   UEFI 条目指向本仓 PXE 套件现成的 grub efiboot 镜像(该形态本固件
+   已证可引),grub 从 CD 的 UDF 链载
+   `\efi\microsoft\boot\bootmgfw.efi`;SB 开启时 shim→grub→bootmgfw
+   签名链依旧干净;
+4. v1.x WinPE PXE 链(既定项,绕开虚拟 CD)。
+
+同日运维附记:①虚拟介质子系统当日 ~15 次挂卸后出现**随机 mount
+Exception**(iBMC.1.0.ConnectionFailed),Manager.Reset 仅短暂恢复,
+属"高频挂载后劣化"的加重形态;②iBMC 任务历史随 Manager.Reset 清空,
+排障须抓新鲜任务体;③LSI BIOS 报 Foreign configuration(按键跳过,
+RAID1 VD 3.8T 正常),SEL 有 Disk4 predictive failure / Disk1 abnormal
+告警——盘健康项,待后续窗口核。
+
 ## ramdisk 探针(2026-09-12 V0 原型 → 2026-09-13 真机闭环 ✅)
 
 **目标**:BMC 虚拟光驱形态的硬件采集探针——debian netinst 的 d-i 引导 +

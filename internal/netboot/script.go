@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 )
 
@@ -79,7 +80,14 @@ func scriptURLFor(baseURL, mac string, arch Arch) string {
 // RenderScript renders the iPXE script for an entry. Everything large rides
 // HTTP under <baseURL>/netboot/files/<token>/; the kernel args already carry
 // absolute URLs (answer file, NFS repo, modloop) composed by provision.
+// wimboot entries (the Windows carrier) render the wimboot shape instead:
+// the loader is the "kernel" and every boot file is an initrd line with an
+// explicit memory name (docs: ipxe.org/wimboot) — the file list is the
+// Extra allowlist plus boot.wim, order-free because wimboot fetches by name.
 func RenderScript(e *Entry, baseURL string) string {
+	if e.Kernel == "wimboot" {
+		return renderWimbootScript(e, baseURL)
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "#!ipxe\n")
 	fmt.Fprintf(&b, "# mammoth boot entry mac=%s task=%s kind=%s\n", e.MAC, e.TaskID, e.Kind)
@@ -87,6 +95,31 @@ func RenderScript(e *Entry, baseURL string) string {
 		strings.TrimSuffix(baseURL, "/"), e.Token, e.Kernel, sanitizeArgs(e.KernelArgs))
 	fmt.Fprintf(&b, "initrd %s/netboot/files/%s/%s\n",
 		strings.TrimSuffix(baseURL, "/"), e.Token, e.Initrd)
+	b.WriteString("boot\n")
+	return b.String()
+}
+
+// renderWimbootScript is the Windows carrier script: wimboot takes the
+// media's boot files (bootmgr / bootmgfw.efi, BCD, boot.sdi) plus the
+// augmented boot.wim and assembles the WinPE memory environment itself —
+// there are no kernel args to interpolate.
+func renderWimbootScript(e *Entry, baseURL string) string {
+	base := fmt.Sprintf("%s/netboot/files/%s/", strings.TrimSuffix(baseURL, "/"), e.Token)
+	names := make([]string, 0, len(e.Extra)+1)
+	for _, n := range e.Extra {
+		if n != "" && !strings.HasPrefix(n, "dir:") {
+			names = append(names, n)
+		}
+	}
+	names = append(names, e.Initrd)
+	sort.Strings(names)
+	var b strings.Builder
+	fmt.Fprintf(&b, "#!ipxe\n")
+	fmt.Fprintf(&b, "# mammoth boot entry mac=%s task=%s kind=%s (wimboot/WinPE)\n", e.MAC, e.TaskID, e.Kind)
+	fmt.Fprintf(&b, "kernel %swimboot\n", base)
+	for _, n := range names {
+		fmt.Fprintf(&b, "initrd %s%s %s\n", base, n, n)
+	}
 	b.WriteString("boot\n")
 	return b.String()
 }
@@ -146,6 +179,19 @@ func sanitizeArgs(s string) string {
 // menu at all.
 func RenderGRUB(e *Entry, baseURL string) string {
 	host := grubHTTPHost(baseURL)
+	if e.Kernel == "wimboot" {
+		// The wimboot carrier has no Secure Boot chain: grub's UEFI loaders
+		// cannot hand files to a chainloaded image, and wimboot is unsigned
+		// anyway (docs/compat/distros.md §windows). Exit cleanly so the
+		// firmware falls through to the next boot device — the same
+		// post-install race neutralization as NoEntryGRUB.
+		var b strings.Builder
+		fmt.Fprintf(&b, "# mammoth boot entry mac=%s task=%s kind=%s (wimboot/WinPE)\n", e.MAC, e.TaskID, e.Kind)
+		fmt.Fprintf(&b, "# wimboot rides plain iPXE, not the shim→grubnet chain (Secure Boot off required)\n")
+		fmt.Fprintf(&b, "echo mammoth: wimboot entry needs plain iPXE — falling through\n")
+		b.WriteString("exit\n")
+		return b.String()
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# mammoth boot entry mac=%s task=%s kind=%s\n", e.MAC, e.TaskID, e.Kind)
 	// grubnet already brought up efinet to fetch this file over TFTP; a

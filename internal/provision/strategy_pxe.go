@@ -91,6 +91,26 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 				"agent boot tree build failed: %s", err.Error())
 		}
+	case render.NetbootCarrierWimboot:
+		// The Windows carrier (docs/compat/distros.md §windows): wimboot +
+		// the media's own boot files, plus small per-task seed files baked
+		// into boot.wim (autounattend.xml, mammoth/task.json). The gate is
+		// shut (PXESupport none) until the SMB install source lands — this
+		// branch serves the validated delivery chain behind it.
+		seed := make(map[string]string, len(b.Answers))
+		for _, a := range b.Answers {
+			seed[a.Name] = a.Content
+		}
+		tree, err = builder.BuildWindowsWimboot(ctx, builder.WindowsWimbootOptions{
+			ISOPath:  distroISO,
+			DestDir:  treeDir,
+			CacheDir: e.MediaDir,
+			Seed:     seed,
+		})
+		if err != nil {
+			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+				"windows wimboot tree build failed: %s", err.Error())
+		}
 	default:
 		tree, err = builder.ExtractBootFiles(ctx, "", distroISO, treeDir)
 		if err != nil {

@@ -59,6 +59,10 @@ type Deps struct {
 	// in capabilities (empty/false when the netboot path is not configured).
 	BootStrategyDefault string
 	NetbootEnabled      bool
+	// WindowsInstallShare reports that the deployment SMB export for the
+	// windows wimboot carrier is configured (capabilities surface and the
+	// windows PXE submission gate).
+	WindowsInstallShare bool
 	// BiosConfirmRequired gates set_bios_attributes submissions (two-stage
 	// confirmation, docs/07-bmc.md §6); surfaced in capabilities.
 	BiosConfirmRequired bool
@@ -240,6 +244,9 @@ func (s *Server) GetCapabilities(ctx context.Context, _ gen.GetCapabilitiesReque
 	}
 	if s.NetbootEnabled {
 		out.NetbootEnabled = &s.NetbootEnabled
+	}
+	if s.WindowsInstallShare {
+		out.WindowsInstallShare = &s.WindowsInstallShare
 	}
 	biosConfirm := "required"
 	if !s.BiosConfirmRequired {

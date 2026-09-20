@@ -152,19 +152,19 @@ func TestRenderWindowsSynthesizesESP(t *testing.T) {
 
 // The boundary, enforced at render time (honest rejections, not silent
 // reinterpretation) and via capability declarations at submit time. The
-// wimboot carrier chain is validated (WinPE boots, small-file augmentation
-// reads back), but PXESupport stays none until the SMB install source
-// lands — the >4G boot.wim shape is a bootmgr-rejected dead end.
+// wimboot carrier is full: the >4G boot.wim dead end was replaced by the
+// deployment SMB export mapped from a baked startnet, and the gate rejects
+// submissions when that export is not configured.
 func TestRenderWindowsBoundary(t *testing.T) {
 	d := New("windows2019")
-	if d.PXESupport() != render.SupportNone {
-		t.Errorf("windows PXE support must stay none until the SMB install source lands")
+	if d.PXESupport() != render.SupportFull {
+		t.Errorf("windows PXE support must be full (wimboot carrier + deployment SMB export)")
 	}
 	if d.NetbootCarrier() != render.NetbootCarrierWimboot {
 		t.Errorf("windows netboot carrier must be wimboot")
 	}
 	if d.NetbootPool() != render.NetbootPoolNone {
-		t.Errorf("windows netboot pool must be none (install source rides SMB, pending)")
+		t.Errorf("windows netboot pool must be none (install source rides the SMB export)")
 	}
 	if d.KeepPartitionSupport() != render.SupportNone {
 		t.Errorf("windows keep support must be none in v1")
@@ -185,6 +185,14 @@ func TestRenderWindowsBoundary(t *testing.T) {
 			in.Netboot = &render.NetbootInputs{PoolURL: "http://x/store/s/iso", NFSRootURL: "h:/p"}
 			return in
 		}, "no pool tree applies"},
+		{"pxe without share", func(in render.InstallInputs) render.InstallInputs {
+			in.Netboot = &render.NetbootInputs{}
+			return in
+		}, "needs the deployment SMB export"},
+		{"pxe share metachar", func(in render.InstallInputs) render.InstallInputs {
+			in.Netboot = &render.NetbootInputs{InstallShareUNC: `\\h\share`, InstallSharePassword: "p&ss"}
+			return in
+		}, "cmd cannot quote metacharacters"},
 		{"raid", func(in render.InstallInputs) render.InstallInputs {
 			in.Raid = []render.ResolvedRaid{{Name: "v0", Mode: "hardware"}}
 			return in
@@ -245,23 +253,37 @@ func TestRenderWindowsBoundary(t *testing.T) {
 	}
 }
 
-// The wimboot PXE shape renders the same answers as virtual media (small
-// seed files ride the augmented boot.wim; the install source is networked)
-// and carries no kernel args.
+// The wimboot PXE shape renders the virtual-media answers plus the startnet
+// that maps the deployment SMB export (the install source), and carries no
+// kernel args.
 func TestRenderWindowsPXE(t *testing.T) {
 	in := baseInputs()
-	in.Netboot = &render.NetbootInputs{}
+	in.Netboot = &render.NetbootInputs{
+		InstallShareUNC:      `\\198.51.100.248\mammoth-media`,
+		InstallShareUser:     "smbuser",
+		InstallSharePassword: "s3cret-9",
+	}
 	answers, boot, err := New("windows2019").RenderAnswers(in, render.MachineView{})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
-	names := map[string]bool{}
+	names := map[string]string{}
 	for _, a := range answers {
-		names[a.Name] = true
+		names[a.Name] = a.Content
 	}
-	for _, want := range []string{"autounattend.xml", "mammoth/SetupComplete.cmd", "mammoth/mammoth-complete.ps1", "mammoth/task.json"} {
-		if !names[want] {
+	for _, want := range []string{"autounattend.xml", "mammoth/SetupComplete.cmd", "mammoth/mammoth-complete.ps1", "mammoth/task.json", "mammoth/startnet.cmd"} {
+		if _, ok := names[want]; !ok {
 			t.Errorf("PXE render missing answer %s (the wimboot seed contract)", want)
+		}
+	}
+	startnet := names["mammoth/startnet.cmd"]
+	for _, want := range []string{
+		"wpeinit",
+		`net use Z: \\198.51.100.248\mammoth-media "s3cret-9" /user:smbuser`,
+		`Z:\sources\setup.exe /unattend X:\autounattend.xml`,
+	} {
+		if !strings.Contains(startnet, want) {
+			t.Errorf("startnet missing %q:\n%s", want, startnet)
 		}
 	}
 	if boot.KernelArgs != "" || boot.NetbootKernelArgs != "" {

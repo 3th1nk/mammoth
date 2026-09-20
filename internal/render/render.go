@@ -67,14 +67,14 @@ type NetbootInputs struct {
 	// NFSRootURL is the NFS install-source tree in casper's nfsroot form
 	// (host:/path — MediaBaseURI + the shared pool-store path).
 	NFSRootURL string
-	// InstallShareUNC/User/Password feed the windows wimboot carrier's
+	// InstallSMBUNC/User/Password feed the windows wimboot carrier's
 	// startnet: WinPE maps this deployment-provided SMB export and runs
 	// setup from it (the SMB analog of the NFS media export — docs/compat/
 	// distros.md §windows). Empty UNC = no export configured; the submission
 	// gate rejects windows PXE before anything renders.
-	InstallShareUNC      string
-	InstallShareUser     string
-	InstallSharePassword string
+	InstallSMBUNC      string
+	InstallSMBUser     string
+	InstallSMBPassword string
 	// PoolPublicKey is the binary OpenPGP keyring of the pool signing key —
 	// the HTTP pool is a signed offline mirror, and the installer's apt needs
 	// this key in its trustdb to pass apt-setup's mirror verification. Nil

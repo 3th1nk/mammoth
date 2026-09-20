@@ -190,7 +190,7 @@ func TestRenderWindowsBoundary(t *testing.T) {
 			return in
 		}, "needs the deployment SMB export"},
 		{"pxe share metachar", func(in render.InstallInputs) render.InstallInputs {
-			in.Netboot = &render.NetbootInputs{InstallShareUNC: `\\h\share`, InstallSharePassword: "p&ss"}
+			in.Netboot = &render.NetbootInputs{InstallSMBUNC: `\\h\share`, InstallSMBPassword: "p&ss"}
 			return in
 		}, "cmd cannot quote metacharacters"},
 		{"raid", func(in render.InstallInputs) render.InstallInputs {
@@ -259,9 +259,9 @@ func TestRenderWindowsBoundary(t *testing.T) {
 func TestRenderWindowsPXE(t *testing.T) {
 	in := baseInputs()
 	in.Netboot = &render.NetbootInputs{
-		InstallShareUNC:      `\\198.51.100.248\mammoth-media`,
-		InstallShareUser:     "smbuser",
-		InstallSharePassword: "s3cret-9",
+		InstallSMBUNC:      `\\198.51.100.248\mammoth-media`,
+		InstallSMBUser:     "smbuser",
+		InstallSMBPassword: "s3cret-9",
 	}
 	answers, boot, err := New("windows2019").RenderAnswers(in, render.MachineView{})
 	if err != nil {

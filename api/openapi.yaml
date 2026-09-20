@@ -1227,10 +1227,10 @@ components:
           type: boolean
           description: Whether the netboot service (proxyDHCP/TFTP/iPXE) runs
             on this instance; pxe boot requests require it.
-        windows_install_share:
+        windows_smb_share:
           type: boolean
           description: Whether the deployment SMB export for the windows wimboot
-            carrier is configured (MAMMOTH_WINDOWS_INSTALL_SHARE); windows pxe
+            carrier is configured (MAMMOTH_WINDOWS_INSTALL_SMB_SHARE); windows pxe
             boot requests require it.
 
     DistroSupport:

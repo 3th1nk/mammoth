@@ -192,6 +192,32 @@ Redfish 卷名/serial 与安装器视图可能不一致,见 docs/compat/huawei.m
 驱动方言限制(如 netcfg 单接口)以 `driver_notes` 结构化返回,供展示层
 在配置阶段就拦住,而不是装到一半 RENDER_FAILED。
 
+### 客户端接入方式(契约即 SDK)
+
+集成面不提供手写 SDK:OpenAPI 3.1 契约(`api/openapi.yaml`,亦随服务端
+二进制经 embedded-spec 分发,`GET /api/v1` 自描述)本身就是对任何语言
+集成方的承诺——手写封装等于把契约复制第二份,随契约演进必然漂移。
+各语言的接入姿势:
+
+- **任意语言**:用各自生态的 OpenAPI 工具链从契约生成客户端
+  (openapi-generator / oapi-codegen / datamodel-code-generator 等),
+  或直接 curl——`scripts/acceptance.py` 与 `internal/cli`(纯 HTTP
+  客户端,契约之外零语义)即是两个 in-repo 的手卷先例。
+- **Go**:一条命令生成类型安全的客户端:
+
+  ```sh
+  go tool oapi-codegen -generate types,client \
+    -package mammothclient -o client/api.go api/openapi.yaml
+  ```
+
+- **机器面例外**:`/render/{token}/...` 与 `/netboot/...` 由安装器/探针
+  消费(shell 脚本),以路径中的 task token 为凭证,不进 SDK 语义。
+
+生成式 client 的 pkg/ 化(输出进 `pkg/api/client` 供外部 import)**不预
+做**:在出现第一个仓库外 Go 消费方(或仓库内第二个 Go HTTP 消费方)之前,
+生成代码留在 `internal/`,避免为想象中的读者发行公共面;届时是 cfg.yaml
+加一行输出的动作,见 docs/09-roadmap.md 等条件组。
+
 ### 破坏性动作确认(规划)
 
 BMC 写动作(power / boot override / 虚拟介质)与未来的固件、擦盘类动作,

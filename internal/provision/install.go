@@ -741,9 +741,9 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 			// it inside WinPE (setup consumes UNC directly, nothing lands in
 			// the boot.wim).
 			in.Netboot = &render.NetbootInputs{
-				InstallShareUNC:      e.WindowsInstallShare,
-				InstallShareUser:     e.WindowsInstallShareUser,
-				InstallSharePassword: e.WindowsInstallSharePassword,
+				InstallSMBUNC:      e.WindowsInstallSMBShare,
+				InstallSMBUser:     e.WindowsInstallSMBShareUser,
+				InstallSMBPassword: e.WindowsInstallSMBSharePassword,
 			}
 		} else {
 			// The shared pool tree is content-addressed by the image's sha256,

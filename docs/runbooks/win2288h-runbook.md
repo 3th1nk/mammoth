@@ -121,15 +121,18 @@ Get-PnpDevice -Class SCSIAdapter | Format-Table FriendlyName, Status
 
 - **WinPE 不识别 LSI 卷**(预期外):distros.md 既定后手 = boot.wim 驱动注入
   (v1.x);窗口内先以 KVM 截图 + `X:\Windows\panther\setupact.log` 留证收场。
-- **构建水位拒斥**:`/data` 当前 18G free(2022 ISO 的 scp 仍在写入——那不是
-  本窗口目标,完成后约再占 5G)。首建需 ≥9GiB,若拒斥,清理 win-dev rig
+- **构建水位拒斥**:`/data` 容量紧(2026-09-20 时 13G free,2022 ISO 已
+  就位)。首建需 ≥9GiB,若拒斥,清理 win-dev rig
   (`/data/mammoth/win-dev/`,含 4.8G boot-dev.iso + qemu 盘)即解。
 - **回调未达**:KVM 看登录界面是否出现;若已登录但 248 无回调,查
   SetupComplete 是否被首次登录打断(正常不会:SYSTEM 先于首登录)。
 
-## 6. 窗口外待办(已识别,非阻塞)
+## 6. 窗口外待办(2026-09-20 收口后核销)
 
-- 契约 `PartitionSpec.fs` 枚举未随 windows 轮补 `ntfs|fat32`(服务端不强制,
-  纯契约文档漂移;补行 + regen 即可)。
-- `SW_DVD9_Win_Server_2022` ISO scp 完成后 md5 核对,2022 作为构造变体轮次。
-- 248 遗留 7 running/3 pending 均为昨日死信残留,窗口后可批量取消清账。
+- ~~契约 `PartitionSpec.fs` 枚举补 `ntfs|fat32`~~ **✅ 已补**(eaf0ccd 同批)。
+- ~~2022 ISO scp/核对~~ **✅ 已就位** `/data/os_iso/windows2022/`(5.5G,
+  隐匿 El Torito 同 2019;2022 轮次随通路打通后作为构造变体验证)。
+- ~~248 遗留死信 job 清账~~ 窗口日新增若干 canceled/failed(本窗口排障
+  所致),清账顺延。
+- iBMC 侧:Disk4 predictive failure / Disk1 abnormal 告警 + LSI Foreign
+  configuration——盘健康核查,下次有人到场时处理。

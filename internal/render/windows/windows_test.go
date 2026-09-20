@@ -280,7 +280,8 @@ func TestRenderWindowsPXE(t *testing.T) {
 	for _, want := range []string{
 		"wpeinit",
 		`net use Z: \\198.51.100.248\mammoth-media "s3cret-9" /user:smbuser`,
-		`Z:\sources\setup.exe /unattend X:\autounattend.xml`,
+		`start "mammoth setup" /D Z:\sources Z:\sources\setup.exe /unattend X:\autounattend.xml`,
+		`curl -sf -T X:\Windows\Panther\setuperr.log http://10.0.2.2:8080/render/tokw/diag/setuperr.log`,
 	} {
 		if !strings.Contains(startnet, want) {
 			t.Errorf("startnet missing %q:\n%s", want, startnet)

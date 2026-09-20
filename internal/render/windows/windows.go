@@ -124,7 +124,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			return nil, render.BootParams{}, fmt.Errorf("%s: PXE needs the deployment SMB export (MAMMOTH_WINDOWS_INSTALL_SMB_SHARE)", d.distro)
 		}
 		var err error
-		if startnet, err = startnetCmd(*in.Netboot); err != nil {
+		if startnet, err = startnetCmd(*in.Netboot, in.AnswerBaseURL); err != nil {
 			return nil, render.BootParams{}, err
 		}
 	}
@@ -498,7 +498,7 @@ func unattendXML(imageName, hostname, password string, plan diskPlan) string {
     </component>
     <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
       <DiskConfiguration>
-        <WillShowUI>OnError</WillShowUI>
+        <WillShowUI>Never</WillShowUI>
         <Disk wcm:action="add">
           <DiskID>0</DiskID>
           <WillWipeDisk>true</WillWipeDisk>
@@ -601,7 +601,7 @@ func unattendXML(imageName, hostname, password string, plan diskPlan) string {
 // (<share>\sources), so the WDS-style flow needs no per-image arguments.
 // Every dynamic value is character-validated — cmd has no safe quoting for
 // metacharacters, so the config contract is a restricted charset instead.
-func startnetCmd(in render.NetbootInputs) (string, error) {
+func startnetCmd(in render.NetbootInputs, answerBase string) (string, error) {
 	if err := validateShareToken(in.InstallSMBUNC, "share UNC", true); err != nil {
 		return "", err
 	}
@@ -614,6 +614,11 @@ func startnetCmd(in render.NetbootInputs) (string, error) {
 	cred := ""
 	if in.InstallSMBUser != "" {
 		cred = fmt.Sprintf(" \"%s\" /user:%s", in.InstallSMBPassword, in.InstallSMBUser)
+	} else {
+		// An empty-credential net use sends a NULL session, which the client
+		// side refuses outright (startnet would silently never map the
+		// share) — guest + empty password rides the server's guest mapping.
+		cred = " \"\" /user:guest"
 	}
 	var b strings.Builder
 	w := func(line string) { b.WriteString(line); b.WriteByte('\n') }
@@ -623,7 +628,10 @@ func startnetCmd(in render.NetbootInputs) (string, error) {
 	w("set ATTEMPT=0")
 	w(":waitnet")
 	w("set /a ATTEMPT+=1")
-	w(fmt.Sprintf("net use Z: %s%s >nul 2>&1", in.InstallSMBUNC, cred))
+	// stderr stays visible: the failure round prints the net use error on
+	// screen before the drop-to-shell, which is the only diagnostic surface
+	// a headless rig has.
+	w(fmt.Sprintf("net use Z: %s%s >nul", in.InstallSMBUNC, cred))
 	w("if not errorlevel 1 goto mounted")
 	w("if %ATTEMPT% GEQ 45 (")
 	w("  echo mammoth: could not map the install share - dropping to shell for diagnosis")
@@ -634,7 +642,42 @@ func startnetCmd(in render.NetbootInputs) (string, error) {
 	w(":mounted")
 	// /unattend explicit: the ramdisk root is not a setup search root, and the
 	// implicit autounattend discovery does not run for a network launch.
-	w("Z:\\sources\\setup.exe /unattend X:\\autounattend.xml")
+	// Setup runs in its own window; this script then streams setup's logs
+	// back to the engine. A successful install reboots the machine and ends
+	// the stream naturally; a failed one leaves the Panther logs on the
+	// engine for post-mortem (the DiskConfiguration investigation channel).
+	w("start \"mammoth setup\" /D Z:\\sources Z:\\sources\\setup.exe /unattend X:\\autounattend.xml")
+	// One-shot diagnostics dump right after launch: the Panther logs may
+	// live somewhere the diag loop does not poll, so the directory listings
+	// themselves travel back (via the writable share) and point at the real
+	// location. setuperr.log, when it appears, is picked up by the loop.
+	w("if not exist Z:\\diag\\ mkdir Z:\\diag")
+	for _, d := range []struct{ src, name string }{
+		{`X:\Windows\Panther`, `panther-dir.txt`},
+		{`X:\Windows`, `x-windows-dir.txt`},
+		{`X:\`, `x-root-dir.txt`},
+		{`Z:\sources`, `z-sources-dir.txt`},
+	} {
+		w(fmt.Sprintf("dir /b %s > Z:\\diag\\%s 2>&1", d.src, d.name))
+	}
+	diag := strings.TrimSuffix(answerBase, "/") + "/diag"
+	w("set DIAG=0")
+	w(":diag")
+	w("set /a DIAG+=1")
+	for _, p := range []string{
+		`X:\Windows\Panther\setuperr.log`,
+		`X:\Windows\Panther\setupact.log`,
+		`X:\Windows\inf\setupapi.dev.log`,
+	} {
+		name := p[strings.LastIndex(p, "\\")+1:]
+		w(fmt.Sprintf("if exist %s curl -sf -T %s %s/%s >nul 2>&1", p, p, diag, name))
+		// curl.exe is not guaranteed present in every WinPE build — the SMB
+		// copy is the second leg (fires when the export allows writes).
+		w(fmt.Sprintf("if exist %s copy /Y %s Z:\\diag\\%s >nul 2>&1", p, p, name))
+	}
+	w("if %DIAG% GEQ 600 exit /b 0")
+	w("ping -n 4 127.0.0.1 >nul")
+	w("goto diag")
 	return b.String(), nil
 }
 

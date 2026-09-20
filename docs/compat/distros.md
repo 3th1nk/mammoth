@@ -14,7 +14,7 @@
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
 | Debian 12 | `debian12` | debian-installer | preseed(`file=/cdrom/preseed.cfg`) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | 无(netcfg 不按 MAC 选口,单接口) | ✅ 真机跑通 |
 | 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(真机复核 2026-09-19) | MAC → 接口名在 %pre 安装期解析 | **full(真机闭环 2026-09-19:虚拟介质 + PXE 双通路零人工)**;⚠️ **方言约束:仅图形前端可用**——text 模式(text 指令/inst.text)下 UOS anaconda 自动分区建出 FAT16 而非 swap 且 Finish 组崩溃,驱动已强制 graphical(见下方根因节) |
-| **Windows Server 2019** | `windows2019` | Windows Setup(bootmgr,`/sources/install.wim`) | **unattend**(autounattend.xml 媒体根自动发现,零内核参数) | **none**(v1) | MAC → SetupComplete.cmd 按 Get-NetAdapter MAC 绑定(装后 SYSTEM 首登录前落地) | 🔧 **v1 代码面就绪(2026-09-19,待 ISO 实测)**:虚拟介质 + UEFI-only;PXE 需 WinPE 链(v1.x);详见下方 windows 节 |
+| **Windows Server 2019** | `windows2019` | Windows Setup(bootmgr,`/sources/install.wim`) | **unattend**(autounattend.xml 媒体根自动发现,零内核参数) | **none**(v1) | MAC → SetupComplete.cmd 按 Get-NetAdapter MAC 绑定(装后 SYSTEM 首登录前落地) | 🔧 **v1 代码面就绪;真机窗口定案(2026-09-20):装机被 iBMC 6.41 固件缺陷挡在引导层**(虚拟 CD 无法 UEFI 引导 windows 介质,详见下方 windows 节);通路路线:PXE wimboot(v1.x 主线)/ agent apply-image(终局)/ Ventoy 式(可选实验) |
 
 ## 保留分区支持语义(SupportLevel)
 
@@ -271,7 +271,9 @@ mini.iso)提供驱动支持。
 
 > 2026-09-19 启动。选型依据:Windows 官方单一完整 ISO(Standard/Datacenter ×
 > Core/Desktop 同盘,装时按 /IMAGE/NAME 元数据选 SKU),无 Linux 式轻量 netboot;
-> 推荐裸金属默认 **Standard Core**。当前仅 2019 镜像(248),2022 待下载。
+> 推荐裸金属默认 **Standard Core**。2019 与 2022 镜像均已在 248
+> (`/data/os_iso/{windows2019,windows2022}/`,2022 于 2026-09-20 到位);
+> 当前仅注册 `windows2019`,2022 为构造变体待注册验证(媒体布局同族)。
 
 **形态与机制**:
 
@@ -310,3 +312,18 @@ alpine 270M ×4 与 UOS 8.2G 均正常引导(大小无辜)。装机代码面全�
 grub 链式引导,详见 compat/huawei.md windows 虚拟介质节)。
 LSI SAS3508 inbox 驱动验证随闭环一并推迟(预期不变:2019 有 inbox
 MegaRAID 驱动;iBMC 6.41 虚拟介质挂 5GB ISO 已实证可行,2022 5.5G 同)。
+
+**通路路线决策(2026-09-20,定案)**:对照行业三派——①WinPE 走网络
+(WDS/MAAS 式,或 iPXE wimboot 从 HTTP 喂 bootmgfw/BCD/boot.sdi/boot.wim
+四件套);②Linux 侧 apply-image(wimlib apply + hivex 预烤 BCD +
+unattend 落 Panther,MAAS-adjacent/Tinkerbell-adjacent 学派);③介质侧
+修复(Ventoy 式 grub 链载,prosumer 世界实证充分但非 provisioning 主
+航道)——定策:**v1.x 主线 = windows PXE 载体直接落 wimboot-over-HTTP**
+(4 件套 builder 全可提取;网络引导绕开 El Torito,顺带根治 iBMC 6.41
+这类固件缺陷,外部 DHCP+TFTP 逃生门即其投递载体;wimboot 为 ipxe 项目
+GPL2 组件,按 shim/grub 的 fetch-and-pin 先例纳管);**终局 = agent
+apply-image**(复用已实证的 agent 引导与声明式落盘,SetupComplete/回调
+面零改动,不背各家 BMC 的 CD 怪癖);**Ventoy 式降级为可选介质侧实验**
+(一次重打包即可验证本固件认不认 grub 链载,认了算白捡缓解)。原版
+windows 介质的隐匿 El Torito(Ldsiz=1)在此固件必死,重打包规范化条目
+同死,故介质侧任何方案以"先引导成功"为验收,不预设。

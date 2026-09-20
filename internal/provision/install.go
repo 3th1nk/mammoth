@@ -737,7 +737,14 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 			wimbootCarrier = carrier == render.NetbootCarrierWimboot
 		}
 		if wimbootCarrier {
-			in.Netboot = &render.NetbootInputs{}
+			// The install source is the deployment SMB export — startnet maps
+			// it inside WinPE (setup consumes UNC directly, nothing lands in
+			// the boot.wim).
+			in.Netboot = &render.NetbootInputs{
+				InstallShareUNC:      e.WindowsInstallShare,
+				InstallShareUser:     e.WindowsInstallShareUser,
+				InstallSharePassword: e.WindowsInstallSharePassword,
+			}
 		} else {
 			// The shared pool tree is content-addressed by the image's sha256,
 			// and the URLs the installer consumes must be FINAL at render time

@@ -51,9 +51,9 @@ type WindowsWimbootOptions struct {
 	// (extraction + SetupComplete injection, ISO-sha keyed). Empty disables
 	// the cache (per-task temp, same contract as BuildBootISO).
 	CacheDir string
-	// Seed carries the render answers; autounattend.xml and mammoth/task.json
-	// are baked into boot.wim here (the SetupComplete pair is consumed by the
-	// prepared install.wim injection).
+	// Seed carries the render answers; autounattend.xml, mammoth/task.json
+	// and mammoth/startnet.cmd are baked into boot.wim here (the
+	// SetupComplete pair is consumed by the prepared install.wim injection).
 	Seed map[string]string
 	// Timeout bounds the wim surgery (default 120m — the tree extraction
 	// and the wim rewrites are multi-gigabyte work).
@@ -64,6 +64,11 @@ type WindowsWimbootOptions struct {
 const (
 	wimbootUnattendSeed = "autounattend.xml"
 	wimbootTaskSeed     = "mammoth/task.json"
+	// startnet replaces the stock wpeinit-only script at the WinPE startup
+	// hook — it maps the deployment SMB export and launches setup (the
+	// install source does NOT ride the wim, see the package comment).
+	wimbootStartnetSeed = "mammoth/startnet.cmd"
+	wimbootStartnetDest = "/Windows/System32/startnet.cmd"
 )
 
 // BuildWindowsWimboot assembles the per-task Windows PXE boot tree.
@@ -123,6 +128,7 @@ func BuildWindowsWimboot(ctx context.Context, opt WindowsWimbootOptions) (BootTr
 	for _, f := range []struct{ seedName, dest string }{
 		{wimbootUnattendSeed, "/autounattend.xml"},
 		{wimbootTaskSeed, "/" + wimbootTaskSeed},
+		{wimbootStartnetSeed, wimbootStartnetDest},
 	} {
 		content, ok := opt.Seed[f.seedName]
 		if !ok || content == "" {
@@ -133,6 +139,14 @@ func BuildWindowsWimboot(ctx context.Context, opt WindowsWimbootOptions) (BootTr
 			return BootTree{}, err
 		}
 		defer os.Remove(src)
+		// The stock boot.wim carries its own startnet.cmd — wimlib's add
+		// refuses an existing destination, hence the delete-then-add dance
+		// (same idiom as the SetupComplete injection).
+		if f.seedName == wimbootStartnetSeed {
+			del := exec.CommandContext(ctx, "wimlib-imagex", "update", wimPath, idx,
+				"--command=delete "+f.dest)
+			_ = del.Run()
+		}
 		out, uerr := exec.CommandContext(ctx, "wimlib-imagex", "update", wimPath, idx,
 			"--command=add "+src+" "+f.dest).CombinedOutput()
 		if uerr != nil {

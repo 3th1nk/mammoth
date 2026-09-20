@@ -1134,7 +1134,23 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 	if err != nil {
 		return err
 	}
-	if m.SSHCredentialID != nil && m.SSHAddress != "" {
+	if e.windowsInstall(ctx, task, job) {
+		// The in-band wait below is an SSH probe, and a Windows install has
+		// no sshd to answer it — not even the CREDENTIAL_AUTH_FAILED degrade
+		// fires — so an on-record credential (a Linux-era leftover, most
+		// often) would only burn the wait budget into a false
+		// INSTALL_NOT_REACHABLE. The family's verification surface is the
+		// completion report alone: SetupComplete fires on the real system's
+		// first boot (SYSTEM, pre-logon), which already proves the image
+		// applied and the network came up.
+		if m.SSHCredentialID != nil && m.SSHAddress != "" {
+			obs.FromContext(ctx).WarnContext(ctx, "verify_ready degraded: windows install, in-band ssh probe not applicable",
+				"machine", task.MachineID, "ssh_address", m.SSHAddress)
+			e.Events.Append(ctx, "task", task.ID, "task.verify_ready_degraded", map[string]any{
+				"reason": "windows install; completion report is the verification surface",
+			})
+		}
+	} else if m.SSHCredentialID != nil && m.SSHAddress != "" {
 		credRow, err := e.Credentials.Get(ctx, *m.SSHCredentialID)
 		if err == nil && credRow.Type == "ssh" {
 			plain, derr := e.Crypto.Decrypt(credRow.SecretEncrypted)
@@ -1212,6 +1228,23 @@ func (e *Executor) verifyReadyWait() time.Duration {
 		return e.VerifyReadyWait
 	}
 	return 10 * time.Minute
+}
+
+// windowsInstall reports whether the task's resolved spec targets the
+// windows family. Resolution failure keeps the legacy in-band path: the
+// gate steers verify_ready's verification surface, and a task whose spec
+// cannot be re-read must fail loudly downstream rather than silently
+// change behavior here (defensive, like the credential chain above).
+func (e *Executor) windowsInstall(ctx context.Context, task *store.Task, job *store.Job) bool {
+	spec, err := e.loadSpec(ctx, task, job)
+	if err != nil {
+		return false
+	}
+	driver, err := e.Render.For(spec.Image.Distro)
+	if err != nil {
+		return false
+	}
+	return render.FamilyOf(driver) == "windows"
 }
 
 // waitForNewSystem polls the in-band probe until the freshly installed

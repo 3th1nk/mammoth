@@ -66,7 +66,7 @@ func (d *Driver) KeepPartitionSupport() render.SupportLevel { return render.Supp
 // bootmgfw → WinPE) is qemu-validated and setup consumes the install source
 // from the deployment SMB export mapped by the baked startnet. The share
 // itself is a deployment fact: submissions gate on it being configured
-// (SCHEMA_WINDOWS_INSTALL_SHARE_REQUIRED), not on the driver.
+// (SCHEMA_WINDOWS_SMB_SHARE_REQUIRED), not on the driver.
 func (d *Driver) PXESupport() render.SupportLevel { return render.SupportFull }
 
 // NetbootInstallDriver: the wimboot carrier, no pool — the install source
@@ -120,8 +120,8 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	}
 	var startnet string
 	if in.Netboot != nil {
-		if in.Netboot.InstallShareUNC == "" {
-			return nil, render.BootParams{}, fmt.Errorf("%s: PXE needs the deployment SMB export (MAMMOTH_WINDOWS_INSTALL_SHARE)", d.distro)
+		if in.Netboot.InstallSMBUNC == "" {
+			return nil, render.BootParams{}, fmt.Errorf("%s: PXE needs the deployment SMB export (MAMMOTH_WINDOWS_INSTALL_SMB_SHARE)", d.distro)
 		}
 		var err error
 		if startnet, err = startnetCmd(*in.Netboot); err != nil {
@@ -602,18 +602,18 @@ func unattendXML(imageName, hostname, password string, plan diskPlan) string {
 // Every dynamic value is character-validated — cmd has no safe quoting for
 // metacharacters, so the config contract is a restricted charset instead.
 func startnetCmd(in render.NetbootInputs) (string, error) {
-	if err := validateShareToken(in.InstallShareUNC, "share UNC", true); err != nil {
+	if err := validateShareToken(in.InstallSMBUNC, "share UNC", true); err != nil {
 		return "", err
 	}
-	if err := validateShareToken(in.InstallShareUser, "share user", false); err != nil {
+	if err := validateShareToken(in.InstallSMBUser, "share user", false); err != nil {
 		return "", err
 	}
-	if err := validateShareToken(in.InstallSharePassword, "share password", false); err != nil {
+	if err := validateShareToken(in.InstallSMBPassword, "share password", false); err != nil {
 		return "", err
 	}
 	cred := ""
-	if in.InstallShareUser != "" {
-		cred = fmt.Sprintf(" \"%s\" /user:%s", in.InstallSharePassword, in.InstallShareUser)
+	if in.InstallSMBUser != "" {
+		cred = fmt.Sprintf(" \"%s\" /user:%s", in.InstallSMBPassword, in.InstallSMBUser)
 	}
 	var b strings.Builder
 	w := func(line string) { b.WriteString(line); b.WriteByte('\n') }
@@ -623,7 +623,7 @@ func startnetCmd(in render.NetbootInputs) (string, error) {
 	w("set ATTEMPT=0")
 	w(":waitnet")
 	w("set /a ATTEMPT+=1")
-	w(fmt.Sprintf("net use Z: %s%s >nul 2>&1", in.InstallShareUNC, cred))
+	w(fmt.Sprintf("net use Z: %s%s >nul 2>&1", in.InstallSMBUNC, cred))
 	w("if not errorlevel 1 goto mounted")
 	w("if %ATTEMPT% GEQ 45 (")
 	w("  echo mammoth: could not map the install share - dropping to shell for diagnosis")

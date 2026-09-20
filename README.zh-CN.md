@@ -7,6 +7,10 @@
 
 # Mammoth
 
+[![ci](https://github.com/3th1nk/mammoth/actions/workflows/ci.yml/badge.svg)](https://github.com/3th1nk/mammoth/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/3th1nk/mammoth)](https://github.com/3th1nk/mammoth/releases)
+[![license](https://img.shields.io/github/license/3th1nk/mammoth)](LICENSE)
+
 > 自包含的裸金属服务器安装引擎。
 > 给它一个带外地址和一份凭证——或者让机器自己找上门——还你一台能跑起来的机器。
 

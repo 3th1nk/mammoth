@@ -48,6 +48,7 @@ func ExportExternalKit(dir string, nbps fs.FS, baseURL string) error {
 		"grubx64.efi":          nil,
 		"shimaa64.efi":         nil,
 		"grubaa64.efi":         nil,
+		"ipxe-amd64.efi":       nil, // the wimboot carrier's host (Windows; Secure Boot off)
 		"boot.ipxe":            []byte(externalIPXETrampoline(ipxeBase)),
 		"grub/grub.cfg":        []byte(externalGRUBTrampoline(host)),
 		"dnsmasq.conf.example": []byte(ExternalDnsmasqExample(host, ipxeBase)),
@@ -170,5 +171,13 @@ dhcp-boot=tag:ipxe,boot.ipxe,,<tftp-server>
 
 # mammoth machine face (HTTP): %s — no UDP service on it in this mode.
 # The grub chain fetches its per-MAC config from (http,%s)/netboot/grub/<mac>.
+#
+# Windows machines (the wimboot carrier) boot through plain iPXE instead of
+# the Secure Boot chain — wimboot has no shim/grub path and is unsigned. Pin
+# each Windows machine's MAC to the iPXE binary (Secure Boot OFF required):
+#   dhcp-host=<win-machine-mac>,set:winboot
+#   dhcp-boot=tag:winboot,tag:!ipxe,ipxe-amd64.efi,,<tftp-server>
+# The second DHCP round is already iPXE (option 175) and takes the shared
+# boot.ipxe trampoline above.
 `, mammoth, grubHost)
 }

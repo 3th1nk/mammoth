@@ -39,6 +39,41 @@ func TestRenderScript(t *testing.T) {
 	}
 }
 
+// The wimboot carrier renders the loader as the kernel and every boot file
+// as a named initrd line; order is sorted so the script is deterministic.
+func TestRenderWimbootScript(t *testing.T) {
+	e := &Entry{
+		MAC:    "52:54:00:12:34:56",
+		TaskID: "tsk_2",
+		Kind:   "install",
+		Token:  "tokw",
+		Kernel: "wimboot",
+		Initrd: "boot.wim",
+		Extra: map[string]string{
+			"bcd":      "BCD",
+			"bootmgr":  "bootmgr",
+			"bootsdi":  "boot.sdi",
+			"bootmgfw": "bootmgfw.efi",
+		},
+	}
+	got := RenderScript(e, "http://h:8080/")
+	want := strings.Join([]string{
+		"#!ipxe",
+		"# mammoth boot entry mac=52:54:00:12:34:56 task=tsk_2 kind=install (wimboot/WinPE)",
+		"kernel http://h:8080/netboot/files/tokw/wimboot",
+		"initrd http://h:8080/netboot/files/tokw/BCD BCD",
+		"initrd http://h:8080/netboot/files/tokw/boot.sdi boot.sdi",
+		"initrd http://h:8080/netboot/files/tokw/boot.wim boot.wim",
+		"initrd http://h:8080/netboot/files/tokw/bootmgfw.efi bootmgfw.efi",
+		"initrd http://h:8080/netboot/files/tokw/bootmgr bootmgr",
+		"boot",
+		"",
+	}, "\n")
+	if got != want {
+		t.Fatalf("wimboot script mismatch:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestNoEntryScriptExits(t *testing.T) {
 	s := NoEntryScript("52:54:00:12:34:56")
 	if !strings.HasPrefix(s, "#!ipxe") || !strings.Contains(s, "exit") {

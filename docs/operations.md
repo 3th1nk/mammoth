@@ -226,6 +226,7 @@ DHCP,option 93 固件观测不工作(观测档案不更新);多 NIC 主机上 iP
 undionly.kpxe            # BIOS:PXE ROM → iPXE
 shimx64.efi grubx64.efi  # UEFI x64 Secure Boot 链(Microsoft/Debian 签名)
 shimaa64.efi grubaa64.efi # UEFI aarch64 Secure Boot 链(同款签名对)
+ipxe-amd64.efi           # 未签名 iPXE(UEFI x64):windows wimboot 载体的宿主
 grub/x86_64-efi/…        # grubnet 模块表(x64)
 grub/arm64-efi/…         # grubnet 模块表(arm64)
 boot.ipxe                # iPXE 蹦床:chain .../netboot/script?mac=${net0/mac}
@@ -249,6 +250,18 @@ DHCP,option 93 固件观测不工作(观测档案不更新);多 NIC 主机上 iP
 
 qemu 同型验证(网桥 + dnsmasq + UEFI guest 经此链完成 alpine agent 全装)
 见 `scripts/pxe-dev/external-e2e.sh`。
+
+**Windows 机器(wimboot 载体)的额外一步**:按 MAC 把目标机钉到未签名
+iPXE——wimboot 只认 iPXE 宿主,且要求目标机 **Secure Boot 关闭**(边界与
+机制见 docs/compat/distros.md §windows;builtin 模式下 proxyDHCP 对
+wimboot entry 的 UEFI x64 客户端自动直发 `ipxe-amd64.efi`,无需手工):
+
+```
+dhcp-host=<win-machine-mac>,set:winboot
+dhcp-boot=tag:winboot,tag:!ipxe,ipxe-amd64.efi,,<tftp-server>
+```
+
+windows 全链 rig 见 `scripts/windows-dev/external-win-e2e.sh`。
 
 **arm64 注记**:aarch64 的 DHCP→TFTP→蹦床链与 x64 同构(opt 93=11→
 shimaa64,与 MAAS/RFC 4578 一致),签名链(shimaa64→grubaa64 在 Secure

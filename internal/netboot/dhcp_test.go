@@ -1,6 +1,7 @@
 package netboot
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/hex"
 	"io"
@@ -336,6 +337,72 @@ func TestReplyToRelay(t *testing.T) {
 // TestReplyObservesArch checks the OnObserve hook: one sighting per
 // PXE client with a resolvable architecture, none for plain DHCP clients
 // or unresolvable ones (docs/08-data-model.md, machines.pxe_firmware).
+// The wimboot carrier (Windows) rides plain iPXE on UEFI x64 — the reply
+// must route such clients to the unsigned ipxe.efi instead of the SB chain,
+// while every other client (BIOS, other distros) keeps its NBP.
+func TestReplyWimbootCarrierRoutesPlainIPXE(t *testing.T) {
+	s := testServer(t, Options{
+		NextServer: []byte{192, 168, 77, 1},
+		BaseURL:    "http://192.168.77.1:8080",
+		Resolver: ResolverFunc(func(_ context.Context, mac string) (*Entry, error) {
+			if mac == "52:54:00:12:34:56" {
+				return &Entry{MAC: mac, TaskID: "t1", Kind: "install", Token: "tokw",
+					Kernel: "wimboot", Initrd: "boot.wim"}, nil
+			}
+			return nil, nil
+		}),
+	})
+	var mac [6]byte
+	copy(mac[:], []byte{0x52, 0x54, 0x00, 0x12, 0x34, 0x56})
+
+	t.Run("uefi x64 rom gets plain ipxe", func(t *testing.T) {
+		req := discover(0x2468ace0, mac,
+			option{optVendorClass, []byte("PXEClient:Arch:00009:UNDI")},
+			option{optArch, u16opt(9)},
+		)
+		reply, _ := s.handle(req, 67, testSrc)
+		p, err := parse(reply)
+		if err != nil {
+			t.Fatalf("reply does not parse: %v", err)
+		}
+		if bf, ok := p.options[optBootfile]; !ok || string(bf) != "ipxe-amd64.efi" {
+			t.Errorf("bootfile = %q, want ipxe-amd64.efi (wimboot host)", bf)
+		}
+	})
+
+	t.Run("uefi x64 without wimboot entry keeps sb chain", func(t *testing.T) {
+		other := mac
+		other[5] = 0x57
+		req := discover(0x2468ace1, other,
+			option{optVendorClass, []byte("PXEClient:Arch:00009:UNDI")},
+			option{optArch, u16opt(9)},
+		)
+		reply, _ := s.handle(req, 67, testSrc)
+		p, err := parse(reply)
+		if err != nil {
+			t.Fatalf("reply does not parse: %v", err)
+		}
+		if bf, ok := p.options[optBootfile]; !ok || string(bf) != "shimx64.efi" {
+			t.Errorf("bootfile = %q, want shimx64.efi (no wimboot entry)", bf)
+		}
+	})
+
+	t.Run("bios rom keeps undionly", func(t *testing.T) {
+		req := discover(0x2468ace2, mac,
+			option{optVendorClass, []byte("PXEClient:Arch:00000:UNDI:002001")},
+			option{optArch, u16opt(0)},
+		)
+		reply, _ := s.handle(req, 67, testSrc)
+		p, err := parse(reply)
+		if err != nil {
+			t.Fatalf("reply does not parse: %v", err)
+		}
+		if bf, ok := p.options[optBootfile]; !ok || string(bf) != "undionly.kpxe" {
+			t.Errorf("bootfile = %q, want undionly.kpxe (BIOS already rides iPXE)", bf)
+		}
+	})
+}
+
 func TestReplyObservesArch(t *testing.T) {
 	var seen []string
 	s := testServer(t, Options{
@@ -375,7 +442,7 @@ func testServer(t *testing.T, opts Options) *Server {
 	s := &Server{
 		opts:  opts,
 		log:   discardLogger(),
-		nbpOK: map[string]bool{"undionly.kpxe": true, "shimx64.efi": true, "shimaa64.efi": true},
+		nbpOK: map[string]bool{"undionly.kpxe": true, "shimx64.efi": true, "shimaa64.efi": true, "ipxe-amd64.efi": true},
 		done:  make(chan error, 1),
 	}
 	return s

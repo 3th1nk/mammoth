@@ -117,3 +117,50 @@ same distro.
 
 Licensing is identical to the x64 chain (shim GPL-2.0-only Red Hat; GRUB
 GPL-3.0-or-later FSF) — the same NOTICE paragraph covers both.
+
+## wimboot (Windows WinPE chain loader)
+
+`wimboot` is the bzImage-shaped loader the Windows PXE carrier serves to
+iPXE clients (`kernel wimboot` + per-file `initrd` lines): it assembles a
+WinPE memory environment from the Windows media's own files (bootmgr /
+bootmgfw.efi, BCD, boot.sdi, boot.wim) and hands off to the Windows boot
+manager. There is no Debian package — the upstream release binary is the
+distribution artifact. It is a hybrid binary (BIOS + 64-bit UEFI from one
+file) and is loaded by iPXE, so the Secure Boot chain does not involve it:
+a Secure Boot firmware only accepts signed NBPs, and wimboot upstream
+signs none — the Windows carrier therefore requires Secure Boot disabled
+(or a site-managed MOK enrollment, a deployment-layer policy mammoth does
+not own).
+
+### Source
+
+| | |
+|---|---|
+| Release | **v2.9.0** |
+| Binary | <https://github.com/ipxe/wimboot/releases/download/v2.9.0/wimboot> |
+| Binary sha256 | `5f067ccdc4d084d5bf77b6c853bd0f8402dfc2b4cd1b103d358993ae97fae8e3` |
+| Upstream source | <https://github.com/ipxe/wimboot/archive/refs/tags/v2.9.0.tar.gz> |
+| Upstream | <https://github.com/ipxe/wimboot> |
+
+### Files
+
+| This directory | sha256 |
+|---|---|
+| `wimboot` | `5f067ccdc4d084d5bf77b6c853bd0f8402dfc2b4cd1b103d358993ae97fae8e3` |
+
+### Licensing
+
+GPL-2.0-only — Copyright the iPXE project (Michael Brown / mcb30). The
+source tarball above is the complete corresponding source for the
+distributed binary; rebuild with `make` in its `src/` directory.
+
+### Rebuild / upgrade
+
+```sh
+scripts/fetch-wimboot.sh            # same version, verifies sha256
+scripts/fetch-wimboot.sh v2.10.0    # bump: pass a new upstream release tag
+```
+
+After a bump, update the sha256 above and this paragraph if the license
+changed.
+

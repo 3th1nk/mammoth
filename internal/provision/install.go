@@ -727,26 +727,40 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	// default — the same resolution bootStrategyFor performs), so the driver
 	// can render its netboot-shaped args/seed up front.
 	if name, _ := effectiveStrategyName(e, spec); name == strategyPXE {
-		// The shared pool tree is content-addressed by the image's sha256,
-		// and the URLs the installer consumes must be FINAL at render time
-		// (the d-i mirror rides the preseed body, casper's nfsroot the
-		// kernel arguments) — so the image is located and hashed here.
-		// EnsureISO is an idempotent cache; prepare reuses both.
-		distroISO, ferr := builder.EnsureISO(ctx, spec.Image.Source, e.MediaDir)
-		if ferr != nil {
-			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
-				"distro ISO fetch failed: %s", ferr.Error())
+		// The carrier decides what the installer consumes over the network.
+		// The wimboot carrier (Windows) has NO network install source — the
+		// augmented boot.wim carries the answer file and install.wim in the
+		// WinPE ramdisk — so Netboot being non-nil is the whole message and
+		// the pool/NFS URLs stay empty.
+		wimbootCarrier := false
+		if driver0, derr := e.Render.For(spec.Image.Distro); derr == nil {
+			carrier, _ := render.NetbootInstallOf(driver0)
+			wimbootCarrier = carrier == render.NetbootCarrierWimboot
 		}
-		sha, herr := builder.FileSHA256(distroISO)
-		if herr != nil {
-			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
-				"distro ISO hash failed: %s", herr.Error())
-		}
-		in.Netboot = &render.NetbootInputs{
-			// PoolURL points at the shared unpacked-ISO tree (/iso) — d-i's
-			// mirror directory and casper's http fallback both root there.
-			PoolURL:    fmt.Sprintf("%s/netboot/store/%s/iso", strings.TrimSuffix(e.ExternalURL, "/"), sha),
-			NFSRootURL: nfsRootFor(e.MediaBaseURI, filepath.Join(PoolStoreDirName, sha, "iso")),
+		if wimbootCarrier {
+			in.Netboot = &render.NetbootInputs{}
+		} else {
+			// The shared pool tree is content-addressed by the image's sha256,
+			// and the URLs the installer consumes must be FINAL at render time
+			// (the d-i mirror rides the preseed body, casper's nfsroot the
+			// kernel arguments) — so the image is located and hashed here.
+			// EnsureISO is an idempotent cache; prepare reuses both.
+			distroISO, ferr := builder.EnsureISO(ctx, spec.Image.Source, e.MediaDir)
+			if ferr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+					"distro ISO fetch failed: %s", ferr.Error())
+			}
+			sha, herr := builder.FileSHA256(distroISO)
+			if herr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+					"distro ISO hash failed: %s", herr.Error())
+			}
+			in.Netboot = &render.NetbootInputs{
+				// PoolURL points at the shared unpacked-ISO tree (/iso) — d-i's
+				// mirror directory and casper's http fallback both root there.
+				PoolURL:    fmt.Sprintf("%s/netboot/store/%s/iso", strings.TrimSuffix(e.ExternalURL, "/"), sha),
+				NFSRootURL: nfsRootFor(e.MediaBaseURI, filepath.Join(PoolStoreDirName, sha, "iso")),
+			}
 		}
 		// Reserve the machine's pool address now: DHCP-carrier installs (the
 		// casper carrier) hand it to the installer as a static ip= argument —

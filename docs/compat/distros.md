@@ -371,10 +371,11 @@ wpeinit → net use Z:(重试环,凭据经字符白名单校验——cmd 无安�
 net use 映射 samba guest share、**setup 从共享启动并解析 autounattend**
 ("Windows 安装程序/安装程序正在启动"屏)。pending:完整受理轮(GPT
 落盘)——setup 报"无法分析 <DiskConfiguration> 设置",**NVMe 与 IDE 盘
-均复现**,排除盘型枚举;ISO 虚拟介质形态(9/19)同款渲染曾报告"受理",
-但"受理"判据与"实际走分区"的区分未在 TCG 下严格建立——下一步=接
-setup 的 Panther 日志通道(setupact/setuperr 回传)定位解析失败的确切
-子项。**rig 层两修已固化**(external-win-e2e.sh):①guest 掉 UEFI Shell
+均复现**,排除盘型枚举;诊断版 startnet(dir/install.wim 存在性输出)已
+制备,待接 setup 的 Panther 日志通道(setupact/setuperr 回传——WinPE 侧
+curl.exe 可 POST,需在机器面开诊断接收端点)定位解析失败的确切子项。
+另记:rig 的"no HTTP pulls"判定恒假——mammoth 不打 GET access log,
+改用 dnsmasq tftp 日志或补 access log(待办)。**rig 层两修已固化**(external-win-e2e.sh):①guest 掉 UEFI Shell
 且无 DISCOVER 的"偶发"根因=**OVMF vars.fd 的 BootOrder NVRAM 多轮
 复用被块设备顶掉网络项**——每轮 fresh vars 修复;②iPXE re-DHCP 偶发
 对 OFFER 挑剔循环——dhcp-host 静态 IP + no-ping + --log-dhcp。

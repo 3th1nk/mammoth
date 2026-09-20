@@ -150,12 +150,21 @@ func TestRenderWindowsSynthesizesESP(t *testing.T) {
 	}
 }
 
-// The v1 boundary, enforced at render time (honest rejections, not silent
-// reinterpretation) and via capability declarations at submit time.
+// The boundary, enforced at render time (honest rejections, not silent
+// reinterpretation) and via capability declarations at submit time. The
+// wimboot carrier chain is validated (WinPE boots, small-file augmentation
+// reads back), but PXESupport stays none until the SMB install source
+// lands — the >4G boot.wim shape is a bootmgr-rejected dead end.
 func TestRenderWindowsBoundary(t *testing.T) {
 	d := New("windows2019")
 	if d.PXESupport() != render.SupportNone {
-		t.Errorf("windows PXE support must be none in v1")
+		t.Errorf("windows PXE support must stay none until the SMB install source lands")
+	}
+	if d.NetbootCarrier() != render.NetbootCarrierWimboot {
+		t.Errorf("windows netboot carrier must be wimboot")
+	}
+	if d.NetbootPool() != render.NetbootPoolNone {
+		t.Errorf("windows netboot pool must be none (install source rides SMB, pending)")
 	}
 	if d.KeepPartitionSupport() != render.SupportNone {
 		t.Errorf("windows keep support must be none in v1")
@@ -172,10 +181,10 @@ func TestRenderWindowsBoundary(t *testing.T) {
 		mutate  func(in render.InstallInputs) render.InstallInputs
 		wantErr string
 	}{
-		{"pxe input", func(in render.InstallInputs) render.InstallInputs {
-			in.Netboot = &render.NetbootInputs{NFSRootURL: "h:/p"}
+		{"pxe input with pool", func(in render.InstallInputs) render.InstallInputs {
+			in.Netboot = &render.NetbootInputs{PoolURL: "http://x/store/s/iso", NFSRootURL: "h:/p"}
 			return in
-		}, "PXE is not supported"},
+		}, "no pool tree applies"},
 		{"raid", func(in render.InstallInputs) render.InstallInputs {
 			in.Raid = []render.ResolvedRaid{{Name: "v0", Mode: "hardware"}}
 			return in
@@ -233,6 +242,33 @@ func TestRenderWindowsBoundary(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 			t.Errorf("%s: error = %v, want it to contain %q", tc.name, err, tc.wantErr)
 		}
+	}
+}
+
+// The wimboot PXE shape renders the same answers as virtual media (small
+// seed files ride the augmented boot.wim; the install source is networked)
+// and carries no kernel args.
+func TestRenderWindowsPXE(t *testing.T) {
+	in := baseInputs()
+	in.Netboot = &render.NetbootInputs{}
+	answers, boot, err := New("windows2019").RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	names := map[string]bool{}
+	for _, a := range answers {
+		names[a.Name] = true
+	}
+	for _, want := range []string{"autounattend.xml", "mammoth/SetupComplete.cmd", "mammoth/mammoth-complete.ps1", "mammoth/task.json"} {
+		if !names[want] {
+			t.Errorf("PXE render missing answer %s (the wimboot seed contract)", want)
+		}
+	}
+	if boot.KernelArgs != "" || boot.NetbootKernelArgs != "" {
+		t.Errorf("wimboot entries carry no kernel args, got %q / %q", boot.KernelArgs, boot.NetbootKernelArgs)
+	}
+	if !boot.InstallerAutoReboot {
+		t.Errorf("windows setup reboots itself — InstallerAutoReboot must hold on PXE too")
 	}
 }
 

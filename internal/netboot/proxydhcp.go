@@ -9,9 +9,10 @@ import (
 
 // NBP file names inside the embedded NBPs filesystem (assets/pxe).
 const (
-	nbpBIOS  = "undionly.kpxe" // BIOS chainloader, rides the NIC's UNDI ROM
-	nbpX64   = "shimx64.efi"   // UEFI x64 Secure Boot chain: shim (Microsoft-signed) loads grubx64.efi (Debian-signed grubnet)
-	nbpARM64 = "shimaa64.efi"  // UEFI aarch64 Secure Boot chain: same shape as x64 — shim (Microsoft-signed) loads grubaa64.efi (Debian-signed grubnetaa64)
+	nbpBIOS     = "undionly.kpxe"  // BIOS chainloader, rides the NIC's UNDI ROM
+	nbpX64      = "shimx64.efi"    // UEFI x64 Secure Boot chain: shim (Microsoft-signed) loads grubx64.efi (Debian-signed grubnet)
+	nbpX64Plain = "ipxe-amd64.efi" // UEFI x64 without Secure Boot: plain iPXE, the wimboot carrier's host
+	nbpARM64    = "shimaa64.efi"   // UEFI aarch64 Secure Boot chain: same shape as x64 — shim (Microsoft-signed) loads grubaa64.efi (Debian-signed grubnetaa64)
 )
 
 // grubX64 and grubARM64 are the shim second stages: the firmware loads
@@ -206,6 +207,18 @@ func (s *Server) reply(p *packet) []byte {
 	}
 
 	name := nbpFor(arch)
+	// The Windows carrier rides iPXE — the only documented wimboot host — so
+	// an x64 client whose armed entry is a wimboot tree gets the unsigned
+	// ipxe.efi instead of the Secure Boot chain (shim→grubnet has no wimboot
+	// path: grub's UEFI loaders cannot hand files to a chainloaded image).
+	// The firmware must therefore run with Secure Boot off; a deployment can
+	// MOK-enroll iPXE itself, which is deployment policy mammoth does not own
+	// (docs/compat/distros.md §windows).
+	if arch == ArchX64 && s.opts.Resolver != nil {
+		if e, err := s.opts.Resolver.Entry(context.Background(), mac); err == nil && e != nil && e.Kernel == "wimboot" {
+			name = nbpX64Plain
+		}
+	}
 	if name == "" || !s.hasNBP(name) {
 		s.logf("dhcp: no boot program for arch %s (mac %s) — silent", arch, mac)
 		return nil

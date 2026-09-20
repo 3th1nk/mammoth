@@ -102,6 +102,12 @@ const (
 	// its /apks package repository. The agent's apkovl overlay rides the
 	// boot tree and is fetched by URL (apkovl=).
 	NetbootCarrierAlpineNetboot NetbootCarrier = "alpine_netboot"
+	// NetbootCarrierWimboot — the Windows carrier: wimboot assembles the
+	// WinPE memory environment from the media's own boot files, and the
+	// augmented boot.wim carries the answer file AND the install source, so
+	// there is no unpacked pool tree at all (NetbootPoolNone). Delivered by
+	// iPXE — the only documented wimboot host (docs: ipxe.org/wimboot).
+	NetbootCarrierWimboot NetbootCarrier = "wimboot"
 )
 
 // NetbootPool declares how a distro's PXE install source is served.

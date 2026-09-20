@@ -10,12 +10,23 @@
 // analog of the Linux dialects' late-commands (anything left to an
 // interactive session would need a human).
 //
-// v1 boundary (explicit, honest): virtual-media carrier only (PXE needs a
-// WinPE chain — SupportNone), UEFI-only (the rendered DiskConfiguration is
-// ESP+MSR+GPT; a Legacy BIOS machine cannot consume it), no keep semantics,
-// no RAID, no bond/vlan, no user scripts. SKU: SERVERSTANDARDCORE
-// (Standard Core — the bare-metal default; the media carries every SKU,
-// selection is by /IMAGE/NAME metadata).
+// PXE carrier (wimboot over PXE): wimboot assembles the WinPE memory
+// environment from the media's own boot files, and the builder augments
+// boot.wim with autounattend.xml + mammoth/task.json (small files only —
+// install.wim must NOT ride the wim: >4G boot.wim is rejected by the
+// bootmgr ramdisk path, qemu-reproduced 2026-09-20). The install source
+// rides the network (SMB share, pending); until it lands PXESupport stays
+// none and the delivery machinery (proxyDHCP routing the right MACs to
+// plain iPXE, the wimboot-shaped script render) sits ready behind the
+// gate. Delivery is iPXE: it is the only documented wimboot host, so
+// Secure Boot is out of scope for this carrier (docs/compat/distros.md
+// §windows).
+//
+// v1 boundary (explicit, honest): UEFI-only (the rendered DiskConfiguration
+// is ESP+MSR+GPT; a Legacy BIOS machine cannot consume it), no keep
+// semantics, no RAID, no bond/vlan, no user scripts. SKU:
+// SERVERSTANDARDCORE (Standard Core — the bare-metal default; the media
+// carries every SKU, selection is by /IMAGE/NAME metadata).
 package windows
 
 import (
@@ -52,10 +63,20 @@ func (d *Driver) Family() string { return "windows" }
 // worth modeling in v1 — WillWipeDisk is the shape.
 func (d *Driver) KeepPartitionSupport() render.SupportLevel { return render.SupportNone }
 
-// PXESupport: none in v1 — Windows has no Linux-style lightweight netboot;
-// PXE means a WinPE chain (boot.wim + NBP work), deferred to v1.x
-// (docs/09-roadmap.md, the Windows unattend item).
+// PXESupport: none — the wimboot carrier chain itself is validated (iPXE →
+// wimboot → bootmgfw → WinPE, qemu 2026-09-20), but the install source is
+// not landed yet: baking install.wim into the augmented boot.wim crosses the
+// 4 GiB line and Server 2019's bootmgr ramdisk path rejects it outright
+// (0xc0000225 winload.efi, qemu-reproduced), so the source must be served
+// over the network (SMB share — the WDS shape) before submissions can
+// complete. Flips to full when the SMB pool lands
+// (docs/compat/distros.md §windows).
 func (d *Driver) PXESupport() render.SupportLevel { return render.SupportNone }
+
+// NetbootInstallDriver: the wimboot carrier, no pool — declared for the
+// delivery machinery even while PXESupport keeps the gate shut.
+func (d *Driver) NetbootCarrier() render.NetbootCarrier { return render.NetbootCarrierWimboot }
+func (d *Driver) NetbootPool() render.NetbootPool       { return render.NetbootPoolNone }
 
 // FirmwareSupport: the rendered DiskConfiguration is UEFI-shaped
 // (ESP + MSR + GPT) — a Legacy BIOS machine would fail WillShowUI=OnError
@@ -90,11 +111,11 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if in.ImageSource == "" {
 		return nil, render.BootParams{}, fmt.Errorf("%s: image source is required", d.distro)
 	}
-	if in.Netboot != nil {
-		// Belt and braces: PXE is SupportNone, so submissions with
-		// boot.strategy=pxe are already rejected — a render-time netboot
-		// input would mean the gate was bypassed.
-		return nil, render.BootParams{}, fmt.Errorf("%s: PXE is not supported (WinPE chain pending); use virtual media", d.distro)
+	if in.Netboot != nil && in.Netboot.PoolURL != "" {
+		// The wimboot carrier needs no pool (the augmented boot.wim carries
+		// the install source); a pool URL would mean the submission was
+		// shaped by another distro's logic.
+		return nil, render.BootParams{}, fmt.Errorf("%s: PXE uses the wimboot carrier — no pool tree applies", d.distro)
 	}
 	if len(in.Raid) > 0 {
 		return nil, render.BootParams{}, fmt.Errorf("%s: RAID is not supported yet — submit plain disks", d.distro)

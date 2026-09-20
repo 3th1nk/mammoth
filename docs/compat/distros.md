@@ -14,7 +14,7 @@
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
 | Debian 12 | `debian12` | debian-installer | preseed(`file=/cdrom/preseed.cfg`) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | 无(netcfg 不按 MAC 选口,单接口) | ✅ 真机跑通 |
 | 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(真机复核 2026-09-19) | MAC → 接口名在 %pre 安装期解析 | **full(真机闭环 2026-09-19:虚拟介质 + PXE 双通路零人工)**;⚠️ **方言约束:仅图形前端可用**——text 模式(text 指令/inst.text)下 UOS anaconda 自动分区建出 FAT16 而非 swap 且 Finish 组崩溃,驱动已强制 graphical(见下方根因节) |
-| **Windows Server 2019** | `windows2019` | Windows Setup(bootmgr,`/sources/install.wim`) | **unattend**(autounattend.xml 媒体根自动发现,零内核参数) | **none**(v1) | MAC → SetupComplete.cmd 按 Get-NetAdapter MAC 绑定(装后 SYSTEM 首登录前落地) | 🔧 **v1 代码面就绪;真机窗口定案(2026-09-20):装机被 iBMC 6.41 固件缺陷挡在引导层**(虚拟 CD 无法 UEFI 引导 windows 介质,详见下方 windows 节);通路路线:PXE wimboot(v1.x 主线)/ agent apply-image(终局)/ Ventoy 式(可选实验) |
+| **Windows Server 2019** | `windows2019` | Windows Setup(bootmgr,`/sources/install.wim`) | **unattend**(autounattend.xml 媒体根自动发现,零内核参数) | **none**(wimboot 载体链已验,install 源 SMB 落地后翻 full) | MAC → SetupComplete.cmd 按 Get-NetAdapter MAC 绑定(装后 SYSTEM 首登录前落地) | 🔧 **v1 代码面就绪;真机窗口定案(2026-09-20):装机被 iBMC 6.41 固件缺陷挡在引导层**(虚拟 CD 无法 UEFI 引导 windows 介质,详见下方 windows 节);**wimboot-over-PXE 载体链 qemu 实证(2026-09-20,见下方落地小节):iPXE→wimboot→WinPE 全通,唯一悬段=install 源(SMB)**;终局 = agent apply-image |
 
 ## 保留分区支持语义(SupportLevel)
 
@@ -327,3 +327,53 @@ apply-image**(复用已实证的 agent 引导与声明式落盘,SetupComplete/�
 (一次重打包即可验证本固件认不认 grub 链载,认了算白捡缓解)。原版
 windows 介质的隐匿 El Torito(Ldsiz=1)在此固件必死,重打包规范化条目
 同死,故介质侧任何方案以"先引导成功"为验收,不预设。
+
+### wimboot-over-PXE 落地(2026-09-20,v1.x 主线兑现)
+
+**载体形态(`internal/render/windows` + `internal/builder/wimboot.go`)**:
+wimboot 载体的**投递链已 qemu 实证闭环**(iPXE → wimboot → bootmgfw → bootmgr
+→ WinPE 桌面),但 **PXESupport 保持 none**——install 源未落地(见下)。
+与 Linux 方言的"内核+initrd+独立安装源"三件套不同,Windows 载体的 per-task
+部分只有**小文件**:builder 从 prepared tree(与虚拟介质共享的 ISO-sha 缓存)
+取 bootmgr/bootx64.efi/BCD/boot.sdi/原版 boot.wim,经 wimlib 向 boot.wim 的
+Setup 镜像(Boot Index)灌入 `autounattend.xml`(根)与 `mammoth/task.json`
+(KB 级)。投递面是 iPXE(wimboot 唯一官方宿主,`kernel wimboot` + 逐文件
+`initrd` 带内存名):per-task 树投 `wimboot` + 五个引导文件,iPXE 脚本按 entry
+的 wimboot 形态渲染(`internal/netboot/script.go`);grub 侧对 wimboot entry
+渲染显式 exit(shim→grubnet 链无 wimboot 路径,干净掉盘)。
+
+**投递路由(builtin + external 同源)**:wimboot 是 bzImage 形态的无签名二进制,
+shim→grubnet 链无法把文件递给 chainload 的镜像(grub UEFI 加载器无 wimboot 路径,
+wimboot 文档也只认 iPXE)——因此 **wimboot entry 的 UEFI x64 客户端由 proxyDHCP
+按 MAC 解析后直发未签名 `ipxe-amd64.efi`**(普通 PXE ROM 的 BIOS 侧本就经
+undionly 进 iPXE,零改动);external 逃生门的 kit 增导出 `ipxe-amd64.efi`,
+dnsmasq example 附按 MAC 钉 Windows 机器的示例段。
+
+**install 源:唯一悬而未决的一段(qemu 实证,2026-09-20)**:
+`install.wim` **不能灌进 boot.wim**——增强后 wim 总量 4.8G 跨 4 GiB 边界,
+Server 2019 的 bootmgr ramdisk 路径直接拒载(`0xc0000225 \windows\system32\
+boot\winload.efi ... missing or contains errors`);同链路对照:原版 boot.wim
+与仅灌小文件的 boot.wim 均 WinPE 正常启动、灌入的 autounattend 被 setup
+读取解析(DiskConfiguration 分析错误框为证,失败本身是 guest NVMe 枚举/
+安装源缺失的次生现象)。结论:**安装源走网络(SMB 共享——WDS 同款形态,
+go-smb2 只读共享 + setup 自 InstallFrom 指引),这是 PXESupport 翻 full 的
+唯一前置**。此前评估过的"install.wim 并入 boot.wim = X: 即虚拟 DVD"形态
+就此否定。
+
+**边界(显式)**:
+- **Secure Boot 必须关闭**:固件只验 NBP 层,wimboot/iPXE 均无微软链签名;
+  站点自行 MOK 纳管 iPXE 属部署层策略,mammoth 不拥有。
+- **目标机内存 ≥8G**(WinPE 466M wim + SMB 装机运行时,余量充足;此前
+  4.8G wim 形态的内存压力随否定一并消失)。
+
+**qemu 实验记录(2026-09-20,external rig `scripts/windows-dev/
+external-win-e2e.sh`)**:①SB OFF 轮:站点 DHCP(dnsmasq 按 MAC 钉
+ipxe-amd64.efi)→ iPXE re-DHCP(opt 175 tag)→ boot.ipxe 蹦床 → per-MAC
+wimboot 脚本 → HTTP 拉 wimboot+五件 → **WinPE 完整启动**(原版与小文件
+增强版两轮,后者 setup 读到 autounattend);②>4G boot.wim 轮:0xc0000225
+(winload.efi),否定"install.wim 并入"形态;③SB ON 轮未跑——SB 下固件
+拒未签名 NBP 是架构性边界(与 arm64 AAVMF 无 PXE 栈同类),qemu 补测
+优先级低。**环境坑(本机)**:brew wimlib 在 macOS 迁移/升级后签名失效,
+进程启动即 UNE 挂死(连 `--version` 都挂),`codesign --force --sign -`
+对 bin/lib 重签即愈;Docker Desktop 默认 VM 内存 7.65G 装不下 8G guest
+(settings-store.json `MemoryMiB=16384` 后重跑通过)。

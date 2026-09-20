@@ -11,8 +11,8 @@ import (
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/obs"
-	"github.com/gin-gonic/gin"
 	"github.com/3th1nk/mammoth/internal/store"
+	"github.com/gin-gonic/gin"
 )
 
 // ── machine-facing render surface (docs/06-install-pipeline.md §2.1) ────────

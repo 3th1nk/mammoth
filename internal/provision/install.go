@@ -739,11 +739,27 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		if wimbootCarrier {
 			// The install source is the deployment SMB export — startnet maps
 			// it inside WinPE (setup consumes UNC directly, nothing lands in
-			// the boot.wim).
+			// the boot.wim). The prepared tree (the SetupComplete-injected
+			// unpack) sits at a sha-addressed path below the share root; the
+			// image is located and hashed here so the path is FINAL at render
+			// time (EnsureISO is an idempotent cache; prepare reuses both).
+			distroISO, ferr := builder.EnsureISO(ctx, spec.Image.Source, e.MediaDir)
+			if ferr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+					"distro ISO fetch failed: %s", ferr.Error())
+			}
+			sha, herr := builder.FileSHA256(distroISO)
+			if herr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+					"distro ISO hash failed: %s", herr.Error())
+			}
 			in.Netboot = &render.NetbootInputs{
 				InstallSMBUNC:      e.WindowsInstallSMBShare,
 				InstallSMBUser:     e.WindowsInstallSMBShareUser,
 				InstallSMBPassword: e.WindowsInstallSMBSharePassword,
+				// Windows separators, not filepath.Join — this string lands
+				// verbatim in the startnet batch script.
+				InstallSMBImagePath: PoolStoreDirName + "\\" + sha + "\\win\\tree",
 			}
 		} else {
 			// The shared pool tree is content-addressed by the image's sha256,

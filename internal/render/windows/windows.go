@@ -102,6 +102,12 @@ const (
 	// wpeinit-only script): WinPE runs it at startup, it maps the install
 	// share and hands off to setup.
 	StartnetSeedName = "mammoth/startnet.cmd"
+	// WinpeshlIniSeedName lands at \Windows\System32\winpeshl.ini and is
+	// load-bearing: the Setup image's stock flow launches setup.exe itself
+	// (bypassing startnet entirely — observed: our startnet never ran while
+	// setup failed on the unattended DiskConfiguration), so the boot order
+	// must be pinned to startnet through winpeshl's [LaunchApps].
+	WinpeshlIniSeedName = "mammoth/winpeshl.ini"
 )
 
 // RenderAnswers produces autounattend.xml + the SetupComplete.cmd source.
@@ -169,6 +175,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	}
 	if startnet != "" {
 		answers = append(answers, render.AnswerFile{Name: StartnetSeedName, Content: startnet})
+		answers = append(answers, render.AnswerFile{Name: WinpeshlIniSeedName, Content: winpeshlIni()})
 	}
 	return answers, render.BootParams{
 		AnswerURL:           strings.TrimSuffix(in.AnswerBaseURL, "/") + "/autounattend.xml",
@@ -520,11 +527,17 @@ func unattendXML(imageName, hostname, password string, plan diskPlan) string {
 	w(`          </CreatePartitions>
           <ModifyPartitions>
 `)
+	// ModifyPartition's Order counts ModifyPartitions entries (1..N, MSR has
+	// none), while PartitionID is the on-disk partition number (MSR occupies
+	// one) — conflating the two skips an Order and setup rejects the whole
+	// DiskConfiguration with 0x8007000d (real-media: qemu SMB round, 9/21).
+	modOrder := 0
 	for i, p := range plan.partitions {
 		if p.kind == "MSR" {
 			continue // unformatted by definition
 		}
-		order, pid := i+1, i+1
+		modOrder++
+		order, pid := modOrder, i+1
 		letter := ""
 		if p.letter != "" {
 			letter = fmt.Sprintf("\n              <Letter>%s</Letter>", p.letter)
@@ -611,6 +624,11 @@ func startnetCmd(in render.NetbootInputs, answerBase string) (string, error) {
 	if err := validateShareToken(in.InstallSMBPassword, "share password", false); err != nil {
 		return "", err
 	}
+	// The image path is repo-relative and machine-generated (pool-store sha
+	// addressing) — validated anyway, it flows into a batch script.
+	if err := validateInstallImagePath(in.InstallSMBImagePath); err != nil {
+		return "", err
+	}
 	cred := ""
 	if in.InstallSMBUser != "" {
 		cred = fmt.Sprintf(" \"%s\" /user:%s", in.InstallSMBPassword, in.InstallSMBUser)
@@ -625,6 +643,12 @@ func startnetCmd(in render.NetbootInputs, answerBase string) (string, error) {
 	w("@echo off")
 	w("rem mammoth: wimboot carrier - map the deployment install share and launch setup.")
 	w("wpeinit")
+	if in.InstallSMBUser == "" {
+		// The WinPE SMB client refuses sessions the server maps to guest
+		// (AllowInsecureGuestAuth defaults to off and WinPE has no Group
+		// Policy) — the docs-sanctioned opt-in is a direct registry write.
+		w(`reg add "HKLM\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters" /v AllowInsecureGuestAuth /t REG_DWORD /d 1 /f >nul`)
+	}
 	w("set ATTEMPT=0")
 	w(":waitnet")
 	w("set /a ATTEMPT+=1")
@@ -646,7 +670,12 @@ func startnetCmd(in render.NetbootInputs, answerBase string) (string, error) {
 	// back to the engine. A successful install reboots the machine and ends
 	// the stream naturally; a failed one leaves the Panther logs on the
 	// engine for post-mortem (the DiskConfiguration investigation channel).
-	w("start \"mammoth setup\" /D Z:\\sources Z:\\sources\\setup.exe /unattend X:\\autounattend.xml")
+	// No /unattend argument: the answer file sits at the ramdisk root (X:)
+	// where setup's implicit autounattend discovery finds it — the explicit
+	// form changes language handling (a media-language mismatch makes setup
+	// show the language picker even with the setting specified).
+	w(fmt.Sprintf("start \"mammoth setup\" /D Z:\\%s Z:\\%s\\sources\\setup.exe",
+		in.InstallSMBImagePath, in.InstallSMBImagePath))
 	// One-shot diagnostics dump right after launch: the Panther logs may
 	// live somewhere the diag loop does not poll, so the directory listings
 	// themselves travel back (via the writable share) and point at the real
@@ -702,6 +731,35 @@ func validateShareToken(v, what string, isUNC bool) error {
 	}
 	if isUNC && !strings.HasPrefix(v, `\\`) {
 		return fmt.Errorf("windows: install share UNC must start with \\\\ (got %q)", v)
+	}
+	return nil
+}
+
+// winpeshlIni pins the WinPE startup to our startnet: without it the Setup
+// image launches setup.exe on its own and startnet never runs (the stock
+// image carries no winpeshl.ini — winpeshl.exe falls back to startnet only
+// after nothing else is launched, and the Setup image IS something else).
+func winpeshlIni() string {
+	return "[LaunchApps]\r\n%SYSTEMDRIVE%\\Windows\\System32\\startnet.cmd\r\n"
+}
+
+// validateInstallImagePath checks the share-relative tree path: batch-safe
+// charset plus the backslash separator, no drive, no leading slash, and no
+// .. segments (it lands verbatim in a batch script).
+func validateInstallImagePath(p string) error {
+	if p == "" {
+		return fmt.Errorf("windows: install image path is empty")
+	}
+	if strings.HasPrefix(p, "\\") || strings.Contains(p, "..") {
+		return fmt.Errorf("windows: install image path %q must be repo-relative without .. segments", p)
+	}
+	for _, r := range p {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.' || r == '-' || r == '_' || r == '\\':
+		default:
+			return fmt.Errorf("windows: install image path contains character %q", r)
+		}
 	}
 	return nil
 }

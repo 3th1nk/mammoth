@@ -367,12 +367,17 @@ wpeinit → net use Z:(重试环,凭据经字符白名单校验——cmd 无安�
 `SCHEMA_WINDOWS_SMB_SHARE_REQUIRED` 拦未配置导出的 windows PXE
 (能力位 `capabilities.windows_smb_share` 对外可见)。
 
-**qemu 实证(2026-09-20)**:startnet 驱动的 SMB 链已走通一轮——WinPE 起、
+**qemu 实证(2026-09-20)**:startnet 驱动的 SMB 链已走通多轮——WinPE 起、
 net use 映射 samba guest share、**setup 从共享启动并解析 autounattend**
-("Windows 安装程序/安装程序正在启动"屏)。pending:完整受理轮(Disk
-Configuration 在 guest NVMe 上报"无法分析"——9/19 受理成功的 rig 用
-IDE 盘,NVMe 枚举疑点待换盘复验;叠加 rig 的 iPXE 对 dnsmasq 已有
-lease 的 DISCOVER 偶发挑剔循环,reset 可过,rig 层待修)。
+("Windows 安装程序/安装程序正在启动"屏)。pending:完整受理轮(GPT
+落盘)——setup 报"无法分析 <DiskConfiguration> 设置",**NVMe 与 IDE 盘
+均复现**,排除盘型枚举;ISO 虚拟介质形态(9/19)同款渲染曾报告"受理",
+但"受理"判据与"实际走分区"的区分未在 TCG 下严格建立——下一步=接
+setup 的 Panther 日志通道(setupact/setuperr 回传)定位解析失败的确切
+子项。**rig 层两修已固化**(external-win-e2e.sh):①guest 掉 UEFI Shell
+且无 DISCOVER 的"偶发"根因=**OVMF vars.fd 的 BootOrder NVRAM 多轮
+复用被块设备顶掉网络项**——每轮 fresh vars 修复;②iPXE re-DHCP 偶发
+对 OFFER 挑剔循环——dhcp-host 静态 IP + no-ping + --log-dhcp。
 
 **边界(显式)**:
 - **Secure Boot 必须关闭**:固件只验 NBP 层,wimboot/iPXE 均无微软链签名;

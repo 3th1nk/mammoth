@@ -7,6 +7,10 @@
 
 # Mammoth
 
+[![ci](https://github.com/3th1nk/mammoth/actions/workflows/ci.yml/badge.svg)](https://github.com/3th1nk/mammoth/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/3th1nk/mammoth)](https://github.com/3th1nk/mammoth/releases)
+[![license](https://img.shields.io/github/license/3th1nk/mammoth)](LICENSE)
+
 > A self-contained bare-metal provisioning engine.
 > Give it an out-of-band address and a credential — or let the machine introduce itself — and get back a machine that runs.
 

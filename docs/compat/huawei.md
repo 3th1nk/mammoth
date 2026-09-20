@@ -69,8 +69,8 @@ Redfish 上枚举盘拓扑(与 AVAGO 背板管理配置相关)。盘查结果标
     "cpu": {"model": "Intel(R) Xeon(R) Silver 4110 CPU @ 2.10GHz", "cores": 8},
     "memory_bytes": 34359738368,
     "nics": [
-      {"name": "mainboardLOMPort1", "mac": "50:1D:93:…"},
-      {"name": "mainboardLOMPort2", "mac": "50:1D:93:…"}
+      {"name": "mainboardLOMPort1", "mac": "02:00:00:…"},
+      {"name": "mainboardLOMPort2", "mac": "02:00:00:…"}
     ],
     "coverage": "partial",
     "coverage_notes": ["no drives or volumes reported"]

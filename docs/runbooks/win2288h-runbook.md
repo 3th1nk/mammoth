@@ -25,9 +25,9 @@
 - **媒体**:`/data/os_iso/windows2019/cn_windows_server_2019_x64_dvd_4de40f33.iso`
   (4.8G)。iBMC 6.41 虚拟介质挂 4.8G ISO 预期可行(UOS 8.2G 已实证)。
 - **机器档案**:`mch_0f1e2d3c4b5a`,state=ready;iBMC 198.51.100.74
-  (cred_0f1e2d3c4b5a);固件观测 **uefi-x64**(windows2019 是 uefi_only,门禁会过);
+  (cred_a9b8c7d6e5f4);固件观测 **uefi-x64**(windows2019 是 uefi_only,门禁会过);
   盘查 coverage=full,`LogicalDrive0` ≈ 3.64TiB(protocol raid)。
-- **网络**:机房无站点 DHCP;LOM Port1 `02:00:00:00:00:00` 是唯一插线口;
+- **网络**:机房无站点 DHCP;LOM Port1 `02:00:00:D8:C6:97` 是唯一插线口;
   网关 198.51.100.1,DNS 198.51.100.3。目标静态地址 **198.51.100.215**
   (2026-09-20 扫段确认空闲;.211/.212 是本机历史安装残留,.213/.214/.219 被
   VMware 占用)。Windows 安装期零网络依赖(应答与回调全走本地介质+装后回网),

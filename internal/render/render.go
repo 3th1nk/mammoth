@@ -75,6 +75,10 @@ type NetbootInputs struct {
 	InstallSMBUNC      string
 	InstallSMBUser     string
 	InstallSMBPassword string
+	// InstallSMBImagePath is the share-relative directory holding the
+	// prepared windows tree (pool-store/<sha256>/win/tree) — setup.exe and
+	// install.wim live under its sources/ below.
+	InstallSMBImagePath string
 	// PoolPublicKey is the binary OpenPGP keyring of the pool signing key —
 	// the HTTP pool is a signed offline mirror, and the installer's apt needs
 	// this key in its trustdb to pass apt-setup's mirror verification. Nil

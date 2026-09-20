@@ -247,8 +247,8 @@ func TestParseDHCPPool(t *testing.T) {
 	// Rejections.
 	for _, bad := range []string{
 		"198.51.100.180,199", // shorthand on the wrong side of a comma
-		"10.0.0.10-",        // missing end
-		"nonsense-nonsense", // not IPs
+		"10.0.0.10-",         // missing end
+		"nonsense-nonsense",  // not IPs
 	} {
 		if _, err := ParseDHCPPool(bad, r); err == nil {
 			t.Errorf("ParseDHCPPool(%q) accepted", bad)

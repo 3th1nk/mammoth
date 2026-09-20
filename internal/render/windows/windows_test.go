@@ -253,15 +253,44 @@ func TestRenderWindowsBoundary(t *testing.T) {
 	}
 }
 
+// Guest-share mode (no credentials): the startnet opts the WinPE SMB client
+// into insecure guest sessions before mapping.
+func TestRenderWindowsPXEGuestShare(t *testing.T) {
+	in := baseInputs()
+	in.Netboot = &render.NetbootInputs{
+		InstallSMBUNC:       `\\198.51.100.248\mammoth-media`,
+		InstallSMBImagePath: `pool-store\abc123\win\tree`,
+	}
+	answers, _, err := New("windows2019").RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	var startnet string
+	for _, a := range answers {
+		if a.Name == "mammoth/startnet.cmd" {
+			startnet = a.Content
+		}
+	}
+	for _, want := range []string{
+		`AllowInsecureGuestAuth /t REG_DWORD /d 1 /f`,
+		`net use Z: \\198.51.100.248\mammoth-media "" /user:guest`,
+	} {
+		if !strings.Contains(startnet, want) {
+			t.Errorf("guest startnet missing %q:\n%s", want, startnet)
+		}
+	}
+}
+
 // The wimboot PXE shape renders the virtual-media answers plus the startnet
 // that maps the deployment SMB export (the install source), and carries no
 // kernel args.
 func TestRenderWindowsPXE(t *testing.T) {
 	in := baseInputs()
 	in.Netboot = &render.NetbootInputs{
-		InstallSMBUNC:      `\\198.51.100.248\mammoth-media`,
-		InstallSMBUser:     "smbuser",
-		InstallSMBPassword: "s3cret-9",
+		InstallSMBUNC:       `\\198.51.100.248\mammoth-media`,
+		InstallSMBUser:      "smbuser",
+		InstallSMBPassword:  "s3cret-9",
+		InstallSMBImagePath: `pool-store\abc123\win\tree`,
 	}
 	answers, boot, err := New("windows2019").RenderAnswers(in, render.MachineView{})
 	if err != nil {
@@ -280,7 +309,7 @@ func TestRenderWindowsPXE(t *testing.T) {
 	for _, want := range []string{
 		"wpeinit",
 		`net use Z: \\198.51.100.248\mammoth-media "s3cret-9" /user:smbuser`,
-		`start "mammoth setup" /D Z:\sources Z:\sources\setup.exe /unattend X:\autounattend.xml`,
+		`start "mammoth setup" /D Z:\pool-store\abc123\win\tree Z:\pool-store\abc123\win\tree\sources\setup.exe`,
 		`curl -sf -T X:\Windows\Panther\setuperr.log http://10.0.2.2:8080/render/tokw/diag/setuperr.log`,
 	} {
 		if !strings.Contains(startnet, want) {

@@ -69,6 +69,10 @@ const (
 	// install source does NOT ride the wim, see the package comment).
 	wimbootStartnetSeed = "mammoth/startnet.cmd"
 	wimbootStartnetDest = "/Windows/System32/startnet.cmd"
+	// winpeshl.ini pins the startup to startnet: the Setup image's own flow
+	// launches setup.exe directly and startnet never runs without it.
+	wimbootWinpeshlSeed = "mammoth/winpeshl.ini"
+	wimbootWinpeshlDest = "/Windows/System32/winpeshl.ini"
 )
 
 // BuildWindowsWimboot assembles the per-task Windows PXE boot tree.
@@ -129,6 +133,7 @@ func BuildWindowsWimboot(ctx context.Context, opt WindowsWimbootOptions) (BootTr
 		{wimbootUnattendSeed, "/autounattend.xml"},
 		{wimbootTaskSeed, "/" + wimbootTaskSeed},
 		{wimbootStartnetSeed, wimbootStartnetDest},
+		{wimbootWinpeshlSeed, wimbootWinpeshlDest},
 	} {
 		content, ok := opt.Seed[f.seedName]
 		if !ok || content == "" {
@@ -142,7 +147,7 @@ func BuildWindowsWimboot(ctx context.Context, opt WindowsWimbootOptions) (BootTr
 		// The stock boot.wim carries its own startnet.cmd — wimlib's add
 		// refuses an existing destination, hence the delete-then-add dance
 		// (same idiom as the SetupComplete injection).
-		if f.seedName == wimbootStartnetSeed {
+		if f.seedName == wimbootStartnetSeed || f.seedName == wimbootWinpeshlSeed {
 			del := exec.CommandContext(ctx, "wimlib-imagex", "update", wimPath, idx,
 				"--command=delete "+f.dest)
 			_ = del.Run()

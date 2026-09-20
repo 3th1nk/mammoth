@@ -159,7 +159,11 @@ iPXE    ──HTTP GET /netboot/files/<token>/…──▶ kernel/initrd(+modloo
 
 - post_install 脚本阶段执行用户注册类脚本,末尾回调完成端点(status=ok);
 - 带内探活确认新系统可达(内建轮询,见 §7 verify_ready 行);配置了带内凭证的
-  机器随后刷新 layout 快照(装后视角:设备名 + serial 即安装器所见);
+  机器随后刷新 layout 快照(装后视角:设备名 + serial 即安装器所见)。
+  windows 家族例外:完成上报即验证面(SetupComplete 在真实系统首启、
+  登录前回调,已证明镜像落盘且网络可用),不做带内探活——机器档案残留的
+  ssh 凭证不参与,否则只会在无 sshd 的系统上耗尽轮询预算误报
+  INSTALL_NOT_REACHABLE;装后快照刷新随之不适用;
 - 恢复引导顺序。
 
 ## 6. 发行版驱动(OS Driver)

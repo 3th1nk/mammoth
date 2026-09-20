@@ -1,5 +1,14 @@
 # Runbook · 2288H Windows 真机窗口(windows2019 虚拟介质全装闭环)
 
+> **结果(2026-09-20 执行完毕)**:排障闭环,装机未启动——根因定案为
+> **iBMC 6.41 虚拟 CD 对 windows 介质 UEFI 引导固件级拒绝**(原版/重打包
+> ×NFS/客户端重定向 ×Once/Continuous 全灭,同通路 alpine/UOS 正常,完整
+> 证据链见 compat/huawei.md windows 虚拟介质节)。管线侧当日另收获三修:
+> install-plan 分类错误 500→422(eaf0ccd,已部署)、探针资产路径修正
+> (WORKDIR 迁移遗留)、ssh.address→探针静态兜底真机实证。重跑前置:仅
+> 等 workaround(USB / iBMC 升级 / Ventoy 式 builder 增强),§1 起流程不变
+> (discover 快照有时效,重跑前先跑 §1)。
+
 > 2026-09-20 定稿。目标:真固件 El Torito 引导 → unattend 全装 → SetupComplete
 > 完成回调(真 mammoth CompleteURL 承接)→ LSI SAS3508 inbox 驱动验证。
 > qemu(TCG)已收口应答受理层;本窗口是装机闭环与回调的最终验证面

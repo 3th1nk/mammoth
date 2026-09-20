@@ -300,6 +300,13 @@ RAID 拒绝、bond/vlan 拒绝、用户脚本拒绝、非默认路由拒绝、Fi
 缺失即弹 "无法从无人参与应答文件读取 <ProductKey> 设置" 中止——已修复并 golden 钉住。
 TCG 全装挂机因固件交互窗口(UEFI Shell→bootx64→press-any-key→BCD 菜单)的定时
 盲发不可靠,收口于应答受理层;装机闭环与 SetupComplete 回调验证并入 2288H 真机窗口。
-**待真机**:2288H
-(LSI SAS3508:2019 有 inbox MegaRAID 驱动,预期免注入;若 WinPE 不识别再走
-boot.wim 驱动注入)。iBMC 6.41 虚拟介质挂 5GB ISO:UOS 8.2G 已实证可行。
+**待真机** → **真机定案(2026-09-20)**:2288H(iBMC 6.41 + BIOS 8.20)的
+虚拟介质 UEFI 引导对 windows 介质**固件级失败**——原版 2019/重打包 2019/
+原版 2022、NFS 服务端挂载/KVM 客户端重定向、Once/Continuous 全灭
+("EFI USB Device (Virtual DVD-ROM VM 1.1.0) boot failed."),而同通路
+alpine 270M ×4 与 UOS 8.2G 均正常引导(大小无辜)。装机代码面全部就绪
+且经 qemu 应答受理层验证,瓶颈仅在固件;全装闭环与 SetupComplete 回调
+验证**等 workaround**(物理 USB / iBMC 升级复验 / builder 增 Ventoy 式
+grub 链式引导,详见 compat/huawei.md windows 虚拟介质节)。
+LSI SAS3508 inbox 驱动验证随闭环一并推迟(预期不变:2019 有 inbox
+MegaRAID 驱动;iBMC 6.41 虚拟介质挂 5GB ISO 已实证可行,2022 5.5G 同)。

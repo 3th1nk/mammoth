@@ -152,6 +152,12 @@ func New(d Deps, apiToken string) *gin.Engine {
 	// hook fetch (early/late_command) 401s into the NoRoute auth wall and the
 	// completion callback never fires (real-hardware: install ran to the end,
 	// then hung at the first hook fetch).
+	// Diagnostics upload: the installer environment ships setup logs back
+	// (windows startnet curls the Panther logs after a failed launch) —
+	// same machine-face credentialing as the rest of /render.
+	router.POST("/render/:token/diag/:name", func(c *gin.Context) {
+		srv.UploadDiag(c)
+	})
 	router.GET("/render/:token/run/*rest", func(c *gin.Context) {
 		req := gen.FetchAnswerFileRequestObject{
 			Token: c.Param("token"),

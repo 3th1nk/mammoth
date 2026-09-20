@@ -3,11 +3,15 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/obs"
+	"github.com/gin-gonic/gin"
 	"github.com/3th1nk/mammoth/internal/store"
 )
 
@@ -104,6 +108,56 @@ func (s *Server) ReportProbeFindings(ctx context.Context, request gen.ReportProb
 	obs.FromContext(ctx).InfoContext(ctx, "ramdisk probe report recorded",
 		obs.FieldTaskID, task.ID, obs.FieldMachineID, task.MachineID)
 	return gen.ReportProbeFindings204Response{}, nil
+}
+
+// uploadDiagMaxBytes caps one diagnostics upload (logs, not images).
+const uploadDiagMaxBytes = 64 << 20
+
+// UploadDiag accepts one diagnostics file from the installer environment
+// (the windows startnet curls setup's Panther logs back after a failed
+// launch). Machine-face credentialing: the unguessable token in the path.
+// The file lands under <MediaDir>/diag/<token>/ for post-mortem.
+func (s *Server) UploadDiag(c *gin.Context) {
+	name := c.Param("name")
+	if len(name) == 0 || len(name) > 64 {
+		problem(c, http.StatusBadRequest, "SCHEMA_INVALID_DIAG_NAME", "Invalid name", "diag file name must be 1..64 chars", false)
+		return
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == '_':
+		default:
+			problem(c, http.StatusBadRequest, "SCHEMA_INVALID_DIAG_NAME", "Invalid name", "diag file name allows [A-Za-z0-9._-] only", false)
+			return
+		}
+	}
+	task, err := s.Jobs.GetTaskByToken(c.Request.Context(), c.Param("token"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	if s.MediaDir == "" {
+		problem(c, http.StatusServiceUnavailable, "DIAG_UNAVAILABLE", "Diagnostics unavailable", "media repo is not configured", false)
+		return
+	}
+	dest := filepath.Join(s.MediaDir, "diag", task.ID, name)
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		problem(c, http.StatusInternalServerError, "DIAG_STORE_FAILED", "Diagnostics store failed", err.Error(), false)
+		return
+	}
+	f, err := os.Create(dest)
+	if err != nil {
+		problem(c, http.StatusInternalServerError, "DIAG_STORE_FAILED", "Diagnostics store failed", err.Error(), false)
+		return
+	}
+	defer f.Close()
+	if _, err := io.Copy(f, io.LimitReader(c.Request.Body, uploadDiagMaxBytes)); err != nil {
+		problem(c, http.StatusInternalServerError, "DIAG_STORE_FAILED", "Diagnostics store failed", err.Error(), false)
+		return
+	}
+	obs.FromContext(c.Request.Context()).InfoContext(c.Request.Context(), "diagnostics uploaded",
+		obs.FieldTaskID, task.ID, "file", name, "bytes", c.Request.ContentLength)
+	c.Status(http.StatusNoContent)
 }
 
 var _ = store.ErrNotFound

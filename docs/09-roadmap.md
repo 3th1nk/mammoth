@@ -236,9 +236,19 @@
    - **Windows unattend**——**v1 代码面就绪(2026-09-19,见 compat/distros.md
      windows 节)**:windows2019 驱动(autounattend.xml + SetupComplete.cmd
      wimlib 注入)+ builder windows 布局家族(El Torito 重放 + UDF);虚拟
-     介质 + UEFI-only + Standard Core,回调式 verify 零改动。qemu 可先验
-     winpe 引导与应答前半(2019 ISO 在 248);LSI 卷驱动差异要真机;2022
-     等镜像(磁盘空间);PXE WinPE 链挂 v1.x;
+     介质 + UEFI-only + Standard Core,回调式 verify 零改动。qemu 已验证
+     winpe 引导与应答受理层(2019/2022 镜像均在 248)。
+     **2026-09-20 真机定案**:2288H(iBMC 6.41)虚拟介质 UEFI 引导对
+     windows 介质固件级失败(原版/重打包 ×NFS/客户端重定向 全灭,
+     同通路 linux 介质正常;完整证据链 compat/huawei.md windows 虚拟介质
+     节)。**通路路线定策**:①**v1.x 主线 = windows PXE 载体落
+     wimboot-over-HTTP**(builder 提取 bootmgfw/BCD/boot.sdi/boot.wim
+     四件套,wimboot GPL2 纳管同 shim/grub 先例;网络引导绕开 El Torito,
+     根治本固件缺陷,外部逃生门即投递载体);②**终局 = agent
+     apply-image**(wimlib apply + 预烤 BCD + unattend 落 Panther,复用
+     agent 引导与声明式落盘);③Ventoy 式 grub 链载 = 可选介质侧实验;
+     ④iBMC 升级 = 正确修复(与 SecureErase 缺失叠加升级动机),物理 USB
+     = 有人场景最短路径。
    - **复验轮**——22.04-crypt(性价比最高: crypt 修复仅 24.04 轮覆盖过,
      2288H 半天可补,**真机窗口第一件事**)+ Kylin/rocky10-PXE;2288H 单
      机轮装顺序覆盖(22/24/rocky9 已证明此模式可行);

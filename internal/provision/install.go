@@ -93,7 +93,6 @@ func installMediaProduced(stage string) bool {
 type installSpecView struct {
 	Image struct {
 		Source   string `json:"source"`
-		ImageID  string `json:"image_id"`
 		Checksum string `json:"checksum"`
 		Distro   string `json:"distro"`
 	} `json:"image"`
@@ -870,19 +869,31 @@ func (e *Executor) reclaimBootMediaFiles(ctx context.Context, ictx *installTaskC
 	if ictx.Token == "" {
 		return
 	}
-	mediaFile := fmt.Sprintf("boot-%s.iso", ictx.Token)
+	e.removeBootMediaCopies(ctx, fmt.Sprintf("boot-%s.iso", ictx.Token), "")
+	if e.MediaWorkDir != "" {
+		_ = os.RemoveAll(filepath.Join(e.MediaWorkDir, fmt.Sprintf("boot-%s.iso", ictx.Token)+".build"))
+	}
+}
+
+// removeBootMediaCopies deletes the repo and relay copies of one boot media
+// name, sweeping both the boot/ subdirectory shape and the legacy repo-root
+// name — binaries older than the subdirectory isolation left their files at
+// the root, and a version upgrade must not strand them (best-effort, logged).
+func (e *Executor) removeBootMediaCopies(ctx context.Context, name, reason string) {
+	rel := filepath.Join("boot", name)
 	if e.MediaDir != "" {
-		if err := os.Remove(filepath.Join(e.MediaDir, mediaFile)); err == nil {
-			obs.FromContext(ctx).InfoContext(ctx, "boot media removed", "file", mediaFile)
+		for _, p := range []string{rel, name} {
+			if err := os.Remove(filepath.Join(e.MediaDir, p)); err == nil {
+				obs.FromContext(ctx).InfoContext(ctx, "boot media removed", "file", p, "reason", reason)
+			}
 		}
 	}
 	if e.MediaUploader != nil {
-		if err := e.MediaUploader.Remove(ctx, mediaFile); err == nil {
-			obs.FromContext(ctx).InfoContext(ctx, "boot media relay copy removed", "file", mediaFile)
+		for _, n := range []string{rel, name} {
+			if err := e.MediaUploader.Remove(ctx, n); err == nil {
+				obs.FromContext(ctx).InfoContext(ctx, "boot media relay copy removed", "file", n, "reason", reason)
+			}
 		}
-	}
-	if e.MediaWorkDir != "" {
-		_ = os.RemoveAll(filepath.Join(e.MediaWorkDir, mediaFile+".build"))
 	}
 }
 
@@ -896,21 +907,9 @@ func (e *Executor) cleanupBootMedia(ctx context.Context, task *store.Task, reaso
 	if len(task.Context) == 0 || json.Unmarshal(task.Context, &ictx) != nil || ictx.Token == "" {
 		return
 	}
-	mediaFile := fmt.Sprintf("boot-%s.iso", ictx.Token)
-	if e.MediaDir != "" {
-		if err := os.Remove(filepath.Join(e.MediaDir, mediaFile)); err == nil {
-			obs.FromContext(ctx).InfoContext(ctx, "boot media removed",
-				"file", mediaFile, "reason", reason)
-		}
-	}
-	if e.MediaUploader != nil {
-		if err := e.MediaUploader.Remove(ctx, mediaFile); err == nil {
-			obs.FromContext(ctx).InfoContext(ctx, "boot media relay copy removed",
-				"file", mediaFile, "reason", reason)
-		}
-	}
+	e.removeBootMediaCopies(ctx, fmt.Sprintf("boot-%s.iso", ictx.Token), reason)
 	if e.MediaWorkDir != "" {
-		_ = os.RemoveAll(filepath.Join(e.MediaWorkDir, mediaFile+".build"))
+		_ = os.RemoveAll(filepath.Join(e.MediaWorkDir, fmt.Sprintf("boot-%s.iso", ictx.Token)+".build"))
 	}
 }
 
@@ -1379,7 +1378,10 @@ func moveFile(src, dst string) error {
 // MediaRelay (SSH) is the first implementation; FTP/HTTP relays would slot
 // in behind the same two calls.
 type MediaUploader interface {
-	Push(ctx context.Context, localPath string) (remoteName string, err error)
+	// Push uploads localPath under the remote export as relName (repo-relative,
+	// e.g. "boot/boot-<token>.iso" — subdirectories are created remotely; the
+	// BMC-facing URI must mirror the same relative name).
+	Push(ctx context.Context, localPath string, relName string) (remoteName string, err error)
 	Remove(ctx context.Context, name string) error
 }
 

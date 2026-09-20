@@ -174,7 +174,8 @@ func (e *Executor) probeRamdisk(ctx context.Context, task *store.Task, usePXE bo
 		if err != nil {
 			return classifiedErr("PROBE_MEDIA_FAILED", true, "carrier ISO unavailable: %s", err.Error())
 		}
-		mediaName := "probe-" + pctx.Token + ".iso"
+		mediaName := filepath.Join("boot", "probe-"+pctx.Token+".iso")
+		_ = os.MkdirAll(filepath.Dir(filepath.Join(e.MediaDir, mediaName)), 0o755)
 		if _, err := builder.BuildProbeISO(ctx, builder.ProbeOptions{
 			ISOPath:       carrierISO,
 			OutputPath:    filepath.Join(e.MediaDir, mediaName),
@@ -186,7 +187,7 @@ func (e *Executor) probeRamdisk(ctx context.Context, task *store.Task, usePXE bo
 		}
 		mediaURI = mediaURIFor(e.MediaBaseURI, mediaName)
 		if e.MediaUploader != nil {
-			if _, perr := e.MediaUploader.Push(ctx, filepath.Join(e.MediaDir, mediaName)); perr != nil {
+			if _, perr := e.MediaUploader.Push(ctx, filepath.Join(e.MediaDir, mediaName), mediaName); perr != nil {
 				return classifiedErr("PROBE_MEDIA_FAILED", true, "probe media relay push failed: %s", perr.Error())
 			}
 		}
@@ -292,7 +293,7 @@ func (e *Executor) probeRamdisk(ctx context.Context, task *store.Task, usePXE bo
 			return
 		}
 		media := bmc.MediaImage{URL: mediaURI, Kind: bmc.MediaBoot}
-		e.probeCompensate(cctx, addr, cred, proto, media, "probe-"+pctx.Token+".iso")
+		e.probeCompensate(cctx, addr, cred, proto, media, filepath.Join("boot", "probe-"+pctx.Token+".iso"))
 	}
 	for {
 		select {
@@ -324,9 +325,14 @@ func (e *Executor) probeCompensate(ctx context.Context, addr string, cred bmc.Cr
 	_, _ = e.BMC.Do(ctx, addr, cred, proto, "set_power", func(ctx context.Context, d bmc.Driver) (any, error) {
 		return nil, d.SetPower(ctx, addr, cred, bmc.PowerOff)
 	})
+	// legacy (root-level name) swept alongside: tasks prepared by older
+	// binaries left their ISOs outside the boot/ subdirectory.
 	if e.MediaUploader != nil {
 		_ = e.MediaUploader.Remove(ctx, mediaName)
+		_ = e.MediaUploader.Remove(ctx, filepath.Base(mediaName))
 	} else {
-		_ = os.Remove(filepath.Join(e.MediaDir, mediaName))
+		for _, p := range []string{mediaName, filepath.Base(mediaName)} {
+			_ = os.Remove(filepath.Join(e.MediaDir, p))
+		}
 	}
 }

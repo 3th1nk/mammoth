@@ -846,8 +846,16 @@ func (s *Server) validateBootStrategy(specRaw json.RawMessage) error {
 	}
 	if pxe := render.PXESupport(driver); pxe != render.SupportFull {
 		return verr("SCHEMA_UNSUPPORTED_BOOT_STRATEGY",
-			"distro %s declares %q PXE support: only the RHEL-lineage installers boot over the network today",
+			"distro %s declares %q PXE support: only the RHEL-lineage and wimboot installers boot over the network",
 			spec.Image.Distro, pxe)
+	}
+	// The wimboot carrier's install source is the deployment SMB export —
+	// without it WinPE boots and then has nothing to install from, so the
+	// submission rejects up front (the NFS media export analog).
+	if carrier, _ := render.NetbootInstallOf(driver); carrier == render.NetbootCarrierWimboot && !s.WindowsInstallShare {
+		return verr("SCHEMA_WINDOWS_INSTALL_SHARE_REQUIRED",
+			"distro %s boots PXE through the wimboot carrier, which needs the deployment SMB export (set MAMMOTH_WINDOWS_INSTALL_SHARE)",
+			spec.Image.Distro)
 	}
 	return nil
 }

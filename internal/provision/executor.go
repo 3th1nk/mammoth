@@ -46,6 +46,13 @@ type Executor struct {
 	// MediaBaseURI is the BMC-reachable media base URI the BMC mounts from
 	// (nfs://, cifs://, ftp:// — the firmware decides what it accepts).
 	MediaBaseURI string
+	// WindowsInstallShare* feed the windows wimboot carrier's startnet (the
+	// WinPE maps this deployment-provided SMB export for the install source;
+	// the SMB analog of MediaBaseURI's NFS export). Empty share = windows PXE
+	// submissions are rejected at the gate.
+	WindowsInstallShare         string
+	WindowsInstallShareUser     string
+	WindowsInstallSharePassword string
 	// MediaUploader, when configured, moves the assembled boot ISO into the
 	// BMC-reachable share in-process (SSH relay today; FTP/HTTP relays slot
 	// in behind the same shape). Deployments that mount the export directly

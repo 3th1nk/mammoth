@@ -263,6 +263,25 @@ dhcp-boot=tag:winboot,tag:!ipxe,ipxe-amd64.efi,,<tftp-server>
 
 windows 全链 rig 见 `scripts/windows-dev/external-win-e2e.sh`。
 
+## 4.5.2 Windows PXE 的部署层 SMB 导出
+
+windows wimboot 载体的 install 源是**部署层 SMB 只读共享**(与 NFS 介质
+导出同哲学,引擎不内建 SMB 服务面——SMB 交 samba/Windows 文件共享):
+
+```sh
+MAMMOTH_WINDOWS_INSTALL_SHARE='\\198.51.100.248\mammoth-media'  # 必填,UNC
+MAMMOTH_WINDOWS_INSTALL_SHARE_USER=''      # 可选;空 = guest 导出
+MAMMOTH_WINDOWS_INSTALL_SHARE_PASSWORD=''
+```
+
+share 指向介质仓库(`MAMMOTH_MEDIA_DIR`,WinPE 从
+`<share>\pool-store\<sha256>\win\tree\sources\install.wim` 取安装源),
+只读即可。samba 最小配置:`[mammoth-media] path=/data/mammoth/media +
+guest ok = yes + read only = yes + map to guest = Bad User`(或固定凭据,
+user/password 字符限 `[A-Za-z0-9._@-]`——cmd 批处理不可安全引用元字符)。
+未配置时 windows PXE 提交即 `SCHEMA_WINDOWS_INSTALL_SHARE_REQUIRED`;
+配置后能力位 `capabilities.windows_install_share` 置真。
+
 **arm64 注记**:aarch64 的 DHCP→TFTP→蹦床链与 x64 同构(opt 93=11→
 shimaa64,与 MAAS/RFC 4578 一致),签名链(shimaa64→grubaa64 在 Secure
 Boot 下)已经 qemu AAVMF 验证(`scripts/pxe-dev/arm64-sb-chain.sh`)。

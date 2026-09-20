@@ -56,6 +56,7 @@ MAMMOTH_HTTP_ADDR=":$HTTP_PORT" MAMMOTH_API_TOKEN=devtoken MAMMOTH_MASTER_KEY="$
 MAMMOTH_MEDIA_DIR="$WORK/media" \
 MAMMOTH_EXTERNAL_URL="http://$BRIDGE_IP:$HTTP_PORT" \
 MAMMOTH_PXE_ENABLED=true MAMMOTH_PXE_MODE=external \
+MAMMOTH_WINDOWS_INSTALL_SHARE='\\192.168.77.1\mammoth-media' \
 "$WORK/mammoth" serve --mode=all >"$WORK/logs/server.log" 2>&1 &
 SERVER_PID=$!
 cleanup() {
@@ -125,7 +126,7 @@ docker run --rm -d --name win-ext-ctl --privileged \
   -v "$WORK:/work" \
   alpine:3.22 sleep infinity >/dev/null
 docker exec win-ext-ctl sh -c '
-  apk add -q dnsmasq socat qemu-system-x86_64 qemu-img iproute2 2>&1 | tail -1
+  apk add -q dnsmasq socat qemu-system-x86_64 qemu-img iproute2 samba 2>&1 | tail -1
   ip link add br-pxe type bridge; ip addr add '"$BRIDGE_IP"'/24 dev br-pxe
   ip link set br-pxe up
   ip tuntap add dev tap0 mode tap; ip link set tap0 master br-pxe; ip link set tap0 up
@@ -141,11 +142,27 @@ dhcp-boot=tag:winboot,tag:!ipxe,ipxe-amd64.efi,,'"$BRIDGE_IP"'
 dhcp-boot=tag:ipxe,boot.ipxe,,'"$BRIDGE_IP"'
 EOF
   dnsmasq --conf-file=/etc/dnsmasq-win.conf --no-daemon --log-queries >/work/logs/dnsmasq.log 2>&1 &
+  # The deployment SMB export stand-in: read-only /work/media, guest access —
+  # the wimboot startnet maps \\192.168.77.1\mammoth-media from WinPE.
+  cat > /etc/samba/smb.conf <<'SAMBAEOF'
+[global]
+  map to guest = Bad User
+  server min protocol = SMB2
+  log file = /work/logs/samba.log
+[mammoth-media]
+  path = /work/media
+  browseable = yes
+  guest ok = yes
+  read only = yes
+  force user = root
+SAMBAEOF
+  mkdir -p /run/samba /var/lib/samba/private /var/cache/samba
+  smbd -D && echo "  samba up (guest read-only /work/media)"
   socat TCP-LISTEN:'"$HTTP_PORT"',bind='"$BRIDGE_IP"',fork,reuseaddr TCP:host.docker.internal:'"$HTTP_PORT"' &
   sleep 1
-  qemu-img create -f raw /work/disk.raw 40G >/dev/null
   # a stale mon.sock breaks the monitor bind (virtiofs cannot unlink sockets)
   rm -f /work/mon.sock /work/qemu.pid /work/disk.raw
+  qemu-img create -f raw /work/disk.raw 40G >/dev/null
   rm -f /work/logs/serial.log
   # 8G guest: the augmented boot.wim (~4.7G) plus the WinPE runtime must fit
   # in RAM. The Docker Desktop VM needs >= 10G allotted (settings MemoryMiB)

@@ -12,15 +12,14 @@
 //
 // PXE carrier (wimboot over PXE): wimboot assembles the WinPE memory
 // environment from the media's own boot files, and the builder augments
-// boot.wim with autounattend.xml + mammoth/task.json (small files only —
-// install.wim must NOT ride the wim: >4G boot.wim is rejected by the
-// bootmgr ramdisk path, qemu-reproduced 2026-09-20). The install source
-// rides the network (SMB share, pending); until it lands PXESupport stays
-// none and the delivery machinery (proxyDHCP routing the right MACs to
-// plain iPXE, the wimboot-shaped script render) sits ready behind the
-// gate. Delivery is iPXE: it is the only documented wimboot host, so
-// Secure Boot is out of scope for this carrier (docs/compat/distros.md
-// §windows).
+// boot.wim with small per-task seeds only — autounattend.xml,
+// mammoth/task.json and a startnet.cmd that maps the deployment SMB export
+// and launches setup from it (install.wim must NOT ride the wim: >4G
+// boot.wim is rejected by the bootmgr ramdisk path, qemu-reproduced
+// 2026-09-20; the SMB share itself is deployment-provided, the same shape
+// as the NFS media export). Delivery is iPXE: it is the only documented
+// wimboot host, so Secure Boot is out of scope for this carrier
+// (docs/compat/distros.md §windows).
 //
 // v1 boundary (explicit, honest): UEFI-only (the rendered DiskConfiguration
 // is ESP+MSR+GPT; a Legacy BIOS machine cannot consume it), no keep
@@ -63,18 +62,15 @@ func (d *Driver) Family() string { return "windows" }
 // worth modeling in v1 — WillWipeDisk is the shape.
 func (d *Driver) KeepPartitionSupport() render.SupportLevel { return render.SupportNone }
 
-// PXESupport: none — the wimboot carrier chain itself is validated (iPXE →
-// wimboot → bootmgfw → WinPE, qemu 2026-09-20), but the install source is
-// not landed yet: baking install.wim into the augmented boot.wim crosses the
-// 4 GiB line and Server 2019's bootmgr ramdisk path rejects it outright
-// (0xc0000225 winload.efi, qemu-reproduced), so the source must be served
-// over the network (SMB share — the WDS shape) before submissions can
-// complete. Flips to full when the SMB pool lands
-// (docs/compat/distros.md §windows).
-func (d *Driver) PXESupport() render.SupportLevel { return render.SupportNone }
+// PXESupport: full via the wimboot carrier — the chain (iPXE → wimboot →
+// bootmgfw → WinPE) is qemu-validated and setup consumes the install source
+// from the deployment SMB export mapped by the baked startnet. The share
+// itself is a deployment fact: submissions gate on it being configured
+// (SCHEMA_WINDOWS_INSTALL_SHARE_REQUIRED), not on the driver.
+func (d *Driver) PXESupport() render.SupportLevel { return render.SupportFull }
 
-// NetbootInstallDriver: the wimboot carrier, no pool — declared for the
-// delivery machinery even while PXESupport keeps the gate shut.
+// NetbootInstallDriver: the wimboot carrier, no pool — the install source
+// rides the deployment SMB export the startnet maps.
 func (d *Driver) NetbootCarrier() render.NetbootCarrier { return render.NetbootCarrierWimboot }
 func (d *Driver) NetbootPool() render.NetbootPool       { return render.NetbootPoolNone }
 
@@ -101,6 +97,11 @@ const (
 	SetupCompleteSeedName = "mammoth/SetupComplete.cmd"
 	CompletePS1SeedName   = "mammoth/mammoth-complete.ps1"
 	TaskJSONSeedName      = "mammoth/task.json"
+	// StartnetSeedName lands at \Windows\System32\startnet.cmd inside the
+	// augmented boot.wim (the builder delete-then-adds it over the stock
+	// wpeinit-only script): WinPE runs it at startup, it maps the install
+	// share and hands off to setup.
+	StartnetSeedName = "mammoth/startnet.cmd"
 )
 
 // RenderAnswers produces autounattend.xml + the SetupComplete.cmd source.
@@ -112,10 +113,20 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		return nil, render.BootParams{}, fmt.Errorf("%s: image source is required", d.distro)
 	}
 	if in.Netboot != nil && in.Netboot.PoolURL != "" {
-		// The wimboot carrier needs no pool (the augmented boot.wim carries
-		// the install source); a pool URL would mean the submission was
+		// The wimboot carrier needs no pool (the install source rides the
+		// deployment SMB export); a pool URL would mean the submission was
 		// shaped by another distro's logic.
 		return nil, render.BootParams{}, fmt.Errorf("%s: PXE uses the wimboot carrier — no pool tree applies", d.distro)
+	}
+	var startnet string
+	if in.Netboot != nil {
+		if in.Netboot.InstallShareUNC == "" {
+			return nil, render.BootParams{}, fmt.Errorf("%s: PXE needs the deployment SMB export (MAMMOTH_WINDOWS_INSTALL_SHARE)", d.distro)
+		}
+		var err error
+		if startnet, err = startnetCmd(*in.Netboot); err != nil {
+			return nil, render.BootParams{}, err
+		}
 	}
 	if len(in.Raid) > 0 {
 		return nil, render.BootParams{}, fmt.Errorf("%s: RAID is not supported yet — submit plain disks", d.distro)
@@ -150,15 +161,19 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// pair is generic, so the builder's prepared install.wim is ISO-sha
 	// cacheable — task.json is consumed at first boot from the still-mounted
 	// medium (the medium is released only after the completion callback).
-	return []render.AnswerFile{
-			{Name: "autounattend.xml", Content: unattend},
-			{Name: SetupCompleteSeedName, Content: setupCompleteCmd()},
-			{Name: CompletePS1SeedName, Content: mammothCompletePS()},
-			{Name: TaskJSONSeedName, Content: task},
-		}, render.BootParams{
-			AnswerURL:           strings.TrimSuffix(in.AnswerBaseURL, "/") + "/autounattend.xml",
-			InstallerAutoReboot: true,
-		}, nil
+	answers := []render.AnswerFile{
+		{Name: "autounattend.xml", Content: unattend},
+		{Name: SetupCompleteSeedName, Content: setupCompleteCmd()},
+		{Name: CompletePS1SeedName, Content: mammothCompletePS()},
+		{Name: TaskJSONSeedName, Content: task},
+	}
+	if startnet != "" {
+		answers = append(answers, render.AnswerFile{Name: StartnetSeedName, Content: startnet})
+	}
+	return answers, render.BootParams{
+		AnswerURL:           strings.TrimSuffix(in.AnswerBaseURL, "/") + "/autounattend.xml",
+		InstallerAutoReboot: true,
+	}, nil
 }
 
 // diskPlan is the resolved UEFI partition layout: the declared partitions
@@ -576,6 +591,76 @@ func unattendXML(imageName, hostname, password string, plan diskPlan) string {
 </unattend>
 `)
 	return b.String()
+}
+
+// startnetCmd renders the WinPE startup script baked into boot.wim
+// (\Windows\System32\startnet.cmd, delete-then-added over the stock
+// wpeinit-only script): bring the network up, map the deployment SMB
+// export, and launch setup against the answer file already on the ramdisk
+// (X:). Setup resolves install.wim from its own launch location
+// (<share>\sources), so the WDS-style flow needs no per-image arguments.
+// Every dynamic value is character-validated — cmd has no safe quoting for
+// metacharacters, so the config contract is a restricted charset instead.
+func startnetCmd(in render.NetbootInputs) (string, error) {
+	if err := validateShareToken(in.InstallShareUNC, "share UNC", true); err != nil {
+		return "", err
+	}
+	if err := validateShareToken(in.InstallShareUser, "share user", false); err != nil {
+		return "", err
+	}
+	if err := validateShareToken(in.InstallSharePassword, "share password", false); err != nil {
+		return "", err
+	}
+	cred := ""
+	if in.InstallShareUser != "" {
+		cred = fmt.Sprintf(" \"%s\" /user:%s", in.InstallSharePassword, in.InstallShareUser)
+	}
+	var b strings.Builder
+	w := func(line string) { b.WriteString(line); b.WriteByte('\n') }
+	w("@echo off")
+	w("rem mammoth: wimboot carrier - map the deployment install share and launch setup.")
+	w("wpeinit")
+	w("set ATTEMPT=0")
+	w(":waitnet")
+	w("set /a ATTEMPT+=1")
+	w(fmt.Sprintf("net use Z: %s%s >nul 2>&1", in.InstallShareUNC, cred))
+	w("if not errorlevel 1 goto mounted")
+	w("if %ATTEMPT% GEQ 45 (")
+	w("  echo mammoth: could not map the install share - dropping to shell for diagnosis")
+	w("  exit /b 1")
+	w(")")
+	w("ping -n 3 127.0.0.1 >nul")
+	w("goto waitnet")
+	w(":mounted")
+	// /unattend explicit: the ramdisk root is not a setup search root, and the
+	// implicit autounattend discovery does not run for a network launch.
+	w("Z:\\sources\\setup.exe /unattend X:\\autounattend.xml")
+	return b.String(), nil
+}
+
+// validateShareToken keeps cmd metacharacters out of the rendered startnet:
+// the script is batch-interpreted as SYSTEM, so the share identity is
+// restricted to a safe charset rather than quoted.
+func validateShareToken(v, what string, isUNC bool) error {
+	if v == "" {
+		if isUNC {
+			return fmt.Errorf("windows: install share UNC is empty")
+		}
+		return nil // user/password absent: guest export
+	}
+	for _, r := range v {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.' || r == '-' || r == '_' || r == '@':
+		case isUNC && r == '\\':
+		default:
+			return fmt.Errorf("windows: install share %s contains character %q — cmd cannot quote metacharacters, use [A-Za-z0-9._-] (%s: also \\ and @)", what, r, what)
+		}
+	}
+	if isUNC && !strings.HasPrefix(v, `\\`) {
+		return fmt.Errorf("windows: install share UNC must start with \\\\ (got %q)", v)
+	}
+	return nil
 }
 
 // xmlEscape keeps dynamic values out of the markup's way (attributes and

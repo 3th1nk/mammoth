@@ -119,6 +119,9 @@ if [ ! -f "$OVMF_DIR/code-nosb.fd" ]; then
 fi
 CODE=code-nosb.fd
 [ $SB = 1 ] && CODE=code-sb.fd
+# Fresh VARS every run: a reused vars.fd carries stale BootOrder NVRAM — the
+# network boot entry gets displaced by block devices across runs and the
+# guest skips PXE entirely (drops to the UEFI shell with no DISCOVER at all).
 cp -f "$OVMF_DIR/vars-template.fd" "$WORK/vars.fd"
 
 docker rm -f win-ext-ctl >/dev/null 2>&1 || true
@@ -132,16 +135,17 @@ docker exec win-ext-ctl sh -c '
   ip tuntap add dev tap0 mode tap; ip link set tap0 master br-pxe; ip link set tap0 up
   cat > /etc/dnsmasq-win.conf <<EOF
 dhcp-authoritative
+no-ping
 dhcp-range=192.168.77.50,192.168.77.150,255.255.255.0,12h
 dhcp-option=option:router,'"$BRIDGE_IP"'
 enable-tftp
 tftp-root=/work/media/netboot/external-tftp
 dhcp-match=set:ipxe,175
-dhcp-host='"$GUEST_MAC"',set:winboot
+dhcp-host='"$GUEST_MAC"',set:winboot,192.168.77.107
 dhcp-boot=tag:winboot,tag:!ipxe,ipxe-amd64.efi,,'"$BRIDGE_IP"'
 dhcp-boot=tag:ipxe,boot.ipxe,,'"$BRIDGE_IP"'
 EOF
-  dnsmasq --conf-file=/etc/dnsmasq-win.conf --no-daemon --log-queries >/work/logs/dnsmasq.log 2>&1 &
+  dnsmasq --conf-file=/etc/dnsmasq-win.conf --no-daemon --log-queries --log-dhcp >/work/logs/dnsmasq.log 2>&1 &
   # The deployment SMB export stand-in: read-only /work/media, guest access —
   # the wimboot startnet maps \\192.168.77.1\mammoth-media from WinPE.
   cat > /etc/samba/smb.conf <<'SAMBAEOF'

@@ -2237,9 +2237,8 @@ components:
             source:
               type: string
               format: uri
-              description: Installer image URL. Required unless `image_id` references a registered image.
-            image_id:
-              type: string
+              description: Installer image URL (file, http(s) or nfs URI reachable
+                from the engine host). Required.
             checksum:
               type: string
               description: e.g. `sha256:9f86d0...`.

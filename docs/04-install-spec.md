@@ -109,7 +109,7 @@ POST /api/v1/jobs
   },
   "spec": {
     "image": {
-      "source": "https://mirror.example/rocky9.iso",   // 或 "image_id": "img_01"
+      "source": "https://mirror.example/rocky9.iso",   // 必填;file/http(s)/nfs URI
       "checksum": "sha256:9f86d0...",
       "distro": "rocky9"                  // 显式声明;不做隐式探测(见 §6 取舍)
     },

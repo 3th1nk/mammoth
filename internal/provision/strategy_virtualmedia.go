@@ -27,8 +27,12 @@ func (s *virtualMediaStrategy) name() bootStrategyName { return strategyVirtualM
 func (s *virtualMediaStrategy) prepare(ctx context.Context, b *bootSession) error {
 	e := s.e
 	ictx := b.Ictx
-	mediaFile := fmt.Sprintf("boot-%s.iso", ictx.Token)
-	mediaURI := mediaURIFor(e.MediaBaseURI, filepath.Base(mediaFile))
+	// The boot ISO lives in its own repo subdirectory — isolated from the
+	// EnsureISO cache files sharing the media root (release sweeps a
+	// directory-shaped name instead of globbing the root, and a cache file
+	// can never shadow a boot image).
+	mediaFile := filepath.Join("boot", fmt.Sprintf("boot-%s.iso", ictx.Token))
+	mediaURI := mediaURIFor(e.MediaBaseURI, mediaFile)
 	distroISO, err := builder.EnsureISO(ctx, b.Spec.Image.Source, e.MediaDir)
 	if err != nil {
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
@@ -55,7 +59,9 @@ func (s *virtualMediaStrategy) prepare(ctx context.Context, b *bootSession) erro
 	if layout, _, lerr := builder.DetectLayout(ctx, "", distroISO); lerr == nil && !layout.FullRepack() {
 		needMB = 2560
 	}
-	outputPath := filepath.Join(e.MediaDir, filepath.Base(mediaFile))
+	repoPath := filepath.Join(e.MediaDir, mediaFile)
+	_ = os.MkdirAll(filepath.Dir(repoPath), 0o755)
+	outputPath := repoPath
 	buildWork := ""
 	buildDir := e.MediaWorkDir
 	if buildDir == "" {
@@ -80,7 +86,7 @@ func (s *virtualMediaStrategy) prepare(ctx context.Context, b *bootSession) erro
 			"boot media build failed: %s", berr.Error())
 	}
 	if buildWork != "" {
-		if merr := moveFile(outputPath, filepath.Join(e.MediaDir, filepath.Base(mediaFile))); merr != nil {
+		if merr := moveFile(outputPath, repoPath); merr != nil {
 			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 				"boot media move into repo failed: %s", merr.Error())
 		}
@@ -89,7 +95,7 @@ func (s *virtualMediaStrategy) prepare(ctx context.Context, b *bootSession) erro
 	// the file must be complete there BEFORE the boot stage mounts it. The
 	// push is synchronous and atomic (temp name + rename).
 	if e.MediaUploader != nil {
-		if _, perr := e.MediaUploader.Push(ctx, filepath.Join(e.MediaDir, filepath.Base(mediaFile))); perr != nil {
+		if _, perr := e.MediaUploader.Push(ctx, repoPath, mediaFile); perr != nil {
 			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 				"boot media relay push failed: %s", perr.Error())
 		}

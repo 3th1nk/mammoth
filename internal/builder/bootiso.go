@@ -287,10 +287,15 @@ func uriPath(u string) string {
 // EnsureISO makes the distribution ISO available locally. sourceURL may be
 // an HTTP(S) URL or any URI (e.g. nfs://) — for non-HTTP URIs the file is
 // looked up in cacheDir by basename. Downloaded files are cached and
-// size-verified on subsequent calls.
+// size-verified on subsequent calls. The cache key is the SOURCE URL's
+// fingerprint (not just the basename): two different URLs shipping files
+// with the same name must not collide — a basename-only key let one task's
+// ISO serve another's whenever Content-Length happened to match, and a
+// size-mismatched re-download overwrote the file under a concurrent reader.
 func EnsureISO(ctx context.Context, sourceURL, cacheDir string) (string, error) {
 	filename := sourceURL[strings.LastIndex(sourceURL, "/")+1:]
-	dest := filepath.Join(cacheDir, filename)
+	key := sha256.Sum256([]byte(sourceURL))
+	dest := filepath.Join(cacheDir, fmt.Sprintf("%x-%s", key[:8], filename))
 	defer lockISOFetch(dest)()
 
 	isHTTP := strings.HasPrefix(sourceURL, "http://") || strings.HasPrefix(sourceURL, "https://")

@@ -460,8 +460,8 @@ func validateInstallSpec(spec *gen.InstallSpec) error {
 	if spec.Image.Distro == "" {
 		return verr("SCHEMA_INVALID_SPEC", "image.distro must be declared explicitly")
 	}
-	if spec.Image.Source == nil && spec.Image.ImageId == nil {
-		return verr("SCHEMA_INVALID_SPEC", "image.source or image.image_id is required")
+	if spec.Image.Source == nil {
+		return verr("SCHEMA_INVALID_SPEC", "image.source is required")
 	}
 	if spec.Storage == nil {
 		return verr("SCHEMA_INVALID_SPEC", "storage is required")
@@ -678,7 +678,7 @@ func mergeSpecOverride(base json.RawMessage, overrides map[string]gen.InstallSpe
 	if err := json.Unmarshal(base, &b); err != nil {
 		return nil
 	}
-	if ov.Image.Distro != "" || ov.Image.Source != nil || ov.Image.ImageId != nil || ov.Image.Checksum != nil {
+	if ov.Image.Distro != "" || ov.Image.Source != nil || ov.Image.Checksum != nil {
 		b.Image = ov.Image
 	}
 	if ov.Storage != nil {

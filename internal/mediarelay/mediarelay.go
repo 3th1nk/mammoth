@@ -42,10 +42,9 @@ func New(addr, user, password, dir string, timeout time.Duration) (*Relay, error
 	return &Relay{Addr: addr, User: user, Password: password, Dir: dir, Timeout: timeout}, nil
 }
 
-// Push uploads localPath under the export directory (basename preserved) and
-// returns the remote file name.
-func (r *Relay) Push(ctx context.Context, localPath string) (string, error) {
-	base := filepath.Base(localPath)
+// Push uploads localPath under the export directory as relName (repo-relative;
+// subdirectories are created) and returns the remote file name.
+func (r *Relay) Push(ctx context.Context, localPath, relName string) (string, error) {
 	f, err := os.Open(localPath)
 	if err != nil {
 		return "", fmt.Errorf("mediarelay: %w", err)
@@ -64,14 +63,14 @@ func (r *Relay) Push(ctx context.Context, localPath string) (string, error) {
 	}
 	defer session.Close()
 
-	tmp := "." + base + ".part"
-	remote := r.Dir + "/" + base
+	tmp := "." + filepath.Base(relName) + ".part"
+	remote := r.Dir + "/" + relName
 	// One shot: stream into the temp name, rename into place atomically.
 	session.Stdin = f
-	if err := session.Run(fmt.Sprintf("mkdir -p %q && cat > %q && mv %q %q", r.Dir, r.Dir+"/"+tmp, r.Dir+"/"+tmp, remote)); err != nil {
-		return "", fmt.Errorf("mediarelay: push %s: %w", base, err)
+	if err := session.Run(fmt.Sprintf("mkdir -p %q && cat > %q && mv %q %q", filepath.Dir(remote), r.Dir+"/"+relName, r.Dir+"/"+tmp, remote)); err != nil {
+		return "", fmt.Errorf("mediarelay: push %s: %w", relName, err)
 	}
-	return base, nil
+	return relName, nil
 }
 
 // Remove deletes a file from the export directory (best-effort callers log).

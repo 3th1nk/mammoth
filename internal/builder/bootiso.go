@@ -583,6 +583,101 @@ func injectWindowsSetupScripts(ctx context.Context, work string, seed map[string
 // applied when a KMS host activates.
 const winChannelID = "[Channel]\r\nVolume\r\n"
 
+// DetectWindowsMediaLanguage resolves the media's own UI language from
+// sources\lang.ini — the authority setup itself uses ("Media default
+// language is [zh-cn]" in the setupact comes from here). The unattend's
+// international components must name a language the media carries, so the
+// render consumes this instead of a per-distro constant.
+//
+// Resolution order: the cache file (media-language, a pure ISO-sha
+// derivative like the prepared tree) → the prepared tree's lang.ini →
+// single-file 7z extraction (the tree may not exist yet at render time).
+func DetectWindowsMediaLanguage(ctx context.Context, isoPath, sha, winCacheDir string) (string, error) {
+	if b, err := os.ReadFile(filepath.Join(winCacheDir, "media-language")); err == nil {
+		if lang := strings.TrimSpace(string(b)); lang != "" {
+			return lang, nil
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(winCacheDir, "tree", "sources", "lang.ini"))
+	if err != nil {
+		data, err = extractFileFromISO(ctx, isoPath, "sources/lang.ini")
+		if err != nil {
+			return "", err
+		}
+	}
+	lang, err := parseWindowsLangIni(data)
+	if err != nil {
+		return "", err
+	}
+	_ = os.MkdirAll(winCacheDir, 0o755)
+	_ = os.WriteFile(filepath.Join(winCacheDir, "media-language"), []byte(lang+"\n"), 0o644)
+	return lang, nil
+}
+
+// extractFileFromISO pulls one file through 7z's forced UDF view into a
+// temp dir and returns its bytes — KB-scale reads only, this runs at render
+// time, not pool staging. Tries the name verbatim then upper-cased (ISO
+// readers disagree about case folding).
+func extractFileFromISO(ctx context.Context, iso, name string) ([]byte, error) {
+	tmp, err := os.MkdirTemp("", "mammoth-lang-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+	var lastErr error
+	for _, n := range []string{name, strings.ToUpper(name)} {
+		out, err := exec.CommandContext(ctx, sevenZip(), "e", "-tUDF", "-y",
+			"-o"+tmp, iso, n).CombinedOutput()
+		if err != nil {
+			lastErr = fmt.Errorf("7z e %s: %w: %s", n, err, tail(out, 200))
+			continue
+		}
+		entries, rerr := os.ReadDir(tmp)
+		if rerr != nil || len(entries) == 0 {
+			lastErr = fmt.Errorf("7z e %s produced no file", n)
+			continue
+		}
+		data, rerr := os.ReadFile(filepath.Join(tmp, entries[0].Name()))
+		if rerr != nil {
+			lastErr = rerr
+			continue
+		}
+		return data, nil
+	}
+	return nil, lastErr
+}
+
+// parseWindowsLangIni returns the media's default UI language — the first
+// entry under [Available UI Languages]. Single-language media ship one
+// line; on multi-language media the first listed entry is the media
+// default, matching setup's own DetermineSetupLanguage.
+func parseWindowsLangIni(data []byte) (string, error) {
+	section := false
+	for _, line := range strings.Split(string(data), "\n") {
+		t := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if t == "" || strings.HasPrefix(t, ";") {
+			continue
+		}
+		if strings.HasPrefix(t, "[") {
+			section = strings.EqualFold(t, "[Available UI Languages]")
+			continue
+		}
+		if !section {
+			continue
+		}
+		key, _, ok := strings.Cut(t, "=")
+		if !ok {
+			continue
+		}
+		lang := strings.ToLower(strings.TrimSpace(key))
+		if lang == "" {
+			return "", fmt.Errorf("windows: lang.ini has an empty language entry")
+		}
+		return lang, nil
+	}
+	return "", fmt.Errorf("windows: lang.ini has no [Available UI Languages] entries")
+}
+
 // writeWindowsScripts materializes the generic script pair inside the tree
 // before wim injection (the injector reads them from the tree; the pair is
 // unlink+rewritten so a hardlinked farm never truncates the cache copy).

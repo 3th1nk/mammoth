@@ -81,8 +81,8 @@ func (d *Driver) NetbootPool() render.NetbootPool       { return render.NetbootP
 // driver's unattend supports.
 func (d *Driver) FirmwareSupport() render.FirmwareSupport { return render.FirmwareUEFIOnly }
 
-// mediaLocale is the language the registered media carries, rendered into
-// both the windowsPE and oobeSystem international components: setup and the
+// mediaLocale is the language the media carries, rendered into both the
+// windowsPE and oobeSystem international components: setup and the
 // installed system speak the media's language. Values must name a language
 // the media actually has — the zh-CN single-language media ships no en-US
 // setup resources, so en-US settings collapse into the language-selection
@@ -92,10 +92,28 @@ type mediaLocale struct {
 	inputLocale string
 }
 
-// windows2019 is registered against the zh-CN single-language media; an
-// en-US media variant declares its own entry here when registered.
-func (d *Driver) mediaLocale() mediaLocale {
-	return mediaLocale{uiLang: "zh-CN", inputLocale: "0804:00000804"}
+// mediaLocaleTable maps sources/lang.ini language tokens (the media's own
+// declaration, e.g. "zh-cn") to the unattend language set: the UILanguage
+// display form plus the GeoID:KLID keyboard pair. One row per language a
+// deployment may plausibly meet — extend as media variants register.
+var mediaLocaleTable = map[string]mediaLocale{
+	"zh-cn": {uiLang: "zh-CN", inputLocale: "0804:00000804"},
+	"en-us": {uiLang: "en-US", inputLocale: "0409:00000409"},
+}
+
+// defaultMediaLocale is the fallback when detection is unavailable or the
+// token is unknown — the language of the media this driver was first
+// registered against. Falling back here keeps behavior identical to the
+// pre-detection era instead of guessing a value the media may not carry.
+var defaultMediaLocale = mediaLocale{uiLang: "zh-CN", inputLocale: "0804:00000804"}
+
+// mediaLocaleFor resolves the unattend language set for a detected media
+// language token; unknown/empty inputs take defaultMediaLocale.
+func mediaLocaleFor(lang string) mediaLocale {
+	if ml, ok := mediaLocaleTable[strings.ToLower(strings.TrimSpace(lang))]; ok {
+		return ml
+	}
+	return defaultMediaLocale
 }
 
 // osImageName is the /IMAGE/NAME inside install.wim the unattend selects —
@@ -171,7 +189,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		return nil, render.BootParams{}, err
 	}
 
-	unattend := unattendXML(d.osImageName(), hostname, in.RootPassword, d.mediaLocale(), plan)
+	unattend := unattendXML(d.osImageName(), hostname, in.RootPassword, mediaLocaleFor(in.MediaLanguage), plan)
 	task, terr := taskJSON(in.CompleteURL, in.Network)
 	if terr != nil {
 		return nil, render.BootParams{}, terr

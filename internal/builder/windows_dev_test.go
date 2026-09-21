@@ -114,3 +114,24 @@ func TestDevWindowsBuildChain(t *testing.T) {
 	}
 	t.Logf("windows build chain OK: %s", out)
 }
+
+// Dev harness: the real-ISO path of DetectWindowsMediaLanguage — the 7z
+// single-file extraction layer (the cache and tree layers are covered by
+// TestDetectWindowsMediaLanguageLayers). Skipped unless:
+//
+//	MAMMOTH_WIN_DEV_ISO=~/mammoth-qxe/windows/cn_windows_server_2019_x64_dvd_4de40f33.iso \
+//	  go test ./internal/builder -run TestDevWindowsMediaLanguage -v
+func TestDevWindowsMediaLanguage(t *testing.T) {
+	iso := os.Getenv("MAMMOTH_WIN_DEV_ISO")
+	if iso == "" {
+		t.Skip("MAMMOTH_WIN_DEV_ISO not set; skipping windows media language dev probe")
+	}
+	lang, err := DetectWindowsMediaLanguage(context.Background(), iso, "devsha", t.TempDir())
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	t.Logf("media language: %s", lang)
+	if lang != "zh-cn" {
+		t.Errorf("detect = %q, want zh-cn (the cn Server 2019 media)", lang)
+	}
+}

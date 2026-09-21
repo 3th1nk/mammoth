@@ -68,6 +68,25 @@ ssh <machine> — 执行只读命令集(单次连接,超时短):
 
 ## 4. ramdisk 探针(可选启用)
 
+**触发方式**(异步,返回 202 + job):
+
+```
+POST /machines/{id}/actions {"type": "discover", "probe": "ramdisk"}
+                            // 载体:缺省随部署 boot 策略缺省;可显式 "boot": "pxe"|"virtual_media"
+```
+
+**启用最小集**(变量语义详见本节其余部分;完整清单以 `internal/config/config.go` 为准):
+
+| 变量 | 何时必配 | 作用 |
+|------|---------|------|
+| `MAMMOTH_RAMDISK_ENABLED` | 总是 | 特性总开关(缺省关闭;未开启时任务以 `BMC_UNSUPPORTED` 拒绝) |
+| `MAMMOTH_PROBE_ALPINE_ISO` | 总是 | 载体原料,本地路径或 URL;**须 standard 版 + lts 内核**(§下文) |
+| `MAMMOTH_EXTERNAL_URL` | 总是 | 机器侧上报 URL 的基地址(与安装路径同源依赖,须机房可达) |
+| `MAMMOTH_PXE_ENABLED` | `boot:pxe` | 本 runner 的 netboot 服务 |
+| `MAMMOTH_PROBE_ALPINE_NETBOOT` | `boot:pxe` | NETBOOT tarball(standard ISO 的 initramfs 缺机房网卡驱动) |
+| `MAMMOTH_PROBE_WAIT` | 可选 | 上报等待预算(默认 10m) |
+| `MAMMOTH_PROBE_STATIC_CIDR` / `_GATEWAY` / `_PREFIX` | 无 DHCP 机房 | 静态兜底三级;注册了 `ssh.address` 的机器以它为权威,免全局配置 |
+
 - **V1 载体 = alpine standard 虚拟介质**(2026-09-13,qemu BIOS+UEFI 双模式
   闭环,复盘见 compat/huawei.md):任务级 `probe-<token>.iso`,builder 全量
   重打包 alpine 载体(与安装介质同机制),探针逻辑以 apkovl 覆盖层注入

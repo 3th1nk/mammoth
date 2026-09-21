@@ -38,6 +38,8 @@ GET    /api/v1/machines/{id}
 PATCH  /api/v1/machines/{id}
 DELETE /api/v1/machines/{id}
 GET    /api/v1/machines/{id}/layout
+GET    /api/v1/machines/{id}/drives             # 控制器实时物理盘表(带外同步读)
+GET    /api/v1/machines/{id}/bios               # 控制器实时 BIOS 属性表(带外同步读)
 GET    /api/v1/machines/{id}/console            # 一次性 KVM URL
 POST   /api/v1/machines/{id}/install-plan       # 试算(只读;已实现 V1,见 §4)
 POST   /api/v1/machines/{id}/actions            # 单机动作 → 202 + job
@@ -67,7 +69,10 @@ DELETE /api/v1/webhooks/{id}
 统一入口 `POST /machines/{id}/actions`,以 `type` 区分:
 
 ```jsonc
-{"type": "discover",       "probe": "auto"}     // auto | redfish | inband_ssh
+{"type": "discover",       "probe": "auto"}     // auto | redfish | inband_ssh | ramdisk
+                                                // ramdisk 可选,启用清单见 docs/05-inventory.md §4;
+                                                // 另接受 "boot":"pxe"|"virtual_media" 选 ramdisk 载体
+                                                // (缺省随部署 boot 策略缺省)
 {"type": "power_on"}
 {"type": "power_off"}                            // 硬关机
 {"type": "soft_off"}

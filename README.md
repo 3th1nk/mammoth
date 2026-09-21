@@ -159,10 +159,14 @@ bin/mammoth serve --mode=all
 
 Configuration is 12-factor env (`MAMMOTH_*`). For bare-binary deployments a
 dotenv file works too — existing environment variables win over file entries,
-and invalid values fail startup instead of silently defaulting:
+and invalid values fail startup instead of silently defaulting. A full
+worked example ([deploy/mammoth.env.example](deploy/mammoth.env.example)) is
+derived from a real deployment — copy it, edit the generated keys, addresses
+and paths:
 
 ```bash
-bin/mammoth serve --env-file /etc/mammoth.env   # or MAMMOTH_ENV_FILE=...
+cp deploy/mammoth.env.example /etc/mammoth.env   # edit keys/IPs/paths
+bin/mammoth serve --env-file /etc/mammoth.env    # or MAMMOTH_ENV_FILE=...
 ```
 
 Try it:

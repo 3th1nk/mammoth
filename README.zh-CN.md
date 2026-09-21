@@ -146,10 +146,13 @@ bin/mammoth serve --mode=all
 ```
 
 配置采用 12-factor 环境变量(`MAMMOTH_*`)。裸二进制部署也可用 dotenv 文件——
-已存在的环境变量优先于文件条目,非法值会在启动时报错而非静默默认:
+已存在的环境变量优先于文件条目,非法值会在启动时报错而非静默默认。完整可用的
+示例见 [deploy/mammoth.env.example](deploy/mammoth.env.example)(源自真实部署,
+已脱敏)——拷贝后修改其中的密钥、地址与路径即可:
 
 ```bash
-bin/mammoth serve --env-file /etc/mammoth.env   # 或 MAMMOTH_ENV_FILE=...
+cp deploy/mammoth.env.example /etc/mammoth.env   # 修改密钥/IP/路径
+bin/mammoth serve --env-file /etc/mammoth.env    # 或 MAMMOTH_ENV_FILE=...
 ```
 
 试一下:

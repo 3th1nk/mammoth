@@ -645,6 +645,20 @@ func unattendXML(imageName, hostname, password string, ml mediaLocale, plan disk
         <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
         <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
       </OOBE>
+      <!-- Primary completion trigger: RunSynchronous is a native unattend
+           mechanism and oobeSystem is proven to run on this path
+           (AdministratorPassword takes effect). SetupComplete remains as
+           backup — its auto-execution silently never fired on the real
+           machine (setupact has zero records, root cause open). The ps1 is
+           idempotent: it re-configures the declared network and re-POSTs
+           the callback, so running from both paths is harmless. -->
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Setup\Scripts\mammoth-complete.ps1</Path>
+          <Description>mammoth static network + completion callback</Description>
+        </RunSynchronousCommand>
+      </RunSynchronous>
       <UserAccounts>
         <AdministratorPassword>
           <Value>` + xmlEscape(password) + `</Value>

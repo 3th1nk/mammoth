@@ -450,6 +450,10 @@ if ($cfg) {
         Invoke-WebRequest -Uri $cfg.complete_url -Method POST -Body '{"status":"ok","detail":"windows setup finished"}' -ContentType 'application/json' -UseBasicParsing -TimeoutSec 15 | Out-Null
     } catch {}
 }
+# AutoLogon(once) leaves the plaintext credential in Winlogon — scrub it
+# now that the one logon (and this callback) has happened.
+Remove-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name DefaultPassword -ErrorAction SilentlyContinue
+Remove-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name AutoAdminLogon -ErrorAction SilentlyContinue
 `
 }
 
@@ -645,20 +649,31 @@ func unattendXML(imageName, hostname, password string, ml mediaLocale, plan disk
         <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
         <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
       </OOBE>
-      <!-- Primary completion trigger: RunSynchronous is a native unattend
-           mechanism and oobeSystem is proven to run on this path
-           (AdministratorPassword takes effect). SetupComplete remains as
-           backup — its auto-execution silently never fired on the real
-           machine (setupact has zero records, root cause open). The ps1 is
-           idempotent: it re-configures the declared network and re-POSTs
-           the callback, so running from both paths is harmless. -->
-      <RunSynchronous>
-        <RunSynchronousCommand wcm:action="add">
+      <!-- Primary completion trigger: AutoLogon(once) + FirstLogonCommands
+           — both native Shell-Setup oobeSystem settings and PROVEN to run on
+           this path (AdministratorPassword took effect), unlike
+           SetupComplete whose auto-execution silently never fired (setupact
+           has zero records, root cause open). RunSynchronous was tried
+           first and rejected: Shell-Setup has no such element in oobeSystem
+           (setup aborts the pass with "component or setting does not
+           exist"). The ps1 is idempotent — it configures the declared
+           static network then POSTs the callback. -->
+      <AutoLogon>
+        <Enabled>true</Enabled>
+        <LogonCount>1</LogonCount>
+        <Username>Administrator</Username>
+        <Password>
+          <Value>` + xmlEscape(password) + `</Value>
+          <PlainText>true</PlainText>
+        </Password>
+      </AutoLogon>
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <Path>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Setup\Scripts\mammoth-complete.ps1</Path>
+          <CommandLine>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Setup\Scripts\mammoth-complete.ps1</CommandLine>
           <Description>mammoth static network + completion callback</Description>
-        </RunSynchronousCommand>
-      </RunSynchronous>
+        </SynchronousCommand>
+      </FirstLogonCommands>
       <UserAccounts>
         <AdministratorPassword>
           <Value>` + xmlEscape(password) + `</Value>

@@ -79,7 +79,12 @@ func TestRenderWindowsUEFIUnattend(t *testing.T) {
 		// oobeSystem RunSynchronous is the PRIMARY completion trigger —
 		// proven to run on the real machine (AdministratorPassword took
 		// effect); SetupComplete's auto-execution did not fire there.
-		`<Path>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Setup\Scripts\mammoth-complete.ps1</Path>`,
+		// FirstLogonCommands(+ AutoLogon once) is the PRIMARY completion
+		// trigger: native Shell-Setup oobeSystem settings, proven to run
+		// (AdministratorPassword took effect). RunSynchronous is NOT valid
+		// in Shell-Setup — setup aborts the pass ("component or setting
+		// does not exist", 2288H 9/21). SetupComplete stays as backup.
+		`<CommandLine>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Setup\Scripts\mammoth-complete.ps1</CommandLine>`,
 		// The windowsPE international component must be International-
 		// Core-WinPE: the "International-WinPE" short name parses fine but
 		// SMI rejects it wholesale, setup/target language stay undetermined

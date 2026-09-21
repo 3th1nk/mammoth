@@ -333,6 +333,10 @@ func TestRenderWindowsPXE(t *testing.T) {
 		// diag uploads are POST (--data-binary): the machine endpoint has no
 		// PUT route, and -T (PUT) failed silently under -sf every round.
 		`curl -sf -X POST --data-binary @X:\Windows\Panther\setuperr.log http://10.0.2.2:8080/render/tokw/diag/setuperr.log`,
+		// The diag loop ships task.json onto the applied volume: the wimboot
+		// ramdisk (X:) dies at setup auto-reboot, and SetupComplete reads
+		// its config from this same directory (2288H round, 9/21).
+		`for %%d in (C D E F) do if exist %%d:\Windows\Setup\Scripts\mammoth-complete.ps1 copy /Y X:\mammoth\task.json %%d:\Windows\Setup\Scripts\task.json >nul 2>&1`,
 	} {
 		if !strings.Contains(startnet, want) {
 			t.Errorf("startnet missing %q:\n%s", want, startnet)

@@ -35,7 +35,7 @@ func TestValidateBootStrategyWimbootShareGate(t *testing.T) {
 		t.Fatalf("code = %q, want SCHEMA_WINDOWS_SMB_SHARE_REQUIRED", ve.Code())
 	}
 
-	s.WindowsInstallSMBShare = true
+	s.WindowsInstallSMBUNC = true
 	if err := s.validateBootStrategy(spec); err != nil {
 		t.Fatalf("configured share must pass the gate: %v", err)
 	}

@@ -852,9 +852,9 @@ func (s *Server) validateBootStrategy(specRaw json.RawMessage) error {
 	// The wimboot carrier's install source is the deployment SMB export —
 	// without it WinPE boots and then has nothing to install from, so the
 	// submission rejects up front (the NFS media export analog).
-	if carrier, _ := render.NetbootInstallOf(driver); carrier == render.NetbootCarrierWimboot && !s.WindowsInstallSMBShare {
+	if carrier, _ := render.NetbootInstallOf(driver); carrier == render.NetbootCarrierWimboot && !s.WindowsInstallSMBUNC {
 		return verr("SCHEMA_WINDOWS_SMB_SHARE_REQUIRED",
-			"distro %s boots PXE through the wimboot carrier, which needs the deployment SMB export (set MAMMOTH_WINDOWS_INSTALL_SMB_SHARE)",
+			"distro %s boots PXE through the wimboot carrier, which needs the deployment SMB export (set MAMMOTH_WINDOWS_INSTALL_SMB_UNC)",
 			spec.Image.Distro)
 	}
 	return nil

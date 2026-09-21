@@ -515,8 +515,10 @@ func windowsCacheHeadroom(dir string) error {
 // windowsInjectorVersion guards the prepared-tree cache — bump when the
 // injected script pair, its destinations or the SKU contract change, and
 // stale trees re-inject on the next build. v2 adds sources\ei.cfg (the
-// empty-Key unattend contract depends on it).
-const windowsInjectorVersion = "2"
+// empty-Key unattend contract depends on it). v3: the ps1 reads its config
+// from its own directory first ($PSScriptRoot\task.json — shipped there by
+// the startnet diag loop once setup has applied the image).
+const windowsInjectorVersion = "3"
 
 // windows seed-file contract between the driver and the wim injector.
 const (

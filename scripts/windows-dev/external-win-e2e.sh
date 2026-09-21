@@ -22,8 +22,8 @@
 # post-SBM era); --sb boots the Secure Boot firmware (expected boundary:
 # the firmware refuses the unsigned NBP).
 #
-# Usage: host$ scripts/windows-dev/external-win-e2e.sh [--full] [--sb] [--keep]
-# Requires: docker (VM memory >= 10G for the 8G guest), wimlib-imagex + 7z
+# Usage: host$ scripts/windows-dev/external-win-e2e.sh [--full] [--nostop] [--sb] [--keep]
+# Requires: docker (VM memory >= 8G for the 4G guest), wimlib-imagex + 7z
 # on the host (builder stage), ~/mammoth-qxe/windows/<win2019 iso>.
 set -e
 REPO_PWD="$PWD"
@@ -35,9 +35,9 @@ ISO=$(ls "$QXE"/windows/cn_windows_server_2019_x64_dvd_4de40f33.iso 2>/dev/null 
 GUEST_MAC=52:54:00:12:34:56
 BRIDGE_IP=192.168.77.1
 HTTP_PORT=18082
-FULL=0; SB=0
+FULL=0; SB=0; NOSTOP=0
 for a in "$@"; do case "$a" in
-  --full) FULL=1;; --sb) SB=1;; --keep) ;; *) echo "unknown arg $a"; exit 1;; esac; done
+  --full) FULL=1;; --sb) SB=1;; --nostop) NOSTOP=1; FULL=1;; --keep) ;; *) echo "unknown arg $a"; exit 1;; esac; done
 
 [ -f "$ISO" ] || { echo "missing windows 2019 ISO under $QXE/windows/"; exit 1; }
 command -v wimlib-imagex >/dev/null || { echo "wimlib-imagex not on PATH (brew install wimlib)"; exit 1; }
@@ -129,7 +129,14 @@ docker run --rm -d --name win-ext-ctl --privileged \
   -v "$WORK:/work" \
   alpine:3.22 sleep infinity >/dev/null
 docker exec win-ext-ctl sh -c '
-  apk add -q dnsmasq socat qemu-system-x86_64 qemu-img iproute2 samba 2>&1 | tail -1
+  for i in 1 2 3 4 5; do
+    apk add -q dnsmasq socat qemu-system-x86_64 qemu-img iproute2 samba >/dev/null 2>&1 && break
+    [ "$i" = 5 ] && { echo "apk add failed after 5 tries"; exit 1; }
+    sleep 5
+  done
+  command -v dnsmasq >/dev/null && command -v socat >/dev/null \
+    && command -v qemu-system-x86_64 >/dev/null && command -v qemu-img >/dev/null \
+    && command -v smbd >/dev/null || { echo "container tools missing (apk add silently failed)"; exit 1; }
   ip link add br-pxe type bridge; ip addr add '"$BRIDGE_IP"'/24 dev br-pxe
   ip link set br-pxe up
   ip tuntap add dev tap0 mode tap; ip link set tap0 master br-pxe; ip link set tap0 up
@@ -168,10 +175,12 @@ SAMBAEOF
   rm -f /work/mon.sock /work/qemu.pid /work/disk.raw
   qemu-img create -f raw /work/disk.raw 40G >/dev/null
   rm -f /work/logs/serial.log
-  # 8G guest: the augmented boot.wim (~4.7G) plus the WinPE runtime must fit
-  # in RAM. The Docker Desktop VM needs >= 10G allotted (settings MemoryMiB)
-  # or qemu gets OOM-killed there — the rig was validated on 16G.
-  qemu-system-x86_64 -machine q35 -m 8192 -smp 4 -display none \
+  # 4G guest: WinPE runs from the 452M boot.wim and setup reads install.wim
+  # straight off the SMB share (nothing big enters RAM), so 4G is ample. An
+  # 8G guest was OOM-killed inside the 16G Docker VM on back-to-back runs
+  # (qemu anon-rss ~9G at the WinPE graphic handoff, dmesg: "Out of memory:
+  # Killed process qemu-system-x86") — smaller guest, smaller qemu RSS.
+  qemu-system-x86_64 -machine q35 -m 4096 -smp 4 -display none \
     -serial file:/work/logs/serial.log \
     -monitor unix:/work/mon.sock,server,nowait \
     -drive if=pflash,format=raw,readonly=on,file=/work/ovmf/'"$CODE"' \
@@ -179,10 +188,15 @@ SAMBAEOF
     -drive file=/work/disk.raw,format=raw,if=none,id=disk0 \
     -device nvme,drive=disk0,serial=winpxedisk \
     -netdev tap,id=n0,ifname=tap0,script=no,downscript=no \
-    -device virtio-net-pci,netdev=n0,mac='"$GUEST_MAC"' \
-    -no-reboot -daemonize -pidfile /work/qemu.pid
-  echo "  ✓ guest booting (UEFI x64, TCG — minutes; boot.wim ~4.7G over HTTP)"
+    -device e1000,netdev=n0,mac='"$GUEST_MAC"' \
+    -no-reboot -daemonize -pidfile /work/qemu.pid 2>>/work/logs/qemu.err
+  echo "  ✓ guest booting (UEFI x64, TCG — boot.wim ~450M over HTTP, minutes)"
 '
+# NIC is e1000, NOT virtio-net (see the qemu line above): the media boot.wim
+# ships no virtio driver, so a virtio NIC leaves WinPE with no link and the
+# startnet net use can never come up (observed 9/21 — same constraint as the
+# 9/19 probe rig). Kept outside the container sh -c block: an apostrophe in
+# a comment there terminates the quoted payload and breaks the script.
 
 shot() { docker exec win-ext-ctl sh -c "echo screendump /work/logs/screen-$1.png | socat - UNIX-CONNECT:/work/mon.sock" >/dev/null 2>&1 || true; }
 
@@ -205,7 +219,37 @@ done
 shot final
 if [ "$GPT" = "b'EFI PART'" ]; then
   echo "  ✓ GPT on the raw disk — setup applied the unattend's DiskConfiguration"
-  echo "WINDOWS WIMBOOT PXE E2E ✓ (full chain, unattend accepted)"
+  if [ $NOSTOP = 1 ]; then
+    # Keep the rig up: setup applies the image from the SMB share and
+    # reboots into SetupComplete (the completion callback) — the six-stage
+    # tail. TCG: the image apply alone is 1-3h.
+    echo "· --nostop: waiting for the six-stage install (TCG — 1-3h)"
+    FINAL=""
+    for i in $(seq 1 300); do
+      sleep 60
+      FINAL=$(curl -s -H "Authorization: Bearer devtoken" "http://127.0.0.1:$HTTP_PORT/api/v1/jobs/$JOB/tasks" | python3 -c "
+import json,sys
+items=json.load(sys.stdin)['items']
+states=sorted(t['state'] for t in items)
+print(states[-1] if states else '')" 2>/dev/null)
+      case "$FINAL" in succeeded|failed|canceled) break;; esac
+      [ $((i % 10)) = 0 ] && echo "    minute $i: tasks still running"
+    done
+    curl -s -H "Authorization: Bearer devtoken" "http://127.0.0.1:$HTTP_PORT/api/v1/jobs/$JOB/tasks" | python3 -c "
+import json,sys
+for t in json.load(sys.stdin)['items']:
+    print('  stages:', [(s['name'],s['state']) for s in t.get('stages',[])])
+    e=t.get('error') or {}
+    if e: print('  error:', e.get('code'), e.get('message','')[:200])
+"
+    if [ "$FINAL" = "succeeded" ]; then
+      echo "WINDOWS WIMBOOT PXE E2E ✓✓ (six stages green — full install, unattend end to end)"
+      exit 0
+    fi
+    echo "WINDOWS WIMBOOT PXE E2E ✗ (GPT ok but tasks ended $FINAL)"
+    exit 1
+  fi
+  echo "WINDOWS WIMBOOT PXE E2E ✓ (full chain, unattend accepted; --nostop waits for the six-stage tail)"
   exit 0
 fi
 if [ $FULL = 1 ]; then
@@ -222,32 +266,3 @@ if [ "$PULLS" != "0" ] && [ "$PULLS" != "" ]; then
 fi
 echo "✗ no HTTP pulls from the guest — see $WORK/logs (dnsmasq/server logs)"
 exit 1
-if [ $SB = 1 ]; then
-  HITS=$(grep -ac "netboot/files" "$WORK/logs/server.log" 2>/dev/null || true)
-  if [ "$HITS" = "0" ]; then echo "SB-ON BOUNDARY ✓ (firmware refused the unsigned NBP — no HTTP reached mammoth)"; else echo "SB-ON UNEXPECTED HTTP HITS ($HITS) — inspect"; exit 1; fi
-  exit 0
-fi
-
-if [ $FULL = 1 ]; then
-  echo "· --full: waiting for the six-stage install (TCG — 1-3h)"
-  FINAL=""
-  for i in $(seq 1 280); do
-    STATE=$(curl -s -H "Authorization: Bearer devtoken" "http://127.0.0.1:$HTTP_PORT/api/v1/jobs/$JOB/tasks" | python3 -c "
-import json,sys
-items=json.load(sys.stdin)['items']
-print(','.join(t['state'] for t in items) if items else '')" 2>/dev/null)
-    case "$STATE" in succeeded|failed|canceled) FINAL="$STATE"; break;; esac
-    sleep 60
-  done
-  echo "  task final: $FINAL"
-  curl -s -H "Authorization: Bearer devtoken" "http://127.0.0.1:$HTTP_PORT/api/v1/jobs/$JOB/tasks" | python3 -c "
-import json,sys
-for t in json.load(sys.stdin)['items']:
-    print('  stages:', [(s['name'],s['state']) for s in t.get('stages',[])])
-    e=t.get('error') or {}
-    if e: print('  error:', e.get('code'), e.get('message','')[:200])
-"
-  echo "$FINAL" | grep -q succeeded && { echo "WINDOWS WIMBOOT PXE E2E ✓ (full)"; exit 0; } || { echo "WINDOWS WIMBOOT PXE E2E ✗"; exit 1; }
-fi
-
-echo "WINDOWS WIMBOOT PXE E2E ✓ (WinPE up + unattend accepted; run with --full for the six-stage tail)"

@@ -753,6 +753,18 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 					"distro ISO hash failed: %s", herr.Error())
 			}
+			// The unattend's language set must name a language the media
+			// carries (a mismatch puts setup back on the language-selection
+			// page) — detect it from sources/lang.ini, setup's own
+			// authority. Best-effort: on failure the driver falls back to
+			// its declared default with this warning as the trace.
+			lang, lerr := builder.DetectWindowsMediaLanguage(ctx, distroISO, sha,
+				filepath.Join(e.MediaDir, PoolStoreDirName, sha, "win"))
+			if lerr != nil {
+				obs.FromContext(ctx).WarnContext(ctx, "media language detection failed; using driver default", "err", lerr.Error())
+			} else {
+				in.MediaLanguage = lang
+			}
 			in.Netboot = &render.NetbootInputs{
 				InstallSMBUNC:      e.WindowsInstallSMBShare,
 				InstallSMBUser:     e.WindowsInstallSMBShareUser,

@@ -301,6 +301,13 @@ type InstallInputs struct {
 	RootPassword  string // per-task random when spec asked for generate
 	SSHPublicKeys []string
 
+	// MediaLanguage is the installer media's own UI language, detected from
+	// sources/lang.ini by provision (lang.ini token form, e.g. "zh-cn";
+	// empty = unknown). The windows driver renders the international
+	// components in this language — a value the media does not carry cannot
+	// even load its setup resources. Other dialects ignore it.
+	MediaLanguage string
+
 	BootDrive string         // resolved bootloader device
 	Disks     []ResolvedDisk `json:"disks"`
 	Network   []NetworkEntry `json:"network,omitempty"`

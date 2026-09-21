@@ -76,6 +76,10 @@ func TestRenderWindowsUEFIUnattend(t *testing.T) {
 		`<ProductKey>`,
 		`<Key></Key>`,
 		`<HideEULAPage>true</HideEULAPage>`,
+		// oobeSystem RunSynchronous is the PRIMARY completion trigger —
+		// proven to run on the real machine (AdministratorPassword took
+		// effect); SetupComplete's auto-execution did not fire there.
+		`<Path>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Setup\Scripts\mammoth-complete.ps1</Path>`,
 		// The windowsPE international component must be International-
 		// Core-WinPE: the "International-WinPE" short name parses fine but
 		// SMI rejects it wholesale, setup/target language stay undetermined

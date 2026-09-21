@@ -164,12 +164,18 @@ curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
 curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
   -d '{"bmc":{"address":"fake://n1","protocol":"fake","credential_id":"cred_..."}}' \
   localhost:8080/api/v1/machines
-# 3. 试算安装方案(只读:select 解析到哪块盘、keep 是否命中快照,不烧引导)
+# 3. 查看探测结果(注册即自动盘查;hardware=规格级,/layout=分区快照需带内通路)
+curl -s -H "$TOKEN" localhost:8080/api/v1/machines/mch_...           # hardware / firmware / power_state
+curl -s -H "$TOKEN" localhost:8080/api/v1/machines/mch_.../layout    # 最新布局快照(看 captured_at)
+# 快照只表达采集时刻的事实——规划与执行间隔久了,先刷新再试算:
+curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
+  -d '{"type":"discover"}' localhost:8080/api/v1/machines/mch_.../actions
+# 4. 试算安装方案(只读:select 解析到哪块盘、keep 是否命中快照,不烧引导)
 curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
   -d '{"spec":{"image":{"distro":"rocky9"},"storage":{"disks":[{"select":{"match":{"size":"largest"}},"wipe":true}]}}}' \
   localhost:8080/api/v1/machines/mch_.../install-plan
 
-# 4. 批量安装(完整 Install Spec:一份意图,按发行版落地方言)
+# 5. 批量安装(完整 Install Spec:一份意图,按发行版落地方言)
 curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
   -d '{
     "type": "install",
@@ -201,11 +207,11 @@ curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
 #   支持矩阵见 docs/06 §5,试算可预检 keep 是否命中)
 # → bond/vlan、软件+硬件 RAID、pxe 载体等完整面见 docs/04
 
-# 5. 开机/关机/挂载介质等通用带外动作(与安装解耦的一等公民 API)
+# 6. 开机/关机/挂载介质等通用带外动作(与安装解耦的一等公民 API)
 curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
   -d '{"type":"power_on"}' localhost:8080/api/v1/machines/mch_.../actions
 
-# 6. 观察 job(事件流:SSE /api/v1/events;验收全流程:scripts/acceptance.py,
+# 7. 观察 job(事件流:SSE /api/v1/events;验收全流程:scripts/acceptance.py,
 #    它扮演 fake 机器取应答文件并回报完成)
 curl -s -H "$TOKEN" localhost:8080/api/v1/jobs/job_...
 ```

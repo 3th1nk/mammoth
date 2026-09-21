@@ -177,13 +177,21 @@ curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
 curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
   -d '{"bmc":{"address":"fake://n1","protocol":"fake","credential_id":"cred_..."}}' \
   localhost:8080/api/v1/machines
-# 3. dry-run the install plan (read-only resolution: which disk the
+# 3. inspect the probe results (registration auto-discovers; hardware is
+#    spec-level, /layout is the partition snapshot and needs an in-band path)
+curl -s -H "$TOKEN" localhost:8080/api/v1/machines/mch_...           # hardware / firmware / power_state
+curl -s -H "$TOKEN" localhost:8080/api/v1/machines/mch_.../layout    # latest layout snapshot (mind captured_at)
+# snapshots state facts at capture time — when the probe→install gap grows
+# long, refresh before planning:
+curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
+  -d '{"type":"discover"}' localhost:8080/api/v1/machines/mch_.../actions
+# 4. dry-run the install plan (read-only resolution: which disk the
 #    selector picks, whether keep hits the snapshot — no boot burned)
 curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
   -d '{"spec":{"image":{"distro":"rocky9"},"storage":{"disks":[{"select":{"match":{"size":"largest"}},"wipe":true}]}}}' \
   localhost:8080/api/v1/machines/mch_.../install-plan
 
-# 4. batch install (the complete Install Spec: one intent, rendered into
+# 5. batch install (the complete Install Spec: one intent, rendered into
 #    the distro's dialect)
 curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
   -d '{
@@ -218,12 +226,12 @@ curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
 #   partition number; support matrix in docs/06 §5, install-plan pre-checks)
 # → bond/vlan, software+hardware RAID, the pxe carrier: full surface in docs/04
 
-# 5. generic out-of-band actions (power/media/boot-device — first-class API
+# 6. generic out-of-band actions (power/media/boot-device — first-class API
 #    decoupled from installs)
 curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
   -d '{"type":"power_on"}' localhost:8080/api/v1/machines/mch_.../actions
 
-# 6. watch the job (event stream: SSE /api/v1/events; full scripted
+# 7. watch the job (event stream: SSE /api/v1/events; full scripted
 #    acceptance: scripts/acceptance.py — it plays the fake machines, fetching
 #    answer files and reporting completion)
 curl -s -H "$TOKEN" localhost:8080/api/v1/jobs/job_...

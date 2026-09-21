@@ -14,7 +14,7 @@
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
 | Debian 12 | `debian12` | debian-installer | preseed(`file=/cdrom/preseed.cfg`) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | 无(netcfg 不按 MAC 选口,单接口) | ✅ 真机跑通 |
 | 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(真机复核 2026-09-19) | MAC → 接口名在 %pre 安装期解析 | **full(真机闭环 2026-09-19:虚拟介质 + PXE 双通路零人工)**;⚠️ **方言约束:仅图形前端可用**——text 模式(text 指令/inst.text)下 UOS anaconda 自动分区建出 FAT16 而非 swap 且 Finish 组崩溃,驱动已强制 graphical(见下方根因节) |
-| **Windows Server 2019** | `windows2019` | Windows Setup(bootmgr,`/sources/install.wim`) | **unattend**(autounattend.xml 媒体根自动发现,零内核参数) | **full**(wimboot 载体;前置=部署层 SMB 导出 `MAMMOTH_WINDOWS_INSTALL_SMB_SHARE`,未配置提交即拒) | MAC → SetupComplete.cmd 按 Get-NetAdapter MAC 绑定(装后 SYSTEM 首登录前落地) | 🔧 **v1 代码面就绪;真机窗口定案(2026-09-20):装机被 iBMC 6.41 固件缺陷挡在引导层**(虚拟 CD 无法 UEFI 引导 windows 介质,详见下方 windows 节);**wimboot-over-PXE 载体链 qemu 实证(2026-09-20,见下方落地小节):iPXE→wimboot→WinPE 全通,唯一悬段=install 源(SMB)**;终局 = agent apply-image |
+| **Windows Server 2019** | `windows2019` | Windows Setup(bootmgr,`/sources/install.wim`) | **unattend**(autounattend.xml 灌 boot.wim 根,startnet 显式启动时经 ramdisk 隐式发现) | **full**(wimboot 载体;前置=部署层 SMB 导出 `MAMMOTH_WINDOWS_INSTALL_SMB_SHARE`,未配置提交即拒) | MAC → SetupComplete.cmd 按 Get-NetAdapter MAC 绑定(装后 SYSTEM 首登录前落地) | 🔧 **qemu 全链实证(2026-09-21):iPXE→wimboot→WinPE→SMB install 源→unattend 三关(语言/密钥/磁盘)零交互全过,GPT 2 分钟落盘**;虚拟介质通路仍被 iBMC 6.41 固件缺陷封死(见下方 windows 节);真机窗口执行 2288H 全装(§4.1);终局 = agent apply-image |
 
 ## 保留分区支持语义(SupportLevel)
 
@@ -401,3 +401,57 @@ wimboot 脚本 → HTTP 拉 wimboot+五件 → **WinPE 完整启动**(原版与�
 进程启动即 UNE 挂死(连 `--version` 都挂),`codesign --force --sign -`
 对 bin/lib 重签即愈;Docker Desktop 默认 VM 内存 7.65G 装不下 8G guest
 (settings-store.json `MemoryMiB=16384` 后重跑通过)。
+
+### SMB 链全通 + unattend 交互三关修复(2026-09-21,qemu 实证)
+
+**install 源 SMB 链收通**:net use 根因 = WinPE 无凭据 net use 发 NULL
+session 被客户端拒——渲染改显式 `guest/空密码`(samba 侧
+`map to guest = Bad User` 承接,AllowInsecureGuestAuth 注册表位随行);
+setup 从 `Z:\pool-store\<sha>\win\tree\sources\setup.exe` 正常启动。
+**ModifyPartition Order 跳号真 bug**:Order 误用物理分区号(MSR 占位致
+1,3 跳号),setup 报 0x8007000d 拒整个 DiskConfiguration——修为 Order 用
+ModifyPartitions 连续计数、PartitionID 保持物理号。
+
+**unattend 交互三关(语言页 → 密钥页 → 磁盘配置),全部 qemu 实证**:
+
+1. **语言选择页(根因 = 组件名错)**:windowsPE pass 渲染的组件名
+   `Microsoft-Windows-International-WinPE` 不存在(正确名
+   **`Microsoft-Windows-International-Core-WinPE`**)。错误名在 XML 层
+   完全合法(setup 正常解析),但 SMI 校验整体拒绝——setupact 实证
+   "找不到与给定的命名空间匹配的组件",Setup language 与 Target
+   language 均未进 blackboard,IBS 落
+   `Could not determine Target language. Will ask to show UI` 弹语言页。
+   **三种语言值形态(en-US 指定/无指定/zh-CN)均复现的谜底即此:组件名
+   错,填什么都不生效**。UI 层的 "Failed to load en-US resources"
+   (zh-CN 单语言介质无 en-US mui,fallback 内置资源)是伴生噪音,不是
+   弹页原因。修复 = 组件名纠正 + 语言值对齐介质语言(驱动 mediaLocale
+   声明,当前 zh-CN + `0804:00000804`;en 介质变体注册时扩展)。
+2. **产品密钥页(KMS key 形态被否定)**:unattend 带 Key(哪怕微软公开
+   文档的 Server 2019 Standard KMS client setup key)会让 setup 走
+   key-validation 路径,网络启动形态下校验失败(0xC004F050,setupact:
+   `ProductKey Value=NULLSTR → SkuGetImageProductKeyFiles → alternate
+   key 检索失败 → ShowUI=1`),弹"激活 Windows"页无人可点。正解 =
+   **Key 空段 + `sources\ei.cfg`**([Channel] Volume,builder
+   writeWindowsScripts 落池树,injector v1→v2 强制存量树重建):空 Key
+   时 setup 转而找 ei.cfg/pid.txt 定通道,retail 介质无 pid.txt,缺
+   ei.cfg 即 0x80070002 报错弹页——两者配套后密钥页跳过。
+3. **磁盘配置页**:ModifyPartition Order 跳号(见上)修复后
+   DiskConfiguration 零交互受理。
+
+**验收(2026-09-21,external rig `--full`)**:guest booting 后 **2 分钟
+GPT 落盘**(`EFI PART` @ LBA1)——语言页、密钥页、DiskConfiguration 全
+部零交互通过,setup 进入镜像应用;六阶段尾段(`--nostop`:装机 TCG
+1-3h → SetupComplete 回调 → 任务收敛)同 rig 可达。**诊断回传腿修复**:
+startnet 的 `curl -T`(PUT)撞机器面 POST-only 端点 → 405 → `-sf`
+静默失败,腿从未通过——修 `-X POST --data-binary`;SMB copy 腿保留
+(read-only 导出下不触发,语义即"导出可写才走")。
+
+**rig 层三修(external-win-e2e.sh 固化)**:①guest 网卡必须 **e1000**
+(介质 boot.wim 无 virtio 驱动,virtio 网卡下 WinPE 无链路,net use 永远
+起不来——与 9/19 探针 rig 同约束);②guest 内存 **4G**——8G guest 被
+Docker VM 全局 OOM 杀(两轮同型:dmesg `Out of memory: Killed process
+qemu-system-x86`,RSS ~9G;装机期 install.wim 走 SMB 不进内存,4G 富余
+且 TCG 更快);③容器 apk add 重试 5 次 + 工具存在性硬校验(网络抖动
+静默缺包会让 dnsmasq/samba/qemu 全空转)。附带勘误:增强 boot.wim 是
+**~450M**(原版 + 小文件),此前注释里的 "4.7G" 是被否定的灌
+install.wim 形态的记忆残留。

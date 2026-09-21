@@ -162,7 +162,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	var startnet string
 	if in.Netboot != nil {
 		if in.Netboot.InstallSMBUNC == "" {
-			return nil, render.BootParams{}, fmt.Errorf("%s: PXE needs the deployment SMB export (MAMMOTH_WINDOWS_INSTALL_SMB_SHARE)", d.distro)
+			return nil, render.BootParams{}, fmt.Errorf("%s: PXE needs the deployment SMB export (MAMMOTH_WINDOWS_INSTALL_SMB_UNC)", d.distro)
 		}
 		var err error
 		if startnet, err = startnetCmd(*in.Netboot, in.AnswerBaseURL); err != nil {
@@ -422,9 +422,13 @@ func mammothCompletePS() string {
 	return `# mammoth first-boot: completion callback + declared network.
 $ErrorActionPreference = "SilentlyContinue"
 $cfg = $null
-foreach ($d in (Get-PSDrive -PSProvider FileSystem).Root) {
-    $p = Join-Path $d "mammoth\task.json"
-    if (Test-Path $p) { $cfg = Get-Content $p -Raw | ConvertFrom-Json; break }
+if (Test-Path (Join-Path $PSScriptRoot "task.json")) {
+    $cfg = Get-Content (Join-Path $PSScriptRoot "task.json") -Raw | ConvertFrom-Json
+} else {
+    foreach ($d in (Get-PSDrive -PSProvider FileSystem).Root) {
+        $p = Join-Path $d "mammoth\task.json"
+        if (Test-Path $p) { $cfg = Get-Content $p -Raw | ConvertFrom-Json; break }
+    }
 }
 if ($cfg) {
     foreach ($n in $cfg.network) {
@@ -690,13 +694,15 @@ func startnetCmd(in render.NetbootInputs, answerBase string) (string, error) {
 	w := func(line string) { b.WriteString(line); b.WriteByte('\n') }
 	w("@echo off")
 	w("rem mammoth: wimboot carrier - map the deployment install share and launch setup.")
-	w("wpeinit")
 	if in.InstallSMBUser == "" {
 		// The WinPE SMB client refuses sessions the server maps to guest
 		// (AllowInsecureGuestAuth defaults to off and WinPE has no Group
 		// Policy) — the docs-sanctioned opt-in is a direct registry write.
+		// It MUST run before wpeinit: the SMB redirector reads the key when
+		// the workstation stack starts (real-hardware round, 9/21).
 		w(`reg add "HKLM\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters" /v AllowInsecureGuestAuth /t REG_DWORD /d 1 /f >nul`)
 	}
+	w("wpeinit")
 	w("set ATTEMPT=0")
 	w(":waitnet")
 	w("set /a ATTEMPT+=1")
@@ -755,6 +761,15 @@ func startnetCmd(in render.NetbootInputs, answerBase string) (string, error) {
 		// copy is the second leg (fires when the export allows writes).
 		w(fmt.Sprintf("if exist %s copy /Y %s Z:\\diag\\%s >nul 2>&1", p, p, name))
 	}
+	// Ship the per-task config onto the target volume the moment setup has
+	// applied the image (its auto-reboot then runs SetupComplete with
+	// task.json sitting next to mammoth-complete.ps1). The wimboot ramdisk
+	// (X:) dies at that same reboot — without this copy the first-boot
+	// script finds no config and neither the static network nor the
+	// completion callback ever fire (2288H round, 9/21). Polling every diag
+	// round makes the copy idempotent; before apply the drive letters do
+	// not exist and every line no-ops.
+	w(`for %%d in (C D E F) do if exist %%d:\Windows\Setup\Scripts\mammoth-complete.ps1 copy /Y X:\mammoth\task.json %%d:\Windows\Setup\Scripts\task.json >nul 2>&1`)
 	w("if %DIAG% GEQ 600 exit /b 0")
 	w("ping -n 4 127.0.0.1 >nul")
 	w("goto diag")

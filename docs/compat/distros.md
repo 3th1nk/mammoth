@@ -440,8 +440,11 @@ ModifyPartitions 连续计数、PartitionID 保持物理号。
 
 **验收(2026-09-21,external rig `--full`)**:guest booting 后 **2 分钟
 GPT 落盘**(`EFI PART` @ LBA1)——语言页、密钥页、DiskConfiguration 全
-部零交互通过,setup 进入镜像应用;六阶段尾段(`--nostop`:装机 TCG
-1-3h → SetupComplete 回调 → 任务收敛)同 rig 可达。**诊断回传腿修复**:
+部零交互通过,setup 进入镜像应用(两次复现)。六阶段尾段(`--nostop`:
+SetupComplete 回调 → 任务收敛)在 TCG 长跑下不稳定——前四阶段绿后
+install_os 复制段 qemu 无声退出(无内核 OOM、stderr 干净;8G 的 OOM×2
+已由 4G guest 解决,4G 死因不明)——环境边界非产品问题,六阶段决断留
+真机窗口。**诊断回传腿修复**:
 startnet 的 `curl -T`(PUT)撞机器面 POST-only 端点 → 405 → `-sf`
 静默失败,腿从未通过——修 `-X POST --data-binary`;SMB copy 腿保留
 (read-only 导出下不触发,语义即"导出可写才走")。

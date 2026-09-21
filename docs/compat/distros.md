@@ -14,7 +14,7 @@
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
 | Debian 12 | `debian12` | debian-installer | preseed(`file=/cdrom/preseed.cfg`) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | 无(netcfg 不按 MAC 选口,单接口) | ✅ 真机跑通 |
 | 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(真机复核 2026-09-19) | MAC → 接口名在 %pre 安装期解析 | **full(真机闭环 2026-09-19:虚拟介质 + PXE 双通路零人工)**;⚠️ **方言约束:仅图形前端可用**——text 模式(text 指令/inst.text)下 UOS anaconda 自动分区建出 FAT16 而非 swap 且 Finish 组崩溃,驱动已强制 graphical(见下方根因节) |
-| **Windows Server 2019** | `windows2019` | Windows Setup(bootmgr,`/sources/install.wim`) | **unattend**(autounattend.xml 灌 boot.wim 根,startnet 显式启动时经 ramdisk 隐式发现) | **full**(wimboot 载体;前置=部署层 SMB 导出 `MAMMOTH_WINDOWS_INSTALL_SMB_SHARE`,未配置提交即拒) | MAC → SetupComplete.cmd 按 Get-NetAdapter MAC 绑定(装后 SYSTEM 首登录前落地) | ✅ **真机闭环(2026-09-21,2288H 六阶段全绿:verify_layout→boot→install_os→verify_ready,零人工进安装界面,SetupComplete 回调,静态网 .215 按 spec 落网)**;虚拟介质通路仍被 iBMC 6.41 固件缺陷封死(见下方 windows 节);真机调试实录见下方"真机轮"小节;终局 = agent apply-image |
+| **Windows Server 2019** | `windows2019` | Windows Setup(bootmgr,`/sources/install.wim`) | **unattend**(autounattend.xml 灌 boot.wim 根,startnet 显式启动时经 ramdisk 隐式发现) | **full**(wimboot 载体;前置=部署层 SMB 导出 `MAMMOTH_WINDOWS_INSTALL_SMB_SHARE`,未配置提交即拒) | MAC → SetupComplete.cmd 按 Get-NetAdapter MAC 绑定(装后 SYSTEM 首登录前落地) | ✅ **真机全自动闭环(2026-09-21,2288H 十轮迭代:六阶段全绿,完成回调全自动到达,静态网 .215 按 spec 落网)**;虚拟介质通路仍被 iBMC 6.41 固件缺陷封死(见下方 windows 节);真机调试实录见下方"真机轮"小节;终局 = agent apply-image |
 
 ## 保留分区支持语义(SupportLevel)
 
@@ -482,7 +482,30 @@ Windows 是否触发/执行失败待查 C:\Windows\Panther\setupact.log),下轮
 注入,让 windows 走统一带内 SSH verify(兼装后快照);③机器入站 ICMP/RDP
 默认被 Windows 防火墙拦(ping 不通属预期,非缺陷)。
 
-**rig 层三修(external-win-e2e.sh 固化)**:**rig 层三修(external-win-e2e.sh 固化)**:①guest 网卡必须 **e1000**
+### 真机轮:完成触发链定位与修复(2026-09-21 下午~晚,第八~十轮)
+
+SetupComplete 自动执行未触发(根因未完全坐实,setupact 零记录)后,
+完成触发链经三轮真机收敛:
+
+1. **RunSynchronous 尝试失败**:Shell-Setup(oobeSystem)没有该元素
+   (它属于 Microsoft-Windows-Deployment/Setup 组件),setup 中止 pass
+   并弹"组件或设置不存在"——schema 校验精确。
+2. **子元素顺序违规**:Shell-Setup 内插入 AutoLogon/FirstLogonCommands
+   在 OOBE 之后 → 整份 unattend 在**最早的 offlineServicing pass** 报
+   "无法应用无人参与设置"并取消安装——组件内子元素必须按 schema 字母序
+   (AutoLogon → FirstLogonCommands → OOBE → UserAccounts)。
+3. **FirstLogonCommands + AutoLogon(LogonCount=1)落地生效**:自动登录
+   Administrator → 首登命令执行 ps1(配静态网 + POST 完成回调)→ 回调
+   **全自动到达**,六阶段绿;ps1 尾部清 Winlogon 的
+   DefaultPassword/AutoAdminLogon 明文残留。SetupComplete 保留为后备
+   路径(ps1 幂等)。
+
+**verify 语义(windows)**:完成回调即验证面(回调前置条件 = 静态网已
+配成功);带内 SSH 不默认开启(改变系统安全面,属部署方策略,可做成
+spec 显式声明)。机器入站 ICMP/RDP 默认被 Windows 防火墙拦(ping 不通
+属预期)。
+
+**rig 层三修(external-win-e2e.sh 固化)**:**rig 层三修(external-win-e2e.sh 固化)**:**rig 层三修(external-win-e2e.sh 固化)**:①guest 网卡必须 **e1000**
 (介质 boot.wim 无 virtio 驱动,virtio 网卡下 WinPE 无链路,net use 永远
 起不来——与 9/19 探针 rig 同约束);②guest 内存 **4G**——8G guest 被
 Docker VM 全局 OOM 杀(两轮同型:dmesg `Out of memory: Killed process

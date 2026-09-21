@@ -580,3 +580,31 @@ runner 将 claim 时快照贯穿全部 stage,其余读 context 的 stage 均在
 `MAMMOTH_PXE_DHCP_POOL` 池模式;装机内核 dracut 的 `ip=dhcp` 不带 option 60,
 池模式必须服务所有客户端(否则 dracut 无限期重试,装机卡死)——普通设备
 只给租约不给引导参数。BIOS 前置 + logicDrive 怪癖见上文两条。
+
+## KVM HTML5 集成远程控制台:URL 直开不可用(2026-09-21 实测定案)
+
+Web UI"HTML5 集成远程控制台(共享)"的页面 URL 形态(2288H V5 / iBMC 6.41,
+同一台机器档案):
+
+```
+https://<bmc>/src/virtualControl/kvm_h5.html?<cache-buster>
+```
+
+- **尾参是 cache-buster 不是凭证**:前端 `Math.random()` 形态(如
+  `0.004009648068480476`),防缓存用;
+- **直开页面两种登录态均黑屏(浏览器实测定案)**:未登录直开——黑屏,
+  无登录提示、无跳转;**登录 iBMC Web 后新标签页直开——同样黑屏**,底部
+  状态条 `IP: SN: Recv:0 Send:0 Frame: 0`(客户端壳已渲染,KVM 会话从未
+  建立)。唯一可用通路是首页"虚拟控制台 → 启动虚拟控制台 → HTML5 集成
+  远程控制台(共享)"的启动流程(自动新开标签页)——而正常启动的 URL 与
+  裸路径形态完全相同(仅 cache-buster 尾参),差异全在浏览器侧启动上下文
+  (opener/启动前票据交换),**不在 URL 本身:服务侧合成 URL 原理上不可行**;
+  未登录时页面 GET 仍返回 200 + 页面壳(无登录墙)——**200 ≠ 可用**,
+  服务侧状态码核验防不了黑屏;
+- **正解 = SSO token 直链(待二期)**:官方机制 `https://<bmc>/sso?token=xxx`
+  (31 字符临时凭证,免登打开 Web 首页/**KVM**,iBMC 高级命令参考)——
+  token 获取路径三选一待真机定(Redfish OemHuawei 资源 > web 登录 API >
+  `ipmcget -d ssoinfo` CLI,最后者依赖 BMC SSH 尽量避开),深链形态待验;
+- **v1 合成实现已试装并回退(2026-09-21)**:Oem.Huawei 识别 + 裸路径合成
+  + 页面 200 核验曾落地,登录态测试定案黑屏后回退为 `BMC_UNSUPPORTED`
+  ——发一个黑屏链接比干净的"不支持"降级更差;驱动桩注释携带本结论。

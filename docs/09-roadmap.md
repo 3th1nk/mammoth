@@ -21,7 +21,9 @@
 - 仓库脚手架:OpenAPI 3.1 契约(oapi-codegen + gin)、CI(契约 diff 检查)、单二进制多模式入口
 - 可观测埋点框架:slog 标准字段集、Prometheus 指标、OTel 边界埋点(no-op 默认)
 - 容器发布:多阶段构建出 `mammoth` / `mammoth-builder` 双镜像,docker compose 一键拉起
-- BMC 驱动接口 + Redfish/IPMI 两个实现:电源、引导设备、虚拟介质、KVM URL
+- BMC 驱动接口 + Redfish/IPMI 两个实现:电源、引导设备、虚拟介质(华为 VmmControl
+  OEM 已实装);KVM URL 未实装——真机定案裸路径直开不可用(启动依赖 Web UI
+  流程),SSO token 直链待二期(07-bmc §5、compat/huawei.md)
 - `credential` / `machine` 注册,`POST /machines/{id}/actions` 全量动作
 - job/task 最小状态机(表队列,契约测试套件于 CI 的 PG 集成作业执行),心跳 + interrupted 判定
 

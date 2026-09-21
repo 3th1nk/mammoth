@@ -446,9 +446,16 @@ if ($cfg) {
             if ($n.dns) { Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses $n.dns }
         }
     }
-    try {
-        Invoke-WebRequest -Uri $cfg.complete_url -Method POST -Body '{"status":"ok","detail":"windows setup finished"}' -ContentType 'application/json' -UseBasicParsing -TimeoutSec 15 | Out-Null
-    } catch {}
+    # Single-shot POST is timing-sensitive right after image apply (the
+    # 2288H round's first-boot callback silently died there) — retry for up
+    # to ~75s until the engine acks one of them (duplicate callbacks are
+    # harmless, the engine keeps the first terminal report).
+    foreach ($i in 1..6) {
+        try {
+            Invoke-WebRequest -Uri $cfg.complete_url -Method POST -Body '{"status":"ok","detail":"windows setup finished"}' -ContentType 'application/json' -UseBasicParsing -TimeoutSec 15 | Out-Null
+            break
+        } catch { Start-Sleep -Seconds 12 }
+    }
 }
 # AutoLogon(once) leaves the plaintext credential in Winlogon — scrub it
 # now that the one logon (and this callback) has happened.

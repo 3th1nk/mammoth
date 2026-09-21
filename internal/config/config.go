@@ -101,14 +101,14 @@ type Config struct {
 	MediaDir     string // local media repository (boot ISOs)
 	MediaWorkDir string // scratch dir for media builds (default: beside the output)
 	MediaBaseURI string // BMC-reachable media base URI (nfs://, cifs://, ftp:// — firmware decides)
-	// WindowsInstallSMBShare is the UNC of the deployment-provided SMB export the
+	// WindowsInstallSMBUNC is the UNC of the deployment-provided SMB export the
 	// windows wimboot carrier maps from WinPE (\\host\share pointing at the
 	// media repo — the SMB analog of the NFS media export). Empty = windows
 	// PXE submissions are rejected at the gate. User/Password are optional
 	// share credentials (guest exports need none).
-	WindowsInstallSMBShare         string
-	WindowsInstallSMBShareUser     string
-	WindowsInstallSMBSharePassword string
+	WindowsInstallSMBUNC         string
+	WindowsInstallSMBUser     string
+	WindowsInstallSMBPassword string
 	BootSettleDelay                time.Duration
 
 	VerifyReadyWait time.Duration // verify_ready poll budget for the new system after the completion report
@@ -260,9 +260,9 @@ func FromEnv() (Config, error) {
 	var errs []error
 	setString(&c.MediaWorkDir, "MAMMOTH_MEDIA_WORKDIR", &errs)
 	setString(&c.MediaBaseURI, "MAMMOTH_MEDIA_BASE_URI", &errs)
-	setString(&c.WindowsInstallSMBShare, "MAMMOTH_WINDOWS_INSTALL_SMB_SHARE", &errs)
-	setString(&c.WindowsInstallSMBShareUser, "MAMMOTH_WINDOWS_INSTALL_SMB_SHARE_USER", &errs)
-	setString(&c.WindowsInstallSMBSharePassword, "MAMMOTH_WINDOWS_INSTALL_SMB_SHARE_PASSWORD", &errs)
+	setString(&c.WindowsInstallSMBUNC, "MAMMOTH_WINDOWS_INSTALL_SMB_UNC", &errs)
+	setString(&c.WindowsInstallSMBUser, "MAMMOTH_WINDOWS_INSTALL_SMB_USER", &errs)
+	setString(&c.WindowsInstallSMBPassword, "MAMMOTH_WINDOWS_INSTALL_SMB_PASSWORD", &errs)
 	setString(&c.MediaRelayAddr, "MAMMOTH_MEDIA_RELAY_ADDR", &errs)
 	setString(&c.MediaRelayUser, "MAMMOTH_MEDIA_RELAY_USER", &errs)
 	setString(&c.MediaRelayPassword, "MAMMOTH_MEDIA_RELAY_PASSWORD", &errs)

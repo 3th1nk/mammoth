@@ -766,9 +766,9 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 				in.MediaLanguage = lang
 			}
 			in.Netboot = &render.NetbootInputs{
-				InstallSMBUNC:      e.WindowsInstallSMBShare,
-				InstallSMBUser:     e.WindowsInstallSMBShareUser,
-				InstallSMBPassword: e.WindowsInstallSMBSharePassword,
+				InstallSMBUNC:      e.WindowsInstallSMBUNC,
+				InstallSMBUser:     e.WindowsInstallSMBUser,
+				InstallSMBPassword: e.WindowsInstallSMBPassword,
 				// Windows separators, not filepath.Join — this string lands
 				// verbatim in the startnet batch script.
 				InstallSMBImagePath: PoolStoreDirName + "\\" + sha + "\\win\\tree",

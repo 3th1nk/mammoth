@@ -14,7 +14,7 @@
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
 | Debian 12 | `debian12` | debian-installer | preseed(`file=/cdrom/preseed.cfg`) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | 无(netcfg 不按 MAC 选口,单接口) | ✅ 真机跑通 |
 | 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(真机复核 2026-09-19) | MAC → 接口名在 %pre 安装期解析 | **full(真机闭环 2026-09-19:虚拟介质 + PXE 双通路零人工)**;⚠️ **方言约束:仅图形前端可用**——text 模式(text 指令/inst.text)下 UOS anaconda 自动分区建出 FAT16 而非 swap 且 Finish 组崩溃,驱动已强制 graphical(见下方根因节) |
-| **Windows Server 2019** | `windows2019` | Windows Setup(bootmgr,`/sources/install.wim`) | **unattend**(autounattend.xml 灌 boot.wim 根,startnet 显式启动时经 ramdisk 隐式发现) | **full**(wimboot 载体;前置=部署层 SMB 导出 `MAMMOTH_WINDOWS_INSTALL_SMB_SHARE`,未配置提交即拒) | MAC → SetupComplete.cmd 按 Get-NetAdapter MAC 绑定(装后 SYSTEM 首登录前落地) | ✅ **真机全自动闭环(2026-09-21,2288H 十轮迭代:六阶段全绿,完成回调全自动到达,静态网 .215 按 spec 落网)**;虚拟介质通路仍被 iBMC 6.41 固件缺陷封死(见下方 windows 节);真机调试实录见下方"真机轮"小节;终局 = agent apply-image |
+| **Windows Server 2019** | `windows2019` | Windows Setup(bootmgr,`/sources/install.wim`) | **unattend**(autounattend.xml 灌 boot.wim 根,startnet 显式启动时经 ramdisk 隐式发现) | **full**(wimboot 载体;前置=部署层 SMB 导出 `MAMMOTH_WINDOWS_INSTALL_SMB_UNC`,未配置提交即拒) | MAC → SetupComplete.cmd 按 Get-NetAdapter MAC 绑定(装后 SYSTEM 首登录前落地) | ✅ **真机全自动闭环(2026-09-21,2288H 十轮迭代:六阶段全绿,完成回调全自动到达,静态网 .215 按 spec 落网)**;虚拟介质通路仍被 iBMC 6.41 固件缺陷封死(见下方 windows 节);真机调试实录见下方"真机轮"小节;终局 = agent apply-image |
 
 ## 保留分区支持语义(SupportLevel)
 
@@ -358,7 +358,7 @@ boot\winload.efi ... missing or contains errors`);同链路对照:原版 boot.wi
 就此否定;Go 生态亦无成熟的纯 Go SMB server(go-smb2 只有 client)——
 **install 源因此交部署层提供**(与 NFS 介质导出完全同哲学,引擎零新增
 服务面):部署者把介质仓库导成只读 SMB share(248 上即 samba 一个
-share,或 Windows 文件共享),引擎以 `MAMMOTH_WINDOWS_INSTALL_SMB_SHARE`
+share,或 Windows 文件共享),引擎以 `MAMMOTH_WINDOWS_INSTALL_SMB_UNC`
 (UNC)+ 可选 `_USER`/`_PASSWORD` 三元消费。渲染面据此生成
 **startnet.cmd**(wimlib 覆盖灌入 boot.wim 的 WinPE 启动钩子):
 wpeinit → net use Z:(重试环,凭据经字符白名单校验——cmd 无安全引用)
@@ -385,7 +385,7 @@ curl.exe 可 POST,需在机器面开诊断接收端点)定位解析失败的确�
   站点自行 MOK 纳管 iPXE 属部署层策略,mammoth 不拥有。
 - **目标机内存 ≥8G**(WinPE 466M wim + SMB 装机运行时,余量充足;此前
   4.8G wim 形态的内存压力随否定一并消失)。
-- **部署层 SMB 导出为前置**(`MAMMOTH_WINDOWS_INSTALL_SMB_SHARE`,只读指向
+- **部署层 SMB 导出为前置**(`MAMMOTH_WINDOWS_INSTALL_SMB_UNC`,只读指向
   介质仓库;guest 或固定凭据均可,凭据字符限 `[A-Za-z0-9._@-]`——cmd
   元字符不可安全引用);未配置时 windows PXE 提交即
   `SCHEMA_WINDOWS_SMB_SHARE_REQUIRED`。

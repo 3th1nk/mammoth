@@ -26,6 +26,7 @@
 | 5 | 扩展 | rocky 10 | Rocky-10.x-dvd.iso | DVD,UEFI-only | vMedia ✅ / PXE 待验 | qemu ✅ |
 | 6 | 扩展 | centos 7 | CentOS-7-x86_64-Minimal.iso | minimal | vMedia ✅ | legacy |
 | 7 | 扩展 | kylin V10/V11 · UOS | 厂商 DVD | DVD | vMedia | 按客户需求 |
+| 8 | Windows 系 | windows server 2019 | cn_windows_server_2019_x64_dvd.iso | Windows Setup(install.wim) | PXE(wimboot+SMB 源)✅ / vMedia 🔧(iBMC 6.41 固件缺陷) | 2026-09-21 |
 
 ## 2. 镜像类型 × 载体选择法则
 
@@ -35,6 +36,11 @@
 | DVD | 完整离线池 | ✅ 重打包 | ✅(离线包池) |
 | live-server(ubuntu) | casper 安装器载体 | ✅ 重打包 | ✅ squashfs 走 NFS |
 | live desktop | 无安装器 | ❌ | ❌ |
+| Windows(install.wim) | Windows Setup 安装器 + 镜像库 | ✅ 重打包(El Torito) | ✅ wimboot 引导 + SMB 安装源 |
+
+- windows PXE 额外依赖:部署层只读 SMB 导出介质仓库(`MAMMOTH_WINDOWS_INSTALL_SMB_UNC`
+  三元,可选专用账号);WinPE 内存 ≥4G;完成回调经 AutoLogon+FirstLogonCommands
+  或 SetupComplete(双路径冗余,均执行 mammoth-complete.ps1)。
 
 - debian PXE 额外依赖:官方 `netboot.tar.gz`(`MAMMOTH_PXE_DI_NETBOOT`)
   与 udeb 暂存目录(`MAMMOTH_PXE_DI_UDEBS_DIR`,fetch-di-udebs.sh)。

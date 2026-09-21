@@ -134,7 +134,7 @@ ISO content as a package source.
 | RHEL-like | Rocky 9.x minimal ISO | virtual_media ✅ · PXE ✅ |
 | Ubuntu-like | Ubuntu 22.04.5 & 24.04.x live-server ISO | virtual_media ✅ · PXE ✅ |
 | Debian-like | Debian 12 / 13 netinst ISO | virtual_media ✅ · PXE ✅ |
-| Windows-like | Windows Server 2019 (zh-CN MSDN) | virtual_media 🔧 (UEFI-only, Standard Core) · qemu boot+unattend-accept ✅ · real pending |
+| Windows-like | Windows Server 2019 (zh-CN MSDN) | PXE (wimboot + SMB source) ✅ real, six stages green · virtual_media 🔧 (blocked by iBMC 6.41 firmware, UEFI-only, Standard Core) |
 | Extension | Rocky 10 (UEFI-only) · CentOS 7 (legacy) · Kylin V10/V11 · UOS | per-demand |
 
 Every regression run: six-stage pipeline green → unattended first boot →

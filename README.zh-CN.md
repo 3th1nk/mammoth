@@ -124,7 +124,7 @@ flowchart TD
 | Ubuntu 系 | Ubuntu 22.04.5 与 24.04.x live-server ISO | virtual_media ✅ · PXE ✅ |
 | Debian 系 | Debian 12 / 13 netinst ISO | virtual_media ✅ · PXE ✅ |
 | 扩展 | Rocky 10(UEFI-only)· CentOS 7(legacy)· Kylin V10/V11 · UOS | 按需 |
-| Windows 系 | Windows Server 2019(zh-CN MSDN) | virtual_media 🔧(UEFI-only,Standard Core)· qemu 引导+应答前半 ✅ · 真机待验 |
+| Windows 系 | Windows Server 2019(zh-CN MSDN) | PXE(wimboot + SMB 源)✅ 真机六阶段全绿 · virtual_media 🔧(被 iBMC 6.41 固件缺陷封死,UEFI-only,Standard Core) |
 
 每轮回归:六阶段流水线全绿 → 无人值守首启 → 装机钥匙 SSH 探测。详见
 [docs/runbooks/test-baselines.md](docs/runbooks/test-baselines.md)。

@@ -81,6 +81,23 @@ func (d *Driver) NetbootPool() render.NetbootPool       { return render.NetbootP
 // driver's unattend supports.
 func (d *Driver) FirmwareSupport() render.FirmwareSupport { return render.FirmwareUEFIOnly }
 
+// mediaLocale is the language the registered media carries, rendered into
+// both the windowsPE and oobeSystem international components: setup and the
+// installed system speak the media's language. Values must name a language
+// the media actually has — the zh-CN single-language media ships no en-US
+// setup resources, so en-US settings collapse into the language-selection
+// page via resource-load failure even when the component itself parses.
+type mediaLocale struct {
+	uiLang      string
+	inputLocale string
+}
+
+// windows2019 is registered against the zh-CN single-language media; an
+// en-US media variant declares its own entry here when registered.
+func (d *Driver) mediaLocale() mediaLocale {
+	return mediaLocale{uiLang: "zh-CN", inputLocale: "0804:00000804"}
+}
+
 // osImageName is the /IMAGE/NAME inside install.wim the unattend selects —
 // Standard Core, the bare-metal default (docs/compat/distros.md §windows:
 // one media carries Standard/Datacenter × Core/Desktop; edition choice is
@@ -154,7 +171,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		return nil, render.BootParams{}, err
 	}
 
-	unattend := unattendXML(d.osImageName(), hostname, in.RootPassword, plan)
+	unattend := unattendXML(d.osImageName(), hostname, in.RootPassword, d.mediaLocale(), plan)
 	task, terr := taskJSON(in.CompleteURL, in.Network)
 	if terr != nil {
 		return nil, render.BootParams{}, terr
@@ -488,20 +505,29 @@ func normalizeMAC(mac string) string {
 // encoding/xml structs): the schema is attribute-annotated magic
 // (wcm:action, component names) that reads better verbatim; every dynamic
 // value passes xmlEscape.
-func unattendXML(imageName, hostname, password string, plan diskPlan) string {
+//
+// The windowsPE component is Microsoft-Windows-International-Core-WinPE —
+// NOT "Microsoft-Windows-International-WinPE". The wrong name is invisible
+// at the XML layer: setup parses the file fine, but SMI rejects the whole
+// component ("no component matches the given namespace" in the setupact
+// SMI dump), the setup/target language stay undetermined and setup shows
+// the language-selection page no matter what values the component carried
+// (real-media setupact, 9/21: "Could not determine Target language. Will
+// ask to show UI").
+func unattendXML(imageName, hostname, password string, ml mediaLocale, plan diskPlan) string {
 	var b strings.Builder
 	w := func(s string) { b.WriteString(s) }
 	w(`<?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
   <settings pass="windowsPE">
-    <component name="Microsoft-Windows-International-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
       <SetupUILanguage>
-        <UILanguage>en-US</UILanguage>
+        <UILanguage>` + ml.uiLang + `</UILanguage>
       </SetupUILanguage>
-      <InputLocale>0409:00000409</InputLocale>
-      <SystemLocale>en-US</SystemLocale>
-      <UILanguage>en-US</UILanguage>
-      <UserLocale>en-US</UserLocale>
+      <InputLocale>` + ml.inputLocale + `</InputLocale>
+      <SystemLocale>` + ml.uiLang + `</SystemLocale>
+      <UILanguage>` + ml.uiLang + `</UILanguage>
+      <UserLocale>` + ml.uiLang + `</UserLocale>
     </component>
     <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
       <DiskConfiguration>
@@ -562,16 +588,18 @@ func unattendXML(imageName, hostname, password string, plan diskPlan) string {
           </InstallTo>
         </OSImage>
       </ImageInstall>
-      <!-- ProductKey: Server 2019 setup REQUIRES the element to be present
-           even with /IMAGE/NAME edition selection. The value is Microsoft's
-           PUBLIC KMS client setup key for Windows Server 2019 Standard
-           (documented on learn.microsoft.com, not a license) — network
-           launches validate the key against the source and an empty Key
-           fails with "cannot read the <ProductKey> setting". -->
+      <!-- ProductKey: the element must exist (setup aborts reading the
+           unattend without it) but the Key stays empty BY DESIGN — with no
+           key setup resolves the channel from sources\ei.cfg, which the
+           builder drops into the prepared tree ([Channel] Volume). A key
+           here (even Microsoft's public KMS client setup key) sends setup
+           down the key-validation path instead, which fails in the network
+           launch shape (0xC004F050, qemu 9/21) and pops the product-key
+           page with no one to click it. -->
       <UserData>
         <AcceptEula>true</AcceptEula>
         <ProductKey>
-          <Key>N69G4-B89J2-4G8F4-WWYCC-J464W</Key>
+          <Key></Key>
         </ProductKey>
       </UserData>
     </component>
@@ -583,10 +611,10 @@ func unattendXML(imageName, hostname, password string, plan diskPlan) string {
   </settings>
   <settings pass="oobeSystem">
     <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-      <InputLocale>0409:00000409</InputLocale>
-      <SystemLocale>en-US</SystemLocale>
-      <UILanguage>en-US</UILanguage>
-      <UserLocale>en-US</UserLocale>
+      <InputLocale>` + ml.inputLocale + `</InputLocale>
+      <SystemLocale>` + ml.uiLang + `</SystemLocale>
+      <UILanguage>` + ml.uiLang + `</UILanguage>
+      <UserLocale>` + ml.uiLang + `</UserLocale>
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
       <OOBE>
@@ -701,7 +729,10 @@ func startnetCmd(in render.NetbootInputs, answerBase string) (string, error) {
 		`X:\Windows\inf\setupapi.dev.log`,
 	} {
 		name := p[strings.LastIndex(p, "\\")+1:]
-		w(fmt.Sprintf("if exist %s curl -sf -T %s %s/%s >nul 2>&1", p, p, diag, name))
+		// The upload endpoint is POST-only (machine plane, token-as-
+		// credential): -X POST --data-binary, not -T (PUT 405s silently
+		// under -sf, and the leg never fired).
+		w(fmt.Sprintf("if exist %s curl -sf -X POST --data-binary @%s %s/%s >nul 2>&1", p, p, diag, name))
 		// curl.exe is not guaranteed present in every WinPE build — the SMB
 		// copy is the second leg (fires when the export allows writes).
 		w(fmt.Sprintf("if exist %s copy /Y %s Z:\\diag\\%s >nul 2>&1", p, p, name))

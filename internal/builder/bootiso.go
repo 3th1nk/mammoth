@@ -514,8 +514,9 @@ func windowsCacheHeadroom(dir string) error {
 
 // windowsInjectorVersion guards the prepared-tree cache — bump when the
 // injected script pair, its destinations or the SKU contract change, and
-// stale trees re-inject on the next build.
-const windowsInjectorVersion = "1"
+// stale trees re-inject on the next build. v2 adds sources\ei.cfg (the
+// empty-Key unattend contract depends on it).
+const windowsInjectorVersion = "2"
 
 // windows seed-file contract between the driver and the wim injector.
 const (
@@ -573,6 +574,15 @@ func injectWindowsSetupScripts(ctx context.Context, work string, seed map[string
 	return nil
 }
 
+// winChannelID is the ei.cfg content dropped into sources\ — declares the
+// Volume channel so setup's empty-Key path resolves without asking. With
+// an empty <Key> (and no pid.txt on retail media) setup searches for
+// ei.cfg; missing it failed the whole UserData read with 0x80070002
+// (qemu, 9/21) and popped the product-key page. Volume is honest here: the
+// KMS client setup key (public, per-edition) is baked into the image and
+// applied when a KMS host activates.
+const winChannelID = "[Channel]\r\nVolume\r\n"
+
 // writeWindowsScripts materializes the generic script pair inside the tree
 // before wim injection (the injector reads them from the tree; the pair is
 // unlink+rewritten so a hardlinked farm never truncates the cache copy).
@@ -590,6 +600,14 @@ func writeWindowsScripts(tree string, seed map[string]string) error {
 		if err := os.WriteFile(dest, []byte(content), 0o644); err != nil {
 			return err
 		}
+	}
+	// sources\ei.cfg — the empty-Key unattend contract (windows driver):
+	// written unconditionally, fixed content, idempotent across cache
+	// generations (a re-inject rewrites it).
+	ei := filepath.Join(tree, "sources", "ei.cfg")
+	_ = os.Remove(ei)
+	if err := os.WriteFile(ei, []byte(winChannelID), 0o644); err != nil {
+		return fmt.Errorf("windows: write sources/ei.cfg: %w", err)
 	}
 	return nil
 }

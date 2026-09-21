@@ -478,8 +478,7 @@ LOM1 ✓)。真机暴露并修复的三层问题:
 
 **遗留点**:①SetupComplete 的自动执行本轮未生效(手动跑 ps1 才收敛;
 Windows 是否触发/执行失败待查 C:\Windows\Panther\setupact.log),下轮
-复核;②verify 面加强方向 = SetupComplete 追加启用 OpenSSH Server + 钥匙
-注入,让 windows 走统一带内 SSH verify(兼装后快照);③机器入站 ICMP/RDP
+复核;③机器入站 ICMP/RDP
 默认被 Windows 防火墙拦(ping 不通属预期,非缺陷)。
 
 ### 真机轮:完成触发链定位与修复(2026-09-21 下午~晚,第八~十轮)

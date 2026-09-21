@@ -14,7 +14,7 @@
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
 | Debian 12 | `debian12` | debian-installer | preseed(`file=/cdrom/preseed.cfg`) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | 无(netcfg 不按 MAC 选口,单接口) | ✅ 真机跑通 |
 | 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(真机复核 2026-09-19) | MAC → 接口名在 %pre 安装期解析 | **full(真机闭环 2026-09-19:虚拟介质 + PXE 双通路零人工)**;⚠️ **方言约束:仅图形前端可用**——text 模式(text 指令/inst.text)下 UOS anaconda 自动分区建出 FAT16 而非 swap 且 Finish 组崩溃,驱动已强制 graphical(见下方根因节) |
-| **Windows Server 2019** | `windows2019` | Windows Setup(bootmgr,`/sources/install.wim`) | **unattend**(autounattend.xml 灌 boot.wim 根,startnet 显式启动时经 ramdisk 隐式发现) | **full**(wimboot 载体;前置=部署层 SMB 导出 `MAMMOTH_WINDOWS_INSTALL_SMB_SHARE`,未配置提交即拒) | MAC → SetupComplete.cmd 按 Get-NetAdapter MAC 绑定(装后 SYSTEM 首登录前落地) | 🔧 **qemu 全链实证(2026-09-21):iPXE→wimboot→WinPE→SMB install 源→unattend 三关(语言/密钥/磁盘)零交互全过,GPT 2 分钟落盘**;虚拟介质通路仍被 iBMC 6.41 固件缺陷封死(见下方 windows 节);真机窗口执行 2288H 全装(§4.1);终局 = agent apply-image |
+| **Windows Server 2019** | `windows2019` | Windows Setup(bootmgr,`/sources/install.wim`) | **unattend**(autounattend.xml 灌 boot.wim 根,startnet 显式启动时经 ramdisk 隐式发现) | **full**(wimboot 载体;前置=部署层 SMB 导出 `MAMMOTH_WINDOWS_INSTALL_SMB_SHARE`,未配置提交即拒) | MAC → SetupComplete.cmd 按 Get-NetAdapter MAC 绑定(装后 SYSTEM 首登录前落地) | ✅ **真机闭环(2026-09-21,2288H 六阶段全绿:verify_layout→boot→install_os→verify_ready,零人工进安装界面,SetupComplete 回调,静态网 .215 按 spec 落网)**;虚拟介质通路仍被 iBMC 6.41 固件缺陷封死(见下方 windows 节);真机调试实录见下方"真机轮"小节;终局 = agent apply-image |
 
 ## 保留分区支持语义(SupportLevel)
 
@@ -449,7 +449,40 @@ startnet 的 `curl -T`(PUT)撞机器面 POST-only 端点 → 405 → `-sf`
 静默失败,腿从未通过——修 `-X POST --data-binary`;SMB copy 腿保留
 (read-only 导出下不触发,语义即"导出可写才走")。
 
-**rig 层三修(external-win-e2e.sh 固化)**:①guest 网卡必须 **e1000**
+### 真机轮闭环(2026-09-21,2288H,iBMC 6.41)
+
+**七轮迭代,六阶段全绿**:verify_layout→configure_raid→prepare_media→boot→
+install_os→verify_ready 全部 succeeded,系统起 LogonUI(Server Core),
+静态网按 spec 落网(LOM1 = .215/24,gw .1,SetupComplete 按 MAC 绑定
+LOM1 ✓)。真机暴露并修复的三层问题:
+
+1. **env UNC 转义链**:部署侧 env 文件写 UNC 时被 shell 多层转义成四重
+   反斜杠(`\\\\host\\share`),dotenv 不做转义、原样进渲染 → net use
+   错误 67(找不到网络名)。教训:反斜杠类的 Windows 值经 ssh/env/dotenv
+   链路时用 base64 或单引号 heredoc 传递,每层验证 repr。
+2. **samba 服务端 guest/tree-connect 拒绝**:248 的 smb.conf [global] 存在
+   历史遗留 `valid users = root`(且 95/96 两行同名参数后值覆盖前值)——
+   WinPE 的 net use 先 TreeConnect `\\host\IPC$`(SMB 协议固定前置),
+   继承 global 名单被拒 → 错误 5(拒绝访问);share 段自己的 valid users
+   修好也没用。修复:global 名单补 nobody/guest/专用账号。**smbclient 直连
+   share 绕过 IPC$,所以本机测试一直假绿——抓包(tshark 解析 TreeConnect
+   路径与 NT Status)才定位**。专用账号 `mammoth-smb`(smbpasswd,share
+   只读)替代 guest 形态,顺带绕开客户端 insecure-guest 策略面。
+3. **SetupComplete 回调链断裂(task.json 可达性假设泄漏)**:task.json 只
+   烘在 boot.wim(X: ramdisk),WinPE 阶段可达;setup 应用镜像后自动重启,
+   X: 消失,SetupComplete 的 ps1 找不到配置 → 静默跳过静态网与完成回调
+   → 任务 install_os 永等(qemu 六阶段尾段从未跑完,此盲区真机第一跑
+   暴露)。修复:ps1 改为 $PSScriptRoot\task.json 优先(injector v3),
+   startnet 诊断循环轮询把 task.json 拷进已应用镜像的
+   Windows\Setup\Scripts(setup 自动重启前 KB 级拷贝,幂等)。
+
+**遗留点**:①SetupComplete 的自动执行本轮未生效(手动跑 ps1 才收敛;
+Windows 是否触发/执行失败待查 C:\Windows\Panther\setupact.log),下轮
+复核;②verify 面加强方向 = SetupComplete 追加启用 OpenSSH Server + 钥匙
+注入,让 windows 走统一带内 SSH verify(兼装后快照);③机器入站 ICMP/RDP
+默认被 Windows 防火墙拦(ping 不通属预期,非缺陷)。
+
+**rig 层三修(external-win-e2e.sh 固化)**:**rig 层三修(external-win-e2e.sh 固化)**:①guest 网卡必须 **e1000**
 (介质 boot.wim 无 virtio 驱动,virtio 网卡下 WinPE 无链路,net use 永远
 起不来——与 9/19 探针 rig 同约束);②guest 内存 **4G**——8G guest 被
 Docker VM 全局 OOM 杀(两轮同型:dmesg `Out of memory: Killed process

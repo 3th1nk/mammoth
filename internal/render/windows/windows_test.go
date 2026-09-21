@@ -69,7 +69,7 @@ func TestRenderWindowsUEFIUnattend(t *testing.T) {
 		`<Value>wRoot-pw</Value>`, `<PlainText>true</PlainText>`,
 		`<AcceptEula>true</AcceptEula>`,
 		`<ProductKey>`,
-		`<Key></Key>`,
+		`<Key>N69G4-B89J2-4G8F4-WWYCC-J464W</Key>`,
 		`<HideEULAPage>true</HideEULAPage>`,
 	} {
 		if !strings.Contains(unattend, want) {

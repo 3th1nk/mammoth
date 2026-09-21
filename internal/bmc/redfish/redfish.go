@@ -581,9 +581,14 @@ func managersVirtualMedia(c *gofish.APIClient) ([]*redfish.VirtualMedia, error) 
 	return all, nil
 }
 
-// ConsoleURL is OEM territory: no standard Redfish KVM resource exists. Known
-// OEM mappings enter behind an OEMExtensions interface; until then report
-// unsupported so callers degrade gracefully (docs/07-bmc.md §5).
+// ConsoleURL is OEM territory: no standard Redfish KVM resource exists — and
+// a synthesized bare page URL is not viable either. Real-hardware finding
+// (Huawei iBMC 6.41, docs/compat/huawei.md): the iBMC HTML5 console page
+// renders an idle client (Recv:0/Send:0) even when opened directly while
+// logged in — the launch depends on the web UI's launch flow, not on the URL
+// or the session cookie. A one-time URL therefore requires the SSO token
+// deep-link, which is unmapped: report unsupported so callers degrade
+// gracefully (docs/07-bmc.md §5).
 func (d *Driver) ConsoleURL(_ context.Context, _ string, _ bmc.Credentials) (string, error) {
 	return "", &bmc.Error{Kind: bmc.KindUnsupported, Op: "console_url",
 		Detail: "no OEM KVM mapping for this vendor yet"}

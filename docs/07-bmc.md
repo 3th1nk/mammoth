@@ -62,7 +62,7 @@ Reset 拒绝时以 `ForceRestart` 重试重启类动作;自签名 TLS 经
 | 电源控制 | ✅ `ComputerSystem.Reset`(拒绝时 ForceRestart 回退) | ✅ `chassis power` |
 | 引导设备 | ✅ `BootSourceOverride` | ✅ `chassis bootdev` |
 | 虚拟介质 | ✅ `InsertMedia`;未通告时回退 OEM 动作(华为 VmmControl 已实装,NFS/CIFS) | ⚠️ 厂商私有(OEM 命令) |
-| KVM | ✅ 厂商 OEM(归一为 URL) | ❌(仅 SOL 串口) |
+| KVM | ⚠️ OEM 领地(Redfish 无标准资源);**OEM 映射未实装**——真机定案裸路径 URL 直开不可用,需 SSO 直链(§5、compat/huawei.md),现返回 `BMC_UNSUPPORTED` | ❌(仅 SOL 串口) |
 | 硬件盘查 | ✅ Storage/Ethernet/Processor/Memory(宽容解析违规固件) | ⚠️ 有限(FRU/传感器) |
 | RAID 卷管理 | ✅ `VolumeCreator`(标准载荷被拒时走 OEM 载荷,如华为 DriveID) | ❌ |
 | 固件清单 | ✅ `FirmwareInventoryProvider`(UpdateService/FirmwareInventory,宽容解析,缺链接/坏条目降级) | ❌(能力缺失即无数据,盘查不失败) |
@@ -153,5 +153,11 @@ Reset 拒绝时以 `ForceRestart` 重试重启类动作;自签名 TLS 经
 
 - 驱动层不引入厂商 SDK 依赖,Redfish 走标准 HTTP + schema 文档,IPMI 走纯协议实现;
   厂商 OEM 扩展以可选接口(`OEMExtensions`)渐进加入;
+- **KVM URL 现状(2026-09-21)**:接口面已归一(`ConsoleURL` 驱动方法 + 同步端点,
+  fake 完整可用,acceptance 覆盖);Redfish 标准无 KVM 资源,OEM 映射未实装。
+  真机定案(2288H V5/iBMC 6.41):页面 URL 登录前后直开均黑屏,启动依赖 Web UI
+  流程,服务侧合成 URL 原理上不可行——正解为 SSO token 直链,待二期。真机
+  侦察实录见 compat/huawei.md;现统一返回 `BMC_UNSUPPORTED`,调用方按能力
+  缺失降级(设计内行为,非缺陷);
 - BMC 弱固件是实践中的主要不稳定源:驱动层内置请求节流、响应校验和超时隔离,
   单台 BMC 的异常不得拖垮 runner(每 target 独立超时上下文)。

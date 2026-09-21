@@ -562,14 +562,16 @@ func unattendXML(imageName, hostname, password string, plan diskPlan) string {
           </InstallTo>
         </OSImage>
       </ImageInstall>
-      <!-- empty ProductKey: Server 2019 setup REQUIRES the element to be
-           present even with /IMAGE/NAME edition selection — its absence
-           aborts unattend with "cannot read the <ProductKey> setting"
-           (real-media finding, 2026-09-20) -->
+      <!-- ProductKey: Server 2019 setup REQUIRES the element to be present
+           even with /IMAGE/NAME edition selection. The value is Microsoft's
+           PUBLIC KMS client setup key for Windows Server 2019 Standard
+           (documented on learn.microsoft.com, not a license) — network
+           launches validate the key against the source and an empty Key
+           fails with "cannot read the <ProductKey> setting". -->
       <UserData>
         <AcceptEula>true</AcceptEula>
         <ProductKey>
-          <Key></Key>
+          <Key>N69G4-B89J2-4G8F4-WWYCC-J464W</Key>
         </ProductKey>
       </UserData>
     </component>

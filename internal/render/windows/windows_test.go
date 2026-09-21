@@ -68,13 +68,33 @@ func TestRenderWindowsUEFIUnattend(t *testing.T) {
 		`<ComputerName>node-w1</ComputerName>`,
 		`<Value>wRoot-pw</Value>`, `<PlainText>true</PlainText>`,
 		`<AcceptEula>true</AcceptEula>`,
+		// ProductKey element must exist but the Key stays empty: a key here
+		// (even the public KMS client setup key) sends setup down the
+		// key-validation path, which fails in the network launch shape and
+		// pops the product-key page (qemu 9/21); the empty-Key contract
+		// resolves via the builder's sources/ei.cfg (Volume channel).
 		`<ProductKey>`,
-		`<Key>N69G4-B89J2-4G8F4-WWYCC-J464W</Key>`,
+		`<Key></Key>`,
 		`<HideEULAPage>true</HideEULAPage>`,
+		// The windowsPE international component must be International-
+		// Core-WinPE: the "International-WinPE" short name parses fine but
+		// SMI rejects it wholesale, setup/target language stay undetermined
+		// and setup shows the language-selection page (real-media setupact,
+		// 9/21). Values are the media's own language — the zh-CN media has
+		// no en-US setup resources, so en-US settings fall to the same page.
+		`name="Microsoft-Windows-International-Core-WinPE"`,
+		`<UILanguage>zh-CN</UILanguage>`,
+		`<InputLocale>0804:00000804</InputLocale>`,
 	} {
 		if !strings.Contains(unattend, want) {
 			t.Errorf("autounattend.xml missing %q", want)
 		}
+	}
+	if strings.Contains(unattend, `name="Microsoft-Windows-International-WinPE"`) {
+		t.Errorf("autounattend.xml uses the non-existent International-WinPE component (SMI rejects it, language page returns)")
+	}
+	if strings.Contains(unattend, "en-US") {
+		t.Errorf("autounattend.xml carries en-US settings — the zh-CN media has no en-US setup resources")
 	}
 	if strings.Contains(unattend, "wRoot-pw</Value>") && !strings.Contains(unattend, "PlainText>true") {
 		t.Errorf("password present without plaintext declaration")
@@ -310,7 +330,9 @@ func TestRenderWindowsPXE(t *testing.T) {
 		"wpeinit",
 		`net use Z: \\198.51.100.248\mammoth-media "s3cret-9" /user:smbuser`,
 		`start "mammoth setup" /D Z:\pool-store\abc123\win\tree Z:\pool-store\abc123\win\tree\sources\setup.exe`,
-		`curl -sf -T X:\Windows\Panther\setuperr.log http://10.0.2.2:8080/render/tokw/diag/setuperr.log`,
+		// diag uploads are POST (--data-binary): the machine endpoint has no
+		// PUT route, and -T (PUT) failed silently under -sf every round.
+		`curl -sf -X POST --data-binary @X:\Windows\Panther\setuperr.log http://10.0.2.2:8080/render/tokw/diag/setuperr.log`,
 	} {
 		if !strings.Contains(startnet, want) {
 			t.Errorf("startnet missing %q:\n%s", want, startnet)

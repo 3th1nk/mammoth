@@ -242,3 +242,17 @@ spec 是发行版无关的声明;方言不能落地的项在**渲染期显式拒
 4. **`root_password` 缺省/空 = 自动生成**:一次性随机口令经任务事件一次性下发,
    避免批口令长期存续;`ssh_keys` 是更优路径,文档引导优先使用。字符串形态下
    哨兵值就是空串(空口令本身非法),非空值一律视为明文,无控制值歧义。
+5. **异构批次的衔接 = overrides 收参数差异,分组多 job 收意图差异**:一份共享
+   spec 只覆盖意图同构的批次。`targets.overrides` 浅合并是**顶层键整体替换**
+   (`internal/api/handlers_jobs.go` mergeSpecOverride,零值检测防误擦)——
+   storage/network/image 皆可逐机整段换,但 install 强制 base spec、列表字段
+   不可"只加一条";IP/主机名/可被选择器吸收的盘差属参数级,进 overrides。
+   RAID 布局/keep 语义/distro 不同属意图级差异,按等价类分组、一组一个 job——
+   试算(逐台)resolved plan 相同者即一组,逐组独立 policy 本来就是需求。
+6. **不引入 `[{targets, spec}]` 数组提交形态,组合逻辑留在客户端**:数组只买到
+   一次 HTTP 往返 + 单一幂等键;若落成"单 job 多 spec 组",`job.spec` 审计面、
+   `policy.abort_batch`、concurrency 等 job 级语义全部重定义,改动落在已冻结的
+   v1 契约上。部分接受优于全有或全无:per-machine 无效片段创建时预失败该
+   task、不阻塞兄弟机器。与"模板化复用由客户端自行管理"(docs/03-api.md §4)
+   同一分工,薄封装先例 `internal/cli` / `scripts/acceptance.py`。若契约要动,
+   优先级更高的是 overrides 合并语义的显式化(如深合并声明),属增量兼容。

@@ -12,6 +12,8 @@
   文件;非法值(非整数/非布尔/非时长)**启动即报错**并聚合列出全部问题,
   不静默用默认值;
 - systemd 部署等价物:`EnvironmentFile=`;compose:`env_file:`。
+- 可选探针特性:ramdisk 探针(discover `probe: ramdisk`)的启用清单见
+  [05-inventory.md](05-inventory.md) §4;PXE 零注册入门见本文 §4.5 第 5 条。
 
 ## 1. 状态边界:什么需要备份
 

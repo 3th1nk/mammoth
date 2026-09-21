@@ -119,7 +119,7 @@ func TestPoolModeReply(t *testing.T) {
 		DHCP:       pool,
 	})
 	var mac [6]byte
-	copy(mac[:], []byte{0x50, 0x1d, 0x93, 0xd8, 0xc6, 0x97})
+	copy(mac[:], []byte{0x02, 0x00, 0x00, 0x00, 0x00, 0x0a})
 	req := discover(0x1111, mac,
 		option{optVendorClass, []byte("PXEClient:Arch:00007:UNDI:003016")},
 		option{optArch, u16opt(7)},
@@ -178,7 +178,7 @@ func TestPoolModeServesInstallerKernel(t *testing.T) {
 		DHCP:       pool,
 	})
 	var mac [6]byte
-	copy(mac[:], []byte{0x50, 0x1d, 0x93, 0xd8, 0xc6, 0x97})
+	copy(mac[:], []byte{0x02, 0x00, 0x00, 0x00, 0x00, 0x0a})
 
 	// Plain DISCOVER (no option 60): proxy mode would stay silent, pool
 	// mode answers with a bare lease.
@@ -299,14 +299,14 @@ func TestPoolModeIgnoresUnknownMACs(t *testing.T) {
 		BaseURL:    "http://192.168.77.1:8080",
 		DHCP:       pool,
 		Resolver: ResolverFunc(func(_ context.Context, mac string) (*Entry, error) {
-			if mac == "02:00:00:00:00:00" {
+			if mac == "02:00:00:00:00:0a" {
 				return &Entry{MAC: mac}, nil
 			}
 			return nil, errors.New("unknown")
 		}),
 	})
 	var mac [6]byte
-	copy(mac[:], []byte{0x50, 0x1d, 0x93, 0xd8, 0xc6, 0x97})
+	copy(mac[:], []byte{0x02, 0x00, 0x00, 0x00, 0x00, 0x0a})
 	pxeOpts := []option{
 		option{optVendorClass, []byte("PXEClient:Arch:00007:UNDI:003016")},
 		option{optArch, u16opt(7)},

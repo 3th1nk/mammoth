@@ -357,3 +357,53 @@ func TestComputerNameTruncation(t *testing.T) {
 		t.Errorf("computerName = %q, want very-long-hostn", name)
 	}
 }
+
+// The unattend language set follows the detected media language; unknown
+// or empty tokens fall back to the driver default (the registered media's
+// language), never to a guessed value the media may not carry.
+func TestMediaLocaleResolution(t *testing.T) {
+	for _, tc := range []struct {
+		lang string
+		want mediaLocale
+	}{
+		{"zh-cn", mediaLocale{uiLang: "zh-CN", inputLocale: "0804:00000804"}},
+		{"en-us", mediaLocale{uiLang: "en-US", inputLocale: "0409:00000409"}},
+		{"  EN-US ", mediaLocale{uiLang: "en-US", inputLocale: "0409:00000409"}},
+		{"fr-fr", defaultMediaLocale},
+		{"", defaultMediaLocale},
+	} {
+		if got := mediaLocaleFor(tc.lang); got != tc.want {
+			t.Errorf("mediaLocaleFor(%q) = %+v, want %+v", tc.lang, got, tc.want)
+		}
+	}
+}
+
+// An en-US media token must flow through to the unattend verbatim — the
+// round trip detection → render is the whole point of the contract.
+func TestRenderWindowsEnUSMedia(t *testing.T) {
+	in := baseInputs()
+	in.MediaLanguage = "en-us"
+	answers, _, err := New("windows2019").RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	var unattend string
+	for _, a := range answers {
+		if a.Name == "autounattend.xml" {
+			unattend = a.Content
+		}
+	}
+	for _, want := range []string{
+		`<UILanguage>en-US</UILanguage>`,
+		`<InputLocale>0409:00000409</InputLocale>`,
+		`<SystemLocale>en-US</SystemLocale>`,
+		`<UserLocale>en-US</UserLocale>`,
+	} {
+		if !strings.Contains(unattend, want) {
+			t.Errorf("autounattend.xml missing %q", want)
+		}
+	}
+	if strings.Contains(unattend, "zh-CN") || strings.Contains(unattend, "0804") {
+		t.Errorf("en-US media round fell back to zh-CN settings:\n%s", unattend)
+	}
+}

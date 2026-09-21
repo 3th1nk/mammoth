@@ -271,9 +271,9 @@ windows wimboot 载体的 install 源是**部署层 SMB 只读共享**(与 NFS �
 导出同哲学,引擎不内建 SMB 服务面——SMB 交 samba/Windows 文件共享):
 
 ```sh
-MAMMOTH_WINDOWS_INSTALL_SMB_SHARE='\\198.51.100.248\mammoth-media'  # 必填,UNC
-MAMMOTH_WINDOWS_INSTALL_SMB_SHARE_USER=''      # 可选;空 = guest 导出
-MAMMOTH_WINDOWS_INSTALL_SMB_SHARE_PASSWORD=''
+MAMMOTH_WINDOWS_INSTALL_SMB_UNC='\\198.51.100.248\mammoth-media'  # 必填,UNC
+MAMMOTH_WINDOWS_INSTALL_SMB_USER=''      # 可选;空 = guest 导出
+MAMMOTH_WINDOWS_INSTALL_SMB_PASSWORD=''
 ```
 
 share 指向介质仓库(`MAMMOTH_MEDIA_DIR`,WinPE 从

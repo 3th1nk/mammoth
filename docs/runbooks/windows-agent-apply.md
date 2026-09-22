@@ -65,7 +65,7 @@
 >   ./cmd/mammoth` → scp 到 248:/root/mammoth.new → kill 旧进程 → mv 到
 >   /usr/local/bin/mammoth → setsid nohup 重启(注意 /root/deploy.sh 里的
 >   env 路径是旧的 /tmp/mammoth.env,实际用 /root/mammoth.env);
->   **248 现行二进制 = 方案 A 版(efb5a36+c3d99ca),与 HEAD 同步**;
+>   **248 现行二进制 = HEAD(89bd602,含 auto 判定+capabilities+v10 网关幂等),与 HEAD 同步**;
 > - **248 跑 builtin netboot 栈**(mammoth 自持 UDP 67/69/4011,
 >   `MAMMOTH_PXE_ENABLED=true`),proxyDHCP 按 entry kind 自动发 NBP
 >   (agent 条目→shim 链,wimboot 条目→plain ipxe-amd64.efi),二段切换
@@ -80,7 +80,7 @@
 > - 凭据加密存 DB,MAMMOTH_MASTER_KEY 在 /root/mammoth.env;
 >   iBMC 的 SOL 会话建立但零字节,排障不可用——用 diag 回传通道;
 > - Windows ISO:/data/os_iso/windows2019/cn_windows_server_2019_x64_dvd_4de40f33.iso;
->   prepared 树缓存 pool-store/7582db01...(injector v3 命中,秒级)。
+>   prepared 树缓存 pool-store/7582db01...(injector v10,内容变更自动重建;首次装机多一次 wim 手术,此后秒级命中)。
 >
 > **真机排障主通道**:VGA 在 initramfs 后冻结属预期(console=ttyS0 切换;
 > first boot 期的黑屏+cmd 小窗口 = AutoLogon 收尾脚本在跑,正常);
@@ -90,19 +90,21 @@
 > alpine 诊断任务取回(modprobe ntfs3 → wget --post-file)。
 > 248 上留了 /root/winev.sh(任务事件查询助手:winev.sh <task_id> [limit])。
 >
+> **boot.installer=auto 已落地(89bd602)**:提交时声明 auto → prepare
+> 按部署事实判定通路——SMB 导出(MAMMOTH_WINDOWS_INSTALL_SMB_UNC)已
+> 配置走 setup 主线,未配置走 agent apply;提交门对 auto 免 SMB 门禁。
+> 缺省(不声明)仍是 setup。
+>
 > **已知小缺陷(未修)**:cancel 不释放 netboot 条目(残留条目会让机器
 > 误跑旧通路——重跑前手动 `DELETE FROM netboot_entries`);机器状态机
 > 装完停留 discovering;同机多轮重试会堆积 pending 任务(重跑前批量
 > cancel)。
 
-> 目标:在 wimboot-over-PXE 真机闭环(2026-09-21)之后,验证 **agent
-> apply-image** 通路(`boot.installer=agent`)的六阶段真机闭环:机器引导
-> alpine agent → HTTP 拉 install.wim → wimlib 直写 NTFS → BCD 预烤 →
-> 重启 → first boot 回调 → 六阶段绿。前置 qemu 证据与集成说明见
-> docs/compat/distros.md §windows "agent apply-image 落地(2026-09-22)"。
-> 预计窗口:半天(TCG 预演可省;真机 apply 4.3G 为分钟级)。
+> 目标(已收官 2026-09-22):agent apply-image 通路六阶段真机闭环验证
+> ——多轮全绿,终态见顶部状态块;历史设计/实施细节见下文 §方案 A
+> 实施清单与 docs/compat/distros.md §windows 落地节。
 
-## §方案 A 实施清单(✅ 代码面已落地 2026-09-22,待真机复验)
+## §方案 A 实施清单(✅ 已落地并真机验证 2026-09-22;下文为实施记录)
 
 外部评审(2026-09-22,专家意见 + PZ regf 详解 + ReactOS cmlib 源码核对)
 定案:手工补丁的模板派生 store 对 NT 的 BcdOpenStore 永远不合法

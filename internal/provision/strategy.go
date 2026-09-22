@@ -106,18 +106,30 @@ const (
 )
 
 // effectiveInstallPath resolves boot.installer: a non-empty spec declaration
-// wins ("setup" | "agent"), else the driver default (setup — the agent path
-// is explicit opt-in until it hardens on real hardware, docs/09-roadmap.md
-// 影子决策 step). Unknown declarations return known=false; the submit gate
+// wins ("setup" | "agent" | "auto"), else the driver default (setup — the
+// proven mainline). Unknown declarations return known=false; the submit gate
 // turns that into SCHEMA_INVALID_BOOT_INSTALLER.
-func effectiveInstallPath(spec *installSpecView) (installPath, bool) {
-	if spec == nil || spec.Boot.Installer == "" {
-		return pathSetup, true
+//
+// "auto" is the deployment-fact judgment (影子决策落地, 2026-09-22): the
+// setup.exe flow requires the deployment SMB export and buys full driver
+// coverage — configured → setup. Without the export the wimboot carrier has
+// nothing to install from, so the SMB-free agent apply pathway is the only
+// viable one — absent → agent. Hardware-driver-coverage detection stays a
+// later enhancement (needs a machine-model ↔ inbox-driver map).
+func effectiveInstallPath(spec *installSpecView, smbConfigured bool) (installPath, bool) {
+	decl := ""
+	if spec != nil {
+		decl = spec.Boot.Installer
 	}
-	switch spec.Boot.Installer {
-	case "setup":
+	switch decl {
+	case "", "setup":
 		return pathSetup, true
 	case "agent":
+		return pathAgent, true
+	case "auto":
+		if smbConfigured {
+			return pathSetup, true
+		}
 		return pathAgent, true
 	default:
 		return pathSetup, false

@@ -596,6 +596,11 @@ bcdedit 枚举成功,NT BcdOpenStore 门禁通过——0xC0000098 死点终结**
 内 curl 由 builder 从 install.wim 补种(介质 boot.wim 不带 curl)。诊断面
 固化:VGA 冻结(console 切 ttyS0)属预期,agent 步骤级 diag 回传 +
 bcdboot 段裁定标记为排障主通道。
+**自动通路判断(boot.installer=auto,2026-09-22 落地)**:提交时声明
+auto → prepare 阶段按部署事实判定——SMB 导出
+(MAMMOTH_WINDOWS_INSTALL_SMB_UNC)已配置走 setup 主线(驱动覆盖完整),
+未配置走 agent apply(无 SMB 依赖);硬件驱动覆盖检测(机型↔inbox
+驱动映射)留作后续增强。提交门对 auto 免 SMB 门禁(判定在 prepare 落地)。
 **遗留**:cancel 不释放 netboot 条目(待修);机器状态机装完停留
-discovering(待查);ntfs3 目录态 apply;SB ON(需内核签名);自动通路
-判断(影子决策阶段,后置)。
+discovering(待查);ntfs3 目录态 apply;SB ON(需内核签名);装完会话
+文字渲染(见 runbook 开放问题)。

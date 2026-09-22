@@ -27,3 +27,6 @@ coverage.html
 # ISO artifacts (distro images, boot media build dirs)
 *.iso
 *.iso.build
+
+# ZCode 会话本地文件(计划/缓存,不入库)
+.zcode/

@@ -120,7 +120,11 @@ POST /api/v1/jobs
     },
     "access": {
       "root_password": "",                 // 缺省/空 = 自动生成;非空 = 明文口令
-      "ssh_keys": ["ssh-ed25519 AAA..."]
+      "ssh_keys": ["ssh-ed25519 AAA..."],
+      "capabilities": ["rdp", "winrm", "ping"]  // windows 专用,可选:装完后
+      // 在防火墙额外启用的访问能力(rdp=远程桌面+放行,winrm=PowerShell 远程,
+      // ping=回显请求放行);缺省不开——对全新安装放开入站管理是操作者的
+      // 安全决策,按任务显式声明,未知值提交即拒
     },
     "scripts": [
       { "stage": "pre_install",  "content_base64": "..." },
@@ -229,6 +233,27 @@ spec 是发行版无关的声明;方言不能落地的项在**渲染期显式拒
 | 硬件 RAID 卷 | ✅(绑定设备) | ✅(serial 绑定) | ✅(绑定设备,单目标) |
 | 多安装目标盘 | ✅ | ✅ | ❌ partman-auto 单盘(其余盘 keep: disk) |
 | xfs | ✅ | ✅(curtin) | ❌ netinst partman 白名单 ext2/3/4、vfat/fat32、swap |
+
+### 5.4 boot — 载体与安装通路
+
+```jsonc
+{
+  "boot": {
+    "strategy": "pxe",       // virtual_media | pxe(缺省 = 部署默认,capabilities.boot_strategy_default)
+    "installer": "agent"     // setup | agent(缺省 = setup)。windows 专用;其他发行版提交即拒
+  }
+}
+```
+
+`installer` 选择 **windows 安装通路**(docs/compat/distros.md §windows 通路路线):
+
+| 值 | 通路 | 载体 | install 源 | 前置 |
+|----|------|------|-----------|------|
+| `setup`(默认) | setup.exe 黑盒,wimboot-over-PXE 或虚拟介质 | wimboot / 虚拟介质 CD | 部署层 SMB 导出 | `MAMMOTH_WINDOWS_INSTALL_SMB_UNC` |
+| `agent` | agent apply-image:wimlib apply + 预烤 BCD + unattend 落 Panther,复用 Linux agent 引导与声明式落盘 | alpine agent(shim→grubnet,SB 链同构) | 引擎 HTTP 面(`/netboot/store/<sha>/win/tree/`),**无需 SMB** | `MAMMOTH_WINDOWS_APPLY_ALPINE_ISO`(extended ISO:python3/sfdisk/partx)+ PXE |
+
+边界:agent 通路 PXE-only、UEFI-only、仅 inbox 驱动机型(wimlib 只铺文件,
+不做驱动服务化)。两通路回调面/verify 语义完全一致,可按机型混用。
 
 ## 6. 关键取舍
 

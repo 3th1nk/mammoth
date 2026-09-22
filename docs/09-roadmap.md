@@ -248,7 +248,16 @@
      四件套,wimboot GPL2 纳管同 shim/grub 先例;网络引导绕开 El Torito,
      根治本固件缺陷,外部逃生门即投递载体);②**终局 = agent
      apply-image**(wimlib apply + 预烤 BCD + unattend 落 Panther,复用
-     agent 引导与声明式落盘);③Ventoy 式 grub 链载 = 可选介质侧实验;
+     agent 引导与声明式落盘)——**✅ 代码面落地 + qemu 启动闭环实证
+     (2026-09-22,compat/distros.md §windows agent apply-image 节)**:
+     boot.installer=agent 契约/渲染/载体/runtime/投递面全链;BCD 预烤
+     (bcdpatch.py 就地 regf 手术,BCD-SYS 格式互证)与 wimlib 直写未挂载
+     NTFS spike 实证;**2288H 真机窗口(2026-09-22)**:apply 链路全通(引导/拉 wim/直写/
+预烤/重启 ✓),**first boot specialize 的 BCD 更新未通**(NT 拒载模板
+派生 store,0xC0000098)——下一步从零 regf 生成器或 WinPE bcdboot 混合
+收尾(runbooks/windows-agent-apply.md);遗留 = cancel 释放条目/机器
+状态机回 ready 两个小修;
+     ③Ventoy 式 grub 链载 = 可选介质侧实验;
      ④iBMC 升级 = 正确修复(与 SecureErase 缺失叠加升级动机),物理 USB
      = 有人场景最短路径。
    - **复验轮**——22.04-crypt(性价比最高: crypt 修复仅 24.04 轮覆盖过,

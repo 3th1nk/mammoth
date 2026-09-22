@@ -65,6 +65,19 @@ func (s *Server) ReportInstallComplete(ctx context.Context, request gen.ReportIn
 			detail = *request.Body.Detail
 		}
 	}
+	// status "applied" is the agent apply-image pathway's phase-one report:
+	// the image is laid down and the machine is rebooting into first boot —
+	// it releases the boot payload but does NOT complete the task; the
+	// terminal completion is the first-boot callback from the installed OS.
+	if status == "applied" {
+		if err := s.Jobs.RecordInstallApplied(ctx, task.ID, detail); err != nil {
+			return nil, err
+		}
+		s.Events.Append(ctx, "task", task.ID, "task.install_applied", map[string]any{
+			"detail": detail,
+		})
+		return gen.ReportInstallComplete204Response{}, nil
+	}
 	if err := s.Jobs.RecordInstallComplete(ctx, task.ID, status, detail); err != nil {
 		return nil, err
 	}

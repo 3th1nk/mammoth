@@ -132,6 +132,12 @@ func TestRenderWindowsUEFIUnattend(t *testing.T) {
 	for _, want := range []string{
 		`mammoth\task.json`, `Get-NetAdapter`, `New-NetIPAddress`,
 		`Set-DnsClientServerAddress`, `$cfg.complete_url`,
+		// static config clears a conflicting DHCP default route first
+		`Remove-NetRoute -DestinationPrefix "0.0.0.0/0"`,
+		// the AutoLogon scrub is user-context-only: the SetupComplete
+		// (SYSTEM) execution must not race winlogon's auto-logon
+		`GetCurrent().IsSystem`,
+		`Remove-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name AutoAdminLogon`,
 	} {
 		if !strings.Contains(ps1, want) {
 			t.Errorf("mammoth-complete.ps1 missing %q", want)
@@ -418,5 +424,40 @@ func TestRenderWindowsEnUSMedia(t *testing.T) {
 	}
 	if strings.Contains(unattend, "zh-CN") || strings.Contains(unattend, "0804") {
 		t.Errorf("en-US media round fell back to zh-CN settings:\n%s", unattend)
+	}
+}
+
+// access.capabilities (opt-in): channels ride task.json into the ps1, which
+// opens only the requested firewall groups; unknown channels are rejected.
+func TestRenderWindowsCapabilities(t *testing.T) {
+	in := baseInputs()
+	in.Capabilities = []string{"rdp", "ping"}
+	_, _, ps1Task, err := func() (string, string, string, error) {
+		ans, _, err := New("windows2019").RenderAnswers(in, render.MachineView{})
+		if err != nil {
+			return "", "", "", err
+		}
+		for _, a := range ans {
+			if a.Name == TaskJSONSeedName {
+				return "", "", a.Content, nil
+			}
+			if a.Name == AgentTaskJSONName {
+				return "", "", a.Content, nil
+			}
+		}
+		return "", "", "", nil
+	}()
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, want := range []string{`"capabilities":["rdp","ping"]`, `"rdp"`, `"ping"`} {
+		if !strings.Contains(ps1Task, want) {
+			t.Errorf("task.json missing %q", want)
+		}
+	}
+	in2 := baseInputs()
+	in2.Capabilities = []string{"telnet"}
+	if _, _, err := New("windows2019").RenderAnswers(in2, render.MachineView{}); err == nil {
+		t.Errorf("unknown capability accepted")
 	}
 }

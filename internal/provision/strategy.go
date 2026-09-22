@@ -30,6 +30,10 @@ type bootSession struct {
 	Ictx    *installTaskContext
 	Answers []render.AnswerFile
 	Boot    render.BootParams
+	// Inputs carries the render inputs the answers came from — the
+	// carrier/payload choice in prepare reads the installer declaration
+	// from here (windows: setup → wimboot, agent → alpine netboot).
+	Inputs render.InstallInputs
 	// Seed carries extra boot-media seed files beyond the rendered answers
 	// (the agent installer's apkovl overlay — binary content that must not
 	// round-trip through the JSON task context).
@@ -88,6 +92,36 @@ func effectiveStrategyName(e *Executor, spec *installSpecView) (bootStrategyName
 		return strategyPXE, true
 	}
 	return strategyVirtualMedia, true
+}
+
+// installPath names the windows install pathway: the setup.exe black box
+// (the default, booted through the wimboot carrier) or the agent
+// apply-image flow (wimlib apply + pre-baked BCD through the alpine agent
+// carrier — docs/compat/distros.md §windows, 通路路线决策).
+type installPath string
+
+const (
+	pathSetup installPath = "setup"
+	pathAgent installPath = "agent"
+)
+
+// effectiveInstallPath resolves boot.installer: a non-empty spec declaration
+// wins ("setup" | "agent"), else the driver default (setup — the agent path
+// is explicit opt-in until it hardens on real hardware, docs/09-roadmap.md
+// 影子决策 step). Unknown declarations return known=false; the submit gate
+// turns that into SCHEMA_INVALID_BOOT_INSTALLER.
+func effectiveInstallPath(spec *installSpecView) (installPath, bool) {
+	if spec == nil || spec.Boot.Installer == "" {
+		return pathSetup, true
+	}
+	switch spec.Boot.Installer {
+	case "setup":
+		return pathSetup, true
+	case "agent":
+		return pathAgent, true
+	default:
+		return pathSetup, false
+	}
 }
 
 // releaseBootPayload reclaims whichever payload a task produced — the

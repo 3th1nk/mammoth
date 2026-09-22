@@ -815,7 +815,8 @@ func (s *Server) validateSnapshotBinding(ctx context.Context, machineID string, 
 func (s *Server) validateBootStrategy(specRaw json.RawMessage) error {
 	var spec struct {
 		Boot *struct {
-			Strategy string `json:"strategy"`
+			Strategy  string `json:"strategy"`
+			Installer string `json:"installer"`
 		} `json:"boot"`
 		Image struct {
 			Distro string `json:"distro"`
@@ -826,6 +827,15 @@ func (s *Server) validateBootStrategy(specRaw json.RawMessage) error {
 	}
 	if spec.Boot == nil {
 		return nil
+	}
+	switch spec.Boot.Installer {
+	case "":
+		// driver default — setup for windows
+	case "setup", "agent":
+		// fall through: windows-only, gated after the driver lookup
+	default:
+		return verr("SCHEMA_INVALID_BOOT_INSTALLER",
+			"boot.installer %q is not one of setup|agent", spec.Boot.Installer)
 	}
 	switch spec.Boot.Strategy {
 	case "", "virtual_media":
@@ -848,6 +858,17 @@ func (s *Server) validateBootStrategy(specRaw json.RawMessage) error {
 		return verr("SCHEMA_UNSUPPORTED_BOOT_STRATEGY",
 			"distro %s declares %q PXE support: only the RHEL-lineage and wimboot installers boot over the network",
 			spec.Image.Distro, pxe)
+	}
+	// boot.installer=agent is the windows apply-image pathway (the alpine
+	// agent carrier: wimlib apply + pre-baked BCD — docs/compat/distros.md
+	// §windows 通路路线). Windows-only today; the agent carrier consumes the
+	// HTTP win tree, so the SMB export gate does NOT apply to it.
+	if spec.Boot.Installer == "agent" {
+		if render.FamilyOf(driver) != "windows" {
+			return verr("SCHEMA_INVALID_BOOT_INSTALLER",
+				"boot.installer=agent is windows-only today (distro %s)", spec.Image.Distro)
+		}
+		return nil
 	}
 	// The wimboot carrier's install source is the deployment SMB export —
 	// without it WinPE boots and then has nothing to install from, so the

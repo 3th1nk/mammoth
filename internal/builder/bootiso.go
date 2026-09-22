@@ -331,8 +331,15 @@ func EnsureISO(ctx context.Context, sourceURL, cacheDir string) (string, error) 
 	if !isHTTP {
 		// Same-host export: mammoth colocated with the NFS server (the
 		// common single-node deployment) — the URI's path resolves on this
-		// filesystem directly, no copy into the cache needed.
-		if p := uriPath(sourceURL); p != "" {
+		// filesystem directly, no copy into the cache needed. A bare
+		// absolute path is the same deal (the config surface documents
+		// "local path or URL"; the probe/alpine env vars use bare paths —
+		// they broke when the cache copy was cleaned away).
+		p := uriPath(sourceURL)
+		if p == "" && strings.HasPrefix(sourceURL, "/") {
+			p = sourceURL
+		}
+		if p != "" {
 			if fi, serr := os.Stat(p); serr == nil && fi.Mode().IsRegular() {
 				return p, nil
 			}
@@ -513,12 +520,21 @@ func windowsCacheHeadroom(dir string) error {
 }
 
 // windowsInjectorVersion guards the prepared-tree cache — bump when the
+// (NEVER reuse a number: markers are compared for equality, so a reused
+// number would make an old-content tree look current). Bump when the
 // injected script pair, its destinations or the SKU contract change, and
 // stale trees re-inject on the next build. v2 adds sources\ei.cfg (the
 // empty-Key unattend contract depends on it). v3: the ps1 reads its config
 // from its own directory first ($PSScriptRoot\task.json — shipped there by
-// the startnet diag loop once setup has applied the image).
-const windowsInjectorVersion = "3"
+// the startnet diag loop once setup has applied the image). v4: the ps1
+// spawns an interactive cmd on exit. v5: v4's spawned window never showed
+// — the ps1 logged off instead. v6: root cause of the dead-console hang —
+// the ps1's AutoLogon scrub ran in the SetupComplete (SYSTEM) context,
+// racing winlogon's own auto-logon; the scrub now runs only in the user
+// context (FirstLogon re-run), the static-gateway config clears a
+// conflicting DHCP default route first, and the logoff is gone — the
+// boot ends on the auto-logged-on Core desktop like the setup.exe flow.
+const windowsInjectorVersion = "10"
 
 // windows seed-file contract between the driver and the wim injector.
 const (

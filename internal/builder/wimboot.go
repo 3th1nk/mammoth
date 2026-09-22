@@ -65,8 +65,9 @@ const (
 	wimbootUnattendSeed = "autounattend.xml"
 	wimbootTaskSeed     = "mammoth/task.json"
 	// startnet replaces the stock wpeinit-only script at the WinPE startup
-	// hook — it maps the deployment SMB export and launches setup (the
-	// install source does NOT ride the wim, see the package comment).
+	// hook — two shapes ride this seat: the setup flow's SMB map + setup
+	// launch, and the agent apply pathway's boot-two bcdboot form (rendered
+	// by the windows driver, baked by provision at the applied marker).
 	wimbootStartnetSeed = "mammoth/startnet.cmd"
 	wimbootStartnetDest = "/Windows/System32/startnet.cmd"
 	// winpeshl.ini pins the startup to startnet: the Setup image's own flow
@@ -124,19 +125,30 @@ func BuildWindowsWimboot(ctx context.Context, opt WindowsWimbootOptions) (BootTr
 
 	// Per-task augmentation: the answer file and the task config (KB-scale).
 	// install.wim stays OUT — see the package comment (4 GiB bootmgr limit).
+	// The unattend/task seeds are OPTIONAL: the setup path always provides
+	// both, but the agent apply pathway's boot two (bcdboot WinPE) ships
+	// only the startnet pair — that WinPE never runs setup, so the answer
+	// file has no consumer there (provision passes the whole answer map as
+	// the seed and the carrier picks what its contract names).
 	wimPath := filepath.Join(opt.DestDir, "boot.wim")
 	idx, err := wimBootIndex(ctx, wimPath)
 	if err != nil {
 		return BootTree{}, err
 	}
-	for _, f := range []struct{ seedName, dest string }{
-		{wimbootUnattendSeed, "/autounattend.xml"},
-		{wimbootTaskSeed, "/" + wimbootTaskSeed},
-		{wimbootStartnetSeed, wimbootStartnetDest},
-		{wimbootWinpeshlSeed, wimbootWinpeshlDest},
+	for _, f := range []struct {
+		seedName, dest string
+		required       bool
+	}{
+		{wimbootUnattendSeed, "/autounattend.xml", false},
+		{wimbootTaskSeed, "/" + wimbootTaskSeed, false},
+		{wimbootStartnetSeed, wimbootStartnetDest, true},
+		{wimbootWinpeshlSeed, wimbootWinpeshlDest, true},
 	} {
 		content, ok := opt.Seed[f.seedName]
 		if !ok || content == "" {
+			if !f.required {
+				continue
+			}
 			return BootTree{}, fmt.Errorf("builder: windows wimboot seed %s missing", f.seedName)
 		}
 		src := filepath.Join(opt.DestDir, ".seed-"+filepath.Base(f.seedName))
@@ -158,6 +170,27 @@ func BuildWindowsWimboot(ctx context.Context, opt WindowsWimbootOptions) (BootTr
 			return BootTree{}, fmt.Errorf("wimlib-imagex update (add %s: builder image must ship wimlib): %w: %s",
 				f.dest, uerr, tail(out, 400))
 		}
+	}
+
+	// curl.exe rides boot.wim: stock WinPE 1809 does NOT carry it (the
+	// media's boot.wim was checked — bcdboot/bcdedit/diskpart are there,
+	// curl is not), and both startnet shapes speak HTTP with it — the
+	// setup flow's Panther-log uploads and the agent pathway's boot-two
+	// verdict marker are engine-visible ONLY through curl. The full OS
+	// image always carries it: extract once from the prepared install.wim
+	// (every image lists it) and add to the boot image.
+	curlDir := filepath.Join(opt.DestDir, ".curl-extract")
+	if out, xerr := exec.CommandContext(ctx, "wimlib-imagex", "extract",
+		filepath.Join(tree, "sources", "install.wim"), "1",
+		`\\Windows\\System32\\curl.exe`, "--dest-dir="+curlDir, "--no-acls",
+	).CombinedOutput(); xerr != nil {
+		return BootTree{}, fmt.Errorf("wimlib extract curl.exe: %w: %s", xerr, tail(out, 400))
+	}
+	defer os.RemoveAll(curlDir)
+	curlSrc := filepath.Join(curlDir, "curl.exe")
+	if _, aerr := exec.CommandContext(ctx, "wimlib-imagex", "update", wimPath, idx,
+		"--command=add "+curlSrc+" /Windows/System32/curl.exe").CombinedOutput(); aerr != nil {
+		return BootTree{}, fmt.Errorf("wimlib-imagex update (add curl.exe): %w", aerr)
 	}
 
 	return BootTree{

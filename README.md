@@ -67,7 +67,7 @@ flowchart TD
         ks["kickstart<br/>rocky · centos · kylin · UOS"]
         ai["autoinstall<br/>ubuntu 22.04 / 24.04"]
         ps["preseed<br/>debian 12 / 13"]
-        wu["unattend<br/>windows 2019 (UEFI-only)"]
+        wu["unattend<br/>windows 2019 (UEFI-only)<br/>boots differently ⤓ windows pathways"]
     end
     ver["5 · verify: completion report +<br/>in-band SSH probe (installer-aware)<br/>+ post-install layout snapshot"]
     reg --> rf
@@ -84,6 +84,24 @@ flowchart TD
     ai --> ver
     ps --> ver
     wu --> ver
+```
+
+### Windows pathways — windows boots differently
+
+Both windows pathways avoid the standard kernel-PXE shape: setup rides
+**wimboot** (bootmgfw/BCD/boot.sdi/boot.wim fed over HTTP — plain iPXE, no
+shim/grub), and the agent pathway is **two-boot** (the second boot re-arms
+the same wimboot carrier so `bcdboot` — not Linux — writes the BCD).
+
+```mermaid
+flowchart TD
+    subgraph WS["windows 2019 · boot.installer"]
+        st["**setup** (default)<br/>PXE: plain iPXE → wimboot<br/>(bootmgfw · BCD · boot.sdi · boot.wim)<br/>install source: deployment SMB export<br/>vMedia: rebuilt ISO + autounattend"]
+        a1["**agent · boot one**<br/>alpine agent → wimlib applies<br/>install.wim onto NTFS + in-wim<br/>injection · ESP left empty"]
+        a2["**agent · boot two**<br/>re-armed wimboot WinPE →<br/>bcdboot writes the BCD natively"]
+    end
+    st --> fbt["first boot:<br/>specialize/OOBE → completion callback"]
+    a1 -->|"applied → re-arm PXE"| a2 --> fbt
 ```
 
 ### PXE addressing: the DHCP decision framework

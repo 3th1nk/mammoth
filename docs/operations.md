@@ -296,18 +296,21 @@ aarch64 没有 alpine extended ISO,agent 路径产品化时包池需另解。
 
 ### 4.5.3 Windows agent apply-image 通路(boot.installer=agent)
 
-`boot.installer: agent` 走 **agent apply-image**:机器引导 alpine agent
-(Linux 装机同款载体链),在机器侧 `wimlib apply` 把预备树里的 install.wim
-直接铺到声明式 NTFS 卷、从介质模板**预烤 BCD**(`bcdpatch.py`,就地 regf
-手术)、把 unattend 落到 `\Windows\Panther`,重启后 specialize/oobeSystem
-与回调链和 setup 路径完全一致。**不消费 SMB 导出**——安装源走引擎 HTTP 面。
+`boot.installer: agent` 走 **agent apply-image(两段式)**:①机器引导
+alpine agent(Linux 装机同款载体链),机器侧 `wimlib apply` 把预备树
+install.wim 直接铺到声明式 NTFS 卷、in-wim 注入首启配置(unattend 落
+`\Windows\Panther` + task.json + SpBcd 剥离版 Specialize.xml),ESP 留空;
+②编排侧在 applied 回报后重挂 wimboot 载体二次引导 WinPE,由 **bcdboot
+原生生成 BCD**——手工预烤的 store 对 NT 的 BcdOpenStore 永远不合法
+(真机定案)。重启后 specialize/oobeSystem 与回调链和 setup 路径完全
+一致。**不消费 SMB 导出**——安装源走引擎 HTTP 面。
 
 ```sh
 MAMMOTH_WINDOWS_APPLY_ALPINE_ISO='/data/os_iso/alpine-extended-3.22.2-x86_64.iso'  # 必填
 ```
 
 指向 alpine **extended** ISO:其 /apks 包池在机器上提供
-sfdisk/partx/dosfstools/**python3**(BCD 预烤运行于 python3);wimlib/mkntfs
+sfdisk/partx/dosfstools;wimlib/mkntfs
 工具闭包不走包池——以 pinned 二进制随 agent overlay 下机
 (`assets/win-apply/`,同 alpine 3.22 源,PROVENANCE 见该目录)。
 
@@ -315,7 +318,10 @@ sfdisk/partx/dosfstools/**python3**(BCD 预烤运行于 python3);wimlib/mkntfs
 inbox 驱动机型(wimlib 只铺文件,不做驱动服务化——boot-critical 驱动不在
 介质 inbox 的机型留在 setup 路径,这正是保留该通路的原因);目标机内存
 ≥ install.wim 体积 + 2G(wim 先暂存内存盘再直写卷)。两通路互补并存:
-`capabilities.windows_agent_installer` 报告本部署 agent 通路是否可用。
+`capabilities.windows_agent_installer` 报告本部署 agent 通路是否可用;
+`boot.installer=auto` 按部署事实(SMB 导出有无)自动二选一。装完会话
+文字渲染的已知问题与三层兜底:见 runbooks/windows-agent-apply.md 开放
+问题节。
 
 ## 4.6 HTTPS 终止(生产)
 

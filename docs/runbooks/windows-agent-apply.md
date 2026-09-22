@@ -222,27 +222,29 @@ value 数据改写**(bcdpatch.py 机制,零分配)+ BCD 文件 4096 对齐。
 
 ## 4. boot→install_os 观察(机器面)
 
-1. 机器 PXE → shim→grubnet→alpine 起(串口/SOL 见 mammoth-agent 打头日志);
-2. agent 拉计划 → 分区(wipefs+sfdisk GPT)→ mkntfs → **wim 下载(4.3G,
-   分钟级,RAM 预检失败会带分类 detail 直接 bail)** → wimlib apply(进度
-   走控制台)→ ntfs3 短挂载写 Panther/task.json → bcdpatch → ESP 落位 →
-   POST complete → `reboot -f`。
-3. 磁盘判定:`sfdisk -d /dev/nvme*n` 应见 GPT + ESP/MSR/ntfs 三段,
-   `label-id` 即 BCD 里预烤的 disk GUID。
+1. 机器 PXE → plain iPXE(或 shim→grubnet)→ alpine 起(mammoth-agent
+   打头日志);
+2. agent 拉计划 → 分区(wipefs+sfdisk GPT:ESP/MSR/NTFS)→ mkntfs →
+   **wim 下载(4.3G,分钟级,RAM 预检失败会带分类 detail 直接 bail)** →
+   in-wim 注入(unattend/task.json/Specialize)→ wimlib apply(进度走
+   控制台+diag)→ POST applied → `reboot -f`。
+3. 磁盘判定:`sfdisk -d` 应见 GPT + ESP/MSR/ntfs 三段。
 
 ## 5. first boot → 六阶段
 
-重启后(一次性 PXE 已失效,直落盘):bootmgfw(ESP)→ 预烤 BCD →
-winload → specialize/oobeSystem → FirstLogonCommands → 静态网(.215)→
-完成回调 → install_os 释放 PXE 记录 → verify_ready(boot order 还原)。
-验收:**六阶段全绿 + `198.51.100.215` 按 spec 落网 + 事件
-`task.install_reported`**。失败面:`bail win_apply` 的 detail 带
-err/log trail(串口可读);setup 路径保留为对照通路(同机提交不带
-installer 字段即可复跑)。
+boot-two 释放后直落盘:bootmgfw(ESP,bcdboot 生成)→ winload →
+specialize/oobeSystem → AutoLogon + FirstLogonCommands → 静态网 →
+完成回调(SetupComplete 与 FirstLogon 各一次,引擎取首条)→
+install_os 释放 PXE 记录 → verify_ready(boot order 还原)。
+验收:**六阶段全绿 + `.215` 按 spec 落网(ARP 层)+ 事件
+`task.install_reported`**。失败面:bail 的 detail 带 err/log trail;
+setup 路径保留为对照通路(同机提交不带 installer 字段即可复跑)。
 
 ## 6. 已知边界(预期内,非故障)
 
 - wimlib 只铺文件:**inbox 驱动覆盖外的机型不在本通路射程**(无驱动注入);
 - RAM < install.wim + 2G 的机器在 RAM 预检处 bail(2028H ≥128G 无虞);
 - Secure Boot ON 需内核签名(当前 wimboot 与 agent 通路都要求 SB OFF);
-- 装机期机器入站 ICMP/RDP 默认被 Windows 防火墙拦(同 wimboot 轮注记)。
+- 装机期机器入站 ICMP/RDP 默认被 Windows 防火墙拦(同 wimboot 轮注记);
+  `access.capabilities` 开启 rdp/winrm/ping 时,ps1 用 Any-profile 显式
+  规则放行(Public 下默认无 RDP/ICMP 实例,zh-CN 的 netsh 组名不可用)。

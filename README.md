@@ -30,9 +30,11 @@ no built-in UI.**
   network boot closed-loop on real hardware; agent-initramfs install path,
   the BMC capability trio (firmware inventory / BIOS settings / NIST 800-88
   drive erase), the external DHCP+TFTP escape hatch, and the arm64 boot chain
-  (SB signature chain qemu-verified). **windows2019 v1 code-complete**
-  (virtual media + UEFI-only; build chain validated on real media + OVMF boot
-  verified; real hardware pending). ([roadmap](docs/09-roadmap.md))
+  (SB signature chain qemu-verified). **windows2019 real-hardware closed-loop**
+  (2026-09-22: the wimboot-PXE setup flow and the two-stage agent
+  apply-image pathway are both six-stage green on real hardware;
+  `boot.installer=auto` picks the pathway by deployment facts).
+  ([roadmap](docs/09-roadmap.md))
 
 ## Why the name Mammoth
 
@@ -118,7 +120,7 @@ flowchart TD
 | UOS | kickstart | DVD ISO | same ISO | NFS ISO | ✅ both |
 | ubuntu 22.04 / 24.04 | autoinstall | **live-server** ISO (casper, repacked) | **live-server** ISO (squashfs over NFS) | unpacked ISO tree over NFS | ✅ both |
 | debian 12 / 13 | preseed | **netinst** ISO (repacked) | **netinst** ISO (signed HTTP pool) **+ official netboot.tar.gz** + staged udebs | HTTP pool (checksum-complete, by-hash backfilled) | ✅ both |
-| windows 2019 | unattend | official media repacked (root autounattend + SetupComplete wimlib injection, UDF bridge) | — (not in v1; WinPE chain deferred to v1.x) | — | qemu boot+unattend-accept ✅ · real pending |
+| windows 2019 | unattend | official media repacked (root autounattend + SetupComplete wimlib injection, UDF bridge) | setup: wimboot-over-PXE (SMB install source) · agent: two-stage apply (HTTP win tree, no SMB) | — | ✅ real: six-stage green (setup + agent apply) |
 
 Rule of thumb: **netinst / minimal** = small installer with its own package
 pool (PXE-friendly); **DVD** = fully offline pool; **live-server** = ubuntu's

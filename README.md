@@ -24,17 +24,8 @@ no built-in UI.**
 
 - Design documents: [docs/README.md](docs/README.md)
 - API contract (single source of truth): [api/openapi.yaml](api/openapi.yaml)
-- Status: **v1.1.0 released** (2026-09-19) — v1.0 contract frozen (additive
-  only); four dialects closed-loop on real hardware: rocky9 / ubuntu22 /
-  debian12 + uniontechos (virtual media + PXE both carriers); M7 PXE/iPXE
-  network boot closed-loop on real hardware; agent-initramfs install path,
-  the BMC capability trio (firmware inventory / BIOS settings / NIST 800-88
-  drive erase), the external DHCP+TFTP escape hatch, and the arm64 boot chain
-  (SB signature chain qemu-verified). **windows2019 real-hardware closed-loop**
-  (2026-09-22: the wimboot-PXE setup flow and the two-stage agent
-  apply-image pathway are both six-stage green on real hardware;
-  `boot.installer=auto` picks the pathway by deployment facts).
-  ([roadmap](docs/09-roadmap.md))
+- Status & per-version changes: see [Releases](https://github.com/3th1nk/mammoth/releases)
+  and the [roadmap](docs/09-roadmap.md).
 
 ## Why the name Mammoth
 
@@ -114,9 +105,9 @@ flowchart TD
 | Distro | Dialect | virtual_media image | PXE image | PXE install source | Real hardware |
 |---|---|---|---|---|---|
 | rocky 9 | kickstart | minimal / DVD ISO (repacked) | same ISO (boot files extracted) | HTTP pool or NFS ISO | ✅ both |
-| rocky 10 | kickstart | DVD ISO, UEFI-only layout | same | same | qemu ✅ · real pending |
+| rocky 10 | kickstart | DVD ISO, UEFI-only layout | same | same | ✅ real closed-loop (2288H, UEFI-only) |
 | centos 7 | kickstart | minimal ISO | same ISO | same | ✅ vMedia |
-| kylin V10 / V11 | kickstart | DVD ISO | same ISO | same | pending |
+| kylin V10 / V11 | kickstart | DVD ISO | same ISO | same | ✅ V11 closed-loop · V10 limited (static-net NM) |
 | UOS | kickstart | DVD ISO | same ISO | NFS ISO | ✅ both |
 | ubuntu 22.04 / 24.04 | autoinstall | **live-server** ISO (casper, repacked) | **live-server** ISO (squashfs over NFS) | unpacked ISO tree over NFS | ✅ both |
 | debian 12 / 13 | preseed | **netinst** ISO (repacked) | **netinst** ISO (signed HTTP pool) **+ official netboot.tar.gz** + staged udebs | HTTP pool (checksum-complete, by-hash backfilled) | ✅ both |

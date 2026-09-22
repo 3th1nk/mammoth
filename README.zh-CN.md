@@ -22,13 +22,8 @@ Mammoth 通过带外控制器(BMC)接管机器,自动盘查硬件与磁盘布局
 
 - 设计文档:[docs/README.md](docs/README.md)
 - API 契约(唯一事实源):[api/openapi.yaml](api/openapi.yaml)
-- 状态:**v1.1.0 已发布**(2026-09-19)——v1.0 契约冻结(仅新增演进);四方言
-  真机闭环:rocky9 / ubuntu22 / debian12 + uniontechos(虚拟介质 + PXE 双载体);
-  M7 PXE/iPXE 网络引导真机闭环;agent initramfs 安装路径、BMC 能力三部曲
-  (固件盘查 / BIOS 设置 / NIST 800-88 擦盘)、外部 DHCP+TFTP 逃生门、arm64
-  引导链(SB 签名链 qemu 验证)。**windows2019 真机闭环**
-  (2026-09-22:wimboot-PXE 的 setup 流程与两段式 agent apply 通路均真机
-  六阶段全绿;`boot.installer=auto` 按部署事实自动选路)。([路线图](docs/09-roadmap.md))
+- 状态与各版本变更:见 [Releases](https://github.com/3th1nk/mammoth/releases)
+  与[路线图](docs/09-roadmap.md)。
 
 ## 为什么叫 Mammoth
 
@@ -104,9 +99,9 @@ flowchart TD
 | 发行版 | 方言 | virtual_media 镜像 | PXE 镜像 | PXE 安装源 | 真机 |
 |---|---|---|---|---|---|
 | rocky 9 | kickstart | minimal / DVD ISO(重打包) | 同 ISO(抽取引导文件) | HTTP 池或 NFS ISO | ✅ 双载体 |
-| rocky 10 | kickstart | DVD ISO,UEFI-only 布局 | 同上 | 同上 | qemu ✅ · 真机待验 |
+| rocky 10 | kickstart | DVD ISO,UEFI-only 布局 | 同上 | 同上 | ✅ 真机闭环(2288H,UEFI-only) |
 | centos 7 | kickstart | minimal ISO | 同 ISO | 同上 | ✅ 虚拟介质 |
-| kylin V10 / V11 | kickstart | DVD ISO | 同 ISO | 同上 | 待验 |
+| kylin V10 / V11 | kickstart | DVD ISO | 同 ISO | 同上 | ✅ V11 真机闭环 · V10 受限(静态网 NM) |
 | UOS | kickstart | DVD ISO | 同源 ISO | NFS ISO | ✅ 双通路 |
 | ubuntu 22.04 / 24.04 | autoinstall | **live-server** ISO(casper,重打包) | **live-server** ISO(squashfs 走 NFS) | 解包 ISO 树走 NFS | ✅ 双载体 |
 | debian 12 / 13 | preseed | **netinst** ISO(重打包) | **netinst** ISO(签名 HTTP 池)**+ 官方 netboot.tar.gz** + 暂存 udebs | HTTP 池(校验和完整、by-hash 回填) | ✅ 双载体 |

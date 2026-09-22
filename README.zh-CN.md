@@ -275,6 +275,12 @@ Prometheus 于 `/metrics`,OTel 边界埋点(默认 no-op,`MAMMOTH_OTEL_EXPORTER_
 
 Apache-2.0
 
+> 注:`assets/win-apply/` 内含取自 Alpine Linux 软件源的 GPL-2.0+ 二进制
+> (wimlib / mkntfs 及配套库),来源与许可证清单见
+> [assets/win-apply/PROVENANCE.md](assets/win-apply/PROVENANCE.md)。
+
+Apache-2.0
+
 ### Logo
 
 mammoth gopher 是 **Renée French** 原作 Go gopher(CC BY 3.0)的衍生作品,

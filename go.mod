@@ -14,7 +14,7 @@ require (
 	github.com/gin-gonic/gin v1.10.1
 	github.com/oapi-codegen/runtime v1.4.2
 	github.com/prometheus/client_golang v1.22.0
-	github.com/spf13/cobra v1.8.1
+	github.com/spf13/cobra v1.10.2
 	github.com/stmcginnis/gofish v0.19.0
 	github.com/vmware/goipmi v0.0.0-20181114221114-2333cd82d702
 	github.com/willscott/go-nfs v0.0.4
@@ -37,7 +37,7 @@ require (
 	github.com/polydawn/rio v0.0.0-20220823181337-7c31ad9831a4 // indirect
 	github.com/rasky/go-xdr v0.0.0-20170124162913-1a41d1a06c93 // indirect
 	github.com/speakeasy-api/openapi v1.19.2 // indirect
-	github.com/spf13/pflag v1.0.5 // indirect
+	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/warpfork/go-errcat v0.0.0-20180917083543-335044ffc86e // indirect
 	github.com/willscott/go-nfs-client v0.0.0-20240104095149-b44639837b00 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect

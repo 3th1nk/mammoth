@@ -303,6 +303,11 @@ default, `MAMMOTH_OTEL_EXPORTER_ENDPOINT` to export).
 
 Apache-2.0
 
+> Note: `assets/win-apply/` bundles GPL-2.0+ binaries (wimlib / mkntfs and
+> supporting libraries) taken verbatim from the Alpine Linux repositories —
+> sources and licenses are documented in
+> [assets/win-apply/PROVENANCE.md](assets/win-apply/PROVENANCE.md).
+
 ### Logo
 
 The mammoth gopher is a derivative of the original Go gopher by

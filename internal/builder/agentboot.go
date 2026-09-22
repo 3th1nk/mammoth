@@ -120,7 +120,7 @@ func agentScript() string {
 # any failing command would kill the whole runtime silently (no report, no
 # shell). This runtime handles its own errors: strip the -e and re-exec. The
 # child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
-SCRIPT_VERSION="ab-v12"
+SCRIPT_VERSION="ab-v13"
 case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
 log "agent runtime $SCRIPT_VERSION starting"
 
@@ -543,6 +543,138 @@ EOF
     log "bootloader installed ($([ "$uefi" = 1 ] && echo "grub-efi $ESP_MOUNT" || echo "grub-bios MBR /dev/$MAMMOTH_BOOT_DRIVE"))"
 }
 
+win_apply() { # windows apply-image phase one (boot.installer=agent, 方案 A)
+    # Lay the image down, inject the first-boot config in-wim, then reboot.
+    # The ESP stays EMPTY by design: the boot store is generated natively by
+    # bcdboot in the boot-two WinPE (the orchestration re-arms a wimboot
+    # tree on the applied report) — a hand-patched store never passes NT's
+    # BcdOpenStore (0xC0000098, real-machine 9/22).
+    # wlog: progress to the console AND the engine diag channel — the VGA
+    # console freezes once /dev/console lands on ttyS0 (after the initramfs),
+    # so the diag POSTs are the live observability during the silent phases.
+    wlog() {
+        log "$*"
+        [ -n "$MAMMOTH_WIN_DIAG" ] && wget -q -T 5 -O /dev/null --post-data="$(cut -d" " -f1 /proc/uptime) $*" "$MAMMOTH_WIN_DIAG/win-progress" 2>/dev/null
+        return 0
+    }
+    wlog "win_apply start (runtime $SCRIPT_VERSION)"
+    # toolchain: the pinned wimlib/mkntfs closure rides the overlay
+    # (assets/win-apply — same alpine release as this carrier); pool tools
+    # cover partitioning.
+    export LD_LIBRARY_PATH=/usr/local/mammoth-win/usr/lib
+    WIMLIB=/usr/local/mammoth-win/usr/bin/wimlib-imagex
+    MKNTFS=/usr/local/mammoth-win/usr/sbin/mkntfs
+    [ -x "$WIMLIB" ] && [ -x "$MKNTFS" ] || { log "windows toolchain missing from overlay"; return 1; }
+    apk add --no-cache sfdisk partx util-linux dosfstools >/dev/console 2>&1
+    wlog "pool tools installed"
+    uefi=0; [ -d /sys/firmware/efi ] && uefi=1
+    wlog "firmware check done (uefi=$uefi)"
+    [ "$uefi" = 1 ] || { log "windows apply is UEFI-only"; return 1; }
+
+    disk=$(head -1 "$DISKS" | cut -d'|' -f1)
+    [ -n "$disk" ] || { log "no disk in plan"; return 1; }
+    resolve_disks || return 1
+    disk=$(head -1 "$DISKS")
+    # the OS partition number: the "/" line's position in the plan order
+    osnum=0; n=0
+    while IFS='|' read -r d mount fs size flags; do
+        [ "$d" = "$disk" ] || continue
+        n=$((n+1)); [ "$mount" = "/" ] && osnum=$n
+    done < "$PARTS"
+    [ "$osnum" -ge 1 ] || { log "plan has no OS partition"; return 1; }
+    wlog "disk resolved: $disk os-part $osnum"
+
+    # GPT table: ESP/MSR/NTFS in the plan's final order (the same shape the
+    # setup path renders into DiskConfiguration)
+    tbl=/tmp/mammoth-win-table
+    echo "label: gpt" > "$tbl"
+    while IFS='|' read -r d mount fs size flags; do
+        [ "$d" = "$disk" ] || continue
+        case "$fs" in
+            vfat) type="C12A7328-F81F-11D2-BA4B-00A0C93EC93B" ;;
+            ntfs) type="EBD0A0A2-B9E5-4433-87C0-68B6B72699C7" ;;
+            *)    type="E3C9E316-0B5C-4DB8-817D-F92DF00215AE" ;; # MSR
+        esac
+        if [ "$size" = "-" ] || [ -z "$size" ]; then
+            echo "type=$type" >> "$tbl"
+        else
+            echo "size=$((size * 2048)), type=$type" >> "$tbl"
+        fi
+    done < "$PARTS"
+    wipefs -a "/dev/$disk" >>/tmp/mammoth-storage.err 2>&1
+    attempt=1
+    while : ; do
+        if sfdisk --force "/dev/$disk" < "$tbl" >>/tmp/mammoth-storage.err 2>&1; then break; fi
+        if [ $attempt -ge 3 ]; then log "storage: sfdisk $disk FAILED after $attempt attempts"; return 1; fi
+        log "storage: sfdisk attempt $attempt failed, retrying"
+        attempt=$((attempt+1)); sleep 3; mdev -s 2>/dev/null
+    done
+    partx -a "/dev/$disk" >/dev/console 2>&1; mdev -s 2>/dev/null
+    wlog "GPT table written"
+
+    ESP_NODE=""; OS_NODE=""
+    n=1
+    while IFS='|' read -r d mount fs size flags; do
+        [ "$d" = "$disk" ] || continue
+        node="/dev/$(partnode "$disk" "$n")"
+        case "$fs" in
+            vfat) mkfs.vfat -F 32 "$node" >>/tmp/mammoth-storage.err 2>&1 && ESP_NODE="$node" ;;
+            ntfs) "$MKNTFS" -Q -F "$node" -L WINDOWS >>/tmp/mammoth-storage.err 2>&1 && OS_NODE="$node" ;;
+        esac
+        n=$((n+1))
+    done < "$PARTS"
+    [ -n "$OS_NODE" ] || { log "storage: NTFS volume format FAILED"; return 1; }
+    wlog "volumes formatted (esp=$ESP_NODE ntfs=$OS_NODE)"
+
+    # stage the wim in the memory root — the precheck fails EARLY (before
+    # partitioning ate the old layout? no: partitioning already ran) when the
+    # machine plainly cannot hold the image, so the bail detail is honest.
+    memkb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+    wimkb=$(wget -q --spider --server-response "$MAMMOTH_WIN_WIM" 2>&1 | awk '/[Cc]ontent-[Ll]ength/ {len=$NF} END{print int(len/1024)}')
+    needkb=$((wimkb + 2097152))
+    [ "$memkb" -ge "$needkb" ] || { log "RAM precheck failed: ${memkb}kB < wim ${wimkb}kB + 2G staging headroom"; return 1; }
+    log "fetching install.wim ($((wimkb / 1024)) MiB)"
+    wlog "fetching install.wim ($((wimkb / 1024)) MiB)"
+    wget -q -T 30 -t 3 -O /tmp/win.wim "$MAMMOTH_WIN_WIM" || { log "wim fetch failed"; wlog "wim fetch FAILED"; return 1; }
+    wlog "wim fetched"
+
+    # first-boot configuration is injected INTO the wim before apply
+    # (wimlib update — the same mechanism as the builder's SetupComplete
+    # pair): mounting the freshly-written NTFS volume through ntfs3 hung on
+    # real hardware (2288H 9/22 — apply finished, the mount never returned),
+    # and the in-wim injection removes the ntfs3 dependency entirely.
+    wget -q -T 20 -O /tmp/win-unattend.xml "$MAMMOTH_WIN_UNATTEND" || return 1
+    wget -q -T 20 -O /tmp/win-task.json "$MAMMOTH_WIN_TASKJSON" || return 1
+    wget -q -T 20 -O /tmp/win-specialize.xml "$MAMMOTH_WIN_SPECIALIZE" || return 1
+    wlog "injecting unattend + task.json + specialize into the wim"
+    # delete-then-add: wimlib add refuses an existing destination (the same
+    # idempotency dance the builder's SetupComplete injection uses)
+    "$WIMLIB" update /tmp/win.wim "$MAMMOTH_WIN_INDEX" --command="delete /Windows/Panther/unattend.xml" >/dev/console 2>&1
+    "$WIMLIB" update /tmp/win.wim "$MAMMOTH_WIN_INDEX" --command="delete /Windows/Setup/Scripts/task.json" >/dev/console 2>&1
+    "$WIMLIB" update /tmp/win.wim "$MAMMOTH_WIN_INDEX" --command="add /tmp/win-unattend.xml /Windows/Panther/unattend.xml" >>/tmp/mammoth-storage.err 2>&1 \
+        || { log "unattend injection FAILED"; wlog "unattend injection FAILED"; rm -f /tmp/win.wim; return 1; }
+    "$WIMLIB" update /tmp/win.wim "$MAMMOTH_WIN_INDEX" --command="add /tmp/win-task.json /Windows/Setup/Scripts/task.json" >>/tmp/mammoth-storage.err 2>&1 \
+        || { log "task.json injection FAILED"; wlog "task.json injection FAILED"; rm -f /tmp/win.wim; return 1; }
+    "$WIMLIB" update /tmp/win.wim "$MAMMOTH_WIN_INDEX" --command="delete /Windows/System32/Sysprep/ActionFiles/Specialize.xml" >/dev/console 2>&1
+    "$WIMLIB" update /tmp/win.wim "$MAMMOTH_WIN_INDEX" --command="add /tmp/win-specialize.xml /Windows/System32/Sysprep/ActionFiles/Specialize.xml" >>/tmp/mammoth-storage.err 2>&1 \
+        || { log "specialize injection FAILED"; wlog "specialize injection FAILED"; rm -f /tmp/win.wim; return 1; }
+    wlog "wim updated (unattend + task.json + specialize stripped)"
+
+    log "applying image $MAMMOTH_WIN_INDEX to $OS_NODE"
+    wlog "wimlib apply started"
+    "$WIMLIB" apply /tmp/win.wim "$MAMMOTH_WIN_INDEX" "$OS_NODE" --no-acls >>/tmp/mammoth-storage.err 2>&1 \
+        || { log "wimlib apply FAILED"; wlog "wimlib apply FAILED"; rm -f /tmp/win.wim; return 1; }
+    rm -f /tmp/win.wim
+    wlog "wimlib apply finished"
+    # Done — no ESP boot files, no NVRAM entry here. The boot-two wimboot
+    # tree (armed by the orchestration on the applied report) boots a WinPE
+    # whose startnet runs bcdboot against the volumes laid out above: the
+    # store is then NT-native, and specialize's BCD module opens it like it
+    # opened setup.exe's own.
+    log "windows image applied: wim $MAMMOTH_WIN_INDEX -> $OS_NODE (first boot pending bcdboot stage)"
+    return 0
+}
+
 # keep the runtime's stderr on the console: openrc swallows it, and the
 # trace (set -x) plus every tool error message is the SOL diagnostic surface
 exec 2>>/dev/console
@@ -550,6 +682,16 @@ log "agent start (kernel $(uname -r))"
 find_plan || bail plan "agent-plan.sh not found (media scan + ${BASE:-<no base>}/agent-plan.sh)"
 . "$PLAN"
 [ -n "$MAMMOTH_COMPLETE_URL" ] || bail plan "plan carries no COMPLETE_URL"
+if [ "$MAMMOTH_WIN_MODE" = "apply" ]; then
+    log "windows apply-image flow"
+    win_apply || bail win_apply "windows apply failed: $(tail -c 220 /tmp/mammoth-storage.err 2>/dev/null | tr '\n' ' ' | tr -d '"\\')"
+    sync
+    if report applied "windows image applied (agent apply-image) — first boot pending"; then
+        log "rebooting into first boot"
+        reboot -f
+    fi
+    bail report "completion report could not be delivered"
+fi
 log "plan loaded: $(cat "$DISKS" | tr '\n' ' ')"
 bootstrap_tools || bail tools "agent tooling install failed"
 run_stage pre_install || bail pre_install "script failed"

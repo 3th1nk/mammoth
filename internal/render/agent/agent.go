@@ -117,6 +117,14 @@ const isoKernelArgs = "modules=loop,squashfs,sd-mod,usb-storage,ext4,vfat consol
 // from the answer URL ("<ext>/render/<token>"), the same file layout the
 // boot tree publishes under /netboot/files/<token>/.
 func netbootKernelArgs(in render.InstallInputs) string {
+	return NetbootKernelArgs(in)
+}
+
+// NetbootKernelArgs is the exported form: the alpine carrier's kernel
+// arguments shared by every agent-carried install — the alpine pilot AND
+// the windows apply-image path (boot.installer=agent), whose driver renders
+// the same boot tree shape (modloop / apks / overlay / plan base).
+func NetbootKernelArgs(in render.InstallInputs) string {
 	base := strings.TrimSuffix(in.AnswerBaseURL, "/")
 	ext := strings.TrimSuffix(base, "/render/"+in.TaskToken)
 	files := ext + "/netboot/files/" + in.TaskToken
@@ -266,6 +274,12 @@ func exitsJSON(list []int) string {
 // defaultGateway extracts the v4 default route's via (the declarative spec
 // expresses the default gateway as a route to 0.0.0.0/0).
 func defaultGateway(routes []render.NetRoute) string {
+	return DefaultGateway(routes)
+}
+
+// DefaultGateway extracts the default-route gateway (the first route with
+// To "default") — shared with the windows apply-image plan renderer.
+func DefaultGateway(routes []render.NetRoute) string {
 	for _, r := range routes {
 		if r.To == "0.0.0.0/0" || r.To == "default" {
 			return r.Via

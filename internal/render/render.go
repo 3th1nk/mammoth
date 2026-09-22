@@ -79,6 +79,13 @@ type NetbootInputs struct {
 	// prepared windows tree (pool-store/<sha256>/win/tree) — setup.exe and
 	// install.wim live under its sources/ below.
 	InstallSMBImagePath string
+	// InstallWimURL/Index feed the windows agent apply-image path
+	// (boot.installer=agent): the agent pulls install.wim over HTTP from the
+	// prepared win tree (no SMB export involved) and wimlib-applies the
+	// server-resolved image index onto the declarative NTFS volume. Index 0
+	// = unresolved (render rejects; the index lookup is server-side).
+	InstallWimURL   string
+	InstallWimIndex int
 	// PoolPublicKey is the binary OpenPGP keyring of the pool signing key —
 	// the HTTP pool is a signed offline mirror, and the installer's apt needs
 	// this key in its trustdb to pass apt-setup's mirror verification. Nil
@@ -152,6 +159,26 @@ func NetbootInstallOf(d OSDriver) (NetbootCarrier, NetbootPool) {
 		return n.NetbootCarrier(), n.NetbootPool()
 	}
 	return NetbootCarrierISO, NetbootPoolNone
+}
+
+// DynamicNetbootCarrier is the optional capability for drivers whose PXE
+// carrier depends on the resolved install inputs — the windows driver boots
+// the wimboot carrier for the setup.exe path (boot.installer=setup, the
+// default) and the alpine netboot carrier for the agent apply-image path
+// (boot.installer=agent). The static NetbootInstallDriver value stays the
+// default for inputs that carry no explicit installer.
+type DynamicNetbootCarrier interface {
+	NetbootCarrierFor(in InstallInputs) NetbootCarrier
+}
+
+// NetbootInstallOfInputs resolves the effective carrier for a render: the
+// dynamic capability (installer-aware) wins over the static declaration.
+func NetbootInstallOfInputs(d OSDriver, in InstallInputs) NetbootCarrier {
+	if dc, ok := d.(DynamicNetbootCarrier); ok {
+		return dc.NetbootCarrierFor(in)
+	}
+	carrier, _ := NetbootInstallOf(d)
+	return carrier
 }
 
 // AgentInstaller is the optional capability marking drivers whose install
@@ -301,6 +328,13 @@ type InstallInputs struct {
 	RootPassword  string // per-task random when spec asked for generate
 	SSHPublicKeys []string
 
+	// Capabilities names the access capabilities to enable on the
+	// installed system (windows: access.capabilities — "rdp", "winrm",
+	// "ping"; default empty = none enabled). Opt-in per task: turning on
+	// inbound management features of a fresh install is the operator's
+	// security call, made explicitly per task.
+	Capabilities []string
+
 	// MediaLanguage is the installer media's own UI language, detected from
 	// sources/lang.ini by provision (lang.ini token form, e.g. "zh-cn";
 	// empty = unknown). The windows driver renders the international
@@ -331,6 +365,18 @@ type InstallInputs struct {
 	// driver shapes its netboot answer files and kernel args against the
 	// network install source (docs/06-install-pipeline.md §3.3).
 	Netboot *NetbootInputs
+
+	// Installer is the resolved boot.installer declaration ("agent" when the
+	// spec pinned the agent apply-image path, "" = driver default = the
+	// setup.exe flow for windows). Windows-only today; other dialects reject
+	// it at submit.
+	Installer string
+	// SpecializeXML is the sysprep Specialize.xml action file with the SpBcd
+	// module stripped — provision extracts it from the prepared install.wim
+	// for the windows agent apply path; the agent injects it back into the
+	// applied wim (specialize's online BCD module fails on the pre-baked
+	// store — real-hardware 9/22). Empty for other paths.
+	SpecializeXML string
 }
 
 // ResolvedRaid is one RAID volume with resolved member devices.

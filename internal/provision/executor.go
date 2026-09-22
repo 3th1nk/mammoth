@@ -50,7 +50,7 @@ type Executor struct {
 	// WinPE maps this deployment-provided SMB export for the install source;
 	// the SMB analog of MediaBaseURI's NFS export). Empty share = windows PXE
 	// submissions are rejected at the gate.
-	WindowsInstallSMBUNC         string
+	WindowsInstallSMBUNC      string
 	WindowsInstallSMBUser     string
 	WindowsInstallSMBPassword string
 	// MediaUploader, when configured, moves the assembled boot ISO into the
@@ -71,6 +71,12 @@ type Executor struct {
 	// initramfs lacks (real hardware needs them to fetch the modloop at
 	// all). Optional; ISO extraction is the fallback.
 	ProbeAlpineNetboot string
+	// WindowsApplyAlpineISO, when set, is the alpine EXTENDED ISO whose
+	// /apks pool arms the windows apply-image agent (boot.installer=agent):
+	// the pool supplies sfdisk/partx/dosfstools/python3 on the machine —
+	// python3 runs the BCD pre-bake, and the wimlib/mkntfs closure itself
+	// rides the overlay (assets/win-apply), not the pool.
+	WindowsApplyAlpineISO string
 	// PXEDINetbootTarball is the debian-installer netboot tarball
 	// (netboot.tar.gz, local path or URL) — the d-i PXE carrier
 	// (MAMMOTH_PXE_DI_NETBOOT): the ISO's own initrd is the cdrom

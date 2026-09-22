@@ -19,6 +19,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/inventory/inbandssh"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/render"
+	renderwindows "github.com/3th1nk/mammoth/internal/render/windows"
 	"github.com/3th1nk/mammoth/internal/store"
 )
 
@@ -48,10 +49,20 @@ type installTaskContext struct {
 }
 
 type installProgress struct {
-	BootedAt    *time.Time `json:"booted_at,omitempty"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
-	Status      string     `json:"status,omitempty"` // ok | failed
-	Detail      string     `json:"detail,omitempty"`
+	BootedAt *time.Time `json:"booted_at,omitempty"`
+	// AppliedAt is the agent apply-image pathway's phase-one marker: the
+	// image is laid down and the machine is rebooting. It triggers BOOT TWO
+	// (the bcdboot WinPE re-arm — the boot store is generated natively, the
+	// agent left the ESP empty) but does NOT complete the task; the terminal
+	// completion is the first-boot callback (CompletedAt).
+	AppliedAt *time.Time `json:"applied_at,omitempty"`
+	// Boot-two state machine, persisted so stage retries re-enter at the
+	// right step instead of replaying BMC/builder work.
+	BcdbootArmedAt *time.Time `json:"bcdboot_armed_at,omitempty"`
+	BcdbootDoneAt  *time.Time `json:"bcdboot_done_at,omitempty"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	Status         string     `json:"status,omitempty"` // ok | failed
+	Detail         string     `json:"detail,omitempty"`
 }
 
 // runInstallStage dispatches the install flow stages
@@ -97,7 +108,8 @@ type installSpecView struct {
 		Distro   string `json:"distro"`
 	} `json:"image"`
 	Boot struct {
-		Strategy string `json:"strategy"`
+		Strategy  string `json:"strategy"`
+		Installer string `json:"installer"`
 	} `json:"boot"`
 	Storage struct {
 		Disks []storageDiskView `json:"disks"`
@@ -109,6 +121,9 @@ type installSpecView struct {
 	Access struct {
 		RootPassword string   `json:"root_password"` // absent/empty → generate
 		SSHKeys      []string `json:"ssh_keys"`
+		// Capabilities: access capabilities enabled on the installed
+		// system ("rdp"|"winrm"|"ping" for windows; default none).
+		Capabilities []string `json:"capabilities,omitempty"`
 	} `json:"access"`
 	Network []networkView `json:"network"`
 	Scripts []scriptView  `json:"scripts"`
@@ -706,6 +721,7 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		ImageSource:   spec.Image.Source,
 		RootPassword:  rootPassword,
 		SSHPublicKeys: spec.Access.SSHKeys,
+		Capabilities:  spec.Access.Capabilities,
 		BootDrive:     bootDrive,
 		Disks:         ictx.Resolved.Disks,
 		Network:       networkEntries(spec.Network),
@@ -726,17 +742,83 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	// default — the same resolution bootStrategyFor performs), so the driver
 	// can render its netboot-shaped args/seed up front.
 	if name, _ := effectiveStrategyName(e, spec); name == strategyPXE {
-		// The carrier decides what the installer consumes over the network.
-		// The wimboot carrier (Windows) has NO network install source — the
-		// augmented boot.wim carries the answer file and install.wim in the
-		// WinPE ramdisk — so Netboot being non-nil is the whole message and
-		// the pool/NFS URLs stay empty.
-		wimbootCarrier := false
-		if driver0, derr := e.Render.For(spec.Image.Distro); derr == nil {
-			carrier, _ := render.NetbootInstallOf(driver0)
-			wimbootCarrier = carrier == render.NetbootCarrierWimboot
+		path, pathOK := effectiveInstallPath(spec)
+		if !pathOK {
+			return classifiedErr("SCHEMA_INVALID_BOOT_INSTALLER", false,
+				"boot.installer %q is not one of setup|agent", spec.Boot.Installer)
 		}
-		if wimbootCarrier {
+		driver0, derr := e.Render.For(spec.Image.Distro)
+		if derr != nil {
+			return classifiedErr("SCHEMA_UNKNOWN_DISTRO", false, "%s", derr.Error())
+		}
+		if path == pathAgent && render.FamilyOf(driver0) != "windows" {
+			return classifiedErr("SCHEMA_INVALID_BOOT_INSTALLER", false,
+				"boot.installer=agent is windows-only today (distro %s)", spec.Image.Distro)
+		}
+		if path == pathAgent {
+			in.Installer = "agent"
+		}
+		// The carrier decides what the installer consumes over the network.
+		// The wimboot carrier (windows setup path) has NO network install
+		// source — the augmented boot.wim carries the answer file and the
+		// SMB share points at the prepared tree; the alpine carrier for the
+		// agent apply-image path serves the prepared install.wim over HTTP
+		// (no SMB export involved at all).
+		wimbootCarrier := render.NetbootInstallOfInputs(driver0, in) == render.NetbootCarrierWimboot
+		winAgentCarrier := path == pathAgent
+		if winAgentCarrier {
+			// The install source is the prepared win tree served over HTTP
+			// (sources/install.wim), and the agent pulls the ESP boot files
+			// (fallback loader + media BCD template) from the same tree —
+			// the sha-addressed cache the wimboot path shares.
+			distroISO, ferr := builder.EnsureISO(ctx, spec.Image.Source, e.MediaDir)
+			if ferr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+					"distro ISO fetch failed: %s", ferr.Error())
+			}
+			sha, herr := builder.FileSHA256(distroISO)
+			if herr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+					"distro ISO hash failed: %s", herr.Error())
+			}
+			lang, lerr := builder.DetectWindowsMediaLanguage(ctx, distroISO, sha,
+				filepath.Join(e.MediaDir, PoolStoreDirName, sha, "win"))
+			if lerr != nil {
+				obs.FromContext(ctx).WarnContext(ctx, "media language detection failed; using driver default", "err", lerr.Error())
+			} else {
+				in.MediaLanguage = lang
+			}
+			tree, terr := builder.EnsureWindowsTree(ctx, builder.WindowsTreeOptions{
+				ISOPath: distroISO, CacheDir: e.MediaDir,
+				// the agent answer set does not carry the SetupComplete pair
+				// (the driver exports it) — the prepared wim's first-boot
+				// chain is required on every cache rebuild (v4 gap, 9/22)
+				Seed: renderwindows.SetupCompleteSeedPair(),
+			})
+			if terr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+					"prepared windows tree build failed: %s", terr.Error())
+			}
+			namer, nok := driver0.(interface{ WindowsOSImageName() string })
+			if !nok {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,
+					"distro %s does not declare its /IMAGE/NAME for the apply path", spec.Image.Distro)
+			}
+			idx, ierr := builder.WindowsImageIndex(filepath.Join(tree, "sources", "install.wim"), namer.WindowsOSImageName())
+			if ierr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false, "%s", ierr.Error())
+			}
+			specXML, serr := builder.WindowsSpecializeStrip(filepath.Join(tree, "sources", "install.wim"), idx)
+			if serr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false, "%s", serr.Error())
+			}
+			in.SpecializeXML = specXML
+			ext := strings.TrimSuffix(e.ExternalURL, "/")
+			in.Netboot = &render.NetbootInputs{
+				InstallWimURL:   fmt.Sprintf("%s/netboot/store/%s/win/tree/sources/install.wim", ext, sha),
+				InstallWimIndex: idx,
+			}
+		} else if wimbootCarrier {
 			// The install source is the deployment SMB export — startnet maps
 			// it inside WinPE (setup consumes UNC directly, nothing lands in
 			// the boot.wim). The prepared tree (the SetupComplete-injected
@@ -852,12 +934,21 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	if err != nil {
 		return err
 	}
-	session := &bootSession{Task: task, Job: job, Spec: spec, Ictx: &ictx, Answers: answers, Boot: boot}
+	session := &bootSession{Task: task, Job: job, Spec: spec, Ictx: &ictx, Answers: answers, Boot: boot, Inputs: in}
 	// The agent install runtime rides the boot media as an apkovl overlay
 	// (docs/12-agent-initramfs.md) — plan-independent, built once here, and
 	// kept OUT of the rendered answers: the tar.gz is binary and the answers
-	// round-trip through the JSON task context.
-	if render.IsAgentInstaller(driver) {
+	// round-trip through the JSON task context. The windows apply path uses
+	// the same runtime plus the pinned wimlib/mkntfs toolchain overlay.
+	switch {
+	case in.Installer == "agent" && render.FamilyOf(driver) == "windows":
+		name, overlay, aerr := builder.WindowsAgentOverlay()
+		if aerr != nil {
+			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+				"windows agent overlay build failed: %s", aerr.Error())
+		}
+		session.Seed = map[string]string{name: string(overlay)}
+	case render.IsAgentInstaller(driver):
 		name, overlay, aerr := builder.AgentOverlay()
 		if aerr != nil {
 			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
@@ -1052,6 +1143,52 @@ func (e *Executor) installOSStage(ctx context.Context, task *store.Task, job *st
 		}
 		var ictx2 installTaskContext
 		_ = json.Unmarshal(fresh.Context, &ictx2)
+		// Agent apply-image BOOT TWO (方案 A — WinPE bcdboot 收尾): the
+		// applied report means the image is laid down and the machine is
+		// rebooting on its own. The second boot is a wimboot WinPE whose
+		// startnet runs bcdboot (setup.exe's own timing) — the agent left
+		// the ESP empty because a hand-made store never passes NT's
+		// BcdOpenStore. The state machine rides the persisted install
+		// record: armed → marker OK → released + cycled into first boot.
+		if ictx2.Install != nil && ictx2.Install.AppliedAt != nil && ictx2.Install.CompletedAt == nil {
+			if ictx2.Install.BcdbootArmedAt == nil {
+				if err := e.armWindowsBcdbootStage(ctx, task, job, &ictx2); err != nil {
+					return err
+				}
+			}
+			state, marker := e.bcdbootMarkerState(ctx, task.ID)
+			switch state {
+			case bcdbootMarkerFailed:
+				return classifiedErr("INSTALL_FAILED", true,
+					"bcdboot stage failed: %s", firstLine(marker))
+			case bcdbootMarkerOK:
+				if ictx2.Install.BcdbootDoneAt == nil {
+					// The WinPE is HOLDING (its startnet never self-reboots):
+					// release the PXE entries FIRST — the reset below must
+					// fall through to disk — then power-cycle into first
+					// boot. Both idempotent on stage retry.
+					e.releaseBootPayload(ctx, task, &ictx2, reasonCompleted)
+					if err := e.bmcSetPower(ctx, task, bmc.Cycle); err != nil {
+						return classifiedErr("BMC_POWER_FAILED", true,
+							"boot-two power cycle failed: %s", err.Error())
+					}
+					if err := e.Jobs.RecordInstallProgress(ctx, task.ID,
+						map[string]any{"bcdboot_done_at": time.Now().UTC()}); err != nil {
+						return err
+					}
+					e.Events.Append(ctx, "task", task.ID, "task.bcdboot_done", map[string]any{
+						"marker": firstLine(marker),
+					})
+					obs.FromContext(ctx).InfoContext(ctx, "bcdboot stage verified, machine cycled into first boot",
+						obs.FieldTaskID, task.ID)
+				}
+			}
+			if time.Now().After(deadline) {
+				return classifiedErr("INSTALL_TIMEOUT", true,
+					"windows boot two (bcdboot) did not complete within %s", job.Policy.TaskTimeout())
+			}
+			continue
+		}
 		if ictx2.Install != nil && ictx2.Install.CompletedAt != nil {
 			// Completion reported: the payload must NOT be released right
 			// away. d-i keeps reading the CD for minutes AFTER late_command
@@ -1093,6 +1230,151 @@ func (e *Executor) installOSStage(ctx context.Context, task *store.Task, job *st
 				"install did not report completion within %s", job.Policy.TaskTimeout())
 		}
 	}
+}
+
+// ── agent apply boot two: the bcdboot re-arm (方案 A) ────────────────────────
+
+// armWindowsBcdbootStage is boot two of the agent apply pathway: the applied
+// image needs a NATIVE boot store, so the machine re-enters a wimboot WinPE
+// whose startnet runs bcdboot against the laid-down volumes (setup.exe's
+// own timing — its generated store is the only kind NT's BcdOpenStore
+// accepts). Sequence: power DOWN first (the machine is rebooting on its own
+// right now, and the registry rows it would resolve are about to be
+// replaced — a boot into the half-flipped state would re-enter the agent),
+// rebuild the SAME boot tree as the wimboot carrier (baking the bcdboot
+// startnet pair from the persisted answers), flip the per-NIC rows, then
+// one-shot PXE + power on. Idempotent: every step overwrites its artifact.
+func (e *Executor) armWindowsBcdbootStage(ctx context.Context, task *store.Task, job *store.Job, ictx *installTaskContext) error {
+	if ictx.Token == "" || ictx.Netboot == nil || len(ictx.Netboot.MACs) == 0 {
+		return classifiedErr("NETBOOT_MAC_UNAVAILABLE", false,
+			"boot two: task carries no netboot record to re-arm")
+	}
+	if len(ictx.Answers) == 0 {
+		return classifiedErr("JOB_CONTEXT_CORRUPT", false,
+			"boot two: no persisted answers to bake the bcdboot startnet from")
+	}
+	// 1. hold the machine down while the payload assembles (authoritative:
+	// the re-arm must not race the machine's own reboot into PXE).
+	if err := e.bmcSetPower(ctx, task, bmc.PowerOff); err != nil {
+		return classifiedErr("BMC_POWER_FAILED", true,
+			"boot-two power-off failed: %s", err.Error())
+	}
+	// 2. rebuild the boot tree as the bcdboot wimboot carrier — same token,
+	// same directory; the agent phase is done with its payload (the machine
+	// is down and the prepared-tree cache makes this a seconds-scale wim
+	// surgery, not a re-extract).
+	spec, err := e.loadSpec(ctx, task, job)
+	if err != nil {
+		return err
+	}
+	distroISO, err := builder.EnsureISO(ctx, spec.Image.Source, e.MediaDir)
+	if err != nil {
+		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+			"boot-two distro ISO fetch failed: %s", err.Error())
+	}
+	seed := make(map[string]string, len(ictx.Answers)+2)
+	for _, a := range ictx.Answers {
+		seed[a.Name] = a.Content
+	}
+	// the agent answers never carry the SetupComplete pair, but the wimboot
+	// build's prepared-tree injection needs it on a cache bust — merge the
+	// driver's copy (the boot-two startnet pair rides the answers already)
+	for k, v := range renderwindows.SetupCompleteSeedPair() {
+		if seed[k] == "" {
+			seed[k] = v
+		}
+	}
+	treeDir := filepath.Join(e.BootTreeDir, ictx.Token)
+	removeBootTree(e.BootTreeDir, ictx.Token)
+	tree, err := builder.BuildWindowsWimboot(ctx, builder.WindowsWimbootOptions{
+		ISOPath: distroISO, DestDir: treeDir, CacheDir: e.MediaDir, Seed: seed,
+	})
+	if err != nil {
+		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+			"bcdboot wimboot tree build failed: %s", err.Error())
+	}
+	// 3. flip the per-NIC rows to the wimboot shape (UNIQUE(mac) upserts;
+	// kernel args stay empty — the wimboot script shape carries none).
+	for _, mac := range ictx.Netboot.MACs {
+		entry := &store.NetbootEntry{
+			MAC: mac, TaskID: task.ID, MachineID: task.MachineID, Token: ictx.Token,
+			Kind: "install", Kernel: tree.Kernel, Initrd: tree.Initrd,
+			KernelArgs: "", Extra: tree.Extra,
+		}
+		if err := e.Netboot.Upsert(ctx, entry); err != nil {
+			return classifiedErr("NETBOOT_REGISTER_FAILED", true,
+				"boot-two netboot entry for %s: %s", mac, err.Error())
+		}
+	}
+	if err := e.Jobs.RecordInstallProgress(ctx, task.ID,
+		map[string]any{"bcdboot_armed_at": time.Now().UTC()}); err != nil {
+		return err
+	}
+	e.Events.Append(ctx, "task", task.ID, "task.bcdboot_armed", map[string]any{
+		"macs": ictx.Netboot.MACs,
+	})
+	obs.FromContext(ctx).InfoContext(ctx, "boot two armed: wimboot bcdboot tree up, PXE one-shot next",
+		obs.FieldTaskID, task.ID, "macs", ictx.Netboot.MACs)
+	// 4. one-shot PXE + power into the bcdboot WinPE — the pxe arm tail
+	// (SetBootDevice(PXE, once) + cycle-or-power-on), reused verbatim.
+	return e.pxe().arm(ctx, &bootSession{Task: task})
+}
+
+// bcdbootMarker is the boot-two verdict state read off the diag file the
+// WinPE startnet POSTs (<MediaDir>/diag/<taskID>/<marker>).
+type bcdbootMarker int
+
+const (
+	bcdbootPending bcdbootMarker = iota
+	bcdbootMarkerOK
+	bcdbootMarkerFailed
+)
+
+// bcdbootMarkerState reads the boot-two verdict marker. Absent file →
+// pending; the verdict is the FIRST line's prefix (the marker body carries
+// the bcdboot/bcdedit logs for the post-mortem trail).
+func (e *Executor) bcdbootMarkerState(ctx context.Context, taskID string) (bcdbootMarker, string) {
+	if e.MediaDir == "" {
+		return bcdbootPending, ""
+	}
+	raw, err := os.ReadFile(filepath.Join(e.MediaDir, "diag", taskID, renderwindows.BCDBootDiagMarker))
+	if err != nil {
+		return bcdbootPending, ""
+	}
+	content := strings.TrimSpace(string(raw))
+	first := content
+	if i := strings.IndexByte(content, '\n'); i >= 0 {
+		first = content[:i]
+	}
+	switch {
+	case strings.Contains(first, renderwindows.BCDBootMarkerOK):
+		return bcdbootMarkerOK, content
+	case strings.Contains(first, renderwindows.BCDBootMarkerFail):
+		return bcdbootMarkerFailed, content
+	}
+	return bcdbootPending, content
+}
+
+// bmcSetPower issues one chassis power action (the boot-two state machine's
+// power-off and power-cycle both need the authoritative form).
+func (e *Executor) bmcSetPower(ctx context.Context, task *store.Task, action bmc.PowerAction) error {
+	cred, addr, proto, ok := e.outOfBand(ctx, task)
+	if !ok {
+		return fmt.Errorf("machine or credential unavailable")
+	}
+	_, err := e.BMC.Do(ctx, addr, cred, proto, "set_power", func(ctx context.Context, d bmc.Driver) (any, error) {
+		return nil, d.SetPower(ctx, addr, cred, action)
+	})
+	return err
+}
+
+// firstLine returns a string's first line, capped — failure details ride
+// event payloads and error envelopes.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
 }
 
 // rebootBestEffort force-restarts the machine, logging (not failing) on

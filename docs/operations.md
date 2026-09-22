@@ -277,7 +277,9 @@ MAMMOTH_WINDOWS_INSTALL_SMB_PASSWORD=''
 ```
 
 share 指向介质仓库(`MAMMOTH_MEDIA_DIR`,WinPE 从
-`<share>\pool-store\<sha256>\win\tree\sources\install.wim` 取安装源),
+`<share>\pool-store\<sha256>\win\tree\sources\install.wim` 取安装源)。
+`boot.installer=agent`(apply-image 通路)不消费 SMB——agent 从引擎 HTTP 面
+(`/netboot/store/<sha>/win/tree/`)拉安装源,见 §4.5.3。
 只读即可。samba 最小配置:`[mammoth-media] path=/data/mammoth/media +
 guest ok = yes + read only = yes + map to guest = Bad User`(或固定凭据,
 user/password 字符限 `[A-Za-z0-9._@-]`——cmd 批处理不可安全引用元字符)。
@@ -291,6 +293,29 @@ Boot 下)已经 qemu AAVMF 验证(`scripts/pxe-dev/arm64-sb-chain.sh`)。
 固件没有 UEFI PXE 栈(SNP 仅 IA32/X64/EBC),arm64 引导链的端到端
 DHCP/TFTP 回归需要 ARM 真机(如华为 TaiShan)窗口。发行版侧注意:
 aarch64 没有 alpine extended ISO,agent 路径产品化时包池需另解。
+
+### 4.5.3 Windows agent apply-image 通路(boot.installer=agent)
+
+`boot.installer: agent` 走 **agent apply-image**:机器引导 alpine agent
+(Linux 装机同款载体链),在机器侧 `wimlib apply` 把预备树里的 install.wim
+直接铺到声明式 NTFS 卷、从介质模板**预烤 BCD**(`bcdpatch.py`,就地 regf
+手术)、把 unattend 落到 `\Windows\Panther`,重启后 specialize/oobeSystem
+与回调链和 setup 路径完全一致。**不消费 SMB 导出**——安装源走引擎 HTTP 面。
+
+```sh
+MAMMOTH_WINDOWS_APPLY_ALPINE_ISO='/data/os_iso/alpine-extended-3.22.2-x86_64.iso'  # 必填
+```
+
+指向 alpine **extended** ISO:其 /apks 包池在机器上提供
+sfdisk/partx/dosfstools/**python3**(BCD 预烤运行于 python3);wimlib/mkntfs
+工具闭包不走包池——以 pinned 二进制随 agent overlay 下机
+(`assets/win-apply/`,同 alpine 3.22 源,PROVENANCE 见该目录)。
+
+边界(显式):PXE-only(virtual_media 无 agent 载体);UEFI-only;仅
+inbox 驱动机型(wimlib 只铺文件,不做驱动服务化——boot-critical 驱动不在
+介质 inbox 的机型留在 setup 路径,这正是保留该通路的原因);目标机内存
+≥ install.wim 体积 + 2G(wim 先暂存内存盘再直写卷)。两通路互补并存:
+`capabilities.windows_agent_installer` 报告本部署 agent 通路是否可用。
 
 ## 4.6 HTTPS 终止(生产)
 

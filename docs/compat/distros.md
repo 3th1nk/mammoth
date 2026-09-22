@@ -14,7 +14,7 @@
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
 | Debian 12 | `debian12` | debian-installer | preseed(`file=/cdrom/preseed.cfg`) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | 无(netcfg 不按 MAC 选口,单接口) | ✅ 真机跑通 |
 | 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(真机复核 2026-09-19) | MAC → 接口名在 %pre 安装期解析 | **full(真机闭环 2026-09-19:虚拟介质 + PXE 双通路零人工)**;⚠️ **方言约束:仅图形前端可用**——text 模式(text 指令/inst.text)下 UOS anaconda 自动分区建出 FAT16 而非 swap 且 Finish 组崩溃,驱动已强制 graphical(见下方根因节) |
-| **Windows Server 2019** | `windows2019` | Windows Setup(bootmgr,`/sources/install.wim`) | **unattend**(autounattend.xml 灌 boot.wim 根,startnet 显式启动时经 ramdisk 隐式发现) | **full**(wimboot 载体;前置=部署层 SMB 导出 `MAMMOTH_WINDOWS_INSTALL_SMB_UNC`,未配置提交即拒) | MAC → SetupComplete.cmd 按 Get-NetAdapter MAC 绑定(装后 SYSTEM 首登录前落地) | ✅ **真机全自动闭环(2026-09-21,2288H 十轮迭代:六阶段全绿,完成回调全自动到达,静态网 .215 按 spec 落网)**;虚拟介质通路仍被 iBMC 6.41 固件缺陷封死(见下方 windows 节);真机调试实录见下方"真机轮"小节;终局 = agent apply-image |
+| **Windows Server 2019** | `windows2019` | Windows Setup(bootmgr,`/sources/install.wim`) | **unattend**(autounattend.xml 灌 boot.wim 根,startnet 显式启动时经 ramdisk 隐式发现) | **full**(wimboot 载体;前置=部署层 SMB 导出 `MAMMOTH_WINDOWS_INSTALL_SMB_UNC`,未配置提交即拒) | MAC → SetupComplete.cmd 按 Get-NetAdapter MAC 绑定(装后 SYSTEM 首登录前落地) | ✅ **真机全自动闭环(2026-09-21,2288H 十轮迭代:六阶段全绿,完成回调全自动到达,静态网 .215 按 spec 落网)**;**agent apply-image 通路亦真机闭环(2026-09-22,两段式方案 A:六阶段全绿,详见下方 agent apply-image 落地节)**;虚拟介质通路仍被 iBMC 6.41 固件缺陷封死(见下方 windows 节) |
 
 ## 保留分区支持语义(SupportLevel)
 
@@ -504,7 +504,7 @@ SetupComplete 自动执行未触发(根因未完全坐实,setupact 零记录)后
 spec 显式声明)。机器入站 ICMP/RDP 默认被 Windows 防火墙拦(ping 不通
 属预期)。
 
-**rig 层三修(external-win-e2e.sh 固化)**:**rig 层三修(external-win-e2e.sh 固化)**:**rig 层三修(external-win-e2e.sh 固化)**:①guest 网卡必须 **e1000**
+**rig 层三修(external-win-e2e.sh 固化)**:①guest 网卡必须 **e1000**
 (介质 boot.wim 无 virtio 驱动,virtio 网卡下 WinPE 无链路,net use 永远
 起不来——与 9/19 探针 rig 同约束);②guest 内存 **4G**——8G guest 被
 Docker VM 全局 OOM 杀(两轮同型:dmesg `Out of memory: Killed process
@@ -513,3 +513,89 @@ qemu-system-x86`,RSS ~9G;装机期 install.wim 走 SMB 不进内存,4G 富余
 静默缺包会让 dnsmasq/samba/qemu 全空转)。附带勘误:增强 boot.wim 是
 **~450M**(原版 + 小文件),此前注释里的 "4.7G" 是被否定的灌
 install.wim 形态的记忆残留。
+
+### agent apply-image 落地(2026-09-22,终局通路兑现,qemu 实证前置)
+
+**通路定策兑现(两段式,方案 A)**:机器引导 **alpine agent**(Linux 装机
+同款载体)在机器侧 `wimlib apply` 把预备树 install.wim **直接铺到未挂载的
+NTFS 卷**(wimlib 内建 libntfs-3g 直写,无需挂载),并 in-wim 注入首启配置
+(unattend(仅 specialize+oobeSystem,无 windowsPE pass)落 `\Windows\Panther`
++ task.json 落 Setup\Scripts + SpBcd 剥离版 Specialize.xml);**ESP 留空**,
+编排侧在 applied 回报后**重挂 wimboot 载体**(startnet 换 bcdboot 形态)
+二次引导 WinPE,由 **bcdboot 原生生成 BCD**——这正是 setup.exe 自己的时序,
+也是唯一能让 NT 的 BcdOpenStore 接受的 store 来源。重启后
+specialize/oobeSystem→FirstLogon→mammoth-complete.ps1 回调链与 setup 路径
+**逐字节一致**,verify_ready 零改动。
+
+**为何放弃手工 BCD(真机定案,2026-09-22)**:首版通路的"介质模板 BCD
+预烤"(`bcdpatch.py` 就地改写 setup loader 条目 {7619dcc9} 的 device blob)
+在 2288H 真机 apply 全通后,**first boot 的 specialize 阶段弹"无法更新
+计算机的启动配置"**——NT 的 BCD 层无法读/写模板派生的手工补丁 store
+(bootmgr 与 hivex 均可读,NT 打开 store 报 0xC0000098;SpBcd 剥离、NVRAM
+条目、脏位、校验和方向均已逐一实验排除)。外部评审(含 PZ regf 详解 +
+ReactOS cmlib 源码核对)定案:NT 校验项远多于 bootmgr,手工 hive 对
+BcdOpenStore 永远不合法,**唯一贴近微软原生的修复 = 让 bcdboot 生成**。
+两段式时序与 setup.exe 完全同构(WinPE 里 bcdboot 生成 BCD 后才重启进
+specialize)。
+
+**两段式编排(同一任务,两次引导)**:①agent 段 = 分区(GPT: ESP 300M +
+MSR 16M + NTFS rest)→ mkntfs → HTTP 拉 install.wim → in-wim 注入 →
+POST `applied` → 重启;②bcdboot 段 = 编排侧收到 applied 后**先断电**(机器
+正在自行重启,registry 行即将被翻转为 wimboot 形态,不按住会撞进半翻转
+状态)→ 同 token 重建 boot tree(BuildWindowsWimboot,bcdboot startnet
+烧入 boot.wim,unattend/task seed 可选缺省)→ netboot 行翻转 wimboot →
+`SetBootDevice(PXE, once)` + 上电;WinPE startnet:diskpart 给 ESP 派 S: →
+探 NTFS 卷盘符 → `bcdboot W:\Windows /s S: /f UEFI` → **验收门禁
+`bcdedit /store S:\EFI\Microsoft\Boot\BCD /enum all`** → curl POST 裁定
+标记到 diag 通道 → **原地等待**(绝不自启重启——引擎要先释放 PXE 行再
+power cycle,自启会赛跑重进 WinPE);编排侧见标记即释放 PXE + power cycle,
+直落盘进 first boot。state machine(`bcdboot_armed_at`/`bcdboot_done_at`)
+持久化在 task context,stage 重入零重复。
+
+**PXE 传送面(两段共链)**:wimboot 载体走 plain iPXE(wimboot 无 shim/grub
+路径),agent 载体的条目用 iPXE 语法渲染同样可走 plain iPXE——external
+dnsmasq 模式下把机器 MAC **全程钉 `ipxe-amd64.efi`**(kit conf 的 winboot
+pin),两段共用一条静态链,**无需中途换钉**;builtin proxyDHCP 模式则按
+entry kind 自动切换(shim→agent,ipxe→wimboot),零配置。
+
+**Spike 实证(qemu,2026-09-21/22)**:①工具链:alpine extended ISO 无
+wimlib/ntfs-3g → fetch-and-pin 同源 apk 闭包 6 文件(wimlib+libwim+
+libntfs-3g+libfuse3+mkntfs+libuuid,~0.9M)纯净环境跑通,直写未挂载 NTFS
+apply 成功(boot.wim img1,23470 文件);②启动闭环:apply 镜像 →
+bootmgfw→winload→WinPE→startnet 全链路截图证据。(②的 BCD 格式考证
+(device blob 88 字节等)随手工补丁路线一并退役,git 历史可考。)
+
+**集成面**:`boot.installer: setup|agent`(windows 专用,其他发行版提交即拒
+`SCHEMA_INVALID_BOOT_INSTALLER`;agent 免 SMB 门禁);windows 驱动
+`NetbootCarrierFor` 按输入选载体(agent → alpine_netboot);答案集 = 共享
+行格式的 agent-plan.sh/json + unattend-panther.xml + task.json +
+win-specialize.xml(经 /render/<token> 下机)+ bcdboot startnet/winpeshl
+(seed 名 `mammoth/startnet.cmd`/`mammoth/winpeshl.ini`,**机器侧从不按名
+拉取**——编排侧在 applied 后整体作为 seed 传入 BuildWindowsWimboot 烧入
+boot.wim);runtime windows-apply 分支(顺序: RAM 预检→GPT 落盘→mkntfs→
+直写 apply→in-wim 注入→POST applied→重启);install.wim 经
+`/netboot/store/<sha>/win/tree/` HTTP 投递;新配置
+`MAMMOTH_WINDOWS_APPLY_ALPINE_ISO`(extended ISO:机器侧包池需
+sfdisk/partx/dosfstools);wimlib/mkntfs 闭包为 pinned 资产
+(`assets/win-apply/` + `scripts/fetch-win-apply-tools.sh`)。
+e2e:`external-win-e2e.sh`(wimboot rig;--full 等六阶段)。
+**真机窗口(2026-09-22,2288H,多轮)**:**apply 链路真机全通**——载体
+引导/HTTP 拉 wim(4195MiB)/wimlib 直写 RAID 卷/in-wim 注入/重启全部打通;
+窗口内修五缺陷(EnsureISO 裸路径回退、gen BootSpec 丢 installer、plan 丢
+size_bytes、task.json 两段名 401、ntfs3 挂死→in-wim 注入)+ 完成回报
+两相化(agent=applied,Windows first boot=ok 才终态,修复假绿)。手工
+BCD 路线的 specialize 卡点由两段式(方案 A)接棒。
+**方案 A 真机闭环(2026-09-22,job_57ef0347654e,六阶段全绿)**:agent 段
+(12:18-12:24)→ applied → 二段武装(断电→wimboot bcdboot 树→PXE once,
+12:28)→ bcdboot 段(plain iPXE→WinPE→**BCDBOOT OK:bcdboot 生成 +
+bcdedit 枚举成功,NT BcdOpenStore 门禁通过——0xC0000098 死点终结**,
+12:32)→ 释放 PXE+cycle → first boot(specialize 无错误框)→ 12:39 回调
+"windows setup finished" ok → verify_ready ✓,全程 ~28 分钟;静态网
+.215 按 spec 落网(ARP 证实)。已知行为:完成回调源 IP 为站点 DHCP 租约
+(.218)而非声明静态(Windows 默认路由竞争),spec 落网判定看 ARP;WinPE
+内 curl 由 builder 从 install.wim 补种(介质 boot.wim 不带 curl)。诊断面
+固化:VGA 冻结(console 切 ttyS0)属预期,agent 步骤级 diag 回传 +
+bcdboot 段裁定标记为排障主通道。
+**遗留**:cancel 不释放 netboot 条目(待修);机器状态机装完停留
+discovering(待查);ntfs3 目录态 apply;SB ON(需内核签名);自动通路
+判断(影子决策阶段,后置)。

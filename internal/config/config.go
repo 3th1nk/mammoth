@@ -92,11 +92,16 @@ type Config struct {
 	ProbeAlpineISO     string // alpine standard ISO (path/URL) the probe medium is built from
 	ProbeAlpineNetboot string // alpine NETBOOT tarball (path/URL) for the probe's PXE carrier (network drivers included)
 	PXEDINetboot       string // debian d-i netboot.tar.gz (path/URL) — the PXE carrier for debian12 (the ISO's initrd is the cdrom flavour)
-	PXEDIUdebsDir      string // staged netboot udeb archive subset (scripts/fetch-di-udebs.sh shape) filling the netinst ISO's pruned pool
-	ProbeStaticCIDR    string // DHCP fallback for machines without ssh.address
-	ProbePrefix        int    // prefix length for a bare ssh.address fallback CIDR (default 24)
-	ProbeGateway       string // fallback default route (cross-subnet report targets)
-	ProbeWait          time.Duration
+	// WindowsApplyAlpineISO is the alpine EXTENDED ISO (path/URL) arming the
+	// windows agent apply-image pathway (MAMMOTH_WINDOWS_APPLY_ALPINE_ISO):
+	// its /apks pool provides sfdisk/partx/dosfstools/python3 on the
+	// machine — python3 runs the BCD pre-bake.
+	WindowsApplyAlpineISO string
+	PXEDIUdebsDir         string // staged netboot udeb archive subset (scripts/fetch-di-udebs.sh shape) filling the netinst ISO's pruned pool
+	ProbeStaticCIDR       string // DHCP fallback for machines without ssh.address
+	ProbePrefix           int    // prefix length for a bare ssh.address fallback CIDR (default 24)
+	ProbeGateway          string // fallback default route (cross-subnet report targets)
+	ProbeWait             time.Duration
 
 	MediaDir     string // local media repository (boot ISOs)
 	MediaWorkDir string // scratch dir for media builds (default: beside the output)
@@ -106,10 +111,10 @@ type Config struct {
 	// media repo — the SMB analog of the NFS media export). Empty = windows
 	// PXE submissions are rejected at the gate. User/Password are optional
 	// share credentials (guest exports need none).
-	WindowsInstallSMBUNC         string
+	WindowsInstallSMBUNC      string
 	WindowsInstallSMBUser     string
 	WindowsInstallSMBPassword string
-	BootSettleDelay                time.Duration
+	BootSettleDelay           time.Duration
 
 	VerifyReadyWait time.Duration // verify_ready poll budget for the new system after the completion report
 
@@ -278,6 +283,7 @@ func FromEnv() (Config, error) {
 	applyString(&c.ProbeAlpineISO, "MAMMOTH_PROBE_ALPINE_ISO", &errs)
 	applyString(&c.ProbeAlpineNetboot, "MAMMOTH_PROBE_ALPINE_NETBOOT", &errs)
 	applyString(&c.PXEDINetboot, "MAMMOTH_PXE_DI_NETBOOT", &errs)
+	applyString(&c.WindowsApplyAlpineISO, "MAMMOTH_WINDOWS_APPLY_ALPINE_ISO", &errs)
 	applyString(&c.PXEDIUdebsDir, "MAMMOTH_PXE_DI_UDEBS_DIR", &errs)
 	applyString(&c.ProbeStaticCIDR, "MAMMOTH_PROBE_STATIC_CIDR", &errs)
 	applyString(&c.ProbeGateway, "MAMMOTH_PROBE_GATEWAY", &errs)

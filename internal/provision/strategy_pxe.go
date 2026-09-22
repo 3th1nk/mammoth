@@ -36,7 +36,8 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 	if err != nil {
 		return classifiedErr("SCHEMA_UNKNOWN_DISTRO", false, "%s", err.Error())
 	}
-	carrier, pool := render.NetbootInstallOf(driver)
+	carrier := render.NetbootInstallOfInputs(driver, b.Inputs)
+	_, pool := render.NetbootInstallOf(driver)
 	if err := requireDiskHeadroom(e.BootTreeDir, 3<<30); err != nil {
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false, "%s", err.Error())
 	}
@@ -81,9 +82,26 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 				"alpine netboot tarball fetch failed: %s", terr.Error())
 		}
+		// The alpine pilot's package pool is the distro ISO's own /apks; the
+		// windows apply-image plan has no alpine ISO — its runtime tools
+		// pool comes from the deployment-configured EXTENDED ISO
+		// (MAMMOTH_WINDOWS_APPLY_ALPINE_ISO: sfdisk/partx/dosfstools/
+		// python3 — the BCD pre-bake runs on python3).
+		apksISO := distroISO
+		if render.FamilyOf(driver) == "windows" {
+			if e.WindowsApplyAlpineISO == "" {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,
+					"windows agent apply needs the alpine extended ISO pool (set MAMMOTH_WINDOWS_APPLY_ALPINE_ISO) — python3/sfdisk/partx are absent from the windows media")
+			}
+			apksISO, terr = builder.EnsureISO(ctx, e.WindowsApplyAlpineISO, e.MediaWorkDir)
+			if terr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+					"windows apply alpine pool ISO fetch failed: %s", terr.Error())
+			}
+		}
 		tree, err = builder.BuildAgentNetboot(ctx, builder.AgentNetbootOptions{
 			TarballPath: tarball,
-			ApksISOPath: distroISO,
+			ApksISOPath: apksISO,
 			DestDir:     treeDir,
 			Overlay:     []byte(b.Seed[builder.AgentOverlayName]),
 		})

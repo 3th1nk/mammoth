@@ -56,7 +56,8 @@ MAMMOTH_HTTP_ADDR=":$HTTP_PORT" MAMMOTH_API_TOKEN=devtoken MAMMOTH_MASTER_KEY="$
 MAMMOTH_MEDIA_DIR="$WORK/media" \
 MAMMOTH_EXTERNAL_URL="http://$BRIDGE_IP:$HTTP_PORT" \
 MAMMOTH_PXE_ENABLED=true MAMMOTH_PXE_MODE=external \
-MAMMOTH_WINDOWS_INSTALL_SMB_SHARE='\\192.168.77.1\mammoth-media' \
+MAMMOTH_WINDOWS_INSTALL_SMB_UNC='\\192.168.77.1\mammoth-media' \
+${AGENT:+MAMMOTH_WINDOWS_APPLY_ALPINE_ISO="$ALPINE_ISO"} \
 "$WORK/mammoth" serve --mode=all >"$WORK/logs/server.log" 2>&1 &
 SERVER_PID=$!
 cleanup() {
@@ -78,7 +79,7 @@ JOB=$(curl -s -X POST -H "Authorization: Bearer devtoken" -H "Content-Type: appl
   "type": "install",
   "targets": {"machine_ids": ["'"$MID"'"]},
   "spec": {
-    "boot": {"strategy": "pxe"},
+    "boot": {"strategy": "pxe"'"${AGENT:+, \"installer\": \"agent\"}"'},
     "image": {"source": "file://'"$ISO"'", "distro": "windows2019"},
     "storage": {"disks": [{"select": {"match": {"type": "nvme", "size": "largest"}}, "wipe": true,
       "partitions": [
@@ -100,8 +101,14 @@ for i in $(seq 1 120); do
   sleep 5
 done
 [ -n "$TOKEN" ] || { echo "✗ boot entry never armed"; tail -30 "$WORK/logs/server.log"; exit 1; }
-echo "$SCRIPT" | grep -q "kernel .*wimboot" && echo "$SCRIPT" | grep -q "initrd .*boot.wim" \
-  && echo "  ✓ wimboot entry armed (token $TOKEN)" || { echo "✗ entry is not wimboot-shaped:"; echo "$SCRIPT"; exit 1; }
+if [ $AGENT = 1 ]; then
+  echo "$SCRIPT" | grep -q "kernel .*vmlinuz" && echo "$SCRIPT" | grep -q "initrd .*initrd.img" \
+    && echo "  ✓ alpine agent entry armed (token $TOKEN — windows apply-image)" \
+    || { echo "✗ entry is not alpine-shaped:"; echo "$SCRIPT"; exit 1; }
+else
+  echo "$SCRIPT" | grep -q "kernel .*wimboot" && echo "$SCRIPT" | grep -q "initrd .*boot.wim" \
+    && echo "  ✓ wimboot entry armed (token $TOKEN)" || { echo "✗ entry is not wimboot-shaped:"; echo "$SCRIPT"; exit 1; }
+fi
 ls -la "$WORK/media/netboot/$TOKEN/" | sed 's/^/    /'
 
 echo "· container: bridge + dnsmasq + qemu guest ($([ $SB = 1 ] && echo 'Secure Boot ON' || echo 'Secure Boot OFF'))"
@@ -140,6 +147,13 @@ docker exec win-ext-ctl sh -c '
   ip link add br-pxe type bridge; ip addr add '"$BRIDGE_IP"'/24 dev br-pxe
   ip link set br-pxe up
   ip tuntap add dev tap0 mode tap; ip link set tap0 master br-pxe; ip link set tap0 up
+  if [ '"$AGENT"' = 1 ]; then
+    # agent carrier: the shim->grubnet chain from the exported kit (the
+    # Linux agent NBP shape, grubnet resolves the per-MAC config over
+    # HTTP), NOT the wimboot ipxe hand-out.
+    cp /work/media/netboot/external-tftp/dnsmasq.conf.example /etc/dnsmasq-win.conf
+    sed -i "s|tftp-root=.*|tftp-root=/work/media/netboot/external-tftp|; s|<tftp-server>|'$BRIDGE_IP'|g" /etc/dnsmasq-win.conf
+  else
   cat > /etc/dnsmasq-win.conf <<EOF
 dhcp-authoritative
 no-ping
@@ -152,6 +166,7 @@ dhcp-host='"$GUEST_MAC"',set:winboot,192.168.77.107
 dhcp-boot=tag:winboot,tag:!ipxe,ipxe-amd64.efi,,'"$BRIDGE_IP"'
 dhcp-boot=tag:ipxe,boot.ipxe,,'"$BRIDGE_IP"'
 EOF
+  fi
   dnsmasq --conf-file=/etc/dnsmasq-win.conf --no-daemon --log-queries --log-dhcp >/work/logs/dnsmasq.log 2>&1 &
   # The deployment SMB export stand-in: read-only /work/media, guest access —
   # the wimboot startnet maps \\192.168.77.1\mammoth-media from WinPE.
@@ -212,7 +227,7 @@ f=open('$WORK/disk.raw','rb'); f.seek(512); print(f.read(8))" 2>/dev/null || tru
   [ "$GPT" = "b'EFI PART'" ] && { echo "  ✓ GPT appeared on the raw disk (setup accepted autounattend, minute $i)"; break; }
   # progress chatter: the big HTTP pulls from the mammoth access log
   if [ $((i % 5)) = 0 ]; then
-    grep -aoE "GET /netboot/files/[a-f0-9]+/(wimboot|bootmgr|bootmgfw.efi|BCD|boot.sdi|boot.wim)" "$WORK/logs/server.log" 2>/dev/null | sort | uniq -c | sed 's/^/    /'
+    grep -aoE "GET /netboot/(files/[a-f0-9]+/(wimboot|bootmgr|bootmgfw.efi|BCD|boot.sdi|boot.wim|vmlinuz|initrd.img|modloop|agent.apkovl.tar.gz)|store/[a-f0-9]+/win/tree/(sources/install.wim|efi/boot/bootx64.efi|efi/microsoft/boot/bcd)|grub/[0-9a-fA-F:]+)" "$WORK/logs/server.log" 2>/dev/null | sort | uniq -c | sed 's/^/    /'
     shot "$i"
   fi
 done
@@ -257,8 +272,13 @@ if [ $FULL = 1 ]; then
   exit 1
 fi
 # default (carrier-verification) round: judge WinPE up from the screendumps
-PULLS=$(grep -acE "GET /netboot/files" "$WORK/logs/server.log" 2>/dev/null || true)
+PULLS=$(grep -acE "GET /netboot/(files|store)" "$WORK/logs/server.log" 2>/dev/null || true)
 if [ "$PULLS" != "0" ] && [ "$PULLS" != "" ]; then
+  if [ $AGENT = 1 ]; then
+    echo "  ✓ guest pulled agent payload over HTTP ($PULLS requests) — GPT appeared, apply underway"
+    echo "WINDOWS AGENT APPLY CARRIER ✓ (chain verified; --full waits for the six-stage tail)"
+    exit 0
+  fi
   echo "  ✓ guest pulled boot files over HTTP ($PULLS requests) — screendumps in $WORK/logs/screen-*.png"
   echo "  ✓ judge WinPE-up from the screenshots (language picker = carrier chain verified)"
   echo "WINDOWS WIMBOOT PXE CARRIER ✓ (chain verified; SMB install source is the remaining segment)"

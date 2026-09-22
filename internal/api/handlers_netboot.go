@@ -162,17 +162,31 @@ func entryGrants(e interface {
 var poolStoreSHARe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // fetchPoolStoreFile serves the shared, content-addressed pool tree
-// (MediaDir/pool-store/<sha256>/iso/...): one unpack per image content,
-// consumed by d-i (HTTP mirror) and casper (http fallback) across tasks.
-// The path is confined to the addressed tree — the sha slot is format-checked
-// and the rest cannot traverse (.. rejected, Clean strips chains).
+// (MediaDir/pool-store/<sha256>/iso/... and, for the windows agent
+// apply-image pathway, .../win/tree/...): one unpack per image content,
+// consumed by d-i (HTTP mirror), casper (http fallback) across tasks, and
+// the windows agent (install.wim + the ESP boot files). The path is
+// confined to the addressed tree — the sha slot is format-checked and the
+// rest cannot traverse (.. rejected, Clean strips chains). The windows
+// subtree is the same trust domain as the ISO: prepared-media content
+// (the injected SetupComplete pair is generic, nothing per-task), served
+// like the ISO itself.
 func (s *Server) fetchPoolStoreFile(c *gin.Context, sha, rest string) error {
 	if !poolStoreSHARe.MatchString(sha) || strings.Contains(rest, "..") {
 		return verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
 			"no pool tree at this address")
 	}
 	rel := strings.TrimPrefix(filepath.Clean("/"+rest), "/")
-	path := filepath.Join(s.MediaDir, "pool-store", sha, "iso", rel)
+	// The first path segment names the subtree ("iso" = the distro ISO
+	// unpack; "win" = the prepared windows tree) — it is also the on-disk
+	// directory below pool-store/<sha>/, so strip it once: joining it back
+	// doubled the segment and 404'd every fetch.
+	sub, inner, ok := strings.Cut(rel, "/")
+	if !ok || (sub != "iso" && sub != "win") {
+		return verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
+			"no pool tree at this address")
+	}
+	path := filepath.Join(s.MediaDir, "pool-store", sha, sub, inner)
 	f, err := os.Open(path)
 	if err != nil {
 		return verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",

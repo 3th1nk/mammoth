@@ -1230,8 +1230,14 @@ components:
         windows_smb_share:
           type: boolean
           description: Whether the deployment SMB export for the windows wimboot
-            carrier is configured (MAMMOTH_WINDOWS_INSTALL_SMB_SHARE); windows pxe
+            carrier is configured (MAMMOTH_WINDOWS_INSTALL_SMB_UNC); windows pxe
             boot requests require it.
+        windows_agent_installer:
+          type: boolean
+          description: Whether the windows agent apply-image pathway
+            (boot.installer=agent) is usable on this deployment — PXE on
+            plus the alpine extended ISO pool configured
+            (MAMMOTH_WINDOWS_APPLY_ALPINE_ISO).
 
     DistroSupport:
       type: object
@@ -2140,6 +2146,17 @@ components:
           type: array
           items:
             type: string
+        capabilities:
+          type: array
+          description: >-
+            Access capabilities enabled on the installed system (windows:
+            "rdp" | "winrm" | "ping"; default empty = none enabled). Opt-in
+            per task — turning on inbound management of a fresh install is
+            the operator's security call. Unknown values are rejected at
+            render.
+          items:
+            type: string
+            enum: [rdp, winrm, ping]
 
     IdentitySpec:
       type: object
@@ -2281,6 +2298,18 @@ components:
             per-task boot ISO the BMC mounts. pxe: the machine boots the
             installer over the LAN (proxyDHCP + iPXE); requires the netboot
             service enabled and a distro declaring pxe_support.
+        installer:
+          type: string
+          enum: [setup, agent]
+          default: setup
+          description: |
+            Windows-only install pathway. setup: the setup.exe flow through
+            the wimboot carrier (the default; needs the deployment SMB
+            export). agent: the agent apply-image pathway — the machine
+            boots the alpine agent, which wimlib-applies install.wim onto
+            the declarative NTFS volume and pre-bakes the BCD; PXE-only,
+            needs no SMB export, and requires the alpine extended ISO pool
+            (MAMMOTH_WINDOWS_APPLY_ALPINE_ISO). Other distros reject it.
 
     Policy:
       type: object

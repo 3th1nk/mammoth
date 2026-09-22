@@ -807,6 +807,19 @@ func (r *JobRepo) RecordInstallProgress(ctx context.Context, taskID string, rec 
 	return tx.Commit()
 }
 
+// RecordInstallApplied records the AGENT's phase-one report: the image was
+// laid down and the machine is about to reboot into first boot. It releases
+// the pipeline's "is the payload still needed" concern (install_os drops the
+// PXE payload on this marker) WITHOUT completing the task — the terminal
+// completion is the first-boot callback from Windows itself
+// (docs/compat/distros.md §windows agent apply: 假绿修复, 2026-09-22).
+func (r *JobRepo) RecordInstallApplied(ctx context.Context, taskID, detail string) error {
+	now := time.Now().UTC()
+	return r.RecordInstallProgress(ctx, taskID, map[string]any{
+		"applied_at": now, "applied_detail": detail,
+	})
+}
+
 // RecordInstallComplete records the installer's completion report
 // (status ok|failed) under a row lock: monotonic terminal facts, no stage CAS.
 func (r *JobRepo) RecordInstallComplete(ctx context.Context, taskID, status, detail string) error {

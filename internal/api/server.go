@@ -63,6 +63,11 @@ type Deps struct {
 	// windows wimboot carrier is configured (capabilities surface and the
 	// windows PXE submission gate).
 	WindowsInstallSMBUNC bool
+	// WindowsAgentInstaller reports that the windows apply-image pathway is
+	// usable on this deployment (PXE on + the alpine extended ISO pool
+	// configured) — surfaced in capabilities and gating nothing by itself
+	// (the pool absence fails at prepare with a classified error).
+	WindowsAgentInstaller bool
 	// BiosConfirmRequired gates set_bios_attributes submissions (two-stage
 	// confirmation, docs/07-bmc.md §6); surfaced in capabilities.
 	BiosConfirmRequired bool
@@ -253,6 +258,9 @@ func (s *Server) GetCapabilities(ctx context.Context, _ gen.GetCapabilitiesReque
 	}
 	if s.WindowsInstallSMBUNC {
 		out.WindowsSmbShare = &s.WindowsInstallSMBUNC
+	}
+	if s.WindowsAgentInstaller {
+		out.WindowsAgentInstaller = &s.WindowsAgentInstaller
 	}
 	biosConfirm := "required"
 	if !s.BiosConfirmRequired {

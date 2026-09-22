@@ -31,9 +31,11 @@ package windows
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/3th1nk/mammoth/internal/render"
+	"github.com/3th1nk/mammoth/internal/render/agent"
 )
 
 // Driver is the Windows Server unattend driver.
@@ -73,6 +75,25 @@ func (d *Driver) PXESupport() render.SupportLevel { return render.SupportFull }
 // rides the deployment SMB export the startnet maps.
 func (d *Driver) NetbootCarrier() render.NetbootCarrier { return render.NetbootCarrierWimboot }
 func (d *Driver) NetbootPool() render.NetbootPool       { return render.NetbootPoolNone }
+
+// NetbootCarrierFor is the installer-aware carrier choice: the setup.exe
+// flow (default) boots the wimboot carrier; the agent apply-image path
+// (boot.installer=agent) rides the proven alpine agent carrier instead —
+// the machine boots the agent, which wimlib-applies install.wim onto the
+// declarative NTFS volume and pre-bakes the BCD (docs/compat/distros.md
+// §windows, 通路路线决策: 终局 = agent apply-image).
+func (d *Driver) NetbootCarrierFor(in render.InstallInputs) render.NetbootCarrier {
+	if in.Installer == "agent" {
+		return render.NetbootCarrierAlpineNetboot
+	}
+	return render.NetbootCarrierWimboot
+}
+
+// WindowsOSImageName reports the /IMAGE/NAME this driver installs —
+// provision resolves the install.wim image index server-side for the agent
+// apply-image plan (the agent gets a deterministic index, no SKU probing
+// on the machine).
+func (d *Driver) WindowsOSImageName() string { return d.osImageName() }
 
 // FirmwareSupport: the rendered DiskConfiguration is UEFI-shaped
 // (ESP + MSR + GPT) — a Legacy BIOS machine would fail WillShowUI=OnError
@@ -153,6 +174,16 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if in.ImageSource == "" {
 		return nil, render.BootParams{}, fmt.Errorf("%s: image source is required", d.distro)
 	}
+	for _, c := range in.Capabilities {
+		switch c {
+		case "rdp", "winrm", "ping":
+		default:
+			return nil, render.BootParams{}, fmt.Errorf("%s: access.capabilities %q is not one of rdp|winrm|ping", d.distro, c)
+		}
+	}
+	if in.Installer == "agent" {
+		return d.renderAgentApply(in)
+	}
 	if in.Netboot != nil && in.Netboot.PoolURL != "" {
 		// The wimboot carrier needs no pool (the install source rides the
 		// deployment SMB export); a pool URL would mean the submission was
@@ -190,7 +221,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	}
 
 	unattend := unattendXML(d.osImageName(), hostname, in.RootPassword, mediaLocaleFor(in.MediaLanguage), plan)
-	task, terr := taskJSON(in.CompleteURL, in.Network)
+	task, terr := taskJSON(in.CompleteURL, in.Network, in.Capabilities)
 	if terr != nil {
 		return nil, render.BootParams{}, terr
 	}
@@ -216,6 +247,313 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		AnswerURL:           strings.TrimSuffix(in.AnswerBaseURL, "/") + "/autounattend.xml",
 		InstallerAutoReboot: true,
 	}, nil
+}
+
+// ── agent apply-image pathway (boot.installer=agent) ─────────────────────────
+//
+// The endgame carrier from the 通路路线决策 (docs/compat/distros.md §windows),
+// in its TWO-BOOT shape (方案 A — 复刻 setup.exe 时序, 2026-09-22): boot one
+// is the alpine agent, which wimlib-applies the prepared install.wim onto
+// the declarative NTFS volume and injects the first-boot config in-wim
+// (unattend into %WINDIR%\Panther, task.json, SpBcd-stripped Specialize.xml);
+// it leaves the ESP EMPTY — a hand-made BCD store is never valid to NT's
+// BcdOpenStore (0xC0000098, real-machine 9/22, every patch angle excluded),
+// so boot two is a wimboot WinPE whose startnet runs bcdboot to generate
+// the store natively — exactly what setup.exe itself does before rebooting
+// into specialize. First boot then runs specialize/oobeSystem like the
+// setup.exe flow and the callback face is byte-identical — verify_ready
+// cannot tell the pathways apart (and must not).
+//
+// What the pathway deliberately does NOT carry: driver injection (wimlib
+// lays down files; boot-critical drivers must ship in the media's inbox —
+// machines outside that envelope stay on the setup.exe path, which is why
+// that pathway is kept, not deleted).
+
+// renderAgentApply renders the agent-flavored answer set: an agent-plan.sh
+// in the shared mammoth_* line format (the runtime's collectors parse it
+// unchanged), the Panther unattend, the per-task task.json — plus the
+// boot-two (bcdboot WinPE) startnet pair, which no machine component ever
+// fetches by name: the orchestration bakes them into the second boot tree's
+// boot.wim at the applied marker (the names are the wimboot seed contract's,
+// so the answer map passes through as the seed map verbatim).
+func (d *Driver) renderAgentApply(in render.InstallInputs) ([]render.AnswerFile, render.BootParams, error) {
+	if in.Netboot == nil {
+		return nil, render.BootParams{}, fmt.Errorf("%s: the agent apply path is PXE-only (boot.strategy=pxe)", d.distro)
+	}
+	if in.Netboot.InstallWimURL == "" || in.Netboot.InstallWimIndex <= 0 {
+		return nil, render.BootParams{}, fmt.Errorf("%s: agent apply needs the prepared install.wim URL and image index", d.distro)
+	}
+	if in.Netboot.InstallSMBUNC != "" || in.Netboot.PoolURL != "" {
+		return nil, render.BootParams{}, fmt.Errorf("%s: agent apply consumes the HTTP win tree — SMB/pool inputs are the setup path's shape", d.distro)
+	}
+	if len(in.Raid) > 0 {
+		return nil, render.BootParams{}, fmt.Errorf("%s: RAID is not supported yet — submit plain disks", d.distro)
+	}
+	if len(in.Scripts) > 0 {
+		return nil, render.BootParams{}, fmt.Errorf("%s: user scripts are not supported yet (SetupComplete is engine-owned)", d.distro)
+	}
+
+	render.NormalizeESP(in.Disks)
+	hostname, err := computerName(in.Hostname)
+	if err != nil {
+		return nil, render.BootParams{}, err
+	}
+	plan, err := planDisks(d.distro, in)
+	if err != nil {
+		return nil, render.BootParams{}, err
+	}
+	if err := validateNetwork(in.Network); err != nil {
+		return nil, render.BootParams{}, err
+	}
+	bootDev := bootDiskDevice(d.distro, in)
+
+	task, terr := taskJSON(in.CompleteURL, in.Network, in.Capabilities)
+	if terr != nil {
+		return nil, render.BootParams{}, terr
+	}
+	ml := mediaLocaleFor(in.MediaLanguage)
+	planSH := winAgentPlanSH(in, bootDev, plan)
+	// task.json rides a FLAT answer name here: the agent fetches it via
+	// /render/<token>/<file>, a single path segment — the setup path's
+	// "mammoth/task.json" (a baked seed, never fetched) does not fit the
+	// route and 401s (real-machine finding, 9/22).
+	base := strings.TrimSuffix(in.AnswerBaseURL, "/")
+	answers := []render.AnswerFile{
+		{Name: "agent-plan.sh", Content: planSH},
+		{Name: "agent-plan.json", Content: winAgentPlanJSON(d, in, bootDev, plan)},
+		{Name: "unattend-panther.xml", Content: pantherUnattendXML(hostname, in.RootPassword, ml)},
+		{Name: AgentTaskJSONName, Content: task},
+		{Name: SpecializeXMLSeedName, Content: in.SpecializeXML},
+		// Boot two (bcdboot WinPE): the seed pair under the wimboot seed
+		// contract's names — the orchestration passes the whole answer map
+		// as BuildWindowsWimboot's seed and only these two apply.
+		{Name: StartnetSeedName, Content: bcdBootStartnetCmd(base + "/diag")},
+		{Name: WinpeshlIniSeedName, Content: winpeshlIni()},
+	}
+	return answers, render.BootParams{
+		AnswerURL:           base + "/agent-plan.sh",
+		InstallerAutoReboot: true,
+		// The alpine carrier's boot shape — identical to the Linux agent
+		// pilot's (modloop / apks / overlay / plan base), rendered by the
+		// agent package so both dialects share one argument authority.
+		NetbootKernelArgs: agent.NetbootKernelArgs(in),
+	}, nil
+}
+
+// AgentTaskJSONName is the flat answer-file name for the per-task task.json
+// on the agent apply path (single path segment — see renderAgentApply).
+const AgentTaskJSONName = "task.json"
+
+// SpecializeXMLSeedName is the flat answer-file name for the SpBcd-stripped
+// sysprep Specialize.xml the agent injects into the applied wim.
+const SpecializeXMLSeedName = "win-specialize.xml"
+
+// BCDBootDiagMarker is the diag file name the boot-two (bcdboot WinPE)
+// startnet POSTs its verdict under; the orchestration polls
+// <MediaDir>/diag/<taskID>/<name> for it.
+const BCDBootDiagMarker = "bcdboot-done.txt"
+
+// The marker's verdict prefixes — the orchestration's grep contract. OK
+// requires BOTH bcdboot and the bcdedit /enum all gate (the acceptance
+// experiment: a store NT's BCD layer cannot open is no store) to exit 0.
+const (
+	BCDBootMarkerOK   = "BCDBOOT OK"
+	BCDBootMarkerFail = "BCDBOOT FAIL"
+)
+
+// bootDiskDevice returns the resolved device carrying the OS partition —
+// the one disk the apply flow wipes and repartitions (v1: single OS disk,
+// the same constraint planDisks enforces).
+func bootDiskDevice(distro string, in render.InstallInputs) string {
+	for i := range in.Disks {
+		for _, p := range in.Disks[i].Partitions {
+			if p.Mount == "/" {
+				return in.Disks[i].Device
+			}
+		}
+	}
+	return "" // unreachable: planDisks already rejected the no-OS spec
+}
+
+// winAgentPlanSH renders the windows flavor of the agent plan: the shared
+// mammoth_disk/mammoth_partition/mammoth_network collector lines (the
+// runtime parses them unchanged) plus the MAMMOTH_WIN_* facts the apply
+// branch consumes. Partition lines describe the FINAL on-disk order —
+// ESP, the synthesized MSR (fs "-": unformatted), the NTFS OS volume —
+// mirroring the DiskConfiguration the setup path renders.
+func winAgentPlanSH(in render.InstallInputs, bootDev string, plan diskPlan) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# mammoth agent plan (windows apply-image) — task %s / machine %s\n", in.TaskToken, in.MachineID)
+	fmt.Fprintf(&b, "MAMMOTH_WIN_MODE=%s\n", shQuote("apply"))
+	fmt.Fprintf(&b, "MAMMOTH_WIN_WIM=%s\n", shQuote(in.Netboot.InstallWimURL))
+	fmt.Fprintf(&b, "MAMMOTH_WIN_INDEX=%s\n", shQuote(fmt.Sprint(in.Netboot.InstallWimIndex)))
+	fmt.Fprintf(&b, "MAMMOTH_COMPLETE_URL=%s\n", shQuote(in.CompleteURL))
+	base := strings.TrimSuffix(in.AnswerBaseURL, "/")
+	fmt.Fprintf(&b, "MAMMOTH_WIN_UNATTEND=%s\n", shQuote(base+"/unattend-panther.xml"))
+	fmt.Fprintf(&b, "MAMMOTH_WIN_TASKJSON=%s\n", shQuote(base+"/"+AgentTaskJSONName))
+	// step-by-step progress channel: the VGA console freezes once /dev/console
+	// lands on ttyS0 after the initramfs (real-machine finding, 9/22), so the
+	// apply posts its own progress to the diag endpoint — the only live
+	// observability during the silent phases.
+	fmt.Fprintf(&b, "MAMMOTH_WIN_DIAG=%s\n", shQuote(base+"/diag"))
+	fmt.Fprintf(&b, "MAMMOTH_WIN_SPECIALIZE=%s\n", shQuote(base+"/"+SpecializeXMLSeedName))
+
+	b.WriteString("\n# disks: mammoth_disk <device> <size_bytes|->\n")
+	for _, dsk := range in.Disks {
+		// size rides along ONLY for controller-named volumes (Redfish
+		// LogicalDriveN has no kernel node — the runtime resolves by size,
+		// same mechanism as the kickstart %pre resolver).
+		size := "-"
+		if dsk.SizeBytes > 0 && !render.IsKernelDeviceName(dsk.Device) {
+			size = fmt.Sprintf("%d", dsk.SizeBytes)
+		}
+		fmt.Fprintf(&b, "mammoth_disk %s %s\n", shQuote(dsk.Device), shQuote(size))
+	}
+	b.WriteString("\n# partitions: mammoth_partition <device> <mount> <fs> <size_mb|-> <flags> (final on-disk order; \"-\" fs = MSR, unformatted)\n")
+	for i, p := range plan.partitions {
+		mount, fs := "-", strings.ToLower(p.format)
+		if p.kind == "MSR" {
+			fs = "-"
+		}
+		if p.isOS {
+			mount = "/"
+		}
+		if p.kind == "EFI" {
+			mount = "/boot/efi"
+			fs = "vfat"
+		}
+		size := fmt.Sprint(p.sizeMB)
+		if p.extend {
+			size = "-"
+		}
+		fmt.Fprintf(&b, "mammoth_partition %s %s %s %s %s\n",
+			shQuote(bootDev), shQuote(mount), shQuote(fs), shQuote(size), shQuote(partFlags(i, plan)))
+	}
+
+	b.WriteString("\n# network: mammoth_network <mac|-> <addresses|-> <gateway|-> <nameservers|->\n")
+	for _, n := range in.Network {
+		mac := "-"
+		if n.Match != nil && n.Match.MAC != "" {
+			mac = strings.ToLower(n.Match.MAC)
+		}
+		addrs := strings.Join(n.Addresses, ",")
+		if addrs == "" {
+			addrs = "-"
+		}
+		gw := agent.DefaultGateway(n.Routes)
+		if gw == "" {
+			gw = "-"
+		}
+		ns := strings.Join(n.Nameservers, ",")
+		if ns == "" {
+			ns = "-"
+		}
+		fmt.Fprintf(&b, "mammoth_network %s %s %s %s\n", shQuote(mac), shQuote(addrs), shQuote(gw), shQuote(ns))
+	}
+	return b.String()
+}
+
+// partFlags renders the partition flags (the ESP's "esp" drives the GPT
+// type GUID the runtime writes; the OS partition is the apply target).
+func partFlags(i int, plan diskPlan) string {
+	switch plan.partitions[i].kind {
+	case "EFI":
+		return "esp"
+	default:
+		return ""
+	}
+}
+
+// winAgentPlanJSON renders the contract face of the windows plan (the
+// documented shape a future agent implementation can consume directly).
+func winAgentPlanJSON(d *Driver, in render.InstallInputs, bootDev string, plan diskPlan) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "{\n  \"version\": 1,\n  \"mode\": \"windows-apply\",\n  \"distro\": %q,\n  \"task_token\": %q,\n  \"machine_id\": %q,\n", d.Distro(), in.TaskToken, in.MachineID)
+	fmt.Fprintf(&b, "  \"wim\": {\"url\": %q, \"index\": %d},\n", in.Netboot.InstallWimURL, in.Netboot.InstallWimIndex)
+	fmt.Fprintf(&b, "  \"complete_url\": %q,\n", in.CompleteURL)
+	b.WriteString("  \"disks\": [\n")
+	for i, dsk := range in.Disks {
+		if i > 0 {
+			b.WriteString(",\n")
+		}
+		fmt.Fprintf(&b, "    {\"device\": %q, \"partitions\": [", dsk.Device)
+		first := true
+		for j, p := range plan.partitions {
+			if dsk.Device != bootDev {
+				continue // v1: only the boot disk carries partitions
+			}
+			if !first {
+				b.WriteString(", ")
+			}
+			first = false
+			mount, fs := "", strings.ToLower(p.format)
+			if p.kind == "MSR" {
+				fs = ""
+			}
+			if p.isOS {
+				mount = "/"
+			}
+			if p.kind == "EFI" {
+				mount = "/boot/efi"
+				fs = "vfat"
+			}
+			size := p.sizeMB
+			_ = j
+			fmt.Fprintf(&b, "{\"fs\": %q, \"mount\": %q, \"size_mb\": %d, \"grow\": %t, \"flags\": [%s]}",
+				fs, mount, size, p.extend, flagsJSON([]string{partFlags(j, plan)}))
+		}
+		b.WriteString("]}")
+	}
+	b.WriteString("\n  ],\n")
+	b.WriteString("  \"network\": [\n")
+	for i, n := range in.Network {
+		if i > 0 {
+			b.WriteString(",\n")
+		}
+		mac := ""
+		if n.Match != nil {
+			mac = n.Match.MAC
+		}
+		fmt.Fprintf(&b, "    {\"mac\": %q, \"addresses\": [%s], \"gateway\": %q, \"nameservers\": [%s]}",
+			mac, cidrsJSON(n.Addresses), agent.DefaultGateway(n.Routes), strsJSON(n.Nameservers))
+	}
+	b.WriteString("\n  ]\n}\n")
+	return b.String()
+}
+
+// flagsJSON renders a flag list as a JSON array body.
+func flagsJSON(flags []string) string {
+	var parts []string
+	for _, f := range flags {
+		if f != "" {
+			parts = append(parts, strconv.Quote(f))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// cidrsJSON renders address strings as a JSON array body.
+func cidrsJSON(addrs []string) string {
+	var parts []string
+	for _, a := range addrs {
+		parts = append(parts, strconv.Quote(a))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// strsJSON renders strings as a JSON array body.
+func strsJSON(list []string) string {
+	var parts []string
+	for _, s := range list {
+		parts = append(parts, strconv.Quote(s))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// shQuote single-quotes a shell word (the plan faces are sourced by
+// busybox sh — the same contract the agent plan renderer upholds).
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
 // diskPlan is the resolved UEFI partition layout: the declared partitions
@@ -434,12 +772,18 @@ if ($cfg) {
     foreach ($n in $cfg.network) {
         $nic = Get-NetAdapter | Where-Object { $_.MacAddress -eq $n.mac }
         if ($nic) {
+            # Idempotent across the script's two executions: the address add
+            # is a no-op when it exists, and the default route is rebuilt
+            # AFTER the clear — a clear-then-add split across executions once
+            # left the box with NO gateway (the second run removed the first
+            # run's route; 2288H 9/22: same-subnet worked, routed sources
+            # could not reach the machine at all).
             $first = $true
             foreach ($a in $n.ips) {
+                New-NetIPAddress -InterfaceIndex $nic.ifIndex -IPAddress $a.ip -PrefixLength ([int]$a.prefix) -ErrorAction SilentlyContinue | Out-Null
                 if ($first -and $n.gateway) {
-                    New-NetIPAddress -InterfaceIndex $nic.ifIndex -IPAddress $a.ip -PrefixLength ([int]$a.prefix) -DefaultGateway $n.gateway | Out-Null
-                } else {
-                    New-NetIPAddress -InterfaceIndex $nic.ifIndex -IPAddress $a.ip -PrefixLength ([int]$a.prefix) | Out-Null
+                    Remove-NetRoute -DestinationPrefix "0.0.0.0/0" -Confirm:$false -ErrorAction SilentlyContinue
+                    New-NetRoute -DestinationPrefix "0.0.0.0/0" -InterfaceIndex $nic.ifIndex -NextHop $n.gateway -RouteMetric 1 -ErrorAction SilentlyContinue | Out-Null
                 }
                 $first = $false
             }
@@ -457,17 +801,71 @@ if ($cfg) {
         } catch { Start-Sleep -Seconds 12 }
     }
 }
-# AutoLogon(once) leaves the plaintext credential in Winlogon — scrub it
-# now that the one logon (and this callback) has happened.
-Remove-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name DefaultPassword -ErrorAction SilentlyContinue
-Remove-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name AutoAdminLogon -ErrorAction SilentlyContinue
+# AutoLogon(once) leaves the plaintext credential in Winlogon — scrub it.
+# CONTEXT MATTERS: this script runs TWICE — as SetupComplete (SYSTEM, pre
+# logon, windeploy's RunUserProvidedScript — the agent apply pathway's
+# SetupComplete DOES execute, unlike the setup.exe flow's) and again as
+# FirstLogonCommands (the Administrator session). The scrub MUST only run
+# in the user context: removing the AutoLogon values from the SYSTEM
+# context races winlogon's own auto-logon execution and hangs the boot
+# with a dead console on the VGA (2288H 9/22, three rounds).
+if (-not [Security.Principal.WindowsIdentity]::GetCurrent().IsSystem) {
+    Remove-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name DefaultPassword -ErrorAction SilentlyContinue
+    Remove-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name AutoAdminLogon -ErrorAction SilentlyContinue
+    Remove-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name AutoLogonCount -ErrorAction SilentlyContinue
+}
+# Optional remote management (access.remote_management, DEFAULT OFF —
+# opening inbound RDP/WinRM/ICMP on a fresh install is the operator's
+# security call). The iBMC console on some hardware renders the Core
+# session as a dead, input-deaf window (2288H 9/22); when opted in, the
+# operator face becomes the network instead.
+$rm = @($cfg.capabilities)
+# Enable-NetFirewallRule only flips EXISTING rule instances, and the
+# default RDP/ICMP rules often exist for Domain/Private profiles only —
+# a fresh NIC lands on the PUBLIC profile (no domain), where nothing is
+# enabled and routed sources stay blocked (2288H 9/22: same-subnet worked,
+# routed operator subnet did not). Explicit Any-profile rules close that
+# gap; -ErrorAction SilentlyContinue keeps the double execution idempotent.
+if ($rm -contains "rdp") {
+    Set-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server" -Name fDenyTSConnections -Value 0
+    Enable-NetFirewallRule -Name RemoteDesktop-UserMode-In-TCP,RemoteDesktop-UserMode-In-UDP -ErrorAction SilentlyContinue
+    Set-NetFirewallRule -Name RemoteDesktop-UserMode-In-TCP -RemoteAddress Any -ErrorAction SilentlyContinue
+    New-NetFirewallRule -Name "mammoth-rdp-in" -DisplayName "mammoth RDP" -Profile Any -Direction Inbound -Protocol TCP -LocalPort 3389 -Action Allow -RemoteAddress Any -ErrorAction SilentlyContinue | Out-Null
+}
+if ($rm -contains "winrm") { Enable-PSRemoting -Force -SkipNetworkProfileCheck -ErrorAction SilentlyContinue | Out-Null }
+if ($rm -contains "ping") {
+    Enable-NetFirewallRule -Name FPS-ICMP4-ERQ-In,FPS-ICMP6-ERQ-In -ErrorAction SilentlyContinue
+    New-NetFirewallRule -Name "mammoth-ping-in" -DisplayName "mammoth ping" -Profile Any -Direction Inbound -Protocol ICMPv4 -Action Allow -RemoteAddress Any -ErrorAction SilentlyContinue | Out-Null
+}
 `
+}
+
+// SetupCompleteSeedPair renders the GENERIC SetupComplete pair under the
+// prepared-tree injection contract's names. The builder injects this pair
+// into install.wim (C:\Windows\Setup\Scripts\) — the running OS's first
+// boot consumes it in BOTH pathways (setup.exe flow via FirstLogon
+// fallback, agent flow via FirstLogonCommands), and the task-specific
+// half (task.json) deliberately rides separately so the pair stays
+// ISO-sha cacheable. provision feeds this into EnsureWindowsTree /
+// BuildWindowsWimboot wherever the render answers themselves do not carry
+// the pair (the agent apply pathway's answer set never did — a latent gap
+// the v4 cache bust exposed as INSTALL_MEDIA_BUILD_FAILED, 9/22).
+// The pair stays task-independent (capabilities ride task.json at
+// runtime), so the cached prepared tree is unaffected by the opt-in.
+func SetupCompleteSeedPair() map[string]string {
+	return map[string]string{
+		SetupCompleteSeedName: setupCompleteCmd(),
+		CompletePS1SeedName:   mammothCompletePS(),
+	}
 }
 
 // taskConfig is the per-task runtime contract consumed at first boot.
 type taskConfig struct {
 	CompleteURL string       `json:"complete_url"`
 	Network     []taskNetNIC `json:"network,omitempty"`
+	// Capabilities mirrors access.capabilities ("rdp"|"winrm"|"ping"):
+	// the access features the ps1 enables on the installed system.
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 type taskNetNIC struct {
@@ -483,8 +881,8 @@ type taskIP struct {
 }
 
 // taskJSON renders the per-task config (ISO root — the only per-task seed).
-func taskJSON(completeURL string, entries []render.NetworkEntry) (string, error) {
-	cfg := taskConfig{CompleteURL: completeURL}
+func taskJSON(completeURL string, entries []render.NetworkEntry, capabilities []string) (string, error) {
+	cfg := taskConfig{CompleteURL: completeURL, Capabilities: capabilities}
 	for _, e := range entries {
 		if len(e.Addresses) == 0 {
 			continue
@@ -637,7 +1035,27 @@ func unattendXML(imageName, hostname, password string, ml mediaLocale, plan disk
       </UserData>
     </component>
   </settings>
-  <settings pass="specialize">
+` + postSetupPassesXML(hostname, password, ml) + `</unattend>
+`)
+	return b.String()
+}
+
+// postSetupPassesXML renders the specialize + oobeSystem passes â the OS
+// runs these on first boot no matter which pathway applied the image
+// (setup.exe DiskConfiguration or the agent wimlib apply), so the
+// autounattend and the Panther variant share this exact XML source.
+// AutoLogon(once) + FirstLogonCommands are the PRIMARY completion trigger
+// â both native Shell-Setup oobeSystem settings and PROVEN to run on this
+// path (AdministratorPassword took effect), unlike SetupComplete whose
+// auto-execution silently never fired (setupact has zero records, root
+// cause open). RunSynchronous was tried first and rejected: Shell-Setup
+// has no such element in oobeSystem (setup aborts the pass with
+// "component or setting does not exist"). The ps1 is idempotent â it
+// configures the declared static network then POSTs the callback.
+func postSetupPassesXML(hostname, password string, ml mediaLocale) string {
+	var b strings.Builder
+	w := func(s string) { b.WriteString(s) }
+	w(`  <settings pass="specialize">
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
       <ComputerName>` + xmlEscape(hostname) + `</ComputerName>
     </component>
@@ -650,15 +1068,6 @@ func unattendXML(imageName, hostname, password string, ml mediaLocale, plan disk
       <UserLocale>` + ml.uiLang + `</UserLocale>
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-      <!-- Primary completion trigger: AutoLogon(once) + FirstLogonCommands
-           — both native Shell-Setup oobeSystem settings and PROVEN to run on
-           this path (AdministratorPassword took effect), unlike
-           SetupComplete whose auto-execution silently never fired (setupact
-           has zero records, root cause open). RunSynchronous was tried
-           first and rejected: Shell-Setup has no such element in oobeSystem
-           (setup aborts the pass with "component or setting does not
-           exist"). The ps1 is idempotent — it configures the declared
-           static network then POSTs the callback. -->
       <AutoLogon>
         <Enabled>true</Enabled>
         <LogonCount>1</LogonCount>
@@ -679,7 +1088,7 @@ func unattendXML(imageName, hostname, password string, ml mediaLocale, plan disk
            (alphabetical): AutoLogon -> FirstLogonCommands -> OOBE ->
            UserAccounts. A mis-ordered element fails the WHOLE unattend at
            the earliest pass (offlineServicing: "cannot apply unattend
-           settings") — not the pass it belongs to. -->
+           settings") â not the pass it belongs to. -->
       <OOBE>
         <HideEULAPage>true</HideEULAPage>
         <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
@@ -694,9 +1103,22 @@ func unattendXML(imageName, hostname, password string, ml mediaLocale, plan disk
       </UserAccounts>
     </component>
   </settings>
-</unattend>
 `)
 	return b.String()
+}
+
+// pantherUnattendXML renders the apply-image unattend: specialize +
+// oobeSystem only, NO windowsPE pass â DiskConfiguration, ImageInstall and
+// International-WinPE are setup.exeï¼s job, and the agent pathway replaces
+// setup with wimlib apply + the pre-baked BCD. The OS consumes this file
+// from %WINDIR%\\Panther\\unattend.xml on first boot (the canonical implicit
+// path for the running system; drive-root autounattend discovery is a
+// setup.exe behavior that does not exist here).
+func pantherUnattendXML(hostname, password string, ml mediaLocale) string {
+	return `<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+` + postSetupPassesXML(hostname, password, ml) + `</unattend>
+`
 }
 
 // startnetCmd renders the WinPE startup script baked into boot.wim
@@ -848,6 +1270,90 @@ func validateShareToken(v, what string, isUNC bool) error {
 // after nothing else is launched, and the Setup image IS something else).
 func winpeshlIni() string {
 	return "[LaunchApps]\r\n%SYSTEMDRIVE%\\Windows\\System32\\startnet.cmd\r\n"
+}
+
+// bcdBootStartnetCmd renders the boot-two startnet (方案 A, WinPE bcdboot
+// 收尾): after the agent laid the image down, a wimboot WinPE generates the
+// boot store NATIVELY — the exact timing setup.exe itself uses (bcdboot in
+// WinPE, then reboot into specialize). Baked into boot.wim as the wimboot
+// startnet seed; never fetched by name.
+//
+// Orchestration contract: the script POSTs its verdict marker to the diag
+// channel, then HOLDS — it must never reboot on its own, because the engine
+// has to release the PXE entries BEFORE the machine resets (a self-reboot
+// races the release and re-enters the installer); the engine power-cycles
+// on the marker instead. Dynamic values: only the diag URL, restricted to
+// the machine-face scheme (scheme://host:port/render/<hextoken>/diag) —
+// cmd cannot quote metacharacters, the same restricted-charset contract
+// the setup startnet's URLs uphold.
+func bcdBootStartnetCmd(diagURL string) string {
+	var b strings.Builder
+	w := func(line string) { b.WriteString(line); b.WriteByte('\n') }
+	progress := func(msg string) {
+		w(fmt.Sprintf("curl.exe -sf -m 20 -X POST --data-binary \"%s\" %s/win-progress >nul 2>&1", msg, diagURL))
+	}
+	w("@echo off")
+	w("rem mammoth boot two: generate the BCD natively with bcdboot - the")
+	w("rem setup.exe timing. The agent left the ESP empty ON PURPOSE: a")
+	w("rem hand-patched store never passes NT's BcdOpenStore (0xC0000098).")
+	progress("boot two: bcdboot stage starting (wpeinit)")
+	w("wpeinit")
+	// The ESP is partition 1 of disk 0: the agent carved ESP/MSR/NTFS in
+	// that order, and this flow is single-OS-disk by contract. The spaced
+	// redirect form is load-bearing — `echo ... 0>file` / `1>>file` parse
+	// as handle redirects and silently drop the digit.
+	w("echo select disk 0 > X:\\mammoth-dp.txt")
+	w("echo select partition 1 >> X:\\mammoth-dp.txt")
+	w("echo assign letter=S >> X:\\mammoth-dp.txt")
+	w("diskpart /s X:\\mammoth-dp.txt > X:\\mammoth-diskpart.log 2>&1")
+	w("set MRK=X:\\mammoth-marker.txt")
+	w(`if exist S:\ goto havesp`)
+	w("echo " + BCDBootMarkerFail + " no-esp-letter > %MRK%")
+	w("type X:\\mammoth-diskpart.log >> %MRK%")
+	w(fmt.Sprintf("curl.exe -sf -m 30 -X POST --data-binary @%%MRK%% %s/%s >nul 2>&1", diagURL, BCDBootDiagMarker))
+	w("goto hold")
+	w(":havesp")
+	// The applied NTFS volume gets whatever letter WinPE hands out — find
+	// it by its content instead of guessing (the task.json copy loop in
+	// the setup startnet is the same idiom).
+	w("set WDRV=")
+	w("for %%d in (C D E F W) do if exist %%d:\\Windows\\System32 set WDRV=%%d")
+	w(`if "%WDRV%"=="" (`)
+	w("  echo " + BCDBootMarkerFail + " no-windows-volume > %MRK%")
+	w(fmt.Sprintf("  curl.exe -sf -m 30 -X POST --data-binary @%%MRK%% %s/%s >nul 2>&1", diagURL, BCDBootDiagMarker))
+	w("  goto hold")
+	w(")")
+	w(fmt.Sprintf("bcdboot %%WDRV%%:\\Windows /s S: /f UEFI > X:\\mammoth-bcdboot.log 2>&1"))
+	w("set RC=%errorlevel%")
+	// The acceptance gate (external review's standing check): the generated
+	// store must OPEN under the NT BCD layer — bcdedit is exactly that
+	// layer; 0xC0000098 here means the store is as dead as our hand-made
+	// ones were.
+	w("bcdedit /store S:\\EFI\\Microsoft\\Boot\\BCD /enum all > X:\\mammoth-bcdedit.log 2>&1")
+	w("set RC2=%errorlevel%")
+	w(`if not "%RC%"=="0" goto bcdfail`)
+	w(`if not "%RC2%"=="0" goto bcdfail`)
+	w("echo " + BCDBootMarkerOK + " > %MRK%")
+	w("goto emit")
+	w(":bcdfail")
+	w("echo " + BCDBootMarkerFail + " bcdboot-rc=%RC% bcdedit-rc=%RC2% > %MRK%")
+	w(":emit")
+	w("type X:\\mammoth-bcdboot.log >> %MRK%")
+	w("echo --- bcdedit /enum all (NT BcdOpenStore gate) --- >> %MRK%")
+	w("type X:\\mammoth-bcdedit.log >> %MRK%")
+	// Firmware-fallback insurance: bcdboot /f UEFI writes the canonical
+	// EFI\Microsoft path and registers the NVRAM entry; the removable
+	// fallback doubles the road in if the NVRAM write or lookup fails.
+	w(`if exist S:\EFI\Microsoft\Boot\bootmgfw.efi (`)
+	w("  mkdir S:\\EFI\\Boot >nul 2>&1")
+	w("  copy /Y S:\\EFI\\Microsoft\\Boot\\bootmgfw.efi S:\\EFI\\Boot\\bootx64.efi >nul 2>&1")
+	w(")")
+	w(fmt.Sprintf("curl.exe -sf -m 30 -X POST --data-binary @%%MRK%% %s/%s >nul 2>&1", diagURL, BCDBootDiagMarker))
+	w(":hold")
+	// HOLD forever: the engine releases PXE + power-cycles on the marker.
+	w("ping -n 11 127.0.0.1 >nul")
+	w("goto hold")
+	return b.String()
 }
 
 // validateInstallImagePath checks the share-relative tree path: batch-safe

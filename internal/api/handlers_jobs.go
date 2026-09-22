@@ -831,11 +831,11 @@ func (s *Server) validateBootStrategy(specRaw json.RawMessage) error {
 	switch spec.Boot.Installer {
 	case "":
 		// driver default — setup for windows
-	case "setup", "agent":
+	case "setup", "agent", "auto":
 		// fall through: windows-only, gated after the driver lookup
 	default:
 		return verr("SCHEMA_INVALID_BOOT_INSTALLER",
-			"boot.installer %q is not one of setup|agent", spec.Boot.Installer)
+			"boot.installer %q is not one of setup|agent|auto", spec.Boot.Installer)
 	}
 	switch spec.Boot.Strategy {
 	case "", "virtual_media":
@@ -863,11 +863,15 @@ func (s *Server) validateBootStrategy(specRaw json.RawMessage) error {
 	// agent carrier: wimlib apply + pre-baked BCD — docs/compat/distros.md
 	// §windows 通路路线). Windows-only today; the agent carrier consumes the
 	// HTTP win tree, so the SMB export gate does NOT apply to it.
-	if spec.Boot.Installer == "agent" {
+	if spec.Boot.Installer == "agent" || spec.Boot.Installer == "auto" {
 		if render.FamilyOf(driver) != "windows" {
 			return verr("SCHEMA_INVALID_BOOT_INSTALLER",
-				"boot.installer=agent is windows-only today (distro %s)", spec.Image.Distro)
+				"boot.installer=%s is windows-only today (distro %s)",
+				spec.Boot.Installer, spec.Image.Distro)
 		}
+		// Both declarations are SMB-gate-exempt: agent consumes the HTTP win
+		// tree, and auto defers the choice to prepare-time deployment facts
+		// (SMB export present → setup, absent → agent apply).
 		return nil
 	}
 	// The wimboot carrier's install source is the deployment SMB export —

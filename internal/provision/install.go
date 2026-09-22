@@ -742,7 +742,8 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	// default — the same resolution bootStrategyFor performs), so the driver
 	// can render its netboot-shaped args/seed up front.
 	if name, _ := effectiveStrategyName(e, spec); name == strategyPXE {
-		path, pathOK := effectiveInstallPath(spec)
+		// SMB 导出事实决定 auto 的落点(配置了 → setup 主线,未配置 → agent)
+		path, pathOK := effectiveInstallPath(spec, e.WindowsInstallSMBUNC != "")
 		if !pathOK {
 			return classifiedErr("SCHEMA_INVALID_BOOT_INSTALLER", false,
 				"boot.installer %q is not one of setup|agent", spec.Boot.Installer)

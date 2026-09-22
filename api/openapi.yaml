@@ -2300,16 +2300,20 @@ components:
             service enabled and a distro declaring pxe_support.
         installer:
           type: string
-          enum: [setup, agent]
+          enum: [setup, agent, auto]
           default: setup
           description: |
             Windows-only install pathway. setup: the setup.exe flow through
             the wimboot carrier (the default; needs the deployment SMB
             export). agent: the agent apply-image pathway — the machine
             boots the alpine agent, which wimlib-applies install.wim onto
-            the declarative NTFS volume and pre-bakes the BCD; PXE-only,
-            needs no SMB export, and requires the alpine extended ISO pool
-            (MAMMOTH_WINDOWS_APPLY_ALPINE_ISO). Other distros reject it.
+            the declarative NTFS volume; PXE-only, needs no SMB export, and
+            requires the alpine extended ISO pool
+            (MAMMOTH_WINDOWS_APPLY_ALPINE_ISO). auto: deployment-fact
+            judgment — SMB export configured → setup, absent → agent (the
+            resolution lands at prepare time). Other distros reject setup
+            or agent; auto resolves to setup only.
+
 
     Policy:
       type: object

@@ -241,7 +241,8 @@ spec 是发行版无关的声明;方言不能落地的项在**渲染期显式拒
   "boot": {
     "strategy": "pxe",       // virtual_media | pxe(缺省 = 部署默认,capabilities.boot_strategy_default)
     "installer": "agent"     // setup | agent(缺省 = setup)。windows 专用;其他发行版提交即拒
-  }
+  }  // boot.installer 可选:setup|agent|auto(缺省 setup;auto=按部署
+  // 事实判定——SMB 导出已配置走 setup,未配置走 agent apply)
 }
 ```
 

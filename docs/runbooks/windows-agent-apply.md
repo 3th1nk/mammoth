@@ -102,8 +102,11 @@
 > DB 记录,PG 回归套件钉住(internal/provision/terminal_release_test.go)。
 > ~~机器状态机装完停留 discovering~~——根因是 ramdisk 探针开了生命周期
 > 转换不收口(装机流程不碰机器状态);探针成功与 verify_ready 成功两处
-> 现在都回置 ready。~~同机多轮重试会堆积 pending 任务~~(重跑前批量
-> cancel)仍待修。
+> 现在都回置 ready。~~同机多轮重试会堆积 pending 任务~~(已修 2026-09-24:
+> 提交门 409 JOB_MACHINE_BUSY——install 任务针对同机存在
+> pending/running/interrupted 前驱时整单拒绝,错误明细带阻塞任务/作业
+> 标识;先显式 cancel 旧作业再重跑,PG 回归钉住)。
+> 其余开放问题(文字渲染等)见上文 §开放问题。
 
 > 目标(已收官 2026-09-22):agent apply-image 通路六阶段真机闭环验证
 > ——多轮全绿,终态见顶部状态块;历史设计/实施细节见下文 §方案 A

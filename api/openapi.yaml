@@ -408,6 +408,16 @@ paths:
                 $ref: '#/components/schemas/Job'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          description: >
+            Conflict — an install job targets a machine that already has an
+            unfinished install task (pending/running/interrupted). Cancel the
+            active job first; the problem detail names the busy machines with
+            their task/job ids.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '422':
           $ref: '#/components/responses/Unprocessable'
     get:

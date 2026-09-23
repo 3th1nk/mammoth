@@ -282,8 +282,11 @@
 DB 任务记录(claim 快照没有 prepare patch 的 token/strategy,陈旧解析误路由
 virtual-media 导致条目与 boot tree 全漏);ramdisk 探针成功与 verify_ready
 成功两处回置机器 ready(探针开转换不收口是停留 discovering 的根因);PG 回归
-套件(terminal_release_test.go)+ test-pg 目标扩到 provision 包;用户脚本
-(spec.scripts 前后置)接入已单列,见第 5 项;
+套件(terminal_release_test.go)+ test-pg 目标扩到 provision 包;~~同机
+多轮重试堆积 pending 任务~~ **✅ 已修(2026-09-24)**:提交门 409
+JOB_MACHINE_BUSY——install 任务针对同机存在 pending/running/interrupted
+前驱时整单拒绝(契约 CreateJob 增 409,明细带阻塞任务/作业标识),先显式
+cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,见第 5 项;
      ③Ventoy 式 grub 链载 = 可选介质侧实验;
      ④iBMC 升级 = 正确修复(与 SecureErase 缺失叠加升级动机),物理 USB
      = 有人场景最短路径。

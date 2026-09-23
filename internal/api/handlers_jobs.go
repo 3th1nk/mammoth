@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -126,6 +127,13 @@ func (s *Server) CreateJob(ctx context.Context, request gen.CreateJobRequestObje
 		return nil, verr("SCHEMA_INVALID_JOB", "unknown job type %q", body.Type)
 	}
 
+	// Machine-busy gate (install only): see rejectBusyInstallMachines.
+	if flow == provision.FlowInstall {
+		if err := s.rejectBusyInstallMachines(ctx, machineIDs); err != nil {
+			return nil, err
+		}
+	}
+
 	policy := store.Policy{OnTaskFailure: "continue"}
 	if body.Policy != nil {
 		if body.Policy.Concurrency != nil {
@@ -197,6 +205,33 @@ func (s *Server) CreateJob(ctx context.Context, request gen.CreateJobRequestObje
 		return nil, err
 	}
 	return gen.CreateJob202JSONResponse(*job), nil
+}
+
+// rejectBusyInstallMachines is the machine-busy gate: an install is
+// destructive and slow, and the queue would happily run a second one after
+// the first — submissions used to pile up pending reinstall tasks on the
+// same machine (real-hardware: the windows agent apply rounds; the
+// workaround was a manual batch cancel before every re-run). A machine with
+// an unfinished install task (pending/running/interrupted) must have that
+// job explicitly canceled first — the gate names the busy machines with
+// their task/job ids instead of silently queueing another reinstall.
+func (s *Server) rejectBusyInstallMachines(ctx context.Context, machineIDs []string) error {
+	busy, err := s.Jobs.ActiveInstallTasksByMachines(ctx, machineIDs)
+	if err != nil {
+		return err
+	}
+	if len(busy) == 0 {
+		return nil
+	}
+	details := make([]string, 0, len(busy))
+	for _, mid := range machineIDs {
+		if ref, ok := busy[mid]; ok {
+			details = append(details, fmt.Sprintf("%s (task %s, job %s, %s)", mid, ref.ID, ref.JobID, ref.State))
+		}
+	}
+	return verrStatus(http.StatusConflict, "JOB_MACHINE_BUSY",
+		"machines with an unfinished install task: %s — cancel the active job first (POST /jobs/{id}/cancel)",
+		strings.Join(details, ", "))
 }
 
 // createJobRecord persists job + tasks + stages in one transaction and

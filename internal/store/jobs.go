@@ -828,3 +828,42 @@ func (r *JobRepo) RecordInstallComplete(ctx context.Context, taskID, status, det
 		"completed_at": now, "status": status, "detail": detail,
 	})
 }
+
+// ActiveTaskRef is the minimal identity of an unfinished task — the busy
+// gate's error detail (docs/04-install-spec.md §5: a machine with an
+// unfinished install task must have that job explicitly canceled first).
+type ActiveTaskRef struct {
+	ID    string
+	JobID string
+	State string
+}
+
+// ActiveInstallTasksByMachines returns, per machine, its latest unfinished
+// install task (pending / running / interrupted — an interrupted task is
+// retryable and will run again). Machines without one are absent from the
+// map; every requested machine missing from the result is free.
+func (r *JobRepo) ActiveInstallTasksByMachines(ctx context.Context, machineIDs []string) (map[string]ActiveTaskRef, error) {
+	out := make(map[string]ActiveTaskRef, len(machineIDs))
+	if len(machineIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT DISTINCT ON (machine_id) machine_id, id, job_id, state
+		FROM tasks
+		WHERE machine_id = ANY($1) AND flow_name = 'install'
+		  AND state IN ('pending', 'running', 'interrupted')
+		ORDER BY machine_id, created_at DESC`, machineIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var mid string
+		var ref ActiveTaskRef
+		if err := rows.Scan(&mid, &ref.ID, &ref.JobID, &ref.State); err != nil {
+			return nil, err
+		}
+		out[mid] = ref
+	}
+	return out, rows.Err()
+}

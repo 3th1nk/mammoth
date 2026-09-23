@@ -33,7 +33,7 @@ test:
 
 # Queue/store suites against a disposable PostgreSQL (compose-postgres).
 test-pg:
-	MAMMOTH_TEST_PG_DSN='$(DSN)' go test ./internal/store/... ./internal/provision/ -count=1
+	MAMMOTH_TEST_PG_DSN='$(DSN)' go test ./internal/store/... ./internal/provision/ ./internal/api/ -count=1
 
 lint: fmt vet
 

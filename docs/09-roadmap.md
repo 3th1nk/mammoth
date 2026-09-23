@@ -155,7 +155,7 @@
 >
 > **顺序按真机可得性重排(2026-09-18)**:当前仅一台真机(2288H V5),qemu/
 > fake 可先行项前置(agent 试点/BMC 读接口/声明化/逃生门/arm64 链路),
-> 强真机或外部条件依赖项显式隔离进第 5 项,不占当前序列。
+> 强真机或外部条件依赖项显式隔离进第 6 项,不占当前序列。
 
 1. **agent initramfs 安装路径试点**(related-work §1 修正结论,提前:qemu
    全程可验且架构红利最大——减少未来所有发行版接入对真机联调的依赖面):
@@ -232,7 +232,31 @@
    **真机回归待 ARM 机器**。信创混合机群刚需;~~下一项 NIST 800-88~~
    ✅ 已落地(见第 2 项,2026-09-18 fake 先行)。
    ~~ubuntu/debian PXE 化~~ ✅ 已入 v1.0(2026-09-17 真机闭环);
-5. **等条件组(不排期,条件触发)**:
+5. **Windows 用户脚本(spec.scripts 前后置接入)**——windows 驱动现状对
+   spec.scripts 渲染即拒("user scripts are not supported yet (SetupComplete
+   is engine-owned)",setup/agent 两通路同,render/windows/windows.go:206、
+   :292):SetupComplete.cmd 每镜像仅一个,是完成回调 + 静态网绑定的引擎
+   专属槽位,用户脚本抢占即断回调链。**结论:前后置都能支持,槽位不同**:
+   - **post_install(装后首启,SYSTEM 登录前)= SetupComplete 托管拼接**:
+     引擎前缀(按 MAC 绑网)+ 用户段按序执行(逐段捕获退出码)+ 引擎
+     完成回调永远收尾——单槽位变引擎托管多段,回调链结构上不可断;失败
+     语义扩展 task.json 契约(回调携带 status=failed + 段退出码);备选
+     补充 = unattend oobeSystem FirstLogonCommands(原生多槽有序,但时点
+     更晚、登录后才跑,只做补充不做主槽);
+   - **pre_install(装前)= 按通路分型**:setup 通路注入 WinPE 阶段
+     (startnet.cmd 引擎前置段后拼接,或 unattend windowsPE pass
+     RunSynchronous 原生多槽;cmd 为主,PowerShell 需向 boot.wim 注入
+     WinPE 可选组件,代价大不作默认);agent 通路由 alpine agent 脚本体
+     天然承载,但语义是 busybox/Linux 环境——适合盘级操作,Windows 语义
+     脚本(bat/ps1)不适用,契约需显式声明脚本运行语境;
+   - **分区操作的边界(照非空 mount 收窄先例)**:装前 WinPE diskpart、
+     装后 PowerShell Storage cmdlets 都是原生机制,但与声明式 storage 是
+     双真相——声明式管辖的启动盘脚本不得触碰(schema 校验拒),脚本只
+     管声明式表达不了的边角(如装后建数据卷);
+   - 验证:qemu 应答受理层可先行(winpe 引导/语言页/回调链先例,
+     compat/distros.md §windows);真机回归随已闭环的 windows 真机通路
+     (agent apply ×5 轮,2026-09-22)。
+6. **等条件组(不排期,条件触发)**:
    - **UefiHttp**(Redfish HTTP Boot)——等多厂商真机(OEM URI 各异,单台
      华为验不出跨厂商);
    - **Windows unattend**——**v1 代码面就绪(2026-09-19,见 compat/distros.md
@@ -254,10 +278,29 @@
      手工 store,真机定案)→ 改**两段式**(第二段 wimboot WinPE 由
      bcdboot 原生生成)后六阶段全绿;boot.installer=auto 自动通路判定
      落地(runbooks/windows-agent-apply.md);遗留 = cancel 释放条目/机器
-状态机回 ready 两个小修;
+状态机回 ready 两个小修;用户脚本(spec.scripts 前后置)接入已单列,见第 5 项;
      ③Ventoy 式 grub 链载 = 可选介质侧实验;
      ④iBMC 升级 = 正确修复(与 SecureErase 缺失叠加升级动机),物理 USB
      = 有人场景最短路径。
+     **spec 覆盖度全量评估(2026-09-23,对 windows 驱动逐语义核对)**:
+     声明式主干(image / storage wipe 档 / 静态网 / identity / access 三件)
+     真机闭环,能力边界靠渲染即拒守住(keep:disk / keep:partitions /
+     preserve / RAID / bond·vlan / scripts → SupportNone)。缺口三层:
+     ①~~**静默语义丢失**~~ **✅ 已改渲染即拒(2026-09-23,与 raid/scripts/
+     keep 同一范式)**——非启动盘 partitions(planDisks 开机盘判定后二次
+     扫描)、access.ssh_keys(RenderAnswers 双通路门禁,Server Core 无
+     sshd)、mount:"swap"(移除 mount 校验豁免)三处静默面全部显式拒绝,
+     边界用例入 TestRenderWindowsBoundary;②~~**通用缺口**~~ **✅ 已实现
+     (2026-09-23,provision 通用层,全发行版受益)**——spec.image.checksum
+     经 builder.EnsureISOVerified 强制(sha256,不符即拒 + 缓存驱逐 +
+     path:size:mtime 备忘避免跨阶段重复哈希,六个 spec 取数点全切换;
+     EnsureISO 本体不动,引擎资产照旧);storage.root_device_hints.
+     min_size_gb 作为选择器池 floor 进两个 resolver(共享
+     diskMatchesSelector 谓词,未知容量不触发 floor,install-plan 同语义);
+     alignment 枚举校验后为 advisory(anaconda/curtin/WinPE 原生对齐,
+     不转发,注释与 validateStorageExtras 定案);③**
+     能力边界(等真实需求触发再排)**——edition 选择(现硬编码
+     SERVERSTANDARDCORE,windows.go:144)、RAID、bond/vlan。
    - **复验轮**——22.04-crypt(性价比最高: crypt 修复仅 24.04 轮覆盖过,
      2288H 半天可补,**真机窗口第一件事**)+ Kylin/rocky10-PXE;2288H 单
      机轮装顺序覆盖(22/24/rocky9 已证明此模式可行);
@@ -321,7 +364,8 @@
   PXE(外部 DHCP+TFTP 逃生门 ✅、arm64 链路 ✅ qemu 可验)+
   uniontechos ✅(根因定位修复,真机双通路闭环)+
   驱动加固(会话复用、iBMC 6.41 写形态、NormalizeESP)。
-  剩余随 v1.x 增量:UefiHttp/Windows/复验轮(等真机窗口)、UOS 最新版复验
+  剩余随 v1.x 增量:UefiHttp/Windows(用户脚本前后置接入,见下一阶段 5)/
+  复验轮(等真机窗口)、UOS 最新版复验
   (等 ISO);契约仅新增演进(向后兼容字段/端点),破坏性变更进 v2 讨论。
 - 发布流程:`git tag vX.Y.Z && goreleaser release --clean`(amd64/arm64,
   版本与 commit 经 ldflags 注入)。

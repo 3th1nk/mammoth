@@ -22,8 +22,10 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 
 FROM alpine:3.20
 # xorriso lands with M3 media assembly; declared here so the deployment
-# unit boundary is visible from day one.
-RUN apk add --no-cache xorriso genisoimage wimlib p7zip ca-certificates && adduser -D -u 1000 mammoth
+# unit boundary is visible from day one. wimlib/p7zip back the windows WIM
+# path (wimlib-imagex / 7z). genisoimage never existed on alpine and no
+# code path invokes it — dropped.
+RUN apk add --no-cache xorriso wimlib p7zip ca-certificates && adduser -D -u 1000 mammoth
 COPY --from=build /out/mammoth /mammoth
 USER mammoth
 EXPOSE 8080

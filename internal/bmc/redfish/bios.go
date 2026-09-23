@@ -134,14 +134,15 @@ func pollSettingsTask(ctx context.Context, c *gofish.APIClient, op string, resp 
 	}
 	_ = json.Unmarshal(raw, &body)
 	switch {
-	case body.TaskState == "Exception":
-		return &bmc.Error{Kind: bmc.KindProtocolError, Op: op,
-			Detail: fmt.Sprintf("settings task exception: %s", bmc.FirstLine(string(raw)))}
-	case body.TaskState == "New" || body.TaskState == "Running":
-		return pollTask(ctx, c, op, body.ID)
+	case body.TaskState != "" && taskTerminal(body.TaskState):
+		if taskFailed(body.TaskState) {
+			return &bmc.Error{Kind: bmc.KindProtocolError, Op: op,
+				Detail: fmt.Sprintf("settings task %s: %s", strings.ToLower(body.TaskState), bmc.FirstLine(string(raw)))}
+		}
+		return nil
 	case body.Task != nil && body.Task.ODataID != "":
 		return pollTask(ctx, c, op, taskIDFromURI(body.Task.ODataID))
-	case body.ID != "" && body.ODataID != "" && strings.Contains(body.ODataID, "Tasks"):
+	case body.ID != "" && (body.ODataID == "" || strings.Contains(body.ODataID, "Tasks")):
 		return pollTask(ctx, c, op, body.ID)
 	default:
 		return nil

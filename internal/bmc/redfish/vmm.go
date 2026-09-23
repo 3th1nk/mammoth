@@ -3,6 +3,7 @@ package redfish
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,11 +16,13 @@ import (
 	"github.com/3th1nk/mammoth/internal/bmc"
 )
 
-// vmmControl drives the Huawei iBMC OEM virtual-media action
-// (VirtualMedia.VmmControl) under the CD resource's Oem path. This firmware
-// does not advertise the standard #VirtualMedia.InsertMedia action; remote
-// media is managed exclusively through this OEM action, which accepts
-// nfs:// (and CIFS) image URIs — plain HTTP(S) URIs are rejected with
+// vmmControl drives the OEM virtual-media action (VirtualMedia.VmmControl)
+// under the CD resource's vendor Oem path: Huawei iBMC /Oem/Huawei/ and
+// H3C HDM /Oem/Public/ document the identical payload (docs/compat/
+// huawei.md, docs/compat/h3c.md). This firmware family does not advertise
+// the standard #VirtualMedia.InsertMedia action; remote media is managed
+// exclusively through the OEM action, which accepts nfs:// (and CIFS)
+// image URIs — plain HTTP(S) URIs are rejected with
 // FileTransferProtocolMismatch (docs/compat/huawei.md §6).
 //
 // The action returns 202 with a Redfish Task; Connect mounts (BMC fetches
@@ -63,6 +66,11 @@ func (d *Driver) vmmControl(ctx context.Context, c *gofish.APIClient, addr strin
 			if strings.Contains(last.Error(), "vmm Connect rejected") {
 				return last
 			}
+			// No OEM route at all: retrying cannot discover one.
+			var berr *bmc.Error
+			if errors.As(last, &berr) && berr.Kind == bmc.KindUnsupported {
+				return last
+			}
 		}
 		return last
 	}
@@ -81,19 +89,33 @@ func (d *Driver) vmmAction(ctx context.Context, c *gofish.APIClient, addr string
 	// The OEM action hangs off the CD slot's own resource; discover the slot
 	// from the VirtualMedia collection instead of hardcoding Manager/CD
 	// (manager identities and slot names vary — Managers/1 vs /iBMC).
-	actionURL := strings.TrimSuffix(cdSlotODataID(c), "/") +
-		"/Oem/Huawei/Actions/VirtualMedia.VmmControl"
-
 	payload := map[string]any{"VmmControlType": action}
 	if imageURI != "" && action == "Connect" {
 		payload["Image"] = imageURI
 	}
-	resp, err := c.Post(actionURL, payload)
-	if err != nil {
-		return bmc.Classify(op, err)
+	// Route candidates: what the slot advertises first, then the known
+	// vendor namespaces. A candidate that answers "no such action route"
+	// (404/405, or the registry's ActionNotSupported) falls through to
+	// the next; any other response means the route received the action.
+	var resp *http.Response
+	var raw []byte
+	for _, target := range vmmControlTargets(c) {
+		r, err := c.Post(target, payload)
+		if err != nil {
+			return bmc.Classify(op, err)
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		if routeMiss(r.StatusCode, string(body)) {
+			continue
+		}
+		resp, raw = r, body
+		break
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
+	if resp == nil {
+		return &bmc.Error{Kind: bmc.KindUnsupported, Op: op,
+			Detail: "no OEM VmmControl route on the virtual media slot"}
+	}
 
 	if resp.StatusCode == http.StatusBadRequest {
 		return &bmc.Error{Kind: bmc.KindProtocolError, Op: op,
@@ -133,7 +155,7 @@ func (d *Driver) vmmAction(ctx context.Context, c *gofish.APIClient, addr string
 			return &bmc.Error{Kind: bmc.KindProtocolError, Op: op,
 				Detail: fmt.Sprintf("task poll decode: %v", err)}
 		}
-		if task.TaskState != "Running" && task.TaskState != "New" {
+		if taskTerminal(task.TaskState) {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -141,12 +163,62 @@ func (d *Driver) vmmAction(ctx context.Context, c *gofish.APIClient, addr string
 				Detail: fmt.Sprintf("vmm %s timed out after 10m", action)}
 		}
 	}
-	if task.TaskState == "Exception" {
+	if taskFailed(task.TaskState) {
 		msg := bmc.FirstLine(string(task.Messages))
 		return &bmc.Error{Kind: bmc.KindProtocolError, Op: op,
-			Detail: fmt.Sprintf("vmm %s task exception: %s", action, msg)}
+			Detail: fmt.Sprintf("vmm %s task %s: %s", action, strings.ToLower(task.TaskState), msg)}
 	}
 	return nil
+}
+
+// vmmControlTargets returns the candidate OEM VmmControl action targets
+// for the CD slot in try order: what the slot advertises under
+// Actions["#VirtualMedia.VmmControl"] first, then the documented vendor
+// namespaces — iBMC /Oem/Huawei/ (docs/compat/huawei.md) and HDM
+// /Oem/Public/ (docs/compat/h3c.md); the payload is identical, only the
+// OEM segment differs.
+func vmmControlTargets(c *gofish.APIClient) []string {
+	slot := strings.TrimSuffix(cdSlotODataID(c), "/")
+	var targets []string
+	if raw, err := getRaw(c, slot); err == nil {
+		var res struct {
+			Actions map[string]struct {
+				Target string `json:"target"`
+			} `json:"Actions"`
+		}
+		if json.Unmarshal(raw, &res) == nil {
+			if act, ok := res.Actions["#VirtualMedia.VmmControl"]; ok && act.Target != "" {
+				targets = append(targets, act.Target)
+			}
+		}
+	}
+	for _, ns := range []string{"Oem/Huawei", "Oem/Public"} {
+		target := slot + "/" + ns + "/Actions/VirtualMedia.VmmControl"
+		dup := false
+		for _, t := range targets {
+			if t == target {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			targets = append(targets, target)
+		}
+	}
+	return targets
+}
+
+// routeMiss reports whether a POST response means "no such action route"
+// rather than "action received and rejected": unknown resource (404),
+// method not routable (405), or the Redfish registry's unknown-action
+// error (HTTP 400 carrying Base.1.x.ActionNotSupported). Real payload
+// rejections carry other codes (PropertyUnknown,
+// FileTransferProtocolMismatch, ConnectionOccupied) and do not match.
+func routeMiss(status int, body string) bool {
+	if status == http.StatusNotFound || status == http.StatusMethodNotAllowed {
+		return true
+	}
+	return status == http.StatusBadRequest && strings.Contains(body, "ActionNotSupported")
 }
 
 // Compile-time shape checks against the gofish types used above.

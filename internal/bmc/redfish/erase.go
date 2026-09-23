@@ -108,14 +108,14 @@ func eraseOneDrive(ctx context.Context, c *gofish.APIClient, op string, dr contr
 		if json.Unmarshal(body, &task) == nil {
 			res.StartedAt, res.EndedAt = task.StartTime, task.EndTime
 			switch {
-			case task.TaskState == "Exception":
-				return res, &bmc.Error{Kind: bmc.KindProtocolError, Op: op,
-					Detail: fmt.Sprintf("secure erase task for %s raised an exception", dr.Serial)}
-			case task.TaskState == "New" || task.TaskState == "Running":
-				return res, pollTask(ctx, c, op, task.ID)
+			case task.TaskState != "" && taskTerminal(task.TaskState):
+				if taskFailed(task.TaskState) {
+					return res, &bmc.Error{Kind: bmc.KindProtocolError, Op: op,
+						Detail: fmt.Sprintf("secure erase task for %s ended in %s", dr.Serial, task.TaskState)}
+				}
 			case task.Task != nil && task.Task.ODataID != "":
 				return res, pollTask(ctx, c, op, taskIDFromURI(task.Task.ODataID))
-			case task.ID != "" && task.ODataID != "" && strings.Contains(task.ODataID, "Tasks"):
+			case task.ID != "" && (task.ODataID == "" || strings.Contains(task.ODataID, "Tasks")):
 				return res, pollTask(ctx, c, op, task.ID)
 			}
 		}

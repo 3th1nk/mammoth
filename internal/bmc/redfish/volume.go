@@ -398,7 +398,7 @@ func getRaw(c *gofish.APIClient, url string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-// pollTask waits for a Redfish task to leave the running states.
+// pollTask waits for a Redfish task to reach a terminal state.
 func pollTask(ctx context.Context, c *gofish.APIClient, op, taskID string) error {
 	taskURL := "/redfish/v1/TaskService/Tasks/" + taskID
 	deadline := time.Now().Add(10 * time.Minute)
@@ -419,10 +419,11 @@ func pollTask(ctx context.Context, c *gofish.APIClient, op, taskID string) error
 			return &bmc.Error{Kind: bmc.KindProtocolError, Op: op,
 				Detail: fmt.Sprintf("task poll decode: %v", err)}
 		}
-		if task.TaskState != "Running" && task.TaskState != "New" {
-			if task.TaskState == "Exception" {
+		if taskTerminal(task.TaskState) {
+			if taskFailed(task.TaskState) {
 				return &bmc.Error{Kind: bmc.KindProtocolError, Op: op,
-					Detail: fmt.Sprintf("volume task exception: %s", bmc.FirstLine(string(task.Messages)))}
+					Detail: fmt.Sprintf("%s task %s: %s", op, strings.ToLower(task.TaskState),
+						bmc.FirstLine(string(task.Messages)))}
 			}
 			return nil
 		}

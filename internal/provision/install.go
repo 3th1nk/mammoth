@@ -270,6 +270,7 @@ type partitionView struct {
 
 type scriptView struct {
 	Stage         string `json:"stage"`
+	Shell         string `json:"shell,omitempty"`
 	ContentBase64 string `json:"content_base64"`
 	URL           string `json:"url"`
 	ExpectedExits []int  `json:"expected_exit_codes"`
@@ -1132,7 +1133,7 @@ func scriptsFrom(spec []scriptView) []render.ScriptEntry {
 			}
 		}
 		out = append(out, render.ScriptEntry{
-			Stage: s.Stage, Inline: decoded, URL: s.URL, ExpectedExit: s.ExpectedExits,
+			Stage: s.Stage, Shell: s.Shell, Inline: decoded, URL: s.URL, ExpectedExit: s.ExpectedExits,
 		})
 	}
 	return out

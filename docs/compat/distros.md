@@ -293,8 +293,16 @@ mini.iso)提供驱动支持。
   InstallTo=OS 分位。BIOS/MBR 布局 v1 不渲染。
 
 **v1 边界(显式拒绝,不静默重释)**:PXE none(WinPE 链挂 v1.x)、keep none、
-RAID 拒绝、bond/vlan 拒绝、用户脚本拒绝、非默认路由拒绝、FirmwareSupport=uefi_only
+RAID 拒绝、bond/vlan 拒绝、非默认路由拒绝、FirmwareSupport=uefi_only
 (渲染面是 ESP+MSR 形态,BIOS 机提交即拒)。SKU 固定 SERVERSTANDARDCORE。
+**用户脚本已落地(2026-09-23,座位有界)**:post_install = task.json 承载 +
+引擎 ps1 托管编排(网绑后逐段执行、首个失败即停并路由进完成回调
+status=failed、`mammoth-scripts.done` 哨兵吸收双执行,两通路统一);
+pre_install = setup 通路 WinPE RunSynchronous 座位(限 cmd+inline,介质
+`mammoth/pre-<n>.cmd` 盘符扫描定位,失败中止 setup 无回调 →
+INSTALL_TIMEOUT);agent 通路 pre_install 拒(装前运行时是 busybox agent
+——Linux 语义);完整座位/失败语义见 docs/04-install-spec.md §5.3。
+qemu 验证待跑;真机回归随 windows 通路下一轮。
 
 **qemu 已验证(2026-09-19/20,TCG)**:OVMF→bootmgfw→WinPE 引导链、autounattend
 被完整受理(WillShowUI=OnError 下零交互 UI)。**真机教训(2026-09-20)**:Server 2019

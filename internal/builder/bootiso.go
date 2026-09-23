@@ -600,7 +600,13 @@ func windowsCacheHeadroom(dir string) error {
 // context (FirstLogon re-run), the static-gateway config clears a
 // conflicting DHCP default route first, and the logoff is gone — the
 // boot ends on the auto-logged-on Core desktop like the setup.exe flow.
-const windowsInjectorVersion = "10"
+// v11: the ps1 orchestrates user post_install segments from task.json
+// (scripts.post_install) — engine network-binding prefix first, segments in
+// order with expected-exit checks, completion callback always last
+// (failure routes INTO the callback as status=failed); the
+// mammoth-scripts.done marker makes the double execution (SetupComplete +
+// FirstLogonCommands) replay the recorded verdict instead of re-running.
+const windowsInjectorVersion = "11"
 
 // windows seed-file contract between the driver and the wim injector.
 const (

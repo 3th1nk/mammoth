@@ -225,14 +225,35 @@ POST /api/v1/jobs
 spec 是发行版无关的声明;方言不能落地的项在**渲染期显式拒绝**
 (`RENDER_FAILED`,任务失败且错误文案带方言说明),不做静默降级:
 
-| 项 | rocky9 | ubuntu22 | debian12 / uniontechos |
-|----|--------|----------|------------------------|
-| bond / vlan | ✅(`%pre` 解析) | ✅(netplan 原生) | ❌ netcfg 无 bond/vlan |
-| 多条静态接口 | ✅ | ✅ | ❌ netcfg 单接口(一条静态 + 其余 dhcp) |
-| 软件 RAID | ✅(raid 行) | —(未接) | ❌ partman md 配方未接 |
-| 硬件 RAID 卷 | ✅(绑定设备) | ✅(serial 绑定) | ✅(绑定设备,单目标) |
-| 多安装目标盘 | ✅ | ✅ | ❌ partman-auto 单盘(其余盘 keep: disk) |
-| xfs | ✅ | ✅(curtin) | ❌ netinst partman 白名单 ext2/3/4、vfat/fat32、swap |
+| 项 | rocky9 | ubuntu22 | debian12 / uniontechos | windows |
+|----|--------|----------|------------------------|---------|
+| bond / vlan | ✅(`%pre` 解析) | ✅(netplan 原生) | ❌ netcfg 无 bond/vlan | ❌ |
+| 多条静态接口 | ✅ | ✅ | ❌ netcfg 单接口(一条静态 + 其余 dhcp) | 单接口(MAC 绑定) |
+| 软件 RAID | ✅(raid 行) | —(未接) | ❌ partman md 配方未接 | ❌ |
+| 硬件 RAID 卷 | ✅(绑定设备) | ✅(serial 绑定) | ✅(绑定设备,单目标) | ❌ |
+| 多安装目标盘 | ✅ | ✅ | ❌ partman-auto 单盘(其余盘 keep: disk) | ❌ |
+| xfs | ✅ | ✅(curtin) | ❌ netinst partman 白名单 ext2/3/4、vfat/fat32、swap | —(ntfs) |
+
+**windows 的 scripts 运行座位**(shell 字段仅 windows 消费,Linux 恒 sh):
+
+- **post_install = 引擎托管首启链**(两条通路统一):段内容随 task.json
+  下发,引擎 `mammoth-complete.ps1` 在静态网绑定之后、完成回调之前逐段
+  执行(`shell=cmd` 经 `cmd /d /c`,`shell=powershell` 经
+  `powershell -File`,缺省 cmd);`expected_exit_codes` 在此被消费(首个
+  失败段即停,剩余段跳过,回调发 `status=failed` + 段位/退出码 detail →
+  任务 `INSTALL_FAILED`)——**回调永远收尾**,失败路由进回调而非绕过它;
+  ps1 双执行(SetupComplete SYSTEM + FirstLogonCommands Administrator,
+见 compat/distros.md §windows)由 `mammoth-scripts.done` 哨兵吸收:第二
+  次执行不重跑段,重放已记录的判定,副作用脚本只执行一次;
+- **pre_install = setup 通路 WinPE 座位**(仅 `boot.installer=setup`):
+  内联内容写介质 `mammoth/pre-<n>.cmd`,`autounattend` windowsPE
+  RunSynchronous 定位执行(盘符扫描,退出码即脚本退出码;非零 → setup
+  中止,无回调 → 任务 `INSTALL_TIMEOUT`);**限 shell=cmd + inline**
+  (WinPE 无 PowerShell;vMedia boot.wim 无取数器);`expected_exit_codes`
+  忽略(与 Linux 安装器方言先例一致);
+- **渲染期拒绝**:agent 通路的 pre_install(装前运行时是 busybox agent
+  ——Linux 语义,非 WinPE)、pre_install 的 powershell/url 形态、未知
+  shell 值。
 
 ### 5.4 boot — 载体与安装通路
 

@@ -1,6 +1,7 @@
 package windows
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -232,10 +233,22 @@ func TestRenderWindowsBoundary(t *testing.T) {
 			in.Raid = []render.ResolvedRaid{{Name: "v0", Mode: "hardware"}}
 			return in
 		}, "RAID is not supported"},
-		{"user scripts", func(in render.InstallInputs) render.InstallInputs {
-			in.Scripts = []render.ScriptEntry{{Stage: "post_install", Inline: "echo hi"}}
+		{"pre script powershell", func(in render.InstallInputs) render.InstallInputs {
+			in.Scripts = []render.ScriptEntry{{Stage: "pre_install", Shell: "powershell", Inline: "Write-Host hi"}}
 			return in
-		}, "user scripts are not supported"},
+		}, "WinPE ships no PowerShell"},
+		{"pre script url", func(in render.InstallInputs) render.InstallInputs {
+			in.Scripts = []render.ScriptEntry{{Stage: "pre_install", URL: "http://x/a.cmd"}}
+			return in
+		}, "pre_install url form is not supported"},
+		{"script unknown stage", func(in render.InstallInputs) render.InstallInputs {
+			in.Scripts = []render.ScriptEntry{{Stage: "during", Inline: "echo hi"}}
+			return in
+		}, "unknown script stage"},
+		{"script bad shell", func(in render.InstallInputs) render.InstallInputs {
+			in.Scripts = []render.ScriptEntry{{Stage: "post_install", Shell: "python", Inline: "print(1)"}}
+			return in
+		}, `shell "python" is not one of cmd|powershell`},
 		{"bond", func(in render.InstallInputs) render.InstallInputs {
 			in.Network = []render.NetworkEntry{{Bond: &render.NetBond{Mode: "802.3ad"},
 				Match: &render.NetMatch{MAC: "aa:bb:cc:dd:ee:0a"}}}
@@ -476,5 +489,116 @@ func TestRenderWindowsCapabilities(t *testing.T) {
 	in2.Capabilities = []string{"telnet"}
 	if _, _, err := New("windows2019").RenderAnswers(in2, render.MachineView{}); err == nil {
 		t.Errorf("unknown capability accepted")
+	}
+}
+
+// User scripts (docs/04-install-spec.md §5, windows runtime seats): post
+// segments ride task.json into the engine-managed first-boot chain; pre
+// segments ride the medium as mammoth/pre-N.cmd behind windowsPE
+// RunSynchronous locators. No scripts ⇒ task.json byte-identical to the
+// pre-scripts shape (the golden contract above depends on it).
+func TestRenderWindowsUserScripts(t *testing.T) {
+	d := New("windows2019")
+
+	// No scripts: no RunSynchronous, no scripts key in task.json.
+	answers, _, err := d.RenderAnswers(baseInputs(), render.MachineView{})
+	if err != nil {
+		t.Fatalf("plain render: %v", err)
+	}
+	if len(answers) != 4 {
+		t.Fatalf("plain answers = %d, want 4", len(answers))
+	}
+	plain := answers[3].Content
+	if strings.Contains(plain, `"scripts"`) {
+		t.Errorf("plain task.json carries a scripts block:\n%s", plain)
+	}
+
+	in := baseInputs()
+	in.Scripts = []render.ScriptEntry{
+		{Stage: "pre_install", Inline: "echo pre-step\r\nver\r\n"},
+		{Stage: "pre_install", Inline: "echo pre-two\r\n"},
+		{Stage: "post_install", Inline: "echo done-%NUMBER_OF_PROCESSORS%\r\n"},
+		{Stage: "post_install", Shell: "powershell", Inline: "Get-Service | Out-Null\nexit 7\n", ExpectedExit: []int{0, 7}},
+		{Stage: "post_install", URL: "http://ext/scripts/post-3.ps1"},
+	}
+	answers, _, err = d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("scripted render: %v", err)
+	}
+	var unattend, ps1, task string
+	var preFiles []string
+	for _, a := range answers {
+		switch {
+		case a.Name == "autounattend.xml":
+			unattend = a.Content
+		case a.Name == CompletePS1SeedName:
+			ps1 = a.Content
+		case a.Name == TaskJSONSeedName:
+			task = a.Content
+		case strings.HasPrefix(a.Name, "mammoth/pre-"):
+			preFiles = append(preFiles, a.Name+"|"+a.Content)
+		}
+	}
+	if len(preFiles) != 2 {
+		t.Fatalf("pre script answers = %v, want two mammoth/pre-N.cmd files", preFiles)
+	}
+	if !strings.Contains(preFiles[0], "echo pre-step") {
+		t.Errorf("pre-1.cmd content missing: %q", preFiles[0])
+	}
+	// RunSynchronous locators: one per pre segment, Order ascending, all
+	// before UserData (schema alphabetical order within the component).
+	for _, want := range []string{
+		"<RunSynchronous>",
+		"<Order>1</Order>", "<Order>2</Order>",
+		"for %i in (C D E F G X Y Z) do @if exist %i:\\mammoth\\pre-1.cmd %i:\\mammoth\\pre-1.cmd",
+		"for %i in (C D E F G X Y Z) do @if exist %i:\\mammoth\\pre-2.cmd %i:\\mammoth\\pre-2.cmd",
+	} {
+		if !strings.Contains(unattend, want) {
+			t.Errorf("unattend missing %q", want)
+		}
+	}
+	if strings.Index(unattend, "<RunSynchronous>") > strings.Index(unattend, "<UserData>") {
+		t.Errorf("RunSynchronous must precede UserData (schema order)")
+	}
+
+	// task.json: post segments in array order, inline base64-decodable,
+	// shell/explicit exits/url carried through.
+	if !strings.Contains(task, `"post_install"`) {
+		t.Fatalf("task.json missing post_install scripts:\n%s", task)
+	}
+	for _, want := range []string{
+		`"shell":"cmd"`, `"shell":"powershell"`,
+		`"url":"http://ext/scripts/post-3.ps1"`,
+		`"expected_exit_codes":[0,7]`,
+	} {
+		if !strings.Contains(task, want) {
+			t.Errorf("task.json missing %q:\n%s", want, task)
+		}
+	}
+	if !strings.Contains(task, base64.StdEncoding.EncodeToString([]byte("echo done-%NUMBER_OF_PROCESSORS%\r\n"))) {
+		t.Errorf("task.json inline body is not the expected base64 of the script:\n%s", task)
+	}
+
+	// ps1 orchestration: segments run after the network binding and before
+	// the callback (which consumes the verdict variables), first failure
+	// stops the loop, and the done-marker replays on the second execution.
+	for _, want := range []string{
+		"$cfg.scripts.post_install",
+		"mammoth-scripts.done",
+		"cmd.exe /d /c $f",
+		"powershell.exe -NoProfile -ExecutionPolicy Bypass -File $f",
+		"-contains [int]$code",
+		"post_install script failed (segment $i/$($seg.Count), shell=$shell, exit=$code)",
+		"$cbStatus = \"ok\"",
+	} {
+		if !strings.Contains(ps1, want) {
+			t.Errorf("ps1 missing %q", want)
+		}
+	}
+	if strings.Index(ps1, "$seg.Count -gt 0") > strings.Index(ps1, "complete_url") {
+		t.Errorf("ps1 orchestration must precede the completion callback")
+	}
+	if strings.Contains(ps1, `{"status":"ok","detail":"windows setup finished"}`) {
+		t.Errorf("ps1 callback must use the verdict variables, not a hardcoded ok body")
 	}
 }

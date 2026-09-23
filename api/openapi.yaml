@@ -2172,6 +2172,14 @@ components:
         stage:
           type: string
           enum: [pre_install, post_install]
+        shell:
+          type: string
+          enum: [cmd, powershell]
+          default: cmd
+          description: >
+            Interpreter for Windows dialects (cmd = batch via cmd.exe,
+            powershell = Windows PowerShell). Ignored by Linux installers,
+            which always run sh.
         content_base64:
           type: string
           description: Script body, base64 encoded. Mutually exclusive with `url`.

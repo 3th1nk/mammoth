@@ -312,6 +312,7 @@ type NetRoute struct {
 // ScriptEntry is a user script hook (docs/04-install-spec.md §5 scripts).
 type ScriptEntry struct {
 	Stage        string // pre_install | post_install
+	Shell        string // cmd | powershell — Windows dialects; Linux runs sh
 	Inline       string // decoded from content_base64
 	URL          string
 	ExpectedExit []int

@@ -172,6 +172,27 @@ func BuildWindowsWimboot(ctx context.Context, opt WindowsWimbootOptions) (BootTr
 		}
 	}
 
+	// pre_install segments ride boot.wim at \mammoth\pre-<n>.cmd — WinPE
+	// sees them on X:, and the unattend windowsPE RunSynchronous locator
+	// scans the drive letters for exactly these names (setup pathway only;
+	// the agent apply pathway rejects pre scripts at render).
+	for name, content := range opt.Seed {
+		if !strings.HasPrefix(name, "mammoth/pre-") || !strings.HasSuffix(name, ".cmd") {
+			continue
+		}
+		src := filepath.Join(opt.DestDir, ".seed-"+filepath.Base(name))
+		if err := os.WriteFile(src, []byte(content), 0o644); err != nil {
+			return BootTree{}, err
+		}
+		defer os.Remove(src)
+		out, uerr := exec.CommandContext(ctx, "wimlib-imagex", "update", wimPath, idx,
+			"--command=add "+src+" /"+name).CombinedOutput()
+		if uerr != nil {
+			return BootTree{}, fmt.Errorf("wimlib-imagex update (add %s: builder image must ship wimlib): %w: %s",
+				name, uerr, tail(out, 400))
+		}
+	}
+
 	// curl.exe rides boot.wim: stock WinPE 1809 does NOT carry it (the
 	// media's boot.wim was checked — bcdboot/bcdedit/diskpart are there,
 	// curl is not), and both startnet shapes speak HTTP with it — the

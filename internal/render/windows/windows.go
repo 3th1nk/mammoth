@@ -23,12 +23,16 @@
 //
 // v1 boundary (explicit, honest): UEFI-only (the rendered DiskConfiguration
 // is ESP+MSR+GPT; a Legacy BIOS machine cannot consume it), no keep
-// semantics, no RAID, no bond/vlan, no user scripts. SKU:
-// SERVERSTANDARDCORE (Standard Core — the bare-metal default; the media
-// carries every SKU, selection is by /IMAGE/NAME metadata).
+// semantics, no RAID, no bond/vlan. User scripts land v1 with runtime-seat
+// bounds: pre_install = setup-pathway WinPE cmd only (agent pathway's
+// pre-apply runtime is the busybox agent — Linux semantics, rejected
+// there), post_install = installed OS via the engine-managed first-boot
+// chain. SKU: SERVERSTANDARDCORE (Standard Core — the bare-metal default;
+// the media carries every SKU, selection is by /IMAGE/NAME metadata).
 package windows
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -164,7 +168,50 @@ const (
 	// setup failed on the unattended DiskConfiguration), so the boot order
 	// must be pinned to startnet through winpeshl's [LaunchApps].
 	WinpeshlIniSeedName = "mammoth/winpeshl.ini"
+	// PreScriptSeedFmt is the ISO-root / boot.wim seat of pre_install
+	// segments (setup pathway only): the unattend windowsPE RunSynchronous
+	// locator scans the WinPE drive letters for exactly these names.
+	PreScriptSeedFmt = "mammoth/pre-%d.cmd"
 )
+
+// scriptShell returns the entry's effective interpreter (contract default:
+// cmd — docs/04-install-spec.md §5).
+func scriptShell(s render.ScriptEntry) string {
+	if s.Shell == "" {
+		return "cmd"
+	}
+	return s.Shell
+}
+
+// splitScripts validates user scripts against the windows runtime seats and
+// splits them by stage. pre_install runs in WinPE (setup pathway only:
+// cmd-only, inline-only — WinPE ships no PowerShell and vMedia's boot.wim no
+// fetcher), post_install runs on the installed OS via the engine-managed
+// first-boot chain (cmd or powershell, inline or url). The agent apply path
+// has NO WinPE seat — its pre-apply runtime is the busybox agent (Linux
+// semantics) — so its caller rejects pre entries outright.
+func splitScripts(distro string, scripts []render.ScriptEntry) (pre, post []render.ScriptEntry, err error) {
+	for i, s := range scripts {
+		switch s.Stage {
+		case "pre_install":
+			if shell := scriptShell(s); shell != "cmd" {
+				return nil, nil, fmt.Errorf("%s: scripts[%d] pre_install shell=%q is not supported — WinPE ships no PowerShell, use shell=cmd", distro, i, shell)
+			}
+			if s.URL != "" {
+				return nil, nil, fmt.Errorf("%s: scripts[%d] pre_install url form is not supported — WinPE has no fetcher on every carrier, inline the body", distro, i)
+			}
+			pre = append(pre, s)
+		case "post_install":
+			if shell := scriptShell(s); shell != "cmd" && shell != "powershell" {
+				return nil, nil, fmt.Errorf("%s: scripts[%d] shell %q is not one of cmd|powershell", distro, i, shell)
+			}
+			post = append(post, s)
+		default:
+			return nil, nil, fmt.Errorf("%s: unknown script stage %q", distro, s.Stage)
+		}
+	}
+	return pre, post, nil
+}
 
 // RenderAnswers produces autounattend.xml + the SetupComplete.cmd source.
 func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([]render.AnswerFile, render.BootParams, error) {
@@ -203,8 +250,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if len(in.Raid) > 0 {
 		return nil, render.BootParams{}, fmt.Errorf("%s: RAID is not supported yet — submit plain disks", d.distro)
 	}
-	if len(in.Scripts) > 0 {
-		return nil, render.BootParams{}, fmt.Errorf("%s: user scripts are not supported yet (SetupComplete is engine-owned)", d.distro)
+	preScripts, postScripts, err := splitScripts(d.distro, in.Scripts)
+	if err != nil {
+		return nil, render.BootParams{}, err
 	}
 	if len(in.SSHPublicKeys) > 0 {
 		return nil, render.BootParams{}, fmt.Errorf("%s: access.ssh_keys is not supported (Server Core has no sshd by default)", d.distro)
@@ -223,8 +271,8 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		return nil, render.BootParams{}, err
 	}
 
-	unattend := unattendXML(d.osImageName(), hostname, in.RootPassword, mediaLocaleFor(in.MediaLanguage), plan)
-	task, terr := taskJSON(in.CompleteURL, in.Network, in.Capabilities)
+	unattend := unattendXML(d.osImageName(), hostname, in.RootPassword, mediaLocaleFor(in.MediaLanguage), plan, preSyncCommands(len(preScripts)))
+	task, terr := taskJSON(in.CompleteURL, in.Network, in.Capabilities, postScripts)
 	if terr != nil {
 		return nil, render.BootParams{}, terr
 	}
@@ -232,15 +280,22 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// Windows Setup finds autounattend.xml at the boot medium root by
 	// itself (no ds=/inst.ks-style argument — BootParams.KernelArgs stays
 	// empty). Setup reboots on its own after applying the image.
-	// Per-task variance lives ONLY in task.json (ISO root): the SetupComplete
-	// pair is generic, so the builder's prepared install.wim is ISO-sha
-	// cacheable — task.json is consumed at first boot from the still-mounted
-	// medium (the medium is released only after the completion callback).
+	// Per-task variance lives in task.json (ISO root) plus the pre_install
+	// answer files when present: the SetupComplete pair is generic, so the
+	// builder's prepared install.wim is ISO-sha cacheable — task.json is
+	// consumed at first boot from the still-mounted medium (the medium is
+	// released only after the completion callback).
 	answers := []render.AnswerFile{
 		{Name: "autounattend.xml", Content: unattend},
 		{Name: SetupCompleteSeedName, Content: setupCompleteCmd()},
 		{Name: CompletePS1SeedName, Content: mammothCompletePS()},
 		{Name: TaskJSONSeedName, Content: task},
+	}
+	for i, s := range preScripts {
+		answers = append(answers, render.AnswerFile{
+			Name:    fmt.Sprintf(PreScriptSeedFmt, i+1),
+			Content: s.Inline,
+		})
 	}
 	if startnet != "" {
 		answers = append(answers, render.AnswerFile{Name: StartnetSeedName, Content: startnet})
@@ -292,8 +347,12 @@ func (d *Driver) renderAgentApply(in render.InstallInputs) ([]render.AnswerFile,
 	if len(in.Raid) > 0 {
 		return nil, render.BootParams{}, fmt.Errorf("%s: RAID is not supported yet — submit plain disks", d.distro)
 	}
-	if len(in.Scripts) > 0 {
-		return nil, render.BootParams{}, fmt.Errorf("%s: user scripts are not supported yet (SetupComplete is engine-owned)", d.distro)
+	preScripts, postScripts, err := splitScripts(d.distro, in.Scripts)
+	if err != nil {
+		return nil, render.BootParams{}, err
+	}
+	if len(preScripts) > 0 {
+		return nil, render.BootParams{}, fmt.Errorf("%s: pre_install scripts are not supported on the agent apply path — its pre-apply runtime is the busybox agent (Linux semantics), not WinPE; use boot.installer=setup for pre_install", d.distro)
 	}
 	if len(in.SSHPublicKeys) > 0 {
 		return nil, render.BootParams{}, fmt.Errorf("%s: access.ssh_keys is not supported (Server Core has no sshd by default)", d.distro)
@@ -313,7 +372,7 @@ func (d *Driver) renderAgentApply(in render.InstallInputs) ([]render.AnswerFile,
 	}
 	bootDev := bootDiskDevice(d.distro, in)
 
-	task, terr := taskJSON(in.CompleteURL, in.Network, in.Capabilities)
+	task, terr := taskJSON(in.CompleteURL, in.Network, in.Capabilities, postScripts)
 	if terr != nil {
 		return nil, render.BootParams{}, terr
 	}
@@ -805,13 +864,73 @@ if ($cfg) {
             if ($n.dns) { Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses $n.dns }
         }
     }
-    # Single-shot POST is timing-sensitive right after image apply (the
-    # 2288H round's first-boot callback silently died there) — retry for up
-    # to ~75s until the engine acks one of them (duplicate callbacks are
-    # harmless, the engine keeps the first terminal report).
+    # --- user post_install segments: engine-managed orchestration. The
+    # network binding above runs first and the completion callback below
+    # runs LAST no matter what — a failing segment routes INTO the callback
+    # as status=failed (the task surfaces INSTALL_FAILED, same face as the
+    # Linux failtrap) and can never bypass it.
+    $cbStatus = "ok"
+    $cbDetail = "windows setup finished"
+    $seg = @()
+    if ($cfg.scripts -and $cfg.scripts.post_install) { $seg = @($cfg.scripts.post_install) }
+    $marker = Join-Path $PSScriptRoot "mammoth-scripts.done"
+    if ($seg.Count -gt 0) {
+        if (Test-Path $marker) {
+            # This script runs TWICE (SetupComplete in SYSTEM context and
+            # again via FirstLogonCommands in the Administrator session —
+            # whichever fires first on a given flow). Segments carry user
+            # side effects: the second execution never re-runs them, it
+            # replays the recorded verdict so both callback reports agree.
+            $done = Get-Content $marker -Raw | ConvertFrom-Json
+            $cbStatus = $done.status
+            $cbDetail = $done.detail
+        } else {
+            for ($i = 1; $i -le $seg.Count; $i++) {
+                $s = $seg[$i - 1]
+                $shell = "cmd"
+                if ($s.shell) { $shell = $s.shell }
+                $ext = ".cmd"
+                if ($shell -eq "powershell") { $ext = ".ps1" }
+                $f = Join-Path $env:TEMP ("mammoth-post-" + $i + $ext)
+                if ($s.content_base64) {
+                    [IO.File]::WriteAllText($f, [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s.content_base64)))
+                } elseif ($s.url) {
+                    Invoke-WebRequest -Uri $s.url -OutFile $f -UseBasicParsing -TimeoutSec 60
+                }
+                $code = -1
+                if (Test-Path $f) {
+                    if ($shell -eq "powershell") {
+                        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $f | Out-Null
+                    } else {
+                        & cmd.exe /d /c $f | Out-Null
+                    }
+                    $code = $LASTEXITCODE
+                }
+                $ok = $code -eq 0
+                if ($s.expected_exit_codes -and @($s.expected_exit_codes).Count -gt 0) {
+                    $ok = @($s.expected_exit_codes) -contains [int]$code
+                }
+                if (-not $ok) {
+                    $cbStatus = "failed"
+                    $cbDetail = "post_install script failed (segment $i/$($seg.Count), shell=$shell, exit=$code)"
+                    break
+                }
+            }
+            # Record BEFORE the callback: whatever happens later (callback
+            # network dies, box reboots mid-retry), the second execution
+            # replays this verdict instead of re-running the segments.
+            Set-Content -Path $marker -Value (@{ status = $cbStatus; detail = $cbDetail } | ConvertTo-Json -Compress)
+        }
+    }
+    # Completion callback — single-shot POST is timing-sensitive right after
+    # image apply (the 2288H round's first-boot callback silently died
+    # there) — retry for up to ~75s until the engine acks one of them
+    # (duplicate callbacks are harmless, the engine keeps the first terminal
+    # report).
+    $body = @{ status = $cbStatus; detail = $cbDetail } | ConvertTo-Json -Compress
     foreach ($i in 1..6) {
         try {
-            Invoke-WebRequest -Uri $cfg.complete_url -Method POST -Body '{"status":"ok","detail":"windows setup finished"}' -ContentType 'application/json' -UseBasicParsing -TimeoutSec 15 | Out-Null
+            Invoke-WebRequest -Uri $cfg.complete_url -Method POST -Body $body -ContentType 'application/json' -UseBasicParsing -TimeoutSec 15 | Out-Null
             break
         } catch { Start-Sleep -Seconds 12 }
     }
@@ -881,6 +1000,23 @@ type taskConfig struct {
 	// Capabilities mirrors access.capabilities ("rdp"|"winrm"|"ping"):
 	// the access features the ps1 enables on the installed system.
 	Capabilities []string `json:"capabilities,omitempty"`
+	// Scripts is nil unless the spec declared post_install segments — no
+	// scripts means a task.json byte-identical to the pre-scripts shape.
+	Scripts *taskScripts `json:"scripts,omitempty"`
+}
+
+// taskScript is one user post_install segment as the first-boot script sees
+// it (docs/04-install-spec.md §5): inline bodies re-encode base64 so
+// task.json stays ASCII-safe, URL bodies are fetched at runtime.
+type taskScript struct {
+	Shell         string `json:"shell"`
+	ContentBase64 string `json:"content_base64,omitempty"`
+	URL           string `json:"url,omitempty"`
+	ExpectedExit  []int  `json:"expected_exit_codes,omitempty"`
+}
+
+type taskScripts struct {
+	PostInstall []taskScript `json:"post_install,omitempty"`
 }
 
 type taskNetNIC struct {
@@ -895,9 +1031,22 @@ type taskIP struct {
 	Prefix string `json:"prefix"`
 }
 
-// taskJSON renders the per-task config (ISO root — the only per-task seed).
-func taskJSON(completeURL string, entries []render.NetworkEntry, capabilities []string) (string, error) {
+// taskJSON renders the per-task config (ISO root — the only per-task seed on
+// the setup pathway; the agent apply pathway injects it in-wim pre-apply).
+func taskJSON(completeURL string, entries []render.NetworkEntry, capabilities []string, post []render.ScriptEntry) (string, error) {
 	cfg := taskConfig{CompleteURL: completeURL, Capabilities: capabilities}
+	if len(post) > 0 {
+		ts := &taskScripts{}
+		for _, s := range post {
+			ts.PostInstall = append(ts.PostInstall, taskScript{
+				Shell:         scriptShell(s),
+				ContentBase64: base64.StdEncoding.EncodeToString([]byte(s.Inline)),
+				URL:           s.URL,
+				ExpectedExit:  s.ExpectedExit,
+			})
+		}
+		cfg.Scripts = ts
+	}
 	for _, e := range entries {
 		if len(e.Addresses) == 0 {
 			continue
@@ -960,7 +1109,21 @@ func normalizeMAC(mac string) string {
 // the language-selection page no matter what values the component carried
 // (real-media setupact, 9/21: "Could not determine Target language. Will
 // ask to show UI").
-func unattendXML(imageName, hostname, password string, ml mediaLocale, plan diskPlan) string {
+// preSyncCommands renders the windowsPE RunSynchronous Path lines: each
+// pre_install segment rides the boot medium as mammoth/pre-<n>.cmd and the
+// command line locates it across the WinPE drive letters (the medium's
+// letter differs between carriers and machines). The script's exit code
+// propagates as the command's — a non-zero aborts setup with no callback,
+// surfacing as INSTALL_TIMEOUT (v1; documented in docs/04-install-spec.md).
+func preSyncCommands(n int) []string {
+	cmds := make([]string, 0, n)
+	for i := 1; i <= n; i++ {
+		cmds = append(cmds, fmt.Sprintf(`cmd /d /s /c "for %%i in (C D E F G X Y Z) do @if exist %%i:\mammoth\pre-%d.cmd %%i:\mammoth\pre-%d.cmd"`, i, i))
+	}
+	return cmds
+}
+
+func unattendXML(imageName, hostname, password string, ml mediaLocale, plan diskPlan, preCmds []string) string {
 	var b strings.Builder
 	w := func(s string) { b.WriteString(s) }
 	w(`<?xml version="1.0" encoding="utf-8"?>
@@ -1034,7 +1197,26 @@ func unattendXML(imageName, hostname, password string, ml mediaLocale, plan disk
           </InstallTo>
         </OSImage>
       </ImageInstall>
-      <!-- ProductKey: the element must exist (setup aborts reading the
+`)
+	// Schema children of Microsoft-Windows-Setup are order-sensitive
+	// (alphabetical): RunSynchronous slots between ImageInstall and
+	// UserData. RunSynchronous is the native multi-slot WinPE seat — it
+	// runs during the windowsPE pass, before the image is applied.
+	if len(preCmds) > 0 {
+		w(`      <RunSynchronous>
+`)
+		for i, c := range preCmds {
+			w(fmt.Sprintf(`        <RunSynchronousCommand wcm:action="add">
+          <Order>%d</Order>
+          <Description>mammoth pre_install script %d</Description>
+          <Path>%s</Path>
+        </RunSynchronousCommand>
+`, i+1, i+1, xmlEscape(c)))
+		}
+		w(`      </RunSynchronous>
+`)
+	}
+	w(`      <!-- ProductKey: the element must exist (setup aborts reading the
            unattend without it) but the Key stays empty BY DESIGN — with no
            key setup resolves the channel from sources\ei.cfg, which the
            builder drops into the prepared tree ([Channel] Volume). A key

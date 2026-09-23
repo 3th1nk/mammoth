@@ -1,6 +1,7 @@
 package windows
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -145,5 +146,50 @@ func TestWindowsCarrierFollowsInstaller(t *testing.T) {
 	}
 	if got := d.NetbootCarrierFor(render.InstallInputs{Installer: "agent"}); got != render.NetbootCarrierAlpineNetboot {
 		t.Errorf("agent carrier = %q, want alpine_netboot", got)
+	}
+}
+
+// post_install segments ride the agent pathway's task.json too (in-wim
+// injected pre-apply — the first-boot chain is byte-identical to setup);
+// pre_install is rejected: the pre-apply runtime is the busybox agent, not
+// WinPE (docs/04-install-spec.md §5 windows seats).
+func TestRenderWindowsAgentApplyScripts(t *testing.T) {
+	d := New("windows2019")
+	in := baseInputs()
+	in.Installer = "agent"
+	in.Netboot = &render.NetbootInputs{
+		InstallWimURL:   "http://ext/netboot/store/abc/win/tree/sources/install.wim",
+		InstallWimIndex: 2,
+	}
+	in.Scripts = []render.ScriptEntry{
+		{Stage: "pre_install", Inline: "echo nope\r\n"},
+		{Stage: "post_install", Inline: "dir C:\\ > NUL\r\n"},
+	}
+	if _, _, err := d.RenderAnswers(in, render.MachineView{}); err == nil || !strings.Contains(err.Error(), "pre_install scripts are not supported on the agent apply path") {
+		t.Fatalf("agent pre_install: err = %v, want agent-path rejection", err)
+	}
+
+	in.Scripts = in.Scripts[1:]
+	answers, _, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	var task, plan string
+	for _, a := range answers {
+		switch a.Name {
+		case AgentTaskJSONName:
+			task = a.Content
+		case "agent-plan.sh":
+			plan = a.Content
+		}
+	}
+	if task == "" || plan == "" {
+		t.Fatalf("missing answers: %+v", answers)
+	}
+	if !strings.Contains(task, `"post_install"`) || !strings.Contains(task, base64.StdEncoding.EncodeToString([]byte("dir C:\\ > NUL\r\n"))) {
+		t.Errorf("agent task.json missing the post_install segment:\n%s", task)
+	}
+	if strings.Contains(plan, "mammoth_script") {
+		t.Errorf("agent plan must stay script-free (post_install runs on the installed OS, not the agent):\n%s", plan)
 	}
 }

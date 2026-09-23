@@ -232,7 +232,7 @@
    **真机回归待 ARM 机器**。信创混合机群刚需;~~下一项 NIST 800-88~~
    ✅ 已落地(见第 2 项,2026-09-18 fake 先行)。
    ~~ubuntu/debian PXE 化~~ ✅ 已入 v1.0(2026-09-17 真机闭环);
-5. **Windows 用户脚本(spec.scripts 前后置接入)**——windows 驱动现状对
+5. **Windows 用户脚本(spec.scripts 前后置接入)**——**✅ 代码落地(2026-09-23,方案按下述定案;契约仅新增 ScriptSpec.shell=cmd|powershell 缺省 cmd;渲染即拒边界齐备;qemu/真机验证待下一窗口)**——windows 驱动现状对
    spec.scripts 渲染即拒("user scripts are not supported yet (SetupComplete
    is engine-owned)",setup/agent 两通路同,render/windows/windows.go:206、
    :292):SetupComplete.cmd 每镜像仅一个,是完成回调 + 静态网绑定的引擎

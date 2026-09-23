@@ -2,7 +2,6 @@ package provision
 
 import (
 	"testing"
-
 )
 
 // boot.installer=auto 的部署事实判定(影子决策落地):SMB 导出配置了 →

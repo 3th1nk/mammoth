@@ -115,7 +115,6 @@ func WindowsImageIndex(installWimPath, imageName string) (int, error) {
 	return 0, fmt.Errorf("windows: %q image not found in install.wim (SKU contract mismatch)", imageName)
 }
 
-
 // WindowsSpecializeStrip extracts the sysprep Specialize.xml action file
 // from the prepared install.wim image and strips the SpBcd imaging blocks
 // (Microsoft-Windows-Sysprep-SpBcd): specialize's online BCD module

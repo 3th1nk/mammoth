@@ -180,7 +180,7 @@ func TestRenderAutoinstallWipeAndBond(t *testing.T) {
 		t.Errorf("offline-apt tolerance cleanup missing:\n%s", late)
 	}
 
-	if boot.KernelArgs != "autoinstall ds=nocloud-net;s=file:///cdrom/" {
+	if boot.KernelArgs != "autoinstall ds=nocloud-net;s=file:///cdrom/ syslog=m" {
 		t.Errorf("boot params wrong: %q", boot.KernelArgs)
 	}
 }
@@ -336,8 +336,9 @@ func TestRenderNetbootCasperArgs(t *testing.T) {
 		!strings.Contains(boot.NetbootKernelArgs, "ds=nocloud-net;s=http://10.0.0.1:8080/render/toku/") ||
 		!strings.Contains(boot.NetbootKernelArgs, "boot=casper netboot=nfs nfsroot=10.0.0.1:/export/netboot/toku/iso") ||
 		!strings.Contains(boot.NetbootKernelArgs, "nfsopts=tcp,v3") ||
+		!strings.Contains(boot.NetbootKernelArgs, "syslog=10.0.0.1") ||
 		!strings.Contains(boot.NetbootKernelArgs, "BOOTIF=01-02-00-00-00-00-00") {
-		t.Errorf("netboot args missing casper/nfsroot/seed/tcp/BOOTIF: %q", boot.NetbootKernelArgs)
+		t.Errorf("netboot args missing casper/nfsroot/seed/tcp/syslog/BOOTIF: %q", boot.NetbootKernelArgs)
 	}
 
 	// A DHCP-only spec (the PXE-legal form) carries no network declaration —

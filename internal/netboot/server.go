@@ -78,6 +78,18 @@ type Options struct {
 	// fallback still works (identity is client-supplied). ExportExternalKit
 	// is the companion the deployment ships to the TFTP root.
 	ExternalOnly bool
+	// IPResolver attributes syslog senders by IP when the lease-reverse
+	// chain misses: vMedia machines hold no lease, so provision registers
+	// the spec's declared static addresses here at boot (TTL-bound; the
+	// release paths forget them). See IPRegistry. nil keeps lease-only
+	// attribution.
+	IPResolver *IPRegistry
+	// SyslogOnly starts ONLY the installer-log sink — no DHCP/TFTP/HTTP
+	// ownership. Pure virtual-media deployments (PXE off) run the netboot
+	// service in this shape so the syslog channel (inst.syslog=/syslog= on
+	// every carrier now) still lands in task_logs. Serve wiring picks
+	// exactly one of the full start and this.
+	SyslogOnly bool
 	// Log receives service diagnostics; nil defaults to slog.Default().
 	Log *slog.Logger
 }
@@ -108,7 +120,7 @@ type ioCloser interface{ Close() error }
 // external escape hatch, a silent downgrade would strand machines at the
 // PXE prompt.
 func Start(ctx context.Context, opts Options) (*Server, error) {
-	if !opts.ExternalOnly {
+	if !opts.ExternalOnly && !opts.SyslogOnly {
 		if v4 := opts.NextServer.To4(); v4 == nil {
 			return nil, fmt.Errorf("netboot: NextServer must be an IPv4 address")
 		}
@@ -136,9 +148,11 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 		done:  make(chan error, 1),
 	}
 
-	if opts.ExternalOnly {
-		// Escape hatch: no UDP ownership. The syslog sink still binds —
-		// diagnostics only, same degradation semantics as builtin mode.
+	if opts.ExternalOnly || opts.SyslogOnly {
+		// No UDP ownership beyond the sink. ExternalOnly is the escape
+		// hatch (site owns DHCP/TFTP); SyslogOnly is the pure virtual-media
+		// shape — both bind ONLY the installer-log sink, diagnostics with
+		// the same degradation semantics as builtin mode.
 		s.closers = []ioCloser{}
 		syslogDone := make(chan struct{})
 		if syslogConn, serr := net.ListenUDP("udp4", &net.UDPAddr{Port: opts.SyslogPort}); serr != nil {
@@ -161,7 +175,11 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 				s.done <- ctx.Err()
 			}
 		}()
-		log.Info("netboot service started (external: DHCP/TFTP owned by the site; mammoth serves HTTP only)",
+		mode := "external: DHCP/TFTP owned by the site; mammoth serves HTTP only"
+		if opts.SyslogOnly {
+			mode = "syslog-only: pure virtual-media deployment, no PXE ownership"
+		}
+		log.Info("netboot service started ("+mode+")",
 			"base_url", opts.BaseURL,
 			"syslog_port", opts.SyslogPort)
 		return s, nil
@@ -310,12 +328,22 @@ func (s *Server) serveSyslog(ctx context.Context, conn *net.UDPConn, done chan<-
 			continue
 		}
 		args := []any{"syslog_src", addr.IP.String()}
+		taskID := ""
 		if s.opts.DHCP != nil && s.opts.Resolver != nil {
 			if mac := s.opts.DHCP.macFor(addr.IP); mac != "" {
 				if e, terr := s.opts.Resolver.Entry(ctx, mac); terr == nil && e != nil && e.TaskID != "" {
-					args = append(args, obs.FieldTaskID, e.TaskID)
+					taskID = e.TaskID
 				}
 			}
+		}
+		// Lease chain missed (vMedia: no pool at all; site-DHCP proxy: the
+		// lease is the site's) — fall back to the provision-registered
+		// address attributions before giving up.
+		if taskID == "" && s.opts.IPResolver != nil {
+			taskID = s.opts.IPResolver.TaskForIP(addr.IP)
+		}
+		if taskID != "" {
+			args = append(args, obs.FieldTaskID, taskID)
 		}
 		s.log.Info(msg, args...)
 	}

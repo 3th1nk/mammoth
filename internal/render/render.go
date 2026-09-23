@@ -8,6 +8,7 @@ package render
 
 import (
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -244,6 +245,23 @@ type ResolvedPartition struct {
 	Number   int    `json:"number,omitempty"`
 	UUID     string `json:"uuid,omitempty"`
 	OnPart   string `json:"on_part,omitempty"` // full kernel name, e.g. sda1
+}
+
+// SyslogHost derives the installer remote-syslog target from the answer
+// base URL — bare hostname, no port (preseed netbootKernelArgs precedent:
+// an IP literal is the common shape and needs no resolver; the argument
+// carries no port, so a non-514 sink port must be configured on both
+// sides). Empty when the base URL is absent or hostless: callers omit the
+// syslog argument rather than render a broken one.
+func SyslogHost(answerBaseURL string) string {
+	if answerBaseURL == "" {
+		return ""
+	}
+	u, err := url.Parse(answerBaseURL)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 // NormalizeESP auto-applies the esp flag to /boot/efi partitions that do

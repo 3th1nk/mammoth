@@ -131,7 +131,7 @@ func TestRenderPreseedWipeAndStaticIP(t *testing.T) {
 	}
 	if boot.KernelArgs != "auto=true priority=critical file=/cdrom/preseed.cfg "+
 		"debian-installer/locale=en_US.UTF-8 keyboard-configuration/layoutcode=us "+
-		"console-setup/ask_detect=false console-setup/layoutcode=us" {
+		"console-setup/ask_detect=false console-setup/layoutcode=us syslog=m" {
 		t.Errorf("boot params wrong: %q", boot.KernelArgs)
 	}
 }

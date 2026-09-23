@@ -99,7 +99,7 @@ func TestRenderWipeStorageAndBond(t *testing.T) {
 		t.Errorf("hostname missing")
 	}
 
-	if boot.KernelArgs != "ip=dhcp inst.ks=https://m/render/tok123/ks.cfg inst.repo=https://mirror.example/rocky9 inst.text" {
+	if boot.KernelArgs != "ip=dhcp inst.ks=https://m/render/tok123/ks.cfg inst.repo=https://mirror.example/rocky9 inst.text inst.syslog=m" {
 		t.Errorf("boot params wrong: %q", boot.KernelArgs)
 	}
 }
@@ -676,5 +676,36 @@ func TestFirmwareSupportDeclarations(t *testing.T) {
 		if got := New(distro).FirmwareSupport(); got != want {
 			t.Errorf("%s firmware support = %q, want %q", distro, got, want)
 		}
+	}
+}
+
+// The syslog channel rides both carriers (KernelArgs is shared) and degrades
+// to no argument when the answer base URL is absent — a broken syslog host
+// must never render.
+func TestRenderSyslogArg(t *testing.T) {
+	d := New("rocky9")
+	in := render.InstallInputs{
+		TaskToken:     "tok123",
+		MachineID:     "mch_x",
+		Hostname:      "node-01",
+		ImageSource:   "https://mirror.example/rocky9",
+		RootPassword:  "s3creT-pw",
+		AnswerBaseURL: "https://m/render/tok123",
+		CompleteURL:   "https://m/render/tok123/complete",
+		Disks: []render.ResolvedDisk{{Device: "nvme0n1", Wipe: true,
+			Partitions: []render.ResolvedPartition{
+				{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+				{Mount: "/", FS: "xfs", Grow: true},
+			}}},
+	}
+	_, boot, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(boot.KernelArgs, "inst.syslog=m") {
+		t.Errorf("kernel args missing inst.syslog: %q", boot.KernelArgs)
+	}
+	if strings.Contains(boot.KernelArgs, "syslog=:") {
+		t.Errorf("syslog host malformed: %q", boot.KernelArgs)
 	}
 }

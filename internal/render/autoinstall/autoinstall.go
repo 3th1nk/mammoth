@@ -249,10 +249,16 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// `autoinstall` is on the kernel command line; the file:// seedfrom is
 	// the documented offline-ISO form (casper mounts the boot medium at
 	// /cdrom — cloud-init reads the seed from there, no networking).
+	// syslog= forwards casper/subiquity logs to mammoth's sink (UDP 514 on
+	// the machine-face host) on BOTH carriers — the vMedia shape needs it
+	// just as much (the offline seed proves nothing about log visibility).
 	boot := render.BootParams{
 		AnswerURL:           primaryURL,
 		KernelArgs:          "autoinstall ds=nocloud-net;s=file:///cdrom/",
 		InstallerAutoReboot: true, // shutdown: reboot
+	}
+	if host := render.SyslogHost(in.AnswerBaseURL); host != "" {
+		boot.KernelArgs += " syslog=" + host
 	}
 	// PXE: no boot medium to mount at /cdrom — the nocloud seed rides HTTP
 	// (the seed URL is already absolute) and the live root mounts from the
@@ -282,6 +288,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		boot.NetbootKernelArgs = fmt.Sprintf(
 			"autoinstall ds=nocloud-net;s=%s/ %s boot=casper netboot=nfs nfsroot=%s nfsopts=tcp,v3",
 			strings.TrimSuffix(in.AnswerBaseURL, "/"), ipArg, in.Netboot.NFSRootURL)
+		if host := render.SyslogHost(in.AnswerBaseURL); host != "" {
+			boot.NetbootKernelArgs += " syslog=" + host
+		}
 		// BOOTIF pins the NIC casper's configure_networking configures: udev
 		// renames interfaces mid-initramfs (2288H: enp1s0 → eno1 between
 		// ipconfig's device scan and its DHCP), and ipconfig then times out

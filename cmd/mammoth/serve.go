@@ -104,6 +104,12 @@ func serve(args []string) error {
 	logsRepo := store.NewTaskLogRepo(db)
 	netbootRepo := store.NewNetbootRepo(db)
 	pendingRepo := store.NewPendingRepo(db)
+	// Syslog attribution registry: provision registers the spec's declared
+	// static addresses at boot, so the 514/udp sink can attribute vMedia
+	// (and site-DHCP proxy) senders the DHCP lease chain cannot see. Shared
+	// by the netboot service and the executor; lives in every
+	// API-serving mode.
+	syslogIPs := netboot.NewIPRegistry()
 
 	// Log dual-write (docs/02-architecture.md §5.2): from here on, every log
 	// line that carries task_id is also persisted for API retrieval; lines
@@ -296,6 +302,7 @@ func serve(args []string) error {
 			NBPs:         pxe.Files,
 			Resolver:     nbResolver,
 			DHCP:         dhcpPool,
+			IPResolver:   syslogIPs,
 			Log:          logger,
 			// macOS/vmnet verification setups: limited broadcast leaves via
 			// the default interface, so offer a directed one (config.go).
@@ -324,6 +331,26 @@ func serve(args []string) error {
 					}
 				}
 			},
+		})
+		if nerr != nil {
+			return fmt.Errorf("netboot: %w", nerr)
+		}
+		go func() {
+			if serr := nb.Wait(); serr != nil {
+				logger.Warn("netboot service stopped", "err", serr.Error())
+			}
+		}()
+	} else if cfg.Mode.RunsNetboot() {
+		// Pure virtual-media deployment (PXE off): no PXE ownership, but the
+		// syslog channel — inst.syslog=/syslog= now rides every carrier —
+		// must still land in task_logs. Run the service in its sink-only
+		// shape; binding failure degrades exactly like the full start.
+		nb, nerr := netboot.Start(ctx, netboot.Options{
+			SyslogOnly: true,
+			SyslogPort: cfg.PXESyslogPort,
+			BaseURL:    strings.TrimSuffix(cfg.ExternalURL, "/"),
+			IPResolver: syslogIPs,
+			Log:        logger,
 		})
 		if nerr != nil {
 			return fmt.Errorf("netboot: %w", nerr)
@@ -453,6 +480,7 @@ func serve(args []string) error {
 			VerifyReadyWait:           cfg.VerifyReadyWait,
 			MediaUploader:             mediaUploader,
 			RamdiskEnabled:            cfg.RamdiskEnabled,
+			IPRegistry:                syslogIPs,
 			ProbeAlpineISO:            cfg.ProbeAlpineISO,
 			ProbeAlpineNetboot:        cfg.ProbeAlpineNetboot,
 			WindowsApplyAlpineISO:     cfg.WindowsApplyAlpineISO,

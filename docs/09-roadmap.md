@@ -321,20 +321,19 @@ virtual-media 导致条目与 boot tree 全漏);ramdisk 探针成功与 verify_r
 - 多机 Raid/LVM 拓扑编排
 - gRPC 内部面间协议(当前为队列 + DB,足够)
 
-- **vMedia 安装器 syslog 通道(观测面,定案待实施,2026-09-20)**——业务形态
-  (左阶段树+右完整日志流)已定,唯一实质缺口是默认载体的 install_os 日志密度:
-  安装器远程日志(`syslog=` 内核参数 → 514/udp sink → task_logs)目前仅 debian
-  netboot 渲染。实施定案(全部事实已核):①渲染层——kickstart 系加
-  `inst.syslog=<host>`、casper/autoinstall 加 `syslog=<host>`,host 推导照抄
-  preseed.netbootKernelArgs 的 AnswerBaseURL hostname 模式(preseed.go:84),
-  vMedia 与 PXE 两路 KernelArgs 都带;②sink 归因——现状 serveSyslog 走
-  DHCP.macFor(租约反查)→Resolver.Entry→task_id(netboot/server.go:297),
-  vMedia 无租约,需扩展 IP→task 归因(共享注册表:provision 在 boot 阶段注册
-  spec 声明地址+TTL,netboot sink 读;或 opts 加 IPResolver 接口);③sink 存活
-  门禁——serveSyslog 随 netboot 服务起,`MAMMOTH_PXE_ENABLED=false` 的纯
-  vMedia 部署需确认 sink 独立存活(escape hatch 已保证 external 模式仍绑);
-  ④契约不动——日志仍走 task_logs,UI 按 stage 字段客户端着色,左树右流
-  无需新 API(轮询 cursor 即近实时,logs SSE 属后续可选)。
+- **vMedia 安装器 syslog 通道(观测面)✅ 已落地(2026-09-24,按本节定案)**——
+  ①渲染层:kickstart 系 `inst.syslog=`、casper/autoinstall 与 d-i
+  `syslog=`(host 照抄 preseed 的 AnswerBaseURL hostname 模式,抽共享
+  `render.SyslogHost`),vMedia 与 PXE 两路 KernelArgs 都带;②sink 归因:
+  `netboot.IPRegistry`(provision 在 prepare 注册 spec 声明静态地址、TTL=
+  任务预算+1h、release 路径 Forget)作租约链之后的回退,`serveSyslog`
+  先租约后注册表——**归因边界:spec 静态地址可归因,site-DHCP 动态地址
+  仍仅记源 IP**(无人声明的 IP 没有诚实的归属);③sink 存活:netboot
+  Options 增 `SyslogOnly`,`MAMMOTH_PXE_ENABLED=false` 的纯 vMedia 部署
+  以 sink-only 形态独立起 514(external 模式既已无条件绑定,语义一致,
+  不新增配置);④契约不动:日志仍走 slog→TaskLogTee→task_logs,左树右流
+  无需新 API(轮询 cursor 近实时,logs SSE 属后续可选)。测试:IPRegistry
+  单测 + sink 归因回退/Forget + SyslogOnly 冒烟 + 三方言渲染断言。
 
 ## 已评估并排除的方向(决策记录,避免重新论证)
 

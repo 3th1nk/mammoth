@@ -252,3 +252,114 @@ func TestParseSyslog(t *testing.T) {
 		t.Errorf("oversized line not capped: %d", len(got))
 	}
 }
+
+// vMedia attribution: no DHCP pool exists on that carrier — the sink falls
+// back to the provision-registered address attributions, and unregistered
+// senders stay source-only.
+func TestSyslogIPRegistryAttribution(t *testing.T) {
+	cap := &captureHandler{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ips := NewIPRegistry()
+	ips.Register("task-vmedia", []string{"127.0.0.1"}, time.Minute)
+	s, err := Start(ctx, Options{
+		DHCPPort:   freeUDPPort(t),
+		ProxyPort:  freeUDPPort(t),
+		TFTPPort:   freeUDPPort(t),
+		SyslogPort: freeUDPPort(t),
+		NextServer: []byte{127, 0, 0, 1},
+		BaseURL:    "http://127.0.0.1:8080",
+		NBPs:       fstest.MapFS{},
+		IPResolver: ips,
+		Log:        slog.New(cap),
+	})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	conn, err := net.DialUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)},
+		&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: s.opts.SyslogPort})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write([]byte("<13>vmedia installer line")); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	waitFor(t, func() bool {
+		attrs, ok := cap.find("vmedia installer line")
+		return ok && attrs["task_id"] == "task-vmedia"
+	})
+
+	// Forget (the release paths) drops the attribution: the next line from
+	// the same address is source-only again.
+	ips.Forget("task-vmedia")
+	conn, err = net.DialUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)},
+		&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: s.opts.SyslogPort})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write([]byte("post-release line")); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	waitFor(t, func() bool {
+		attrs, ok := cap.find("post-release line")
+		return ok && attrs["task_id"] == nil && attrs["syslog_src"] == "127.0.0.1"
+	})
+
+	cancel()
+	select {
+	case err := <-doneOf(s):
+		if err != nil {
+			t.Fatalf("shutdown error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("server did not shut down")
+	}
+}
+
+// Pure virtual-media deployments (PXE off) start the service in its
+// sink-only shape: no NextServer needed, only 514 binds, syslog attribution
+// through the registry works, shutdown is clean.
+func TestSyslogOnlyStart(t *testing.T) {
+	cap := &captureHandler{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ips := NewIPRegistry()
+	ips.Register("task-sink", []string{"127.0.0.1"}, time.Minute)
+	s, err := Start(ctx, Options{
+		SyslogOnly: true,
+		SyslogPort: freeUDPPort(t),
+		BaseURL:    "http://127.0.0.1:8080",
+		IPResolver: ips,
+		Log:        slog.New(cap),
+	})
+	if err != nil {
+		t.Fatalf("syslog-only start: %v", err)
+	}
+
+	conn, err := net.DialUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)},
+		&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: s.opts.SyslogPort})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write([]byte("sink-only line")); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	waitFor(t, func() bool {
+		attrs, ok := cap.find("sink-only line")
+		return ok && attrs["task_id"] == "task-sink"
+	})
+
+	cancel()
+	select {
+	case err := <-doneOf(s):
+		if err != nil {
+			t.Fatalf("shutdown error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("server did not shut down")
+	}
+}

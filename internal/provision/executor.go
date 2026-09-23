@@ -13,6 +13,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/bmc"
 	"github.com/3th1nk/mammoth/internal/bmc/compat"
 	"github.com/3th1nk/mammoth/internal/inventory/inbandssh"
+	"github.com/3th1nk/mammoth/internal/netboot"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/render"
 	"github.com/3th1nk/mammoth/internal/store"
@@ -104,6 +105,11 @@ type Executor struct {
 	// LayoutKeep is the per-machine snapshot retention (docs/08-data-model.md).
 	LayoutKeep int
 
+	// IPRegistry attributes syslog senders by the spec's declared static
+	// addresses — the vMedia carriers have no DHCP lease for the lease-reverse
+	// chain, so prepare_media registers the addresses here and the release
+	// paths forget them. nil keeps the sink lease-only.
+	IPRegistry *netboot.IPRegistry
 	// Netboot is the network-boot registry behind the pxe boot strategy
 	// (docs/06-install-pipeline.md §3.3). Nil disables pxe — a pxe task on
 	// a runner without the service fails fast with NETBOOT_UNAVAILABLE.

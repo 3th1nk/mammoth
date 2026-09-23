@@ -1046,6 +1046,18 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	if err := e.Jobs.PatchTaskContext(ctx, task.ID, task.StageIndex, patch); err != nil {
 		return err
 	}
+	// Syslog attribution: the sink resolves vMedia (and site-DHCP proxy)
+	// senders through the spec's declared static addresses — no DHCP lease
+	// exists on those shapes for the lease-reverse chain. TTL = the task's
+	// budget plus headroom; a retried task re-prepares and re-registers,
+	// and the release paths forget early.
+	if e.IPRegistry != nil {
+		ips := make([]string, 0, 4)
+		for _, n := range in.Network {
+			ips = append(ips, n.Addresses...)
+		}
+		e.IPRegistry.Register(task.ID, ips, job.Policy.TaskTimeout()+time.Hour)
+	}
 	obs.FromContext(ctx).InfoContext(ctx, "answers rendered, boot payload prepared",
 		"files", len(answers), "distro", spec.Image.Distro,
 		"strategy", strategy.name(), "media_uri", ictx.MediaURI)

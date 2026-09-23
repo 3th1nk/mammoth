@@ -128,11 +128,15 @@ iPXE 脚本),默认关闭。启用清单:
    后的分发坚持 HTTP:国产系(麒麟/UOS 系)安装器 initrd 常达数百 MB
    (阵列卡/网卡固件全量塞入),TFTP 停等确认在体积与并发下必然超时;
    TFTP 仅承担 NBP(百 KB 级),属不可避免的最小面。
-   **安装器日志 sink(UDP 514)**:d-i 经 `syslog=<mammoth 地址>` 内核参数
-   把 ramfs 日志转发到 mammoth(ramfs 随安装器重启即逝,尸检别无它据);
-   能反查到已武装任务的行带 `task_id` 落 task_logs(`jobs logs` 可查),
-   外来客户端只记源 IP。514 被占(如站点 rsyslogd)仅告警降级,不阻塞
-   PXE——日志是诊断,不是命脉。
+   **安装器日志 sink(UDP 514)**:安装器经 `inst.syslog=`/`syslog=<mammoth
+   地址>` 内核参数把 ramfs 日志转发到 mammoth(ramfs 随安装器重启即逝,尸检
+   别无它据)——**三方言 × 两载体全覆盖**(kickstart 系 inst.syslog、
+   casper/subiquity 与 d-i 为 syslog=;vMedia 与 PXE 都带,2026-09-24 起)。
+   归因:PXE 池租约反查 → spec 声明静态地址注册表(boot 阶段注册、TTL
+   =任务预算+1h、释放即 Forget)→ 都未命中只记源 IP(site-DHCP 动态地址
+   属此类)。`MAMMOTH_PXE_ENABLED=false` 的纯 vMedia 部署以 sink-only 形态
+   独立起 514(不绑 DHCP/TFTP/HTTP);514 被占(如站点 rsyslogd)仅告警
+   降级,不阻塞——日志是诊断,不是命脉。
 3. **地址来源(二选一)**:
    - **站点 DHCP 存在** → 什么都不用配(proxy 模式:mammoth 只应答 PXEClient,
      地址分配仍归站点 DHCP);

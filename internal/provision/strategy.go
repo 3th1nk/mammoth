@@ -142,6 +142,11 @@ func effectiveInstallPath(spec *installSpecView, smbConfigured bool) (installPat
 // strategy marker exist in no strategy field: they were virtual media by
 // definition, so the empty case keeps the legacy behavior.
 func (e *Executor) releaseBootPayload(ctx context.Context, task *store.Task, ictx *installTaskContext, reason string) {
+	// The syslog attributions are payload-adjacent state: drop them on
+	// every terminal path (completed / failure / cancel / retry rebuild).
+	if e.IPRegistry != nil {
+		e.IPRegistry.Forget(task.ID)
+	}
 	if ictx == nil || ictx.Token == "" {
 		return
 	}

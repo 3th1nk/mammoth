@@ -74,9 +74,21 @@ func (d *Driver) suite() (string, error) {
 // the seed from the CD mount with zero networking; locale/keyboard precede
 // the seed load, so they ride as kernel arguments — the early-question
 // coverage that keeps the installer out of the language prompt.
-const kernelArgs = "auto=true priority=critical file=/cdrom/preseed.cfg " +
+const kernelArgsBase = "auto=true priority=critical file=/cdrom/preseed.cfg " +
 	"debian-installer/locale=en_US.UTF-8 keyboard-configuration/layoutcode=us " +
 	"console-setup/ask_detect=false console-setup/layoutcode=us"
+
+// offlineKernelArgs is the vMedia carrier's command line: the preseed rides
+// the CD, and syslog= forwards the installer's ramfs log to mammoth's sink
+// (UDP 514 on the machine-face host) — the same channel the netboot carrier
+// has always had (netbootKernelArgs below).
+func offlineKernelArgs(answerBaseURL string) string {
+	args := kernelArgsBase
+	if host := render.SyslogHost(answerBaseURL); host != "" {
+		args += " syslog=" + host
+	}
+	return args
+}
 
 // netbootKernelArgs swaps the seed carrier: preseed/url fetches over HTTP —
 // the netboot initrd has no CD to mount. The early-question kernel arguments
@@ -133,7 +145,8 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 
 	// Two seed carriers, one body: the netboot variant differs only in its
 	// install-source section (HTTP pool mirror instead of the CD mount).
-	seedName, bootArgs := "preseed.cfg", kernelArgs
+	vmediaArgs := offlineKernelArgs(in.AnswerBaseURL)
+	seedName, bootArgs := "preseed.cfg", vmediaArgs
 	// The archive codename the pool sources carry (d-i mirror/suite and the
 	// post-install signed-by rewrite use the same value).
 	poolSuite := ""
@@ -159,8 +172,11 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		})
 	}
 	return answers, render.BootParams{
-		AnswerURL:         strings.TrimSuffix(in.AnswerBaseURL, "/") + "/" + seedName,
-		KernelArgs:        kernelArgs,
+		AnswerURL: strings.TrimSuffix(in.AnswerBaseURL, "/") + "/" + seedName,
+		// The ISO shape rides KernelArgs even on the netboot variant (unused
+		// there — NetbootKernelArgs overrides); the syslog host is the same
+		// machine-face host on both carriers.
+		KernelArgs:        vmediaArgs,
 		NetbootKernelArgs: bootArgs,
 	}, nil
 }

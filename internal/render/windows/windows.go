@@ -206,6 +206,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if len(in.Scripts) > 0 {
 		return nil, render.BootParams{}, fmt.Errorf("%s: user scripts are not supported yet (SetupComplete is engine-owned)", d.distro)
 	}
+	if len(in.SSHPublicKeys) > 0 {
+		return nil, render.BootParams{}, fmt.Errorf("%s: access.ssh_keys is not supported (Server Core has no sshd by default)", d.distro)
+	}
 
 	render.NormalizeESP(in.Disks)
 	hostname, err := computerName(in.Hostname)
@@ -291,6 +294,9 @@ func (d *Driver) renderAgentApply(in render.InstallInputs) ([]render.AnswerFile,
 	}
 	if len(in.Scripts) > 0 {
 		return nil, render.BootParams{}, fmt.Errorf("%s: user scripts are not supported yet (SetupComplete is engine-owned)", d.distro)
+	}
+	if len(in.SSHPublicKeys) > 0 {
+		return nil, render.BootParams{}, fmt.Errorf("%s: access.ssh_keys is not supported (Server Core has no sshd by default)", d.distro)
 	}
 
 	render.NormalizeESP(in.Disks)
@@ -607,6 +613,14 @@ func planDisks(distro string, in render.InstallInputs) (diskPlan, error) {
 	if boot == nil {
 		return diskPlan{}, fmt.Errorf("%s: spec declares no OS partition (mount \"/\")", distro)
 	}
+	for i := range in.Disks {
+		if &in.Disks[i] == boot {
+			continue
+		}
+		if len(in.Disks[i].Partitions) > 0 {
+			return diskPlan{}, fmt.Errorf("%s: disk %s declares partitions but is not the OS disk — v1 plans a single disk (secondary disks carry no partition spec)", distro, in.Disks[i].Device)
+		}
+	}
 
 	plan := diskPlan{}
 	espDone := false
@@ -616,9 +630,10 @@ func planDisks(distro string, in render.InstallInputs) (diskPlan, error) {
 		if isOS && plan.osIndex != 0 {
 			return diskPlan{}, fmt.Errorf("%s: more than one partition mounts /", distro)
 		}
-		if !isESP && !isOS && p.Mount != "" && p.Mount != "swap" {
+		if !isESP && !isOS && p.Mount != "" {
 			// Non-OS mounts are drive-letter territory — Windows assigns
-			// letters itself; a declared mountpoint is a spec smell in v1.
+			// letters itself; a declared mountpoint (swap included — it has
+			// no meaning here) is a spec smell in v1.
 			return diskPlan{}, fmt.Errorf("%s: partition mount %q is not supported (declare the OS as /, leave others mountless)", distro, p.Mount)
 		}
 		if p.Preserve {

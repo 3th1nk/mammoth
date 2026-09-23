@@ -265,6 +265,23 @@ func TestRenderWindowsBoundary(t *testing.T) {
 			in.Disks[0].Partitions = in.Disks[0].Partitions[:1]
 			return in
 		}, "no OS partition"},
+		{"ssh keys", func(in render.InstallInputs) render.InstallInputs {
+			in.SSHPublicKeys = []string{"ssh-ed25519 AAA"}
+			return in
+		}, "access.ssh_keys is not supported"},
+		{"second disk partitions", func(in render.InstallInputs) render.InstallInputs {
+			in.Disks = append(in.Disks, render.ResolvedDisk{Device: "sdb", Wipe: true,
+				Partitions: []render.ResolvedPartition{{FS: "ntfs", SizeMB: 10240}}})
+			return in
+		}, "is not the OS disk"},
+		{"swap mount", func(in render.InstallInputs) render.InstallInputs {
+			in.Disks[0].Partitions = []render.ResolvedPartition{
+				{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+				{Mount: "/", FS: "ntfs", SizeMB: 40960},
+				{Mount: "swap", SizeMB: 4096},
+			}
+			return in
+		}, `mount "swap" is not supported`},
 		{"bad hostname", func(in render.InstallInputs) render.InstallInputs {
 			in.Hostname = "node/illegal"
 			return in

@@ -64,5 +64,7 @@ jobs:
         uses: docker/bake-action@v5
         with:
           files: docker-bake.hcl
-          targets: mammoth mammoth-builder
+          # docker-bake.hcl group "default" = [mammoth, mammoth-builder]; a
+          # space-separated targets input reaches buildx as ONE literal name
+          # and bake fails with "failed to find target mammoth mammoth-builder".
           push: false

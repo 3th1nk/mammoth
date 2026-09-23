@@ -13,6 +13,8 @@
 |----|----|
 | 机型 | FusionServer / 2288H V5 |
 | iBMC 固件 | 6.41(Redfish 1.0.2) |
+| 接口文档 | 《iBMC Redfish 接口参考》(EDOC1000126991,iBMC 全产品线共享一册) |
+| IPMI 接口文档 | 《iBMC IPMI 接口说明 03》(EDOC1100078642,同为全产品线共享,见文末推演节) |
 | 处理器 | 1 × Xeon Silver 4110(8 核) |
 | 内存 | 32 GiB |
 
@@ -541,7 +543,12 @@ runner 将 claim 时快照贯穿全部 stage,其余读 context 的 stage 均在
   **没有任何带外 API 能远程打开固件的 PXE 开关**(它是 BIOS Setup 设置项,
   不是引导顺序项)——这是 Ironic/Metal3/Pixiecore 共同的文档化前置条件
   ("hardware that supports booting from network" / "must be configured to
-  boot UEFI with network/PXE device")。
+  boot UEFI with network/PXE device")。**文档级修正候选已同日真机证伪
+  (2026-09-23,V5/6.41)**:IPMI Boot Options OEM 参数 62h 文档化有
+  "boot from PXE enable/disable" 位,真机读回 bit[1]=0(禁用)而该机
+  PXE override 实际可用——该位不承载 UEFI 网络引导开关;Set 写入返回
+  成功但静默丢弃(00h 锁存舞步亦然),带外改写通路不存在。**原结论
+  维持,证据加固**(详见文末 IPMI 推演节 §1)。
 - **解法(远程可行)**:`set_boot_device(bios, once)` 进 BIOS Setup + iBMC
   Web KVM → 启用 UEFI 网络引导/PXE 并保存 → 之后 Pxe 一次性引导即可用。
 - **产品沉淀**:① operations.md §4.5 的部署前提已有此条,补"启用指引";
@@ -605,6 +612,238 @@ https://<bmc>/src/virtualControl/kvm_h5.html?<cache-buster>
   (31 字符临时凭证,免登打开 Web 首页/**KVM**,iBMC 高级命令参考)——
   token 获取路径三选一待真机定(Redfish OemHuawei 资源 > web 登录 API >
   `ipmcget -d ssoinfo` CLI,最后者依赖 BMC SSH 尽量避开),深链形态待验;
+  ~~IPMI `Get auth token` 第 4 条通路~~ 已在 V5/6.41 实测不可用(见 IPMI
+  推演节 §2,机架 C2h 拒);
 - **v1 合成实现已试装并回退(2026-09-21)**:Oem.Huawei 识别 + 裸路径合成
   + 页面 200 核验曾落地,登录态测试定案黑屏后回退为 `BMC_UNSUPPORTED`
   ——发一个黑屏链接比干净的"不支持"降级更差;驱动桩注释携带本结论。
+
+## 官方文档推演:接口正典与盘符漂移(2026-09-23,文档级,待真机复核)
+
+> 与 [inspur.md](inspur.md)/[h3c.md](h3c.md) 同形态:内容全部摘自华为
+> 官方在线文档(动态渲染页,浏览器逐节抓取),未经真机验证的结论
+> 均已标注。文档源两册:
+>
+> | 册 | 编号 | 角色 |
+> |----|------|------|
+> | 《iBMC Redfish 接口参考 23》 | EDOC1000126991 | **接口正典,iBMC 全产品线/全代际共享一册**——2288H V5、2288H V6、TaiShan 机架、Atlas、刀片各自入口引用同一册;**真机 6.41 的接口文档源**,实测即此册行为 |
+> | 《TaiShan 机架服务器 iBMC (V3.05+) 用户指南 18》 | EDOC1100252160 | 仅作 §1 盘符漂移 FAQ 的定性出处 |
+>
+> **站点类目归属(找文档先认类目)**:**青山服务器 → 机架服务器是
+> mammoth 的主要目标**——真机 2288H V5 在此列,同列还有 V6 代际
+> (1288H/2288H/2488H/5288 V6 等,未测);V6 的 Redfish 接口参考同为
+> 此册,本页推演直接适用于 V6 接入,按代际浮动的只有属性级支持
+> (文档内逐属性标注适用产品)。
+> 入口:https://support.huawei.com/enterprise/zh/category/qingshan-server-pid-1548148142425?submodel=doc
+>
+> 注意:机架 V6 恰是软驱开关标注的"V6 产品"支持区间——V6 接入时
+> §1 的 FloppyDriveEnabled 预期直接可用,V5 预期缺失或 400(待验)。
+
+### 1. sda 盘符漂移:官方 FAQ 定性 + 根治开关(挂 ISO 装机必读)
+
+TaiShan 机架 iBMC 用户指南 FAQ(EDOC1100252160,定性出处):「使用 ISO
+挂载镜像方式安装操作系统时 sda 盘符漂移」——系统盘符不为 sda。官方
+定性:**iBMC 的 USB 硬件接口不够,将 CD/ROM 和软盘一起上报给 OS**,
+部分 OS 会把虚拟 CD 分配 `sd*` 盘符,与软驱抢占 sda → 盘符漂移。问题
+源于 iBMC 虚拟介质形态本身,对 2288H V5/V6 同样适用。解法 = Redfish
+关闭虚拟软驱,接口参考 23 给出的通路:
+
+```
+PATCH /redfish/v1/Managers/1/VirtualMedia/CD
+If-Match: <当前 ETag>            ← 同 Boot PATCH,取 GET 响应头
+{"Oem": {"Huawei": {"FloppyDriveEnabled": false}}}
+```
+
+- `FloppyDriveEnabled` 说明:**"iBMC V2 3.1.12.26 及以上版本的 V6 产品
+  支持"**;同载荷可带 `EncryptionEnabled`(VMM 加密开关);
+- **单板不支持该配置时返回 400**——开关是可选能力,不能盲发;
+- 同页样例确认 CD 资源通告 `#VirtualMedia.VmmControl`(target +
+  `@Redfish.ActionInfo` = `/VmmControlActionInfo`)——与 2288H V5 真机
+  观察一致正是**同一册文档**使然(6.41 即此册覆盖固件):VmmControl 是
+  华为 iBMC 全产品线的 OEM 正路,驱动的动态发现逻辑命中;
+- `MediaTypes` 枚举 CD/Floppy/USBStick/DVD;`ConnectedVia` 含
+  NotConnected/URI/Applet/Oem;manager_id 按形态取值(机架=1、刀片=
+  BladeN/SwiN、机框=Enc、U位=UN、机柜=Rack)。
+
+**与 mammoth 的关系**:本项目已记录"Redfish 卷名(LogicalDrive0)与
+安装器设备名(/dev/sda)的鸿沟"并用 size+serial 解析根治——官方 FAQ
+补上了第二成因(虚拟软驱抢号),现有防御(按 size±1%+serial、按带内
+快照解析内核名)对盘符漂移**天然免疫**(不信任盘符)。驱动侧候选增强:
+mount_media 前读 `Oem.Huawei.FloppyDriveEnabled`,为 true 且装机流程
+对盘符敏感时 PATCH 关闭(400 = 不支持,静默跳过)。**下一轮 2288H V5
+真机窗口即可预验**——文档将支持区间标为"V6 产品",V5 上预期属性缺失
+或 400,一次 GET/PATCH 便知,零风险。
+
+### 2. 与真机实测的对号速查(2288H V5/V6 = 接口参考 23 同一册)
+
+| 面 | 真机 2288H V5(6.41) | 接口参考 23(正典,V5/V6 共用) | 驱动 |
+|----|----------------------|-------------------------------|------|
+| 会话 | OEM 域载荷必带,速率限制 | 标准载荷样例,200 + X-Auth-Token/Location | OEM 识别分支 ✅ |
+| 虚拟介质 | VmmControl(NFS/CIFS) | VmmControl 通告同形 + FloppyDriveEnabled 开关(V6 标注支持) | 动态发现 ✅;软驱开关候选 |
+| Boot PATCH | If-Match + 三属性,once 自动回退 | If-Match 同形 | ✅ |
+| BIOS 写 | /Bios/Settings + ETag(实测) | SP 服务另有配置导入通路(待验) | BiosSetter 覆盖 |
+| 盘/RAID | DriveID OEM 建卷(实测) | 本轮未逐节核对此册存储章 | 机架 ✅ |
+| 擦盘 | `#Drive.SecureErase` 未声明 | "创建SP服务的硬盘擦除配置"在册(待验) | 如实 UNSUPPORTED 不变 |
+
+### 3. 附:iRM(TaiShan 900 整机柜)考察结论——不适用,仅存档
+
+TaiShan 900 整机柜(TS900-K2)的 iRM 是**机柜管理模块**(EDOC1100177346,
+独立产品线,非服务器 iBMC),资源树无 VirtualMedia、无 Storage/Bios
+实体资源——虚拟介质、BIOS 写、存储治理三条装机通路在文档层面整体
+缺失,与 mammoth 单机重装定位不符,**不主动适配**。两处结论存档备查
+(需复核时回原文档逐节抓取):
+
+- 其会话为标准载荷(200)但服务根样例带 `Oem.Huawei`,会触发驱动
+  createSession 的 OEM 域载荷分支(2288H 所需);iRM 上该字段是否被
+  接受文档无证据——若将来接整机柜,会话 4xx 先试剥 OEM 域发标准载荷;
+- BIOS 设置走 `Manager.ImportConfiguration` 配置导入(sftp URI →
+  202 + Task),非 Redfish Bios PATCH;Boot 目标集含 BiosSetup,
+  PATCH 同样要求 If-Match。
+
+## 官方文档推演:IPMI 侧正典《iBMC IPMI 接口说明 03》(2026-09-23,文档级;§1/§2 已同日真机预验)
+
+> 文档源:EDOC1100078642(更新 2025-07-15),与上文 Redfish 册并列的
+> 第二册正典——标准命令 141 条(App/Chassis/S-E/Storage/Transport/PICMG)
+> + 标准 DCMI + **OEM 通用自定义 NetFn=30h**(命令字 90h 装备类/91h、93h
+> BMC 通用/92h BIOS 类/94h 多节点/95h 系统类等)+ 其他自定义 + IPMB。
+> **类目陷阱**:站点把该册挂在 TaiShan 900 整机柜(TS900-K2)→ 二次开发
+> → 接口参考 下,但「产品分类说明」明确适用**机架 V3/V5/V6 全系
+> (2288H V5/V6 在列)**、TaiShan 100/200、刀片、高密、KunLun、Atlas、
+> TCE、存储等全产品线——按 Redfish 册同款"全产品线共享正典"口径吸收。
+> OEM 命令载荷统一前缀 Manufacturer ID = 2011(0x7DB,LSB first:
+> DB 07 00)。
+>
+> 吸收视角:mammoth 是 Redfish 优先 + IPMI 兜底(internal/bmc/ipmi 纯 Go
+> 驱动:Probe/电源/标准 Boot Flags 已实现,MountMedia/ConsoleURL/
+> CollectInventory 为桩)——本册价值在为 IPMI 兜底路径补文档化的 OEM
+> 通路与语义。文档级结论为主;**62h(auth token 两项)已同日真机预验,
+> 各节标注"真机预验 ✅"处为实测,其余仍待验证**。
+
+### 1. Boot Options 参数表:引导模式标准位 + OEM PXE 开关候选(高价值)
+
+Set/Get System Boot Options(Chassis 00h CMD 08h/09h)参数表(表 8-1)
+除标准 0h-7h 外的华为 OEM 参数:
+
+- **标准 5# Boot Flags data1 bit[5] = 引导模式**(0=Legacy "PC
+  compatible",1=EFI)——IPMI 层的引导模式控制口,**但在 iBMC 上不可依赖**:
+  IPMI 驱动 SetBootDevice 渲染 data1 = 0x80|once 0x40,bit[5] 恒 0
+  (Legacy),真机探针仍正确 UEFI 引导——iBMC 引导模式跟随全局 BootType
+  (见上文 ubuntu22 节),bit[5] 疑被忽略。模式切轨仍走 Redfish
+  (BootType / BootSourceOverrideMode),IPMI 层勿据此位切换模式;
+- **OEM 62h PXE Option(文档级候选 → 同日真机证伪 ✅)**:文档语义 data1
+  [1] = boot from PXE enable/disable、[3]/[2] = enable PXE2/PXE1、[0] =
+  boot from PXE2/PXE1,尾字节疑为引导超时。真机(2288H V5/6.41):
+  Get 读回 `01 62 70 17`——**bit[1]=0(禁用)而该机 PXE override 自
+  2026-09-13 实测可用 ⇒ 62h 不承载 UEFI 网络引导开关**(开关在 BIOS
+  Setup NVRAM;62h 管的是 legacy/M-project PXE 选项)。Set 写入
+  (`raw 0x00 0x08 0x62 0x72 0x17`;**须全宽 2 数据字节**,只带 1 字节
+  C7h 拒)返回成功但**读回不变——静默丢弃**,补 00h set-in-progress
+  舞步同样无效 ⇒ 带外写通路不存在。**"无带外 API 能远程开 PXE 开关"
+  原结论维持,证据加固**。同批 OEM 参数支持面:65h 可读(延时 mode=0、
+  count=600 即 60s,默认形态),60h/64h/66h 返 D6h(存在但禁用,升级
+  窗口类),63h 返 C1h(不存在,印证文档"待查代码确认");
+- 其余 OEM 参数:60h BIOS bank 选择(bios 0/1,升级用)、63h BIOS 写保护
+  (标注待查代码确认)、64h 预超时中断、65h 上电延时(R1/核心网分批上电,
+  mode 0-3,100ms 计数,≥1200 取默认上限)、66h 逻辑设备 ID;
+- 佐证:Get OEM support(30h 94h 09h,仅 osca 机型)byte6 bit[5] =
+  "Boot option enter into BIOS SETUP support"——标准 5# selector 0110b
+  (Force boot into BIOS Setup)有支持背书,可配合 BiosSetter 远程进
+  BIOS Setup 场景。
+
+### 2. Get auth token(30h 94h 39h):IPMI 换 SSO/Redfish 令牌——两个悬案的第 4 条通路
+
+文档页名即标注"包括机框 SSO 和内部 redfish 会话的 token 获取"。
+载荷:角色 ID(**带内令牌上限 = 操作员 Operator**,非管理员)、
+**会话类型 0 = WEB(含通过 WEB 打开的 KVM)/ 1 = Redfish**、user type
+(本地/域)、IP 协议 + 16 字节客户端 IP(**token 与使用它的会话源 IP
+绑定,防盗用**)、可选用户名分帧(内部 redfish 会话 byte25-27 填 0);
+响应 = token。
+
+- **KVM SSO 直链**(上文 §KVM HTML5 "正解 = SSO token 直链(待二期)"的
+  token 获取):原三选一之外的第 4 条文档化通路——`ipmitool raw 0x30 0x94
+  DB 07 00 39 <role> 00 00 00 <16B 客户端IP> 00 00 00`,**不依赖 BMC
+  SSH**。⚠️ 该命令挂在 NetFn 30h 命令字 **94h(多节点场景类)** 下,机架
+  单节点 iBMC 是否实现待真机(同册覆盖机架,倾向可用);token 形态与
+  `/sso?token=` 深链一次真机定;
+- **Redfish 会话速率限制绕行**(上文实测:连发 2 个 session 即 400):
+  type=1 直接返回 Redfish 会话 token——若可直接作 X-Auth-Token 使用,
+  速率限制有了带外旁路。两处约束:角色上限操作员(部分管理操作可能仍需
+  管理员会话);token 绑定请求源 IP(mammoth 服务端出口 IP 必须与获取时
+  一致)。
+
+**真机预验(2288H V5/6.41,同日)→ 机架不可用 ✅**:39h 子命令存在
+(独立长度预检:载荷 ≤27 字节一律 C7h,≥28 进入分帧解析),但全部合法
+载荷形态(role 1-4 × WEB/Redfish × 无分帧/用户名分帧"root")均 **C2h
+拒绝**;同命令字 09h(Get OEM support)直接 C1h(印证文档"仅 osca
+机型")。判定:该命令面向多节点/内部调用(会话源端如 SMM),机架单节点
+经外部 RMCP+ 不可用——**KVM SSO 第 4 通路与 Redfish 会话限速旁路在
+V5/6.41 落空**,SSO token 获取回到原三选一;V6 机型是否实现待接入时
+顺验(GET 类零风险)。
+
+### 3. Get SAS DiskInfo(30h 95h 04h):IPMI 层盘查兜底的载荷形状
+
+按 JBOD 槽位号 + 起始盘号 + 盘数查询;参数 01h = 在位位图,02h = 每盘
+详情:**类型(0 无/1 SAS/2 SATA)、速率(1.5/3/6/12G)、转速(RPM)、
+容量(GB)、20 字节序列号**,每盘 20 字节紧凑排布。IPMI 驱动
+CollectInventory 目前是桩;对 Redfish 弱的老 iBMC(V3 代际)机型,这是
+带外盘查的兜底载荷来源——serial + size 正是盘选择器需要的两字段。
+注意:容量单位 GB 非字节;JBOD 槽位语义(直连/expander 背板);RAID
+逻辑盘不在其列(RAID 域另有 Set/Get RAID Parameter 30h 93h 34h/42h 与
+Set/Get Storage Configurations 93h 3Dh/3Eh,名称在册、载荷本轮未逐页
+展开)。
+
+### 4. USB Mass Storage(30h 92h 25h):华为原生装机通路,存档不适配
+
+BMC 内部 FLASH 虚拟成 U 盘给主机:device id **0 = iBMA U 盘 / 1 = SP
+U 盘**;挂载类型 0 = 临时(主机只读,BMC 可读写)/ 1 = 正式(主机读写,
+BMC 不可访问);关闭 = 参数 03h;结果经 Get USB Mass Storage Status
+(参数 01h)轮询(长延时命令)。**SP U 盘 = SmartProvision**:BIOS 在
+POST 期间消费("非系统接口或 BIOS 启动完成后的请求报 0xCE"),配合 Set
+SmartProvision Deply Info(93h 47h)构成华为原生无人值守装机机制——
+不经虚拟介质、不经 NFS。iBMA U 盘则要求主机已上电(OS 内 iBMA 驱动
+消费)。错误码:0xC1 = USB 端口被占、0xD5 = 无 iBMA 分区/安装包。
+mammoth 判定:NFS 虚拟介质已是真机验证正路;SP 通路依赖 BIOS 配合与
+BMC FLASH 容量,不主动适配,存档备查(遇"虚拟介质劣化 + 无 NFS"场景
+回看)。
+
+### 5. 带外截屏与诊断取证
+
+Get Screen Snapshot(93h 03h,含 WakeUp 选项)/ Screenshot(93h 7Bh)/
+录像回放触发条件(Kinescope 18h/19h)/ SOL Blackbox 导出(93h 1Fh)/
+一键收集。直接命中 windows 引导失败定案方法论"SEL/RunLog 无引导设备
+记录,**屏幕是唯一证据源**,KVM 抓屏取证"——IPMI 截屏把该取证程序化
+(文件本体走 BMC 文件通道:Read File From BMC BT 超长帧 / Download
+resource from iMana),不再依赖人开 KVM。诊断增强候选,不值得单独拉
+通路,与 KVM SSO 同窗口预验。
+
+### 6. 连接与错误语义(IPMI 兜底路径通用)
+
+- **加密套件**:机架 V3/V5/V6 全系默认开启 Cipher suite **1,2,3,17**
+  (部分存储/刀片机型仅 17);套件 17 = 无鉴权无加密,默认开启本身是
+  安全异味(内网隔离前提下可用;inspur.md 有同款记录)。goipmi 协商
+  失败时显式固定套件 3(等价 `ipmitool -C 3`);
+- **完成码**:标准表 + 命令级扩展(Boot Options:80h = 参数不支持/
+  81h = set-in-progress 已被占用/82h = 只读)。**D1h = 固件更新中、
+  D2h = BMC 初始化中**——BMC 升级/重启窗口内兜底探测必须判"忙"重试
+  而非"不支持";0xCE(时机不符)/ 0xD5(部件缺失)是 OEM 命令高频码;
+- **四段式版本号**:IPMI 查询版本(文档给 raw 0x2C 0x2F 00 00 01)
+  按**十六进制**解读返回(如 99 → 0x99),第 1 段 1 字节(3-9)、后
+  3 段 2 字节(00-99)——解析 iBMC 版本字符串先按 hex 还原 decimal,
+  避免 6.41 被误读;
+- **BMC 复位**:标准 Cold Reset(App 06h 02h)= Redfish Manager.Reset
+  的 IPMI 等价——"虚拟介质高频挂载劣化 → Manager.Reset 恢复"在
+  IPMI-only 场景同样成立;PICMG HPM.1 固件升级命令组(Initiate upgrade
+  action / Upload firmware block / Finish / Activate firmware / Query
+  Rollback / Initiate Manual Rollback)完整在册——IPMI 层固件升级通路
+  存在,本轮不展开。
+
+### 7. 与既有真机结论的对号速查
+
+| 面 | 本册文档结论 | 真机/mammoth 现状 | 动作 |
+|----|-------------|------------------|------|
+| 引导 | 5# 含引导模式 bit[5];OEM 62h PXE 开关 | **62h 已实测证伪**(读回禁用、写入静默丢弃);bit[5] 勿依赖;模式跟随全局 BootType | PXE 前提仍需人进 BIOS(原结论加固) |
+| 会话 | 30h 94h 39h 换 Redfish/WEB token | **已实测机架不可用**(全形态 C2h);Redfish 连发 2 session 即 400(已用缓存规避) | SSO token 回到原三选一;V6 接入时顺验 |
+| 盘查 | 30h 95h 04h SAS/SATA 详情含 serial | Redfish /Chassis/Drives 实测可用(6.41) | 老 V3 机型兜底载荷来源;暂不实现 |
+| 装机 | SP U 盘由 BIOS POST 消费 | NFS VmmControl 端到端闭环 | 不适配,存档 |
+| 诊断 | IPMI 截屏 / SOL Blackbox | 屏幕取证靠人开 KVM | 增强候选,待验 |
+| BMC 复位 | Cold Reset 标准命令 | Manager.Reset 实测恢复劣化 | IPMI 等价已明,无需动作 |

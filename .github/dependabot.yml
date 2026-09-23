@@ -4,7 +4,19 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Minor/patch ride together in one PR; majors stay separate for a human
+    # (breaking-layout bumps like gofish v0.21+ need a code migration).
+    groups:
+      go-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"

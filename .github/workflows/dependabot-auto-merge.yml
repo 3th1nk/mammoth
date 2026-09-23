@@ -1,0 +1,53 @@
+# Auto-merge Dependabot PRs once the pull_request CI is green. Minor/patch
+# only: majors stay for a human (breaking deps like gofish v0.21+ move
+# packages). The repo has no branch protection (direct pushes to main are
+# the normal flow), so this waits on `gh pr checks --watch` itself instead
+# of relying on required status checks.
+#
+# pull_request_target is required for write permissions (approve/merge);
+# no PR code is ever checked out or executed here — only metadata via gh.
+name: dependabot-auto-merge
+
+on: pull_request_target
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dependabot/fetch-metadata@v2
+        id: meta
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Approve and merge once CI is green (non-major only)
+        if: steps.meta.outputs.update-type != 'version-update:semver-major'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.html_url }}
+        run: |
+          # Wait until at least one check is reported (CI just started when
+          # this workflow fires), then block until all checks conclude.
+          for i in $(seq 1 30); do
+            if gh pr checks "$PR" 2>&1 | grep -qE 'pass|fail|skipping|pending'; then
+              break
+            fi
+            sleep 10
+          done
+          if ! gh pr checks "$PR" --watch --interval 15; then
+            gh pr comment "$PR" --body "auto-merge skipped: CI failed — leaving the PR open for triage."
+            exit 1
+          fi
+          gh pr review --approve "$PR"
+          gh pr merge --squash "$PR" --subject "chore(deps): ${{ github.event.pull_request.title }}"
+
+      - name: Label major bumps for manual review
+        if: steps.meta.outputs.update-type == 'version-update:semver-major'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr edit "$PR" --add-label "deps-major"

@@ -56,7 +56,7 @@ Ironic 的 redfish 通用驱动与 sushy 库沉淀了十年厂商坑。mammoth �
 | PATCH 主资源要求 If-Match(ETag),无 Settings 对象 | Huawei iBMC 6.41(实测 412) | ✅ 已吸收:Boot PATCH 携带资源自身 ETag(`patchSystemBoot`) |
 | Reset 只接受标准值的子集 | Huawei iBMC(ForceOn/PowerCycle/GracefulRestart 被拒) | ✅ 已吸收:`ResetType@Redfish.AllowableValues` 预读 + 值映射回退 |
 | OEM 专有虚拟介质动作(无标准动作) | Huawei VmmControl(仅 NFS/CIFS);H3C HDM 同形动作(载荷同形,OEM 命名空间 `/Oem/Public/`,文档推演待真机,见 [h3c.md](h3c.md)) | ✅ 已实现:OEM 回退 + 任务轮询 + 应用内重试;OEM 路径按槽位资源 Actions 通告动态发现,未通告时按候选序(/Oem/Huawei/ → /Oem/Public/)试探;任务终态走黑名单判定(HDM 的 `Mounting` 等在途态不再误判) |
-| Image URL 缺 TransferProtocolType 被拒(部分 BMC 不在错误里带 RelatedProperties) | Cisco C845A / OpenBMC(sushy `is_transfer_protocol_required`) | ⚠️ 预警:当前媒体 URI 走 nfs://(scheme 即协议),不触发;引入 HTTP 直链介质时需补参数重发 |
+| Image URL 缺 TransferProtocolType 被拒(部分 BMC 不在错误里带 RelatedProperties) | Cisco C845A / OpenBMC(sushy `is_transfer_protocol_required`);**浪潮(文档级:InsertMedia 要求显式 `TransferProtocolType: NFS`,示例 Image 为无 scheme 裸路径;Web GUI 另有 CIFS 但 API 未文档化,见 [inspur.md](inspur.md))** | ⚠️ 预警:当前媒体 URI 走 nfs://(scheme 即协议),不触发;引入 HTTP 直链介质时需补参数重发;浪潮接入若被拒,先试剥 scheme + 显式 NFS(CIFS 是 Web-only,API 侧不试) |
 | RAID 建卷前须清外来配置(foreign config),作业分 real-time 与重启级 | Dell iDRAC(drac OEM) | ⚠️ 预警:`configure_raid` 阶段 Redfish Volume 创建已实现,遇 iDRAC 需 OEM 清配置 + 作业等待;华为卷名忽略已处理(按重扫绑定) |
 | 会话创建速率限制(连发 2 个即 400)/并发 session 数受限 | **Huawei iBMC 6.41(2026-09-19 实测)**、Supermicro(会话数)、通用 | ✅ 已吸收:redfish 会话按 addr+user 缓存(TTL 5min),认证类失败失效重连;registry 同址串行天然限流 |
 | reboot 后立即读电源状态拿到旧值 | 通用(power.py 等待 15s) | ✅ 等价:verify_ready/probe 轮询语义天然覆盖 |
@@ -94,7 +94,7 @@ BMC 怪癖按**固件底座**聚类而非服务器品牌(Ironic/sushy 同款经�
 | 固件底座 | 常见品牌 | 已知形态 | mammoth 状态 |
 |----------|----------|----------|--------------|
 | 自研闭环(iBMC/iDRAC/iLO) | 华为/超聚变、Dell、HPE | 见上表 | iBMC 实战闭环;iDRAC/iLO 清单就绪 |
-| **AMI MegaRAC**(装机量最大 OEM 底座) | 超微、浪潮、华硕、**H3C(HDM,文档实证:响应头 `Server: AMI MegaRAC Redfish Service`,见 [h3c.md](h3c.md))**、大量信创整机(长城/宝德等) | 会话数限制、Redfish 完整度随代际浮动(x10/x11/x12)、IPMI 强 Redfish 弱的老机型;`/Systems/{id}/Storages` 非标准复数(iBMC 与 HDM 同形,gofish 按通告链接走通) | 预警表已有会话限制行(代表整个底座);IPMI 兜底路径可用;首个文档级样本(H3C HDM)佐证 OEM 动作/存储路径形态的底座共性 |
+| **AMI MegaRAC**(装机量最大 OEM 底座) | 超微、浪潮、华硕、**H3C(HDM,文档实证:响应头 `Server: AMI MegaRAC Redfish Service`,见 [h3c.md](h3c.md))**、**浪潮(文档级双册:Redfish V1.1 + BMC Web V2.9——`AST2500EVB` 带内实测输出/AMI 前缀主机名/AMI 出厂证书,见 [inspur.md](inspur.md))**、大量信创整机(长城/宝德等) | 会话数限制、Redfish 完整度随代际浮动(x10/x11/x12)、IPMI 强 Redfish 弱的老机型;存储集合路径随 OEM 分化(iBMC/HDM 为非标复数 `Storages`,浪潮为标准单数 `Storage`——gofish 按通告链接走通是唯一正解) | 预警表已有会话限制行(代表整个底座);IPMI 兜底路径可用;两个文档级样本(H3C HDM / 浪潮)显示虚拟介质路径已分化:浪潮通告标准动作,H3C 走 OEM 命名空间——"通告优先 → OEM 回退"分层恰好覆盖两种形态 |
 | **OpenBMC**(开源,增长中) | Meta/MSFT/IBM 主推,ASPEED 卡,IBM Power 全系 | virtual media 常 KVM-only 槽(预警已有);Host 管理接口部分非标;标准符合度偏好且迭代快 | 预警表已有;预计适配成本最低的底座 |
 | 其他专用(ASMI/FSP、XCC、AMT、HMC) | IBM Power、Lenovo、Intel vPro、小型机 | 各自封闭生态 | 低频;预检动作通用 |
 

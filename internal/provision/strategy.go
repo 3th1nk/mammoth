@@ -159,6 +159,24 @@ func (e *Executor) releaseBootPayload(ctx context.Context, task *store.Task, ict
 func (e *Executor) virtualMedia() *virtualMediaStrategy { return &virtualMediaStrategy{e: e} }
 func (e *Executor) pxe() *pxeStrategy                   { return &pxeStrategy{e: e} }
 
+// releaseBootPayloadFresh re-reads the task before the release. The
+// runner/executor hold the CLAIM-TIME snapshot, and the payload facts (task
+// token + boot strategy) land in the context only when prepare_media writes
+// its patch — a stale parse has no strategy and either early-returns or
+// misroutes to the virtual-media cleaner, leaking the netboot entries and
+// the boot tree (real-hardware: canceling a windows agent apply task left
+// the entries behind and the machine re-entered the old path on its next
+// reboot; runbook known-defect, fixed here at both call sites). A re-read
+// failure keeps the caller's snapshot — best effort, like every cleanup
+// path.
+func (e *Executor) releaseBootPayloadFresh(ctx context.Context, task *store.Task, reason string) {
+	fresh := task
+	if t, err := e.Jobs.GetTask(ctx, task.ID); err == nil {
+		fresh = t
+	}
+	e.releaseBootPayload(ctx, fresh, parseInstallContext(fresh), reason)
+}
+
 // releaseReason distinguishes the completed path (eject BEFORE file reclaim,
 // grace-period semantics) from terminal paths (files only — the BMC's
 // one-shot override has expired by then and ejecting adds nothing).

@@ -1596,6 +1596,14 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 			obs.FromContext(ctx).WarnContext(ctx, "restore boot order failed", "err", err.Error())
 		}
 	}
+	// Machine lifecycle settle: installs never touch the state machine, so
+	// a machine that skipped discover (zero-reg claim straight to install)
+	// or came through the ramdisk probe keeps its transitional state after
+	// a successful install (real-hardware: machines stuck in
+	// "discovering"). Success is the authoritative settle point — a fresh
+	// OS with a verified install IS a ready machine (idempotent for
+	// machines already ready).
+	_ = e.Machines.SetState(ctx, task.MachineID, "ready")
 	obs.FromContext(ctx).InfoContext(ctx, "install verified ready")
 	return nil
 }

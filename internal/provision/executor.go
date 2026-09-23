@@ -153,7 +153,11 @@ func (e *Executor) ExecuteStage(ctx context.Context, task *store.Task, job *stor
 		// (retryable failures deliberately keep it — the retry's
 		// prepare_media rebuilds it anyway).
 		if err != nil && installMediaProduced(stage) && !Classified(err).Retryable {
-			e.releaseBootPayload(ctx, task, parseInstallContext(task), "terminal failure")
+			// Terminal failure after the payload was produced: reclaim it
+			// now (retryable failures deliberately keep it — the retry's
+			// prepare_media rebuilds it anyway). The fresh re-read matters:
+			// the claim-time snapshot predates prepare's context patch.
+			e.releaseBootPayloadFresh(ctx, task, "terminal failure")
 		}
 		return err
 	default:

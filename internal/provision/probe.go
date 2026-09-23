@@ -307,6 +307,14 @@ func (e *Executor) probeRamdisk(ctx context.Context, task *store.Task, usePXE bo
 		case <-tick.C:
 			if _, captured, err := e.Machines.LatestLayoutBySource(ctx, task.MachineID, "ramdisk"); err == nil && captured.After(baseline) {
 				compensate()
+				// The lifecycle transition this probe opened (discovering)
+				// completes here: the captured snapshot is the machine's
+				// ready spec view — runDiscover's UpdateProbeResult does the
+				// same for the redfish kind. Without it the machine stays
+				// "discovering" forever (the install flow never touches the
+				// state machine; real-hardware: the windows agent apply
+				// rounds ended with machines stuck in discovering).
+				_ = e.Machines.SetState(ctx, task.MachineID, "ready")
 				obs.FromContext(ctx).InfoContext(ctx, "probe report received",
 					obs.FieldTaskID, task.ID, obs.FieldMachineID, task.MachineID)
 				return nil

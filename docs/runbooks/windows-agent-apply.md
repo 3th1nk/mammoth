@@ -95,10 +95,15 @@
 > 配置走 setup 主线,未配置走 agent apply;提交门对 auto 免 SMB 门禁。
 > 缺省(不声明)仍是 setup。
 >
-> **已知小缺陷(未修)**:cancel 不释放 netboot 条目(残留条目会让机器
-> 误跑旧通路——重跑前手动 `DELETE FROM netboot_entries`);机器状态机
-> 装完停留 discovering;同机多轮重试会堆积 pending 任务(重跑前批量
-> cancel)。
+> **已知小缺陷(2026-09-23 已修)**:~~cancel 不释放 netboot 条目~~——根因
+> 是 runner/executor 的终态释放读 CLAIM 时任务快照,而 token/boot_strategy
+> 是 prepare 阶段才 patch 进 context 的(陈旧解析误路由 virtual-media,
+> 条目与 boot tree 全漏);终态释放改 `releaseBootPayloadFresh` 先重读
+> DB 记录,PG 回归套件钉住(internal/provision/terminal_release_test.go)。
+> ~~机器状态机装完停留 discovering~~——根因是 ramdisk 探针开了生命周期
+> 转换不收口(装机流程不碰机器状态);探针成功与 verify_ready 成功两处
+> 现在都回置 ready。~~同机多轮重试会堆积 pending 任务~~(重跑前批量
+> cancel)仍待修。
 
 > 目标(已收官 2026-09-22):agent apply-image 通路六阶段真机闭环验证
 > ——多轮全绿,终态见顶部状态块;历史设计/实施细节见下文 §方案 A

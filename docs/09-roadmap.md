@@ -277,8 +277,13 @@
      投递面全链;首版手工 BCD 预烤在 specialize 撞 0xC0000098(NT 拒载
      手工 store,真机定案)→ 改**两段式**(第二段 wimboot WinPE 由
      bcdboot 原生生成)后六阶段全绿;boot.installer=auto 自动通路判定
-     落地(runbooks/windows-agent-apply.md);遗留 = cancel 释放条目/机器
-状态机回 ready 两个小修;用户脚本(spec.scripts 前后置)接入已单列,见第 5 项;
+     落地(runbooks/windows-agent-apply.md);~~遗留 = cancel 释放条目/机器
+状态机回 ready 两个小修~~ **✅ 已修(2026-09-23)**:cancel/终态释放改先重读
+DB 任务记录(claim 快照没有 prepare patch 的 token/strategy,陈旧解析误路由
+virtual-media 导致条目与 boot tree 全漏);ramdisk 探针成功与 verify_ready
+成功两处回置机器 ready(探针开转换不收口是停留 discovering 的根因);PG 回归
+套件(terminal_release_test.go)+ test-pg 目标扩到 provision 包;用户脚本
+(spec.scripts 前后置)接入已单列,见第 5 项;
      ③Ventoy 式 grub 链载 = 可选介质侧实验;
      ④iBMC 升级 = 正确修复(与 SecureErase 缺失叠加升级动机),物理 USB
      = 有人场景最短路径。

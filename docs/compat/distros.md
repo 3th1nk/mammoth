@@ -609,6 +609,9 @@ auto → prepare 阶段按部署事实判定——SMB 导出
 (MAMMOTH_WINDOWS_INSTALL_SMB_UNC)已配置走 setup 主线(驱动覆盖完整),
 未配置走 agent apply(无 SMB 依赖);硬件驱动覆盖检测(机型↔inbox
 驱动映射)留作后续增强。提交门对 auto 免 SMB 门禁(判定在 prepare 落地)。
-**遗留**:cancel 不释放 netboot 条目(待修);机器状态机装完停留
-discovering(待查);ntfs3 目录态 apply;SB ON(需内核签名);装完会话
+**遗留**:~~cancel 不释放 netboot 条目~~(已修 2026-09-23:终态释放先重读
+DB 任务记录——claim 快照没有 prepare patch 的 token/strategy,陈旧解析误
+路由 virtual-media 全漏;PG 回归钉住);~~机器状态机装完停留 discovering~~
+(已修 2026-09-23:ramdisk 探针成功与 verify_ready 成功两处回置 ready,
+根因是探针开转换不收口);ntfs3 目录态 apply;SB ON(需内核签名);装完会话
 文字渲染(见 runbook 开放问题)。

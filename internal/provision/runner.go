@@ -222,9 +222,10 @@ func (r *Runner) finish(ctx context.Context, receipt queue.Receipt, task *store.
 		// Compensate side effects, then mark canceled (runner-owned write).
 		r.Exec.Compensate(ctx, task, job)
 		// Release the boot payload for every flow: discover tasks carry a
-		// PXE probe tree the same way installs do (parseInstallContext reads
-		// the shared netboot key; non-PXE contexts release nothing).
-		r.Exec.releaseBootPayload(ctx, task, parseInstallContext(task), "canceled")
+		// PXE probe tree the same way installs do (the fresh re-read inside
+		// picks up the context prepare patched — the claim-time snapshot
+		// knows no token or strategy yet).
+		r.Exec.releaseBootPayloadFresh(ctx, task, "canceled")
 		if err := r.Jobs.MarkCanceled(ctx, task.ID); err != nil {
 			log.ErrorContext(ctx, "cancel task failed", "err", err.Error())
 		}

@@ -11,10 +11,12 @@ import (
 	"embed"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // register "pgx" database/sql driver
 	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/lock"
 )
 
 //go:embed migrations/*.sql
@@ -37,14 +39,29 @@ func Open(databaseURL string) (*sql.DB, error) {
 	return db, nil
 }
 
-// Migrate applies pending migrations (idempotent, run at startup).
+// Migrate applies pending migrations (idempotent, run at startup). The
+// session-level advisory lock serializes concurrent migrators sharing one
+// database — `go test` starts one test binary per package against the same
+// PG, and multiple replicas boot against one DB too; goose's version table
+// makes re-runs no-ops but cannot guard two first-time runs racing on an
+// empty database (the loser dies on "relation already exists").
 func Migrate(ctx context.Context, db *sql.DB) error {
-	goose.SetBaseFS(migrationsFS)
-	goose.SetLogger(goose.NopLogger())
-	if err := goose.SetDialect("postgres"); err != nil {
-		return fmt.Errorf("store: dialect: %w", err)
+	locker, err := lock.NewPostgresSessionLocker()
+	if err != nil {
+		return fmt.Errorf("store: migrate: %w", err)
 	}
-	if err := goose.UpContext(ctx, db, "migrations"); err != nil {
+	migrations, err := fs.Sub(migrationsFS, "migrations")
+	if err != nil {
+		return fmt.Errorf("store: migrate: %w", err)
+	}
+	p, err := goose.NewProvider(goose.DialectPostgres, db, migrations,
+		goose.WithLogger(goose.NopLogger()),
+		goose.WithSessionLocker(locker),
+	)
+	if err != nil {
+		return fmt.Errorf("store: migrate: %w", err)
+	}
+	if _, err := p.Up(ctx); err != nil {
 		return fmt.Errorf("store: migrate: %w", err)
 	}
 	return nil

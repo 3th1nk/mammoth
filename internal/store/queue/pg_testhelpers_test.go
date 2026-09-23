@@ -1,11 +1,14 @@
 package queue
 
 import (
+	"context"
 	"database/sql"
 	"os"
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+
+	"github.com/3th1nk/mammoth/internal/store"
 )
 
 func testPGDSN() string { return os.Getenv("MAMMOTH_TEST_PG_DSN") }
@@ -21,20 +24,13 @@ func openTestPG(t *testing.T, dsn string) *sql.DB {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	if _, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS queue_messages (
-		    id               bigserial PRIMARY KEY,
-		    queue            text NOT NULL,
-		    payload          bytea NOT NULL,
-		    visible_at       timestamptz NOT NULL DEFAULT now(),
-		    lease_token      text,
-		    lease_expired_at timestamptz,
-		    delivery_count   int NOT NULL DEFAULT 0,
-		    dead             boolean NOT NULL DEFAULT false,
-		    dead_reason      text,
-		    enqueued_at      timestamptz NOT NULL DEFAULT now()
-		)`); err != nil {
-		t.Fatalf("ensure schema: %v", err)
+	// Schema via store.Migrate, not a hand-copied DDL: a copy drifts from
+	// migration 00001, and a bare CREATE TABLE racing store's goose run (the
+	// two test binaries start concurrently under `go test ./...`) is the
+	// "relation already exists" CI failure. Migrate's advisory lock
+	// serializes the two migrators.
+	if err := store.Migrate(context.Background(), db); err != nil {
+		t.Fatalf("migrate: %v", err)
 	}
 	return db
 }

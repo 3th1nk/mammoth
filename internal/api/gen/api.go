@@ -1656,6 +1656,7 @@ type Job struct {
 
 // JobCreate defines model for JobCreate.
 type JobCreate struct {
+	// Action Required for `power` jobs (the BMC action to run on each target); optional for `discover` (defaults to `probe: auto`); ignored for `install`.
 	Action  *ActionRequest `json:"action,omitempty"`
 	Policy  *Policy        `json:"policy,omitempty"`
 	Spec    *InstallSpec   `json:"spec,omitempty"`
@@ -1758,7 +1759,9 @@ type Machine struct {
 type MachineCreate struct {
 	Bmc    BMC                `json:"bmc"`
 	Labels *map[string]string `json:"labels,omitempty"`
-	Ssh    *MachineSSH        `json:"ssh,omitempty"`
+
+	// Ssh In-band addressing; required for partition-level discovery.
+	Ssh *MachineSSH `json:"ssh,omitempty"`
 
 	// SshCredentialId Credential for in-band (SSH) probes; optional.
 	SshCredentialId *CredentialId `json:"ssh_credential_id,omitempty"`

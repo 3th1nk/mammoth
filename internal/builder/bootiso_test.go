@@ -1,6 +1,11 @@
 package builder
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,5 +139,44 @@ func TestRewriteIsohybridMbr(t *testing.T) {
 	got = rewriteIsohybridMbr([]string{"-isohybrid-mbr", iv, "-b", "isolinux/isolinux.bin"}, work, "")
 	if len(got) != 2 {
 		t.Errorf("interval drop: got %v", got)
+	}
+}
+
+// image.checksum enforcement (docs/04-install-spec.md §5): a mismatch is
+// rejected AND evicts the cached bytes (a poisoned entry would otherwise
+// fail every later stage too), a match is memoized per path+size+mtime,
+// and the checksum shape itself is validated before any hashing.
+func TestEnsureISOVerified(t *testing.T) {
+	payload := []byte("mammoth-fake-iso-payload")
+	sum := sha256.Sum256(payload)
+	want := "sha256:" + hex.EncodeToString(sum[:])
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer srv.Close()
+	cache := t.TempDir()
+	url := srv.URL + "/disk.iso"
+
+	if _, err := EnsureISOVerified(context.Background(), url, "sha256:"+strings.Repeat("0", 64), cache); err == nil {
+		t.Fatal("expected checksum mismatch rejection")
+	}
+	if entries, _ := os.ReadDir(cache); len(entries) != 0 {
+		t.Fatalf("mismatched cache entry not evicted: %v", entries)
+	}
+
+	p1, err := EnsureISOVerified(context.Background(), url, want, cache)
+	if err != nil {
+		t.Fatalf("verified fetch: %v", err)
+	}
+	p2, err := EnsureISOVerified(context.Background(), url, want, cache)
+	if err != nil {
+		t.Fatalf("re-fetch (memoized verify): %v", err)
+	}
+	if p1 != p2 {
+		t.Fatalf("cache key drifted: %q vs %q", p1, p2)
+	}
+
+	if _, err := EnsureISOVerified(context.Background(), url, "md5:abc", cache); err == nil {
+		t.Fatal("expected checksum-shape rejection")
 	}
 }

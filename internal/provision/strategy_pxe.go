@@ -41,7 +41,7 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 	if err := requireDiskHeadroom(e.BootTreeDir, 3<<30); err != nil {
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false, "%s", err.Error())
 	}
-	distroISO, err := builder.EnsureISO(ctx, b.Spec.Image.Source, e.MediaDir)
+	distroISO, err := builder.EnsureISOVerified(ctx, b.Spec.Image.Source, b.Spec.Image.Checksum, e.MediaDir)
 	if err != nil {
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 			"distro ISO fetch failed: %s", err.Error())

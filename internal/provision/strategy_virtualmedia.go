@@ -33,7 +33,7 @@ func (s *virtualMediaStrategy) prepare(ctx context.Context, b *bootSession) erro
 	// can never shadow a boot image).
 	mediaFile := filepath.Join("boot", fmt.Sprintf("boot-%s.iso", ictx.Token))
 	mediaURI := mediaURIFor(e.MediaBaseURI, mediaFile)
-	distroISO, err := builder.EnsureISO(ctx, b.Spec.Image.Source, e.MediaDir)
+	distroISO, err := builder.EnsureISOVerified(ctx, b.Spec.Image.Source, b.Spec.Image.Checksum, e.MediaDir)
 	if err != nil {
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 			"distro ISO fetch failed: %s", err.Error())

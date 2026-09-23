@@ -101,3 +101,80 @@ func TestPlanInstallRejectionIsClassified(t *testing.T) {
 		t.Fatalf("code = %q, want LAYOUT_DISK_NOT_FOUND", ci.Code)
 	}
 }
+
+// storage.root_device_hints floors every selector pool BEFORE the size pick
+// (docs/04-install-spec.md §5.1 — the disambiguation backstop); alignment is
+// enum-validated and advisory. Both flow through the same classified errors
+// the API maps to 422s.
+func TestPlanInstallRootDeviceHintsAndAlignment(t *testing.T) {
+	reg := windowsPlanRegistry(t)
+	hw := &bmc.HardwareView{Disks: []bmc.DiskView{
+		{Name: "sda", Protocol: "nvme", SizeBytes: 64 << 30},
+		{Name: "sdb", Protocol: "nvme", SizeBytes: 480 << 30},
+		// Redfish-blind stacks can hide capacity — an unknown size must
+		// not fail the floor.
+		{Name: "sdc", Protocol: "raid"},
+	}}
+	spec := func(storage string) json.RawMessage {
+		return json.RawMessage(`{
+		  "image": {"source": "file:///x/os.iso", "distro": "windows2019"},
+		  "storage": {` + storage + `"disks": [{"select": {"match": {"type": "nvme", "size": "largest"}}, "wipe": true, "partitions": [
+		    {"size": "300M", "fs": "vfat", "mount": "/boot/efi", "flags": ["esp"]},
+		    {"size": "rest", "fs": "ntfs", "mount": "/"}]}]},
+		  "identity": {"hostname_pattern": "n1"},
+		  "boot": {"strategy": "virtual_media"}
+		}`)
+	}
+	codeOf := func(err error) string {
+		t.Helper()
+		ci, ok := AsClassified(err)
+		if !ok {
+			t.Fatalf("rejection is not classified: %v (%T)", err, err)
+		}
+		return ci.Code
+	}
+
+	plan, err := PlanInstall(context.Background(), spec(`"root_device_hints": {"min_size_gb": 100}, `), hw, reg)
+	if err != nil {
+		t.Fatalf("floored plan: %v", err)
+	}
+	if plan.BootDrive != "sdb" {
+		t.Fatalf("boot_drive = %q, want sdb (the floor must keep the 64G stick from winning largest)", plan.BootDrive)
+	}
+
+	_, err = PlanInstall(context.Background(), spec(`"root_device_hints": {"min_size_gb": 1024}, `), hw, reg)
+	if codeOf(err) != "LAYOUT_DISK_NOT_FOUND" {
+		t.Fatalf("starved floor code = %v, want LAYOUT_DISK_NOT_FOUND", err)
+	}
+
+	_, err = PlanInstall(context.Background(), spec(`"alignment": "1m", `), hw, reg)
+	if codeOf(err) != "SCHEMA_INVALID_STORAGE" {
+		t.Fatalf("bad alignment code = %v, want SCHEMA_INVALID_STORAGE", err)
+	}
+	_, err = PlanInstall(context.Background(), spec(`"root_device_hints": {"min_size_gb": 0}, `), hw, reg)
+	if codeOf(err) != "SCHEMA_INVALID_STORAGE" {
+		t.Fatalf("non-positive floor code = %v, want SCHEMA_INVALID_STORAGE", err)
+	}
+
+	if _, err := PlanInstall(context.Background(), spec(`"alignment": "4k", `), hw, reg); err != nil {
+		t.Fatalf("advisory alignment must plan clean: %v", err)
+	}
+
+	// unknown-capacity disk (Redfish-blind) survives the floor: the raid
+	// selector's pool is sdc alone, floor or not.
+	raidSpec := json.RawMessage(`{
+	  "image": {"source": "file:///x/os.iso", "distro": "windows2019"},
+	  "storage": {"root_device_hints": {"min_size_gb": 100}, "disks": [{"select": {"match": {"protocol": "raid"}}, "wipe": true, "partitions": [
+	    {"size": "300M", "fs": "vfat", "mount": "/boot/efi", "flags": ["esp"]},
+	    {"size": "rest", "fs": "ntfs", "mount": "/"}]}]},
+	  "identity": {"hostname_pattern": "n1"},
+	  "boot": {"strategy": "virtual_media"}
+	}`)
+	plan, err = PlanInstall(context.Background(), raidSpec, hw, reg)
+	if err != nil {
+		t.Fatalf("unknown-size disk under floor: %v", err)
+	}
+	if plan.BootDrive != "sdc" {
+		t.Fatalf("boot_drive = %q, want sdc", plan.BootDrive)
+	}
+}

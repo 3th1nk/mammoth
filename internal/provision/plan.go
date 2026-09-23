@@ -17,7 +17,6 @@ package provision
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"syscall"
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
@@ -41,13 +40,16 @@ func PlanInstall(ctx context.Context, specJSON json.RawMessage, hw *bmc.Hardware
 	if err != nil {
 		return nil, classifiedErr("SCHEMA_UNKNOWN_DISTRO", false, "%s", err.Error())
 	}
+	if err := validateStorageExtras(&spec); err != nil {
+		return nil, err
+	}
 
 	var warnings []string
 	if hw == nil || len(hw.Disks) == 0 {
 		warnings = append(warnings, "machine has no hardware inventory; selectors cannot be validated here — run discover first")
 	}
 
-	resolved, err := planResolveDisks(spec.Storage.Disks, hw)
+	resolved, err := planResolveDisks(spec.Storage.Disks, spec.minDeviceSizeGB(), hw)
 	if err != nil {
 		return nil, err
 	}
@@ -149,24 +151,16 @@ func planPartitions(parts []render.ResolvedPartition) []gen.InstallPlanPartition
 }
 
 // planResolveDisks mirrors verify_layout's storage resolution for the plan
-// view (same selector semantics, same error codes).
-func planResolveDisks(disks []storageDiskView, hw *bmc.HardwareView) ([]render.ResolvedDisk, error) {
+// view (same selector semantics, same error codes). minSizeGB is the
+// storage.root_device_hints floor — nil when the spec declares none.
+func planResolveDisks(disks []storageDiskView, minSizeGB *int, hw *bmc.HardwareView) ([]render.ResolvedDisk, error) {
 	resolved := make([]render.ResolvedDisk, 0, len(disks))
 	used := map[string]int{}
 	for i, d := range disks {
 		match := d.Select.Match
 		var pool []bmc.DiskView
 		for _, hd := range hw.Disks {
-			if match.Serial != "" && hd.Serial != match.Serial {
-				continue
-			}
-			if match.Type != "" && !diskTypeMatches(match.Type, hd) {
-				continue
-			}
-			if match.Protocol != "" && !strings.EqualFold(match.Protocol, hd.Protocol) {
-				continue
-			}
-			if match.Removable != nil && hd.Removable != *match.Removable {
+			if !diskMatchesSelector(match, minSizeGB, hd) {
 				continue
 			}
 			pool = append(pool, hd)

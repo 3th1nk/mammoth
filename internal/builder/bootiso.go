@@ -383,6 +383,72 @@ func EnsureISO(ctx context.Context, sourceURL, cacheDir string) (string, error) 
 	return dest, f.Close()
 }
 
+// isoVerified memoizes checksum passes keyed by path+size+mtime: the key
+// changes whenever the bytes change, so a replaced cache entry re-verifies
+// while steady-state calls (the pipeline hits EnsureISO at several stages)
+// never re-hash multi-gigabyte media.
+var isoVerified sync.Map // "path:size:mtime" -> struct{}
+
+func isoVerifiedKey(path string) (string, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s:%d:%d", path, fi.Size(), fi.ModTime().UnixNano()), nil
+}
+
+func sha256File(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		f.Close()
+		return "", fmt.Errorf("builder: hash %s: %w", path, err)
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+// EnsureISOVerified is EnsureISO plus spec checksum enforcement
+// (docs/04-install-spec.md §5 image.checksum — "sha256:<hex>", the only
+// algorithm the contract ships). Local (non-cache) sources are verified in
+// place and never removed; a mismatch under cacheDir evicts the cached file
+// so the next fetch starts from clean bytes instead of a poisoned entry.
+func EnsureISOVerified(ctx context.Context, sourceURL, checksum, cacheDir string) (string, error) {
+	path, err := EnsureISO(ctx, sourceURL, cacheDir)
+	if err != nil {
+		return "", err
+	}
+	if checksum == "" {
+		return path, nil
+	}
+	algo, want, ok := strings.Cut(checksum, ":")
+	if !ok || algo != "sha256" || len(want) != 64 {
+		return "", fmt.Errorf("builder: image.checksum %q: only \"sha256:<64 hex chars>\" is supported", checksum)
+	}
+	key, kerr := isoVerifiedKey(path)
+	if kerr != nil {
+		return "", kerr
+	}
+	if _, done := isoVerified.Load(key); done {
+		return path, nil
+	}
+	got, herr := sha256File(path)
+	if herr != nil {
+		return "", herr
+	}
+	if !strings.EqualFold(got, want) {
+		if strings.HasPrefix(path, cacheDir) {
+			_ = os.Remove(path)
+		}
+		return "", fmt.Errorf("builder: checksum mismatch for %s: want %s got sha256:%s", sourceURL, checksum, got)
+	}
+	isoVerified.Store(key, struct{}{})
+	return path, nil
+}
+
 // isoFetchLocks serializes cache writes per destination: concurrent tasks
 // fetching the same source would otherwise interleave appends into one file
 // and leave a corrupt cache (resume offsets from two readers disagree).

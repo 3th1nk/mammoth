@@ -114,6 +114,11 @@ type installSpecView struct {
 	Storage struct {
 		Disks []storageDiskView `json:"disks"`
 		Raid  []raidSpecView    `json:"raid"`
+		// Alignment is enum-validated and ADVISORY: every installer aligns
+		// natively (anaconda/curtin 1 MiB, WinPE 1 MiB), so nothing
+		// forwards it (docs/04-install-spec.md §5.1).
+		Alignment       string               `json:"alignment"`
+		RootDeviceHints *rootDeviceHintsView `json:"root_device_hints"`
 	} `json:"storage"`
 	Identity struct {
 		HostnamePattern string `json:"hostname_pattern"`
@@ -197,19 +202,39 @@ func (n networkView) toRender() render.NetworkEntry {
 }
 
 type storageDiskView struct {
-	Select struct {
-		Match struct {
-			Serial    string `json:"serial"`
-			Type      string `json:"type"`
-			Size      string `json:"size"`
-			Protocol  string `json:"protocol"`
-			Removable *bool  `json:"removable"`
-		} `json:"match"`
-	} `json:"select"`
+	Select     selectView      `json:"select"`
 	Wipe       bool            `json:"wipe"`
 	Keep       string          `json:"keep"`
 	Preserve   []preserveView  `json:"preserve"`
 	Partitions []partitionView `json:"partitions"`
+}
+
+// selectView / selectMatchView carry the selector rules (docs/04-install-spec.md
+// §5.1); named so the exact-match predicate can be shared by both resolvers.
+type selectView struct {
+	Match selectMatchView `json:"match"`
+}
+
+type selectMatchView struct {
+	Serial    string `json:"serial"`
+	Type      string `json:"type"`
+	Size      string `json:"size"`
+	Protocol  string `json:"protocol"`
+	Removable *bool  `json:"removable"`
+}
+
+// rootDeviceHintsView is storage.root_device_hints — the disambiguation
+// backstop applied to every selector pool before size picks.
+type rootDeviceHintsView struct {
+	MinSizeGB *int `json:"min_size_gb,omitempty"`
+}
+
+// minDeviceSizeGB is the selector-pool floor the hints declare (nil = no floor).
+func (s *installSpecView) minDeviceSizeGB() *int {
+	if s.Storage.RootDeviceHints != nil {
+		return s.Storage.RootDeviceHints.MinSizeGB
+	}
+	return nil
 }
 
 type raidSpecView struct {
@@ -273,7 +298,28 @@ func (e *Executor) loadSpec(ctx context.Context, task *store.Task, job *store.Jo
 	if spec.Image.Distro == "" {
 		return nil, classifiedErr("SCHEMA_INVALID_SPEC", false, "spec image.distro missing")
 	}
+	if err := validateStorageExtras(&spec); err != nil {
+		return nil, err
+	}
 	return &spec, nil
+}
+
+// validateStorageExtras enforces the storage-level optional semantics the
+// view parses: alignment is enum-checked and advisory (every installer
+// aligns natively — anaconda/curtin 1 MiB, WinPE 1 MiB — so nothing
+// forwards it), and the hints floor must be a positive size.
+func validateStorageExtras(spec *installSpecView) error {
+	switch spec.Storage.Alignment {
+	case "", "4k", "512e":
+	default:
+		return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+			"storage.alignment %q: must be \"4k\" or \"512e\"", spec.Storage.Alignment)
+	}
+	if h := spec.Storage.RootDeviceHints; h != nil && h.MinSizeGB != nil && *h.MinSizeGB <= 0 {
+		return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+			"storage.root_device_hints.min_size_gb: must be > 0")
+	}
+	return nil
 }
 
 // ── stage 1: verify_layout (docs/06-install-pipeline.md §1) ─────────────────
@@ -314,24 +360,17 @@ func (e *Executor) verifyLayout(ctx context.Context, task *store.Task, job *stor
 
 	resolved := make([]render.ResolvedDisk, 0, len(spec.Storage.Disks))
 	used := map[string]int{} // device → spec disk index (overlap detection)
+	minSizeGB := spec.minDeviceSizeGB()
 	for i, d := range spec.Storage.Disks {
 		match := d.Select.Match
 		// Selector fields combine (docs/04-install-spec.md §5.1): exact
-		// fields filter first; `size` then picks the largest/smallest
-		// WITHIN the filtered pool (e.g. type=nvme + size=largest means
-		// the largest NVMe, not the largest disk overall).
+		// fields filter first (plus the root_device_hints floor); `size`
+		// then picks the largest/smallest WITHIN the filtered pool (e.g.
+		// type=nvme + size=largest means the largest NVMe, not the largest
+		// disk overall).
 		var pool []bmc.DiskView
 		for _, hd := range hw.Disks {
-			if match.Serial != "" && hd.Serial != match.Serial {
-				continue
-			}
-			if match.Type != "" && !diskTypeMatches(match.Type, hd) {
-				continue
-			}
-			if match.Protocol != "" && !strings.EqualFold(match.Protocol, hd.Protocol) {
-				continue
-			}
-			if match.Removable != nil && hd.Removable != *match.Removable {
+			if !diskMatchesSelector(match, minSizeGB, hd) {
 				continue
 			}
 			pool = append(pool, hd)
@@ -597,6 +636,33 @@ func diskTypeMatches(want string, d bmc.DiskView) bool {
 	}
 }
 
+// diskMatchesSelector applies the selector's exact fields plus the
+// storage-level root_device_hints floor (docs/04-install-spec.md §5.1 — the
+// disambiguation backstop that keeps a small removable stick from winning a
+// size:largest election). Unknown sizes (0 bytes: Redfish stacks that hide
+// capacity) never fail the floor. The size pick itself stays with the
+// caller: largest/smallest runs WITHIN the filtered pool. Shared by the
+// verify_layout resolver and the install-plan mirror so the semantics
+// cannot drift.
+func diskMatchesSelector(m selectMatchView, minSizeGB *int, hd bmc.DiskView) bool {
+	if m.Serial != "" && hd.Serial != m.Serial {
+		return false
+	}
+	if m.Type != "" && !diskTypeMatches(m.Type, hd) {
+		return false
+	}
+	if m.Protocol != "" && !strings.EqualFold(m.Protocol, hd.Protocol) {
+		return false
+	}
+	if m.Removable != nil && hd.Removable != *m.Removable {
+		return false
+	}
+	if minSizeGB != nil && hd.SizeBytes > 0 && hd.SizeBytes < int64(*minSizeGB)<<30 {
+		return false
+	}
+	return true
+}
+
 func bestDiskBySize(disks []bmc.DiskView, which string) *bmc.DiskView {
 	var best *bmc.DiskView
 	for i := range disks {
@@ -772,7 +838,7 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 			// (sources/install.wim), and the agent pulls the ESP boot files
 			// (fallback loader + media BCD template) from the same tree —
 			// the sha-addressed cache the wimboot path shares.
-			distroISO, ferr := builder.EnsureISO(ctx, spec.Image.Source, e.MediaDir)
+			distroISO, ferr := builder.EnsureISOVerified(ctx, spec.Image.Source, spec.Image.Checksum, e.MediaDir)
 			if ferr != nil {
 				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 					"distro ISO fetch failed: %s", ferr.Error())
@@ -826,7 +892,7 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 			// unpack) sits at a sha-addressed path below the share root; the
 			// image is located and hashed here so the path is FINAL at render
 			// time (EnsureISO is an idempotent cache; prepare reuses both).
-			distroISO, ferr := builder.EnsureISO(ctx, spec.Image.Source, e.MediaDir)
+			distroISO, ferr := builder.EnsureISOVerified(ctx, spec.Image.Source, spec.Image.Checksum, e.MediaDir)
 			if ferr != nil {
 				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 					"distro ISO fetch failed: %s", ferr.Error())
@@ -862,7 +928,7 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 			// (the d-i mirror rides the preseed body, casper's nfsroot the
 			// kernel arguments) — so the image is located and hashed here.
 			// EnsureISO is an idempotent cache; prepare reuses both.
-			distroISO, ferr := builder.EnsureISO(ctx, spec.Image.Source, e.MediaDir)
+			distroISO, ferr := builder.EnsureISOVerified(ctx, spec.Image.Source, spec.Image.Checksum, e.MediaDir)
 			if ferr != nil {
 				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 					"distro ISO fetch failed: %s", ferr.Error())
@@ -1268,7 +1334,7 @@ func (e *Executor) armWindowsBcdbootStage(ctx context.Context, task *store.Task,
 	if err != nil {
 		return err
 	}
-	distroISO, err := builder.EnsureISO(ctx, spec.Image.Source, e.MediaDir)
+	distroISO, err := builder.EnsureISOVerified(ctx, spec.Image.Source, spec.Image.Checksum, e.MediaDir)
 	if err != nil {
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 			"boot-two distro ISO fetch failed: %s", err.Error())

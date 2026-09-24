@@ -19,7 +19,13 @@ type Policy struct {
 	OnTaskFailure      string `json:"on_task_failure,omitempty"` // continue | abort_batch
 	VerifyLayout       *bool  `json:"verify_layout,omitempty"`
 	TaskTimeoutSeconds int    `json:"task_timeout_seconds,omitempty"`
+	// HealthGate: off | report | block — the pre-install hardware health
+	// gate (docs/04-install-spec.md §5.6). Empty reads as off.
+	HealthGate string `json:"health_gate,omitempty"`
 }
+
+// GateHealth reports whether the policy intercepts unhealthy-disk installs.
+func (p Policy) HealthGateBlocks() bool { return p.HealthGate == "block" }
 
 func (p Policy) AbortBatch() bool { return p.OnTaskFailure == "abort_batch" }
 

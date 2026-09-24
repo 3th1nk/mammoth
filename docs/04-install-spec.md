@@ -89,6 +89,17 @@ POST /api/v1/credentials
   "spec": { /* 同 §5,不含 targets */ } }
 ```
 
+### 4.1 工件库(image registry)
+
+`POST /api/v1/images` 注册发行版 ISO:`source_url` + `sha256`(64 hex,
+必填——校验和是门禁不是元数据)→ fetch worker 串行拉取进内容寻址缓存
+(`MediaDir/images/<sha256>.iso`,digest 重复的注册共享同一文件,下载中
+失败/损坏一律不落缓存,事件 `image.ready`/`image.failed`)。安装 spec 的
+`image.id` 引用注册件,提交时解析为缓存路径 + 注册 digest **快照进 job
+spec**——此后注册件的删除不影响已提交作业;`image.checksum` 另行声明时
+与注册 digest 不一致即 422。注册面不做 yum/apt 源站(那是另一个产品的
+活),mammoth 只管"工件管理 + 源指配"。
+
 ## 5. Install Spec
 
 安装意图的完整契约。`template` 持有它,job 可内联、可 `template_id` 引用 + 覆盖。
@@ -109,8 +120,9 @@ POST /api/v1/jobs
   },
   "spec": {
     "image": {
-      "source": "https://mirror.example/rocky9.iso",   // 必填;file/http(s)/nfs URI
-      "checksum": "sha256:9f86d0...",
+      "source": "https://mirror.example/rocky9.iso",   // 与 id 二选一;file/http(s)/nfs URI
+      "id": "img_01",                       // 工件库注册件(POST /images);与 source 互斥
+      "checksum": "sha256:9f86d0...",       // id 引用时缺省取注册件 digest,冲突即拒
       "distro": "rocky9"                  // 显式声明;不做隐式探测(见 §6 取舍)
     },
     "storage":   { /* §5.1 */ },
@@ -276,6 +288,59 @@ spec 是发行版无关的声明;方言不能落地的项在**渲染期显式拒
 
 边界:agent 通路 PXE-only、UEFI-only、仅 inbox 驱动机型(wimlib 只铺文件,
 不做驱动服务化)。两通路回调面/verify 语义完全一致,可按机型混用。
+
+### 5.5 package_source — 装机后的软件源指配
+
+```jsonc
+{
+  "package_source": {
+    "repos": [
+      { "name": "internal",                       // [A-Za-z0-9._-]+,成为文件名后缀
+        "url": "http://mirrors.int/rocky9",       // http(s)
+        "gpg_key_url": "http://mirrors.int/key.asc",
+        "suite": "9.4",                           // apt 侧;缺省取发行版代号(jammy/noble/trixie…)
+        "components": "main" }                    // apt 侧;缺省 main
+    ]
+  }
+}
+```
+
+离线机房刚需:装机完成即指向内网源,不依赖厂商公网源。渲染按方言分型——
+
+| 方言 | 落地形态 |
+|------|----------|
+| rocky9(anaconda) | 安装期 `repo --name=mammoth-<name> --baseurl=` 指令 + `%post` 落 `/etc/yum.repos.d/mammoth-<name>.repo`(带 key → `gpgcheck=1`;不带 → `gpgcheck=0`) |
+| ubuntu22/24(autoinstall) | late-commands 落 deb822 `/etc/apt/sources.list.d/mammoth-<name>.sources`;key 由安装器环境 python3 取到 `/target/usr/share/keyrings/`,`Signed-By` 指认;无 key → `Trusted: yes` |
+| debian13(d-i) | post-install 脚本落 `/target/etc/apt/sources.list.d/mammoth-<name>.list`;key 由 busybox wget 取到目标 keyring,`signed-by` 内联;无 key → `trusted=yes` |
+| windows | **渲染即拒**——无 yum/apt 语义,repo 声明写进 post_install 脚本 |
+
+信任是显式的:声明了 `gpg_key_url` 的 repo 渲染签名校验,没声明的渲染
+trusted(操作者故意为之,渲染文件如实记录)。提交期校验 name 字符集与
+URL scheme——name 会成为配置文件名,字符集就是注入边界。
+
+### 5.6 policy.health_gate — 装前硬件健康门禁
+
+```jsonc
+"policy": {
+  "health_gate": "off"        // off | report | block(缺省 off)
+}
+```
+
+固件门禁的同构延伸:坏盘在擦盘**之前**拦下,不是之后发现。数据源是
+ramdisk 探针的快照——探针环境 best-effort 从引导介质自身 /apks 仓安装
+smartmontools/nvme(载体带则装,不带则跳过,启动零风险),对每块盘采集
+`smartctl -H` overall-health / NVMe `critical_warning`,快照 disks 项
+携带 `"health": "pass" | "fail"`。
+
+| 档位 | 行为 |
+|------|------|
+| `off`(默认) | 不检查 |
+| `report` | install-plan 的 warnings 列出健康失败的盘(计划本就是提交前看的面);提交不拦 |
+| `block` | 提交期拦截:最近快照存在 `health:"fail"` 即 422 `HEALTH_GATE_FAILED`(带 serial 名单);换盘或显式降档后重提 |
+
+**只对有据可查的坏盘拦截**:快照缺失、载体没带工具、盘不报健康——一律
+视为无数据,不拦不告。"无证据不发明结论"从探针采集(echo 空)到门禁
+判定(只认显式 fail)贯穿同一条线。
 
 ## 6. 关键取舍
 

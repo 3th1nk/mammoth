@@ -365,6 +365,70 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
 
+  /api/v1/machines/{id}/health:
+    get:
+      operationId: getMachineHealth
+      tags: [machines]
+      summary: Live health snapshot of the controller
+      description: |
+        Samples the controller's sensors synchronously (the same
+        out-of-band path the actions use; docs/07-bmc.md §6.3): fans,
+        temperatures, power supplies, voltages — each with a health state —
+        plus the chassis power state and the overall verdict (worst of all
+        reported states; unreadable sensors are unknown, never a
+        downgrade). Requires a controller with the health capability
+        (redfish); others answer BMC_UNSUPPORTED.
+      parameters:
+        - $ref: '#/components/parameters/machineId'
+      responses:
+        '200':
+          description: Current health snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '502':
+          description: BMC error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /api/v1/machines/{id}/sel:
+    get:
+      operationId: getMachineSEL
+      tags: [machines]
+      summary: Live system event log of the controller
+      description: |
+        Reads the controller's system event log synchronously (docs
+        07-bmc.md §6.3) — the rescue-room record of what happened before
+        the OS died. Newest first, capped at the 500 most recent records.
+        Requires a controller with the SEL capability (redfish); others
+        answer BMC_UNSUPPORTED.
+      parameters:
+        - $ref: '#/components/parameters/machineId'
+      responses:
+        '200':
+          description: Most recent log entries, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SELView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '502':
+          description: BMC error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
   /api/v1/machines/{id}/console:
     parameters:
       - $ref: '#/components/parameters/machineId'
@@ -1005,6 +1069,82 @@ paths:
             text/event-stream:
               schema:
                 $ref: '#/components/schemas/Event'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/images:
+    post:
+      operationId: createImage
+      tags: [images]
+      summary: Register an image artifact and start the fetch
+      description: |
+        Registers a distro ISO in the artifact library (docs/09-roadmap.md
+        下一阶段 6). The fetch worker downloads the source into the
+        content-addressed cache and enforces the registered sha256 — a
+        mismatched download is never cached. Registration of bytes the
+        library already holds (same digest, ready) completes immediately by
+        sharing the cached file. Install specs reference the registration
+        via image.id instead of a bare source URL.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImageCreate'
+      responses:
+        '202':
+          description: Registration accepted, fetch queued (or completed by
+            digest dedupe — check state).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Image'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+    get:
+      operationId: listImages
+      tags: [images]
+      summary: List registered images (newest first)
+      responses:
+        '200':
+          description: Image page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageList'
+
+  /api/v1/images/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getImage
+      tags: [images]
+      summary: Get one image registration
+      responses:
+        '200':
+          description: The registration with its fetch state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Image'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: deleteImage
+      tags: [images]
+      summary: Delete an image registration
+      description: |
+        Removes the registration. The cached file is reclaimed when no other
+        registration shares its digest; install jobs already holding a
+        resolved spec snapshot are unaffected (they reference the file, not
+        the row).
+      responses:
+        '204':
+          description: Registration deleted.
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -1728,6 +1868,14 @@ components:
                 properties:
                   serial:
                     type: string
+              health:
+                type: string
+                description: |
+                  Disk health from the ramdisk probe's tooling pass
+                  (smartctl overall-health / nvme critical_warning): pass |
+                  fail. Absent when the carrier carried no health tooling or
+                  the device reports nothing — absence is never a verdict.
+                enum: [pass, fail]
               table:
                 type: string
                 enum: [gpt, mbr]
@@ -1809,6 +1957,70 @@ components:
           type: string
           description: ssd | hdd | unknown.
         protocol:
+          type: string
+
+    HealthView:
+      type: object
+      required: [health, sensors]
+      properties:
+        power_state:
+          $ref: '#/components/schemas/PowerState'
+        health:
+          type: string
+          description: Overall verdict — the worst state across the chassis
+            and every sensor; unknown when nothing reported a readable
+            state (unknown never drags a good verdict down).
+          enum: [ok, warning, critical, unknown]
+        sensors:
+          type: array
+          items:
+            $ref: '#/components/schemas/SensorEntry'
+
+    SensorEntry:
+      type: object
+      required: [name, state]
+      properties:
+        name:
+          type: string
+          description: The controller's presentation name for the sensor.
+        reading:
+          type: number
+          format: double
+          description: Numeric sample; absent for presence-only sensors.
+        unit:
+          type: string
+          description: RPM | Celsius | Watts | Volts | Percent.
+        state:
+          type: string
+          description: Redfish health descriptor; absent reads unknown.
+          enum: [ok, warning, critical, unknown]
+
+    SELView:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          description: Most recent records, newest first (capped at 500).
+          items:
+            $ref: '#/components/schemas/SELEntry'
+
+    SELEntry:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+          description: The controller's record id.
+        timestamp:
+          type: string
+          description: Creation time as the controller reported it (RFC 3339
+            on spec-conformant firmware).
+        severity:
+          type: string
+          description: Vendor severity normalized to the contract vocabulary.
+          enum: [ok, warning, critical, unknown]
+        message:
           type: string
 
     ActionEraseDrives:
@@ -2350,10 +2562,20 @@ components:
               type: string
               format: uri
               description: Installer image URL (file, http(s) or nfs URI reachable
-                from the engine host). Required.
+                from the engine host). Mutually exclusive with id — exactly
+                one of the two is required.
+            id:
+              type: string
+              description: Registered image id from the artifact library
+                (POST /images). The engine resolves it to the checksum-gated
+                local cache file at submit time and snapshots the resolution
+                into the job spec — later registration deletes do not affect
+                submitted jobs. Mutually exclusive with source.
             checksum:
               type: string
-              description: e.g. `sha256:9f86d0...`.
+              description: e.g. `sha256:9f86d0...`. With id, defaults to the
+                registration's digest; a conflicting explicit checksum is
+                rejected at submit.
             distro:
               type: string
               description: Explicitly declared (no implicit detection), e.g. rocky9.
@@ -2371,8 +2593,45 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ScriptSpec'
+        package_source:
+          $ref: '#/components/schemas/PackageSourceSpec'
         boot:
           $ref: '#/components/schemas/BootSpec'
+
+    PackageSourceSpec:
+      type: object
+      description: Declared package repositories (docs/04-install-spec.md §5.5)
+        — written into the installed system's package manager config by the
+        dialect renderer; windows rejects the block at render time.
+      required: [repos]
+      properties:
+        repos:
+          type: array
+          items:
+            type: object
+            required: [name, url]
+            properties:
+              name:
+                type: string
+                pattern: '^[A-Za-z0-9._-]+$'
+                description: Config-file suffix — the rendered file is
+                  mammoth-<name>.repo|.sources|.list.
+              url:
+                type: string
+                format: uri
+                description: http(s) repository base URL.
+              gpg_key_url:
+                type: string
+                format: uri
+                description: http(s) URL of the ASCII-armored signing key.
+                  A declared repo without one renders trusted — deliberate,
+                  recorded in the rendered file.
+              suite:
+                type: string
+                description: apt-side; defaults to the distro's archive codename.
+              components:
+                type: string
+                description: apt-side; defaults to "main".
 
     BootSpec:
       type: object
@@ -2423,6 +2682,19 @@ components:
           type: integer
           minimum: 1
           default: 3600
+        health_gate:
+          type: string
+          enum: [off, report, block]
+          default: off
+          description: |
+            Pre-install hardware health gate (docs/04-install-spec.md §5.6):
+            the machine's latest layout snapshot carries per-disk health from
+            the ramdisk probe (smartctl/nvme overall-health). off installs
+            regardless; report surfaces unhealthy disks in install-plan
+            warnings but never rejects; block rejects the submission (422
+            HEALTH_GATE_FAILED, unhealthy serials named) — only disks with an
+            explicit failed reading intercept; a machine with no snapshot or
+            no health data installs as usual.
 
     # ── jobs & tasks ───────────────────────────────────────────────────────
     JobType:
@@ -2723,6 +2995,72 @@ components:
         next_cursor:
           type: string
           nullable: true
+
+    ImageCreate:
+      type: object
+      required: [source_url, sha256]
+      properties:
+        name:
+          type: string
+          description: Operator-facing label (e.g. "rocky9.4-qa").
+        source_url:
+          type: string
+          format: uri
+          description: http(s) URL the fetch worker downloads from. Local
+            files belong in spec.source directly, not the library.
+        sha256:
+          type: string
+          description: The digest gate — hex, 64 chars. A download whose
+            digest differs is never cached; the registration is the proof.
+          pattern: '^[0-9a-f]{64}$'
+        distro:
+          type: string
+          description: Informational; the install spec still declares its own
+            image.distro.
+        version:
+          type: string
+          description: Informational.
+
+    Image:
+      type: object
+      required: [id, source_url, sha256, state, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        source_url:
+          type: string
+        sha256:
+          type: string
+        distro:
+          type: string
+        version:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+          description: Cached file size; set when ready.
+        state:
+          type: string
+          enum: [fetching, ready, failed]
+        error:
+          type: string
+          description: Failure reason when failed (checksum mismatch,
+            unreachable source).
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+        updated_at:
+          $ref: '#/components/schemas/Timestamp'
+
+    ImageList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Image'
 
     WebhookCreate:
       type: object

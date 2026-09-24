@@ -9,6 +9,7 @@
 package autoinstall
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -123,6 +124,35 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// ssh section does not reach it (the seed is gone by then), so the
 	// tolerance rides a dropped-in cloud-init override instead.
 	late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("mkdir -p /etc/cloud/cloud.cfg.d && printf 'ssh:\\n  emit_keys_to_console: false\\n' > /etc/cloud/cloud.cfg.d/99-mammoth.conf")))
+	// Declared package repos (docs/04-install-spec.md §5.5): the deb822
+	// entry lands in the target BEFORE the user scripts run (they may apt
+	// install against it). The signing key, when declared, is fetched by
+	// the installer environment's python3 (curl/wget are not guaranteed
+	// there — the completion callback relies on python3 for the same
+	// reason) to the target-side keyring the sources entry signs with.
+	for _, r := range in.PackageSource {
+		suite := r.Suite
+		if suite == "" {
+			suite = render.AptSuite(d.distro)
+		}
+		comps := r.Components
+		if comps == "" {
+			comps = "main"
+		}
+		signedBy := ""
+		if r.GPGKey != "" {
+			keyPath := fmt.Sprintf("/usr/share/keyrings/mammoth-%s.asc", r.Name)
+			fetch := fmt.Sprintf("import urllib.request; urllib.request.urlretrieve(%q, '/target%s')", r.GPGKey, keyPath)
+			late = append(late, "python3 -c "+quoteSh(fetch))
+			signedBy = "Signed-By: " + keyPath + "\n"
+		}
+		body := fmt.Sprintf("Types: deb\nURIs: %s\nSuites: %s\nComponents: %s\n%s%s",
+			r.URL, suite, comps, signedBy, trustedLine(r.GPGKey != ""))
+		name := fmt.Sprintf("mammoth-%s.sources", r.Name)
+		late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh(
+			"mkdir -p /etc/apt/sources.list.d && echo "+base64.StdEncoding.EncodeToString([]byte(body))+
+				" | base64 -d > /etc/apt/sources.list.d/"+name)))
+	}
 	for _, k := range in.SSHPublicKeys {
 		late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("mkdir -p /root/.ssh && echo "+quoteSh(k)+" >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys")))
 	}
@@ -773,4 +803,13 @@ func diskSizeOf(m render.MachineView, device string) int64 {
 		}
 	}
 	return 0
+}
+
+// trustedLine marks an unsigned declared repo trusted — the operator
+// declared it deliberately; the renderer records that in the sources entry.
+func trustedLine(keyed bool) string {
+	if keyed {
+		return ""
+	}
+	return "Trusted: yes\n"
 }

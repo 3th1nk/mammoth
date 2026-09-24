@@ -155,7 +155,13 @@
 >
 > **顺序按真机可得性重排(2026-09-18)**:当前仅一台真机(2288H V5),qemu/
 > fake 可先行项前置(agent 试点/BMC 读接口/声明化/逃生门/arm64 链路),
-> 强真机或外部条件依赖项显式隔离进第 6 项,不占当前序列。
+> 强真机或外部条件依赖项显式隔离进第 9 项,不占当前序列。
+>
+> **2026-09-24 增补(同赛道产品调研收敛)**:第 2 项追加健康面读能力
+> (HealthProvider + SELReader);新增第 6~8 项(镜像工件库 / 装后软件源
+> 渲染 / 装前硬件健康门禁)——全部 qemu/fake 可先行,不占真机窗口;
+> 明确不跟进:对外镜像源站、虚拟化管理、常驻带内故障感知、RBAC(超出
+> 单二进制引擎边界)。
 
 1. **agent initramfs 安装路径试点**(related-work §1 修正结论,提前:qemu
    全程可验且架构红利最大——减少未来所有发行版接入对真机联调的依赖面):
@@ -194,6 +200,18 @@
    单测(fake/redfish/provision)+ acceptance 冒烟全绿(422 门禁 /
    未知 serial 拒 / confirm 走通 / 事件落库)。真机回归:iBMC 对 LSI 卷
    的 secure erase 支持度未知,随把握窗口顺带测。
+   **健康面 HealthProvider + SELReader —— ✅ 已落地(2026-09-24,纯读
+   能力,fake 先行,真机随 2288H 窗口)**——可选能力接口 ×2(driver.go,固件清单同型):
+   `Health`(电源态 + 传感器表:风扇 RPM / 温度 / 电源瓦数 / 电压,各带
+   ok|warning|critical 态;overall 取 worst-of,chassis Status 一并计入,
+   absent/unknown 不拖累)+ `SELReader`(System Event Log 只读:
+   Managers→LogServices→Entries 宽容 walk,created 倒序,截断最近 500 条);
+   redfish 实装(取数器注入纯函数可测)+ fake 脚本化(SensorList/SELList
+   默认 plausible 集);契约新增两个活读端点 `GET /machines/{id}/health`、
+   `GET /machines/{id}/sel`(沿 bios/drives 同步读先例:422 缺能力 /
+   502 BMC 错,无持久化无轮询);IPMI 不实现——goipmi 命令栈无 SDR/SEL,
+   缺能力即端点 422,真机全走 redfish(先例:固件清单);周期带外巡检
+   (异常→事件→webhook)等真实需求触发再排,见第 9 项。
 3. ~~**发行版接入声明化**~~ **✅ 已评估并收敛(2026-09-18)**——曾全量
    落地 distros.json(12 发行版声明化),评估后同日 revert 收敛为类型化
    Go 注册表:接入成本在模板 Go + 真机验证而非注册面(三方言连环修为
@@ -256,7 +274,42 @@
    - 验证:qemu 应答受理层可先行(winpe 引导/语言页/回调链先例,
      compat/distros.md §windows);真机回归随已闭环的 windows 真机通路
      (agent apply ×5 轮,2026-09-22)。
-6. **等条件组(不排期,条件触发)**:
+6. **镜像工件库(image registry)**——**✅ 代码落地(2026-09-24;真机
+   无涉,acceptance 冒烟全绿)**(同赛道产品调研收敛为"工件管理 + 源指配"
+   两小块,不做对外镜像源站)——镜像注册
+   (`POST /images`:source_url + sha256 必填 + 发行版元数据可选)→
+   后台拉取队列落 `MediaDir/images/<sha256>.iso`(内容寻址,同 sha 多
+   注册共享同一文件,下载中重注册直接挂同队列)→ `spec.image.id` 引用
+   注册件(与 `source` 互斥,提交校验"二选一"),引用即校验:镜像必须
+   ready,注册 sha256 反哺既有 spec.image.checksum / EnsureISOVerified
+   门禁通路( spec 另带 checksum 时两者一致才放行);images 自带状态机
+   (fetching/ready/failed + 事件 image.ready/image.failed,自带 fetch
+   worker,不进机器 job 模型——webhook 投递器先例);删除清行,缓存
+   文件在无其他行引用时回收;
+7. **装后软件源渲染(package_source)**——**✅ 代码落地(2026-09-24,
+   四方言渲染测试全绿;真机回归随窗口)**(2026-09-24 立项,离线机房
+   刚需;渲染层 identity/access/scripts 同型扩展)——
+   `spec.package_source.repos[]`(name/url/gpg_key_url/suite/components,
+   suite 缺省取发行版代号 jammy/noble/trixie)按方言渲染:anaconda
+   `repo` 指令(装机期)+ %post 落 /etc/yum.repos.d(装机后,gpgcheck
+   按 key 有无)、autoinstall late-commands 落 deb822 sources.list.d
+   (key 由安装器环境 python3 取到 /target keyring,无 key 渲染
+   Trusted: yes)、d-i post-install 脚本落 sources.list.d(busybox wget
+   取 key,无 key 渲染 trusted=yes)、windows 渲染即拒(SupportNone
+   先例);name 字符集 + URL scheme 提交校验(name 成文件名,字符集即
+   注入边界);
+8. **装前硬件健康门禁**——**✅ 代码落地(2026-09-24,fake/PG 可验面
+   全绿;真机探针采集随 alpine 载体工具链窗口核验)**(2026-09-24 立项,
+   固件门禁模式同构延伸 + ramdisk 探针通路复用)——探针追加磁盘健康采集:启动期
+   best-effort 自引导介质自身 /apks 仓安装 smartmontools/nvme(--no-network,
+   载体带则装、不带则跳过,启动零风险),逐盘采集 smartctl -H
+   overall-health / NVMe critical_warning,快照 disks 项附 health:
+   pass|fail(工具缺失、设备不报一律留空,不假装健康)→ probe-report
+   落档(机器最近一次探针健康快照);提交侧 `policy.health_gate`
+   (off|report|block,默认 off):block 档在最近探针报告存在不健康盘
+   时 422 HEALTH_GATE_FAILED(带 serial 名单,探针报告缺失不拦——
+   门禁只对有据可查的坏盘拦截),report 档只落档不拦截;
+9. **等条件组(不排期,条件触发)**:
    - **UefiHttp**(Redfish HTTP Boot)——等多厂商真机(OEM URI 各异,单台
      华为验不出跨厂商);
    - **Windows unattend**——**v1 代码面就绪(2026-09-19,见 compat/distros.md

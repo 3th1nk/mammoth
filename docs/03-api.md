@@ -41,9 +41,16 @@ GET    /api/v1/machines/{id}/current-tasks      # 未完结任务视图(装 busy
 GET    /api/v1/machines/{id}/layout
 GET    /api/v1/machines/{id}/drives             # 控制器实时物理盘表(带外同步读)
 GET    /api/v1/machines/{id}/bios               # 控制器实时 BIOS 属性表(带外同步读)
+GET    /api/v1/machines/{id}/health             # 控制器实时健康快照:传感器 + 电源态 + overall(带外同步读)
+GET    /api/v1/machines/{id}/sel                # 控制器系统事件日志,倒序截断 500 条(带外同步读)
 GET    /api/v1/machines/{id}/console            # 一次性 KVM URL
 POST   /api/v1/machines/{id}/install-plan       # 试算(只读;已实现 V1,见 §4)
 POST   /api/v1/machines/{id}/actions            # 单机动作 → 202 + job
+
+POST   /api/v1/images                           # 工件库注册 + 触发拉取 → 202
+GET    /api/v1/images                           # 注册清单(新→旧)
+GET    /api/v1/images/{id}                      # 注册详情(fetching/ready/failed)
+DELETE /api/v1/images/{id}                      # 删注册(无共享者时回收缓存文件)
 
 POST   /api/v1/jobs                             # → 202
 GET    /api/v1/jobs/{id}

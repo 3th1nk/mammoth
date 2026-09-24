@@ -262,6 +262,80 @@ def main():
     erased = any("S6XPN0001" in str(e.get("payload", {})) for e in ev1.get("items", []))
     ok &= check("task.drive_erase event with serials", erased, str(ev1.get("items", [])[:1]))
 
+    # 3.2 health + SEL live reads (docs/07-bmc.md §6.3)
+    print("· health / sel (live reads)")
+    status, health = c.get(f"/api/v1/machines/{machines[0]}/health")
+    ok &= check("GET health snapshot",
+                status == 200 and health.get("health") == "ok" and len(health.get("sensors", [])) > 0,
+                str(health)[:120])
+    status, sel = c.get(f"/api/v1/machines/{machines[0]}/sel")
+    ok &= check("GET sel newest-first",
+                status == 200 and len(sel.get("entries", [])) > 0,
+                str(sel)[:120])
+
+    # 3.3 image artifact library: register → fetch (digest-gated) → dedupe
+    # → delete (docs/09-roadmap.md 下一阶段 6)
+    print("· image library (fetch + dedupe)")
+    import hashlib
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    iso_bytes = b"acceptance fake iso payload"
+    iso_sha = hashlib.sha256(iso_bytes).hexdigest()
+
+    class _Serve(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(iso_bytes)))
+            self.end_headers()
+            self.wfile.write(iso_bytes)
+
+        def log_message(self, *a):
+            pass
+
+    hs = HTTPServer(("127.0.0.1", 0), _Serve)
+    threading.Thread(target=hs.serve_forever, daemon=True).start()
+    try:
+        status, img = c.post("/api/v1/images", {
+            "name": "acceptance-fake",
+            "source_url": f"http://127.0.0.1:{hs.server_port}/fake.iso",
+            "sha256": iso_sha,
+            "distro": "rocky9",
+        })
+        ok &= check("POST /images → 202", status == 202 and img.get("id", "").startswith("img_"),
+                    f"{status} {str(img)[:80]}")
+        img_id = img.get("id")
+        deadline = time.time() + 15
+        state = None
+        while time.time() < deadline:
+            _, img = c.get(f"/api/v1/images/{img_id}")
+            state = img.get("state")
+            if state == "ready":
+                break
+            time.sleep(0.5)
+        ok &= check("image fetched (digest gate passed)", state == "ready",
+                    f"state={state} err={img.get('error')}")
+        status, img2 = c.post("/api/v1/images", {
+            "source_url": f"http://127.0.0.1:{hs.server_port}/fake2.iso",
+            "sha256": iso_sha,
+        })
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            _, img2 = c.get(f"/api/v1/images/{img2['id']}")
+            if img2.get("state") == "ready":
+                break
+            time.sleep(0.5)
+        ok &= check("re-registration dedupes to ready",
+                    img2.get("state") == "ready", str(img2)[:80])
+        status, _ = c.req("DELETE", f"/api/v1/images/{img2['id']}")
+        ok &= check("DELETE /images/{id} → 204", status == 204, f"{status}")
+        status, _ = c.get(f"/api/v1/images/{img2['id']}")
+        ok &= check("deleted image 404s", status == 404, f"{status}")
+        status, _ = c.req("DELETE", f"/api/v1/images/{img_id}")
+        ok &= check("DELETE last sharer → 204", status == 204, f"{status}")
+    finally:
+        hs.shutdown()
+
     # 3.4 partition-level discovery (M2): a machine WITH ssh access configured
     # but unreachable in-band must yield an explicit classified error — never
     # a hanging task — while keeping its ready spec view. A machine without

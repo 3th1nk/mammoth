@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -18,6 +20,11 @@ import (
 	"github.com/3th1nk/mammoth/internal/store"
 	"github.com/3th1nk/mammoth/internal/store/queue"
 )
+
+// repoNameRe bounds package_source repo names: they become config file
+// names (mammoth-<name>.repo|.sources|.list) and repo ids — a shell-ish
+// name would be an injection vector, so the charset is the boundary.
+var repoNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // ── actions & jobs ──────────────────────────────────────────────────────────
 
@@ -123,6 +130,16 @@ func (s *Server) CreateJob(ctx context.Context, request gen.CreateJobRequestObje
 		if err := s.validateBootStrategy(specRaw); err != nil {
 			return nil, err
 		}
+		// Artifact-library resolution snapshots into the spec here (and
+		// again into per-machine merges below) — submitted jobs reference
+		// the cache file, not the registration row.
+		if s.Images != nil {
+			resolved, rerr := s.resolveImageRefs(ctx, specRaw)
+			if rerr != nil {
+				return nil, rerr
+			}
+			specRaw = resolved
+		}
 	default:
 		return nil, verr("SCHEMA_INVALID_JOB", "unknown job type %q", body.Type)
 	}
@@ -147,6 +164,19 @@ func (s *Server) CreateJob(ctx context.Context, request gen.CreateJobRequestObje
 		}
 		if body.Policy.TaskTimeoutSeconds != nil {
 			policy.TaskTimeoutSeconds = *body.Policy.TaskTimeoutSeconds
+		}
+		if body.Policy.HealthGate != nil {
+			policy.HealthGate = string(*body.Policy.HealthGate)
+		}
+	}
+
+	// Hardware health gate (install only, docs/04-install-spec.md §5.6):
+	// policy.health_gate=block rejects the submission when the machine's
+	// latest layout snapshot carries an explicit failed disk reading — a
+	// bad disk is caught before the wipe, not after.
+	if flow == provision.FlowInstall && policy.HealthGateBlocks() {
+		if err := s.rejectUnhealthyMachines(ctx, machineIDs); err != nil {
+			return nil, err
 		}
 	}
 
@@ -234,6 +264,48 @@ func (s *Server) rejectBusyInstallMachines(ctx context.Context, machineIDs []str
 		strings.Join(details, ", "))
 }
 
+// rejectUnhealthyMachines is the hardware health gate's blocking half
+// (policy.health_gate=block, docs/04-install-spec.md §5.6): a machine whose
+// latest layout snapshot records health:"fail" on any disk is named with the
+// offending serials — the intercept happens before any wipe, never after
+// the damage. Snapshots without health data (no probe run, or a carrier
+// that shipped no health tooling) do not block: the gate only intercepts
+// where there is evidence.
+func (s *Server) rejectUnhealthyMachines(ctx context.Context, machineIDs []string) error {
+	var bad []string
+	for _, mid := range machineIDs {
+		raw, _, err := s.Machines.LatestLayout(ctx, mid)
+		if err != nil {
+			continue // no snapshot: nothing to gate on
+		}
+		var snap struct {
+			Disks []struct {
+				Device string `json:"device"`
+				Serial string `json:"serial"`
+				Health string `json:"health"`
+			} `json:"disks"`
+		}
+		if json.Unmarshal(raw, &snap) != nil {
+			continue
+		}
+		for _, d := range snap.Disks {
+			if d.Health == "fail" {
+				id := d.Serial
+				if id == "" {
+					id = d.Device
+				}
+				bad = append(bad, fmt.Sprintf("%s: %s", mid, id))
+			}
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return verr("HEALTH_GATE_FAILED",
+		"machines with an unhealthy disk (policy.health_gate=block): %s — replace the disk, or submit with policy.health_gate=report/off to override",
+		strings.Join(bad, ", "))
+}
+
 // createJobRecord persists job + tasks + stages in one transaction and
 // enqueues one message per task. Idempotent replays return the original job.
 func (s *Server) createJobRecord(ctx context.Context, in createJobRecord) (*gen.Job, error) {
@@ -285,6 +357,16 @@ func (s *Server) createJobRecord(ctx context.Context, in createJobRecord) (*gen.
 			}
 			merged := mergeSpecOverride(in.specRaw, in.overrides, mid)
 			if merged != nil {
+				// Per-machine overrides may carry their own image.id (or
+				// swap it for a bare source) — resolve the same way the
+				// base spec was.
+				if s.Images != nil {
+					resolved, rerr := s.resolveImageRefs(ctx, merged)
+					if rerr != nil {
+						return nil, rerr
+					}
+					merged = resolved
+				}
 				tctx["spec"] = json.RawMessage(merged)
 			}
 
@@ -495,8 +577,14 @@ func validateInstallSpec(spec *gen.InstallSpec) error {
 	if spec.Image.Distro == "" {
 		return verr("SCHEMA_INVALID_SPEC", "image.distro must be declared explicitly")
 	}
-	if spec.Image.Source == nil {
-		return verr("SCHEMA_INVALID_SPEC", "image.source is required")
+	// Image origin: a bare source URL or an artifact-library reference —
+	// exactly one (docs/09-roadmap.md 下一阶段 6). The id itself resolves
+	// against the library at submit (resolveImageRefs).
+	switch {
+	case spec.Image.Source == nil && spec.Image.Id == nil:
+		return verr("SCHEMA_INVALID_SPEC", "image.source or image.id is required")
+	case spec.Image.Source != nil && spec.Image.Id != nil:
+		return verr("SCHEMA_INVALID_SPEC", "image.source and image.id are mutually exclusive")
 	}
 	if spec.Storage == nil {
 		return verr("SCHEMA_INVALID_SPEC", "storage is required")
@@ -529,6 +617,23 @@ func validateInstallSpec(spec *gen.InstallSpec) error {
 					return verr("SCHEMA_INVALID_STORAGE", "disks[%d]: at most one 'rest' partition per disk", i)
 				}
 				seenRest = true
+			}
+		}
+	}
+	// package_source (docs/04-install-spec.md §5.5): names become config
+	// file names, URLs land verbatim in package manager config — the
+	// charset/URI checks are the injection boundary.
+	for i, r := range derefOr(spec.PackageSource, gen.PackageSourceSpec{}).Repos {
+		if !repoNameRe.MatchString(r.Name) {
+			return verr("SCHEMA_INVALID_SPEC", "package_source.repos[%d].name %q: must match [A-Za-z0-9._-]+", i, r.Name)
+		}
+		for _, u := range []string{r.Url, derefOr(r.GpgKeyUrl, "")} {
+			if u == "" {
+				continue
+			}
+			parsed, perr := url.Parse(u)
+			if perr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+				return verr("SCHEMA_INVALID_SPEC", "package_source.repos[%d]: %q must be an http(s) URL", i, u)
 			}
 		}
 	}

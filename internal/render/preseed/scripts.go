@@ -153,6 +153,35 @@ ln -sf /etc/systemd/system/mammoth-hostname.service /target/etc/systemd/system/m
 	}
 	b.WriteString("mkdir -p /target/etc/ssh/sshd_config.d\n")
 	b.WriteString("echo 'PermitRootLogin yes' > /target/etc/ssh/sshd_config.d/60-mammoth.conf\n")
+	// Declared package repos (docs/04-install-spec.md §5.5): land in the
+	// target BEFORE the user scripts run (they may apt install against
+	// it). The signing key, when declared, is fetched by the installer
+	// environment's busybox wget to the target-side keyring the one-line
+	// source signs with; an unsigned declared repo renders trusted=yes —
+	// the operator declared it deliberately.
+	for _, r := range in.PackageSource {
+		suite := r.Suite
+		if suite == "" {
+			suite = render.AptSuite(distro)
+		}
+		comps := r.Components
+		if comps == "" {
+			comps = "main"
+		}
+		b.WriteString("mkdir -p /target/etc/apt/sources.list.d /target/usr/share/keyrings\n")
+		line := "deb [arch=amd64"
+		if r.GPGKey != "" {
+			line += " signed-by=/usr/share/keyrings/mammoth-" + r.Name + ".asc"
+		} else {
+			line += " trusted=yes"
+		}
+		line += "] " + r.URL + " " + suite + " " + comps + "\n"
+		b.WriteString("echo " + quoteSh(strings.TrimSuffix(line, "\n")) +
+			" > /target/etc/apt/sources.list.d/mammoth-" + r.Name + ".list\n")
+		if r.GPGKey != "" {
+			b.WriteString("wget -q -T 10 -O /target/usr/share/keyrings/mammoth-" + r.Name + ".asc " + quoteSh(r.GPGKey) + "\n")
+		}
+	}
 	// grub-installer's update-grub is observed to die between writing
 	// grub.cfg.new and its rename on the LSI hardware-RAID volume
 	// (real-hardware 2288H: the install "succeeded", yet the box dropped to

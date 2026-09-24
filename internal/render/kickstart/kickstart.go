@@ -226,6 +226,28 @@ func failtrap(detail, completeURL string) string {
 		payload, completeURL)
 }
 
+// packageRepoScript renders the %post body persisting the declared repos
+// into /etc/yum.repos.d (the `repo` directive is install-time only). Values
+// are submit-validated (name charset, http(s) URLs) and the heredoc is
+// quoted — nothing in the block expands.
+func packageRepoScript(repos []render.RepoSpec) string {
+	if len(repos) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range repos {
+		fmt.Fprintf(&b, "cat > /etc/yum.repos.d/mammoth-%s.repo <<'MAMMOTH_REPO'\n", r.Name)
+		fmt.Fprintf(&b, "[mammoth-%s]\nname=%s\nbaseurl=%s\nenabled=1\n", r.Name, r.Name, r.URL)
+		if r.GPGKey != "" {
+			fmt.Fprintf(&b, "gpgcheck=1\ngpgkey=%s\n", r.GPGKey)
+		} else {
+			b.WriteString("gpgcheck=0\n")
+		}
+		b.WriteString("MAMMOTH_REPO\n")
+	}
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
 var ksTemplate = template.Must(template.New("ks").Funcs(template.FuncMap{
 	"failtrap": failtrap,
 }).Parse(`# Mammoth — task {{.TaskToken}} / machine {{.MachineID}}
@@ -282,6 +304,9 @@ sh /run/install/mammoth/storage.sh > /run/install/mammoth/90-storage.ks
 
 {{.RepoCmd}}
 {{.DialectExtras}}
+{{- range .ExtraRepoLines}}
+{{.}}
+{{- end}}
 {{- if not .StoragePre}}
 bootloader{{if .BootDrive}} --boot-drive={{.BootDrive}}{{end}}
 {{- if .WipeDrives}}
@@ -307,6 +332,14 @@ clearpart --list={{.RemoveParts}}
 openssh-server
 curl
 %end
+
+{{- if .PackagePost}}
+
+%post --erroronfail
+set -e
+{{.PackagePost}}
+%end
+{{- end}}
 
 {{- if .GrowRootScript}}
 
@@ -830,6 +863,17 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		}
 	}
 
+	// Declared package repos (docs/04-install-spec.md §5.5): `repo`
+	// directives for the INSTALLER (packages beyond the media's own set),
+	// plus the %post that persists them into /etc/yum.repos.d for the
+	// installed system — the repo command is install-time only.
+	var extraRepoLines []string
+	for _, r := range in.PackageSource {
+		extraRepoLines = append(extraRepoLines,
+			fmt.Sprintf("repo --name=mammoth-%s --baseurl=%s", r.Name, r.URL))
+	}
+	packagePost := packageRepoScript(in.PackageSource)
+
 	data := map[string]any{
 		"TaskToken":             in.TaskToken,
 		"MachineID":             in.MachineID,
@@ -850,6 +894,8 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		"NetworkShell":          netPre,
 		"StoragePre":            storageShellText != "",
 		"RepoCmd":               repoCmd,
+		"ExtraRepoLines":        extraRepoLines,
+		"PackagePost":           packagePost,
 		"DialectExtras":         d.dialectExtras(),
 		"StorageShell":          storageShellText,
 		"PreScripts":            preScripts,

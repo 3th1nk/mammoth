@@ -132,6 +132,18 @@ type installSpecView struct {
 	} `json:"access"`
 	Network []networkView `json:"network"`
 	Scripts []scriptView  `json:"scripts"`
+	// PackageSource is the declared package repositories (docs
+	// 04-install-spec.md §5.5) — rendered into the installed system by the
+	// dialect; windows rejects it.
+	PackageSource struct {
+		Repos []struct {
+			Name       string `json:"name"`
+			URL        string `json:"url"`
+			GPGKeyURL  string `json:"gpg_key_url"`
+			Suite      string `json:"suite"`
+			Components string `json:"components"`
+		} `json:"repos"`
+	} `json:"package_source"`
 }
 
 // networkView mirrors the contract's network entries (docs/04-install-spec.md §5.2).
@@ -795,6 +807,12 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		AnswerBaseURL: fmt.Sprintf("%s/render/%s", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
 		CompleteURL:   fmt.Sprintf("%s/render/%s/complete", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
 		Scripts:       scriptsFrom(spec.Scripts),
+	}
+	for _, r := range spec.PackageSource.Repos {
+		in.PackageSource = append(in.PackageSource, render.RepoSpec{
+			Name: r.Name, URL: r.URL, GPGKey: r.GPGKeyURL,
+			Suite: r.Suite, Components: r.Components,
+		})
 	}
 	raidInputs := ictx.Resolved.Raid
 	for i := range raidInputs {

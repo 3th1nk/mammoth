@@ -229,6 +229,8 @@ scan() {
 		line="\"device\":\"$name\",\"size_bytes\":$((sect * 512))"
 		[ -n "$model" ]  && line="$line,\"model\":\"$model\""
 		[ -n "$serial" ] && line="$line,\"serial\":\"$serial\""
+		h=$(disk_health "$name")
+		[ -n "$h" ] && line="$line,\"health\":\"$h\""
 		line="$line,\"partitions\":["
 		pfirst=1
 		for p in "$d"/"$name"[0-9]* "$d"/"$name"p[0-9]*; do
@@ -290,7 +292,39 @@ report() {
 	return 1
 }
 
+disk_health() {
+	# Health verdict per disk — tool-optional: when the carrier's boot repo
+	# carries smartmontools/nvme the binaries land in the memory root and
+	# every disk reports pass|fail; when it does not, nothing is emitted
+	# (absence of tooling is never a verdict — the gate only intercepts on
+	# explicit failed readings).
+	if command -v smartctl >/dev/null 2>&1; then
+		h=$(smartctl -H "/dev/$1" 2>/dev/null | sed -n 's/.*[Oo]verall-[Hh]ealth.*: //p')
+		case "$h" in
+			PASSED) echo pass ;;
+			"") ;;
+			*) echo fail ;;
+		esac
+		return
+	fi
+	if command -v nvme >/dev/null 2>&1; then
+		cw=$(nvme smart-log "/dev/$1" 2>/dev/null | sed -n 's/critical_warning[ :]*\([0-9a-fxA-F]*\).*/\1/p')
+		[ -n "$cw" ] || return
+		case "$cw" in
+			0|0x0|0x00) echo pass ;;
+			*) echo fail ;;
+		esac
+	fi
+}
+
 log "probe start (kernel $KERN)"
+# Best-effort health tooling from the boot media's own /apks repository
+# (network-free): the standard/extended ISO set differs — a carrier without
+# the packages boots the probe exactly the same, disks just report no
+# health. Two passes: apk prefers the boot repo and nothing else.
+if [ -d /media/cdrom/apks ] || [ -d /media/cdrom/apks/x86_64 ]; then
+	apk add --quiet --no-network smartmontools nvme >/dev/null 2>&1 || true
+fi
 scan
 log "scan done: $(wc -c < "$OUT") bytes"
 if report; then

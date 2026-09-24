@@ -254,6 +254,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if err != nil {
 		return nil, render.BootParams{}, err
 	}
+	if len(in.PackageSource) > 0 {
+		return nil, render.BootParams{}, fmt.Errorf("%s: package_source is not supported — Windows has no yum/apt semantics; declare repos inside post_install scripts", d.distro)
+	}
 	if len(in.SSHPublicKeys) > 0 {
 		return nil, render.BootParams{}, fmt.Errorf("%s: access.ssh_keys is not supported (Server Core has no sshd by default)", d.distro)
 	}
@@ -353,6 +356,9 @@ func (d *Driver) renderAgentApply(in render.InstallInputs) ([]render.AnswerFile,
 	}
 	if len(preScripts) > 0 {
 		return nil, render.BootParams{}, fmt.Errorf("%s: pre_install scripts are not supported on the agent apply path — its pre-apply runtime is the busybox agent (Linux semantics), not WinPE; use boot.installer=setup for pre_install", d.distro)
+	}
+	if len(in.PackageSource) > 0 {
+		return nil, render.BootParams{}, fmt.Errorf("%s: package_source is not supported — Windows has no yum/apt semantics; declare repos inside post_install scripts", d.distro)
 	}
 	if len(in.SSHPublicKeys) > 0 {
 		return nil, render.BootParams{}, fmt.Errorf("%s: access.ssh_keys is not supported (Server Core has no sshd by default)", d.distro)

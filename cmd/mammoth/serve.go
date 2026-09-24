@@ -22,6 +22,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/bmc/redfish"
 	"github.com/3th1nk/mammoth/internal/builder"
 	"github.com/3th1nk/mammoth/internal/config"
+	"github.com/3th1nk/mammoth/internal/images"
 	"github.com/3th1nk/mammoth/internal/inventory/inbandssh"
 	"github.com/3th1nk/mammoth/internal/mediarelay"
 	"github.com/3th1nk/mammoth/internal/netboot"
@@ -104,6 +105,7 @@ func serve(args []string) error {
 	logsRepo := store.NewTaskLogRepo(db)
 	netbootRepo := store.NewNetbootRepo(db)
 	pendingRepo := store.NewPendingRepo(db)
+	imageRepo := store.NewImageRepo(db)
 	// Syslog attribution registry: provision registers the spec's declared
 	// static addresses at boot, so the 514/udp sink can attribute vMedia
 	// (and site-DHCP proxy) senders the DHCP lease chain cannot see. Shared
@@ -412,6 +414,8 @@ func serve(args []string) error {
 		WindowsAgentInstaller: cfg.ProbeAlpineNetboot != "" && cfg.WindowsApplyAlpineISO != "",
 		BiosConfirmRequired:   cfg.BiosConfirmRequired,
 		EraseConfirmRequired:  cfg.EraseConfirmRequired,
+		Images:                imageRepo,
+		ImagesDir:             filepath.Join(cfg.MediaDir, "images"),
 	}
 
 	errCh := make(chan error, 4)
@@ -462,6 +466,17 @@ func serve(args []string) error {
 			Logger: logger,
 		}
 		go func() { _ = dispatcher.Run(ctx) }()
+
+		// Image artifact fetch: content-addressed, sha256-gated
+		// (docs/09-roadmap.md 下一阶段 6). Single worker, like the
+		// dispatcher and the reaper.
+		fetcher := &images.Fetcher{
+			Repo:   imageRepo,
+			Events: eventRepo,
+			Dir:    filepath.Join(cfg.MediaDir, "images"),
+			Logger: logger,
+		}
+		go func() { _ = fetcher.Run(ctx) }()
 	}
 
 	// Runner facet (execution plane).

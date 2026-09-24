@@ -35,6 +35,17 @@ type BMC struct {
 	// (docs/07-bmc.md §6); defaultFirmware fills a plausible pair.
 	FirmwareList []bmc.FirmwareComponent
 
+	// SensorList scripts the health snapshot the controller reports
+	// (docs/07-bmc.md §6.3); defaultSensors fills a plausible set.
+	SensorList []bmc.SensorReading
+	// PowerScripted overrides the chassis power state Health reports;
+	// empty falls through to the Power field.
+	PowerScripted bmc.PowerState
+
+	// SELList scripts the system event log the controller reports
+	// (docs/07-bmc.md §6.3); defaultSEL fills a plausible pair.
+	SELList []bmc.SELEntry
+
 	// BIOS is the simulated BIOS attribute table (docs/07-bmc.md §6);
 	// defaultBIOS fills a plausible set. Writes apply immediately and
 	// reject unknown attribute names (the protocol-fidelity the two-stage
@@ -87,6 +98,8 @@ func (d *Driver) Add(addr string) *BMC {
 		ConsoleBaseURL: "https://fake.bmc/console",
 		Hardware:       defaultHardware(serial),
 		FirmwareList:   defaultFirmware(),
+		SensorList:     defaultSensors(),
+		SELList:        defaultSEL(),
 		BIOS:           defaultBIOS(),
 		EraseSupport:   true,
 	}
@@ -131,6 +144,29 @@ func defaultFirmware() []bmc.FirmwareComponent {
 	return []bmc.FirmwareComponent{
 		{ID: "BMC", Name: "MammothSim iBMC", Version: "1.0.0-fake"},
 		{ID: "BIOS", Name: "MammothSim BIOS", Version: "5.49-fake"},
+	}
+}
+
+// defaultSensors scripts a plausible health snapshot so the health view has
+// stable data: two fans, two temperature zones, one power supply, one
+// voltage rail.
+func defaultSensors() []bmc.SensorReading {
+	return []bmc.SensorReading{
+		{Name: "Fan 1", Reading: 6600, Unit: "RPM", State: bmc.SensorOK},
+		{Name: "Fan 2", Reading: 6100, Unit: "RPM", State: bmc.SensorOK},
+		{Name: "CPU Temp", Reading: 46, Unit: "Celsius", State: bmc.SensorOK},
+		{Name: "Inlet Temp", Reading: 24, Unit: "Celsius", State: bmc.SensorOK},
+		{Name: "PSU 1", Reading: 210, Unit: "Watts", State: bmc.SensorOK},
+		{Name: "+3.3V", Reading: 3.29, Unit: "Volts", State: bmc.SensorOK},
+	}
+}
+
+// defaultSEL scripts a couple of log records so the SEL view has stable
+// data.
+func defaultSEL() []bmc.SELEntry {
+	return []bmc.SELEntry{
+		{ID: "1", Timestamp: "2026-09-24T08:00:00Z", Severity: "ok", Message: "System boot completed"},
+		{ID: "2", Timestamp: "2026-09-24T08:15:00Z", Severity: "warning", Message: "Redundancy lost: PSU 2 removed"},
 	}
 }
 
@@ -400,6 +436,51 @@ func (d *Driver) SecureErase(_ context.Context, addr string, _ bmc.Credentials, 
 		results = append(results, bmc.SanitizeResult{Serial: s, Method: "fake-purge"})
 	}
 	return results, nil
+}
+
+// Health reports the scripted health snapshot (the HealthProvider optional
+// capability): the scripted sensor list plus the chassis power state
+// (PowerScripted overrides, Power falls through) and the worst sensor
+// state as the overall verdict.
+func (d *Driver) Health(_ context.Context, addr string, _ bmc.Credentials) (bmc.HealthView, error) {
+	b, err := d.get(addr, "health")
+	if err != nil {
+		return bmc.HealthView{}, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	sensors := append([]bmc.SensorReading(nil), b.SensorList...)
+	power := b.PowerScripted
+	if power == "" {
+		power = b.Power
+	}
+	overall := bmc.SensorOK
+	seen := false
+	for _, s := range sensors {
+		seen = seen || s.State != bmc.SensorUnknown
+		if s.State == bmc.SensorCritical {
+			overall = bmc.SensorCritical
+		} else if s.State == bmc.SensorWarning && overall != bmc.SensorCritical {
+			overall = bmc.SensorWarning
+		}
+	}
+	if !seen {
+		overall = bmc.SensorUnknown
+	}
+	return bmc.HealthView{PowerState: power, Health: overall, Sensors: sensors}, nil
+}
+
+// SystemEventLog reports the scripted system event log (the SELReader
+// optional capability), newest first — the fake list is used as-is because
+// tests script it in presentation order.
+func (d *Driver) SystemEventLog(_ context.Context, addr string, _ bmc.Credentials) ([]bmc.SELEntry, error) {
+	b, err := d.get(addr, "sel")
+	if err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]bmc.SELEntry(nil), b.SELList...), nil
 }
 
 func (d *Driver) CollectInventory(_ context.Context, addr string, _ bmc.Credentials) (bmc.HardwareView, error) {

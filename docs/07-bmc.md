@@ -68,6 +68,8 @@ Reset 拒绝时以 `ForceRestart` 重试重启类动作;自签名 TLS 经
 | 固件清单 | ✅ `FirmwareInventoryProvider`(UpdateService/FirmwareInventory,宽容解析,缺链接/坏条目降级) | ❌(能力缺失即无数据,盘查不失败) |
 | BIOS 配置 | ✅ `BiosSetter`(Bios 属性表读 / @Redfish.Settings 设置对象 PATCH,ETag If-Match,读改写保 pending,202 任务轮询) | ❌ |
 | 安全擦除 | ✅ `DriveEraser`(逐盘 `#Drive.SecureErase` 动作,serial 先全量解析再下发,202 任务轮询) | ❌ |
+| 健康传感 | ✅ `HealthProvider`(Chassis→Thermal/Power 宽容 walk,overall 取 worst-of,absent 即 unknown 不拖累) | ❌(goipmi 无 SDR,缺能力即端点 422) |
+| 事件日志 | ✅ `SELReader`(Managers→LogServices→Entries,倒序截断 500 条) | ❌(同上) |
 | 一次性引导 | ✅ | ✅ |
 
 ### 6.1 BiosSetter 两段式确认契约(高危动作范式的定稿形态)
@@ -114,6 +116,28 @@ Reset 拒绝时以 `ForceRestart` 重试重启类动作;自签名 TLS 经
    record 底稿。实际擦除机制是厂商策略,驱动如实转述、不替控制器承诺
    Clear 还是 Purge 档;LSI 卷的 secure erase 支持度随真机窗口核验
    (见 compat/huawei.md 回归表)。
+
+### 6.3 HealthProvider / SELReader 健康面(纯读能力)
+
+数据中心的"急救室"面:OS 崩溃、网络中断时,带外健康快照与事件日志是
+仅存的观测手段(同赛道产品定位参照;DeplOS IPMI 模块调研结论)。两个
+可选能力接口,固件清单同型——**纯读、无确认门禁、无持久化、无轮询**:
+
+1. **Health**:Chassis 集合 → 每机箱 Thermal(Fans/Temperatures)+
+   Power(PowerSupplies/Voltages)宽容 walk,传感器带
+   ok|warning|critical|unknown 四态;overall 取 chassis Status 与全部
+   传感器的 worst-of——absent/unreadable 一律 unknown,**不拖累**整体
+   (宽容解析纪律:一份不可读的描述符绝不发明一条告警);风扇
+   ReadingUnits 缺省回填 RPM;
+2. **SELReader**:Managers → LogServices → Entries 连接遍历,日志集合
+   按追加序(老→新)到达,截取集合尾部再取条目体(链接一次 GET,内容
+   至多 `SELMaxEntries`=500 次),按 created 倒序 + id 稳定排序;severity
+   归一到契约词表,"Debug"/OEM 串归 unknown 而非默默升格为 OK;
+3. **活读端点**:`GET /machines/{id}/health`、`GET /machines/{id}/sel`,
+   console/bios 同步读先例(422 缺能力 / 502 BMC 错);IPMI 不实现
+   (goipmi 命令栈无 SDR/SEL,先例:固件清单——真机全走 redfish);
+4. **边界**:周期带外巡检(异常→事件→webhook)是有状态服务化能力,
+   等真实需求触发再排(roadmap 第 9 项);本节只交付按需读。
 
 选择逻辑(`protocol: auto`):
 

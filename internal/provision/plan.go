@@ -83,6 +83,12 @@ func PlanInstall(ctx context.Context, specJSON json.RawMessage, hw *bmc.Hardware
 	for _, n := range spec.Network {
 		inputs.Network = append(inputs.Network, n.toRender())
 	}
+	for _, r := range spec.PackageSource.Repos {
+		inputs.PackageSource = append(inputs.PackageSource, render.RepoSpec{
+			Name: r.Name, URL: r.URL, GPGKey: r.GPGKeyURL,
+			Suite: r.Suite, Components: r.Components,
+		})
+	}
 	for _, r := range spec.Storage.Raid {
 		rr := render.ResolvedRaid{Name: r.Name, Level: r.Level, Mode: r.Mode}
 		for i, p := range r.Partitions {

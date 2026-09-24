@@ -345,6 +345,87 @@ func (s *Server) GetMachineDrives(ctx context.Context, request gen.GetMachineDri
 	return gen.GetMachineDrives200JSONResponse(gen.DrivesView{Drives: drives}), nil
 }
 
+// GetMachineHealth live-reads the controller's health snapshot
+// (docs/07-bmc.md §6.3). A synchronous BMC read like the console/bios
+// endpoints — sensor state is only true at read time.
+func (s *Server) GetMachineHealth(ctx context.Context, request gen.GetMachineHealthRequestObject) (gen.GetMachineHealthResponseObject, error) {
+	cred, addr, proto, err := s.outOfBandFor(ctx, string(request.Id))
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.BMC.Do(ctx, addr, cred, proto, "health", func(ctx context.Context, d bmc.Driver) (any, error) {
+		hp, ok := d.(bmc.HealthProvider)
+		if !ok {
+			return nil, &bmc.Error{Kind: bmc.KindUnsupported, Op: "health"}
+		}
+		return hp.Health(ctx, addr, cred)
+	})
+	if err != nil {
+		return nil, err
+	}
+	view, _ := res.(bmc.HealthView)
+	out := gen.HealthView{
+		Health:  gen.HealthViewHealth(view.Health),
+		Sensors: make([]gen.SensorEntry, 0, len(view.Sensors)),
+	}
+	switch view.PowerState {
+	case bmc.PowerStateOn:
+		ps := gen.PowerStateOn
+		out.PowerState = &ps
+	case bmc.PowerStateOff:
+		ps := gen.PowerStateOff
+		out.PowerState = &ps
+	}
+	for _, s := range view.Sensors {
+		entry := gen.SensorEntry{Name: s.Name, State: gen.SensorEntryState(s.State)}
+		if s.Unit != "" {
+			entry.Unit = &s.Unit
+		}
+		if s.Reading != 0 {
+			entry.Reading = &s.Reading
+		}
+		out.Sensors = append(out.Sensors, entry)
+	}
+	return gen.GetMachineHealth200JSONResponse(out), nil
+}
+
+// GetMachineSEL live-reads the controller's system event log
+// (docs/07-bmc.md §6.3) — the rescue-room record. A synchronous BMC read
+// like the console/bios endpoints.
+func (s *Server) GetMachineSEL(ctx context.Context, request gen.GetMachineSELRequestObject) (gen.GetMachineSELResponseObject, error) {
+	cred, addr, proto, err := s.outOfBandFor(ctx, string(request.Id))
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.BMC.Do(ctx, addr, cred, proto, "sel", func(ctx context.Context, d bmc.Driver) (any, error) {
+		sr, ok := d.(bmc.SELReader)
+		if !ok {
+			return nil, &bmc.Error{Kind: bmc.KindUnsupported, Op: "sel"}
+		}
+		return sr.SystemEventLog(ctx, addr, cred)
+	})
+	if err != nil {
+		return nil, err
+	}
+	entries, _ := res.([]bmc.SELEntry)
+	out := make([]gen.SELEntry, 0, len(entries))
+	for _, e := range entries {
+		entry := gen.SELEntry{Id: e.ID}
+		if e.Timestamp != "" {
+			entry.Timestamp = &e.Timestamp
+		}
+		if e.Severity != "" {
+			sev := gen.SELEntrySeverity(e.Severity)
+			entry.Severity = &sev
+		}
+		if e.Message != "" {
+			entry.Message = &e.Message
+		}
+		out = append(out, entry)
+	}
+	return gen.GetMachineSEL200JSONResponse(gen.SELView{Entries: out}), nil
+}
+
 // outOfBandFor resolves machine → (decrypted credentials, address, protocol).
 func (s *Server) outOfBandFor(ctx context.Context, machineID string) (bmc.Credentials, string, bmc.Protocol, error) {
 	m, err := s.Machines.Get(ctx, machineID)

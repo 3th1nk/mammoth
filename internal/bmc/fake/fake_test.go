@@ -120,3 +120,64 @@ func TestSecureErase(t *testing.T) {
 type errFake struct{}
 
 func (errFake) Error() string { return "scripted" }
+
+// The health + SEL read capabilities: default data on auto-provisioned
+// controllers, scriptable via the exported fields, failure-injectable via
+// FailOps (docs/07-bmc.md §6.3).
+func TestHealthAndSEL(t *testing.T) {
+	d := New()
+	ctx := context.Background()
+	if _, ok := bmc.Driver(d).(bmc.HealthProvider); !ok {
+		t.Fatalf("fake must implement HealthProvider")
+	}
+	if _, ok := bmc.Driver(d).(bmc.SELReader); !ok {
+		t.Fatalf("fake must implement SELReader")
+	}
+
+	t.Run("auto-provisioned card reports defaults", func(t *testing.T) {
+		got, err := d.Health(ctx, "fake://health-a", bmc.Credentials{})
+		if err != nil {
+			t.Fatalf("Health: %v", err)
+		}
+		if got.Health != bmc.SensorOK || len(got.Sensors) == 0 {
+			t.Fatalf("unexpected default health: %+v", got)
+		}
+		if got.PowerState != bmc.PowerStateOff {
+			t.Fatalf("default power state must fall through to Power: %+v", got)
+		}
+		sel, err := d.SystemEventLog(ctx, "fake://health-a", bmc.Credentials{})
+		if err != nil || len(sel) == 0 {
+			t.Fatalf("unexpected default SEL: %+v %v", sel, err)
+		}
+	})
+
+	t.Run("scripted sensors drive the overall verdict", func(t *testing.T) {
+		card := d.Add("fake://health-b")
+		card.SensorList = []bmc.SensorReading{
+			{Name: "Fan 1", Reading: 6000, Unit: "RPM", State: bmc.SensorOK},
+			{Name: "CPU Temp", Reading: 92, Unit: "Celsius", State: bmc.SensorCritical},
+		}
+		got, err := d.Health(ctx, "fake://health-b", bmc.Credentials{})
+		if err != nil || got.Health != bmc.SensorCritical {
+			t.Fatalf("critical sensor must dominate: %+v %v", got, err)
+		}
+		card.PowerScripted = bmc.PowerStateOn
+		got, _ = d.Health(ctx, "fake://health-b", bmc.Credentials{})
+		if got.PowerState != bmc.PowerStateOn {
+			t.Fatalf("PowerScripted must override: %+v", got)
+		}
+	})
+
+	t.Run("scripted SEL and failure injection", func(t *testing.T) {
+		card := d.Add("fake://health-c")
+		card.SELList = []bmc.SELEntry{{ID: "9", Severity: "warning", Message: "redundancy lost"}}
+		sel, err := d.SystemEventLog(ctx, "fake://health-c", bmc.Credentials{})
+		if err != nil || len(sel) != 1 || sel[0].ID != "9" {
+			t.Fatalf("scripted SEL wrong: %+v %v", sel, err)
+		}
+		card.FailOps = map[string]error{"health": errFake{}}
+		if _, err := d.Health(ctx, "fake://health-c", bmc.Credentials{}); err == nil {
+			t.Fatalf("expected scripted health failure")
+		}
+	})
+}

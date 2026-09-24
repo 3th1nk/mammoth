@@ -282,6 +282,10 @@ func TestRenderWindowsBoundary(t *testing.T) {
 			in.SSHPublicKeys = []string{"ssh-ed25519 AAA"}
 			return in
 		}, "access.ssh_keys is not supported"},
+		{"package_source", func(in render.InstallInputs) render.InstallInputs {
+			in.PackageSource = []render.RepoSpec{{Name: "x", URL: "http://mirrors.int/deb"}}
+			return in
+		}, "package_source is not supported"},
 		{"second disk partitions", func(in render.InstallInputs) render.InstallInputs {
 			in.Disks = append(in.Disks, render.ResolvedDisk{Device: "sdb", Wipe: true,
 				Partitions: []render.ResolvedPartition{{FS: "ntfs", SizeMB: 10240}}})

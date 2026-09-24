@@ -75,6 +75,13 @@ type Deps struct {
 	// confirmation, docs/07-bmc.md §6.2); surfaced in capabilities.
 	EraseConfirmRequired bool
 
+	// Images is the artifact-library registration store (nil-safe: the
+	// image endpoints degrade to a configured-off problem).
+	Images *store.ImageRepo
+	// ImagesDir is the content-addressed cache root the fetch worker fills
+	// (MediaDir/images); the delete handler confines its reclamation here.
+	ImagesDir string
+
 	// Visibility is the lease window used when re-enqueueing retried tasks.
 	Visibility time.Duration
 }

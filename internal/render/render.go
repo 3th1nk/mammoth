@@ -336,6 +336,37 @@ type ScriptEntry struct {
 	ExpectedExit []int
 }
 
+// RepoSpec is one declared package repository (docs/04-install-spec.md
+// §5.6): name doubles as the config-file suffix, GPGKey pins trust when the
+// mirror signs (an unsigned repo renders trusted — the operator declared
+// it, the renderer records it). Suite/Components are apt-side only; yum
+// repos ignore them.
+type RepoSpec struct {
+	Name       string `json:"name"`
+	URL        string `json:"url"`
+	GPGKey     string `json:"gpg_key_url,omitempty"`
+	Suite      string `json:"suite,omitempty"`
+	Components string `json:"components,omitempty"`
+}
+
+// AptSuite defaults a repo's suite from the distro when the spec omits it —
+// the archive codename the renderer knows and the operator shouldn't have to
+// repeat per repo.
+func AptSuite(distro string) string {
+	switch distro {
+	case "ubuntu22":
+		return "jammy"
+	case "ubuntu24":
+		return "noble"
+	case "debian12":
+		return "bookworm"
+	case "debian13":
+		return "trixie"
+	default:
+		return ""
+	}
+}
+
 // InstallInputs is everything a driver renders from. Inputs arrive resolved:
 // storage selectors are concrete devices, the hostname is expanded, and the
 // image source is dereferenced.
@@ -365,6 +396,11 @@ type InstallInputs struct {
 	Disks     []ResolvedDisk `json:"disks"`
 	Network   []NetworkEntry `json:"network,omitempty"`
 	Scripts   []ScriptEntry  `json:"scripts,omitempty"`
+	// PackageSource carries the declared package repositories (docs
+	// 04-install-spec.md §5.5): written into the installed system's
+	// package manager config by the dialect renderer. Windows rejects the
+	// whole block (no yum/apt semantics on an ISO-installed Windows).
+	PackageSource []RepoSpec `json:"package_source,omitempty"`
 
 	// AnswerBaseURL is the task-token URL base; the driver composes its own
 	// answer file names on it (rocky9: /ks.cfg; ubuntu22: /user-data).

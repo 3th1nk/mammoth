@@ -34,5 +34,36 @@ func (s *Server) CreateInstallPlan(ctx context.Context, request gen.CreateInstal
 	if err != nil {
 		return nil, err
 	}
+	// Health advisory (the report档 surface of policy.health_gate, docs
+	// 04-install-spec.md §5.6): the plan is where an operator looks BEFORE
+	// submitting, so an explicitly failed disk reading in the machine's
+	// latest layout snapshot always surfaces here as a warning — the plan
+	// stays advisory; blocking is the submission's job.
+	if raw, _, lerr := s.Machines.LatestLayout(ctx, machine.ID); lerr == nil {
+		var snap struct {
+			Disks []struct {
+				Device string `json:"device"`
+				Serial string `json:"serial"`
+				Health string `json:"health"`
+			} `json:"disks"`
+		}
+		if json.Unmarshal(raw, &snap) == nil {
+			for _, d := range snap.Disks {
+				if d.Health != "fail" {
+					continue
+				}
+				id := d.Serial
+				if id == "" {
+					id = d.Device
+				}
+				w := "disk " + id + " reported health=fail in the latest probe snapshot — consider policy.health_gate=block or replacing the disk"
+				if plan.Warnings == nil {
+					plan.Warnings = &[]string{w}
+				} else {
+					*plan.Warnings = append(*plan.Warnings, w)
+				}
+			}
+		}
+	}
 	return gen.CreateInstallPlan200JSONResponse(*plan), nil
 }

@@ -139,3 +139,70 @@ type BiosSetter interface {
 	// attributes are a protocol-level rejection.
 	SetBiosAttributes(ctx context.Context, addr string, cred Credentials, attrs map[string]any) error
 }
+
+// SensorState is a Redfish health descriptor, normalized to the four states
+// the contract exposes. An absent Status.Health is unknown, never a
+// downgrade — vendors omit it for healthy-but-simple sensors all the time.
+type SensorState string
+
+const (
+	SensorOK       SensorState = "ok"
+	SensorWarning  SensorState = "warning"
+	SensorCritical SensorState = "critical"
+	SensorUnknown  SensorState = "unknown"
+)
+
+// SensorReading is one health sensor sample (fan / temperature / power
+// supply / voltage — docs/07-bmc.md §6.3). Reading is optional: presence-
+// only sensors report state without a numeric value.
+type SensorReading struct {
+	Name    string      `json:"name"`
+	Reading float64     `json:"reading,omitempty"`
+	Unit    string      `json:"unit,omitempty"` // RPM | Celsius | Watts | Volts | Percent
+	State   SensorState `json:"state"`
+}
+
+// HealthView is the controller's live health snapshot: the chassis power
+// state, every sensor the controller reports, and the overall verdict (the
+// worst state across the chassis and all sensors — unknown sensors never
+// drag it down).
+type HealthView struct {
+	PowerState PowerState      `json:"power_state,omitempty"`
+	Health     SensorState     `json:"health"`
+	Sensors    []SensorReading `json:"sensors"`
+}
+
+// HealthProvider is the optional read-only capability of sampling the
+// controller's health sensors (Redfish Chassis → Thermal/Power, docs
+// 07-bmc.md §6.3). Pure read like FirmwareInventoryProvider: drivers
+// without it leave the health endpoint answering BMC_UNSUPPORTED rather
+// than failing anything else.
+type HealthProvider interface {
+	// Health samples the sensor table. Best-effort data: implementations
+	// should prefer a partial sensor list over an error when some entries
+	// fail to decode.
+	Health(ctx context.Context, addr string, cred Credentials) (HealthView, error)
+}
+
+// SELEntry is one system event log record (docs/07-bmc.md §6.3): what the
+// controller logged, when, and how severe. Severity keeps the vendor's own
+// normalized ok|warning|critical|unknown vocabulary.
+type SELEntry struct {
+	ID        string `json:"id"`
+	Timestamp string `json:"timestamp,omitempty"`
+	Severity  string `json:"severity,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+// SELReader is the optional read-only capability of retrieving the
+// controller's system event log — the "rescue room" record of what happened
+// before the OS died. Entries come back newest-first, capped; drivers
+// without it answer BMC_UNSUPPORTED at the endpoint.
+type SELReader interface {
+	// SystemEventLog returns the most recent log entries, newest first.
+	SystemEventLog(ctx context.Context, addr string, cred Credentials) ([]SELEntry, error)
+}
+
+// SELMaxEntries caps a SystemEventLog read: controllers keep thousands of
+// records, and the rescue-room question is always "what happened lately".
+const SELMaxEntries = 500

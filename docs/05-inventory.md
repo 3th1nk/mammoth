@@ -97,6 +97,13 @@ POST /machines/{id}/actions {"type": "discover", "probe": "ramdisk"}
   任务轮询快照水位,收到即弹出介质并断电(补偿);等待预算
   `MAMMOTH_PROBE_WAIT`(默认 10m),特性整体由 `MAMMOTH_RAMDISK_ENABLED` 门控;
 - 个性化(上报 URL 内嵌任务 token)构建期烘入,无运行时配置;
+- **磁盘健康采集(2026-09-24)**:探针启动时 best-effort 从引导介质自身
+  `/apks` 仓安装 smartmontools/nvme(`--no-network`,载体带则装、不带则
+  跳过——启动零风险,standard/extended 皆可引导);扫描时对每块盘采集
+  `smartctl -H` overall-health 或 NVMe `critical_warning`,快照 disks 项
+  附 `"health": "pass" | "fail"`。**无证据不发明结论**:工具缺失、设备
+  不报,该项留空——门禁侧(装前健康门禁,
+  [04-install-spec.md](04-install-spec.md) §5.6)只认显式 fail;
 - 载体 ISO 经 `MAMMOTH_PROBE_ALPINE_ISO` 声明(本地路径或 URL):**须 lts
   内核的 standard 版**——lts + modloop 才带全量真机存储驱动(megaraid_sas
   等);virt 内核/40MB 级 flavor 缺驱动,真机看不到盘;

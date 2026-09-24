@@ -92,6 +92,9 @@ POST /api/v1/credentials
 ### 4.1 工件库(image registry)
 
 `POST /api/v1/images` 注册发行版 ISO:`source_url` + `sha256`(64 hex,
+拉取完成后引擎自动嗅探 ISO 内容回填空缺的 `distro`/`version`——
+纯 Go ISO 9660 解析(PVD+目录指纹:.treeinfo/.discinfo/.disk/info/sources/apks),
+注册者自带的值优先;
 必填——校验和是门禁不是元数据)→ fetch worker 串行拉取进内容寻址缓存
 (`MediaDir/images/<sha256>.iso`,digest 重复的注册共享同一文件,下载中
 失败/损坏一律不落缓存,事件 `image.ready`/`image.failed`)。安装 spec 的

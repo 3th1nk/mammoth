@@ -81,6 +81,12 @@ func (f *Fetcher) process(ctx context.Context, im *store.Image) {
 	// no download. The first registration pays; every later one is a
 	// rename on the row.
 	if shared, err := f.Repo.ReadyBySHA(ctx, im.SHA256); err == nil && shared.ID != im.ID {
+		// inherit the shared row's identification for blank fields
+		if im.Distro == "" || im.Version == "" {
+			if derr := f.Repo.SetDetected(ctx, im.ID, shared.Distro, shared.Version); derr != nil {
+				log.Warn("dedupe inherit detection failed", "err", derr.Error())
+			}
+		}
 		if serr := f.Repo.SetReady(ctx, im.ID, shared.SizeBytes, shared.FilePath); serr != nil {
 			log.Warn("dedupe share failed", "err", serr.Error())
 			return
@@ -104,14 +110,35 @@ func (f *Fetcher) process(ctx context.Context, im *store.Image) {
 		log.Warn("image fetch failed", "err", cause)
 		return
 	}
+	// Auto-detect distro/version for blank fields (the ISO is already on
+	// disk — detection is free at this point). The registrant's own values
+	// always win; absence of a verdict is fine, the row just stays blank.
+	if im.Distro == "" || im.Version == "" {
+		if fh, oerr := os.Open(path); oerr == nil {
+			distro, version, ok := DetectISO(fh)
+			fh.Close()
+			if ok && (im.Distro == "" || im.Version == "") {
+				if derr := f.Repo.SetDetected(ctx, im.ID, distro, version); derr == nil {
+					if im.Distro == "" && distro != "" {
+						im.Distro = distro
+					}
+					if im.Version == "" && version != "" {
+						im.Version = version
+					}
+					log.Info("image distro detected", "distro", distro, "version", version)
+				}
+			}
+		}
+	}
 	if uerr := f.Repo.SetReady(ctx, im.ID, size, path); uerr != nil {
 		log.Warn("set ready row", "err", uerr.Error())
 		return
 	}
 	f.emit(ctx, "image.ready", im.ID, map[string]any{
 		"source_url": im.SourceURL, "sha256": im.SHA256, "size_bytes": size,
+		"distro": im.Distro, "version": im.Version,
 	})
-	log.Info("image ready", "bytes", size, "path", path)
+	log.Info("image ready", "bytes", size, "path", path, "distro", im.Distro, "version", im.Version)
 }
 
 func (f *Fetcher) emit(ctx context.Context, typ, id string, payload map[string]any) {

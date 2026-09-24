@@ -99,6 +99,19 @@ func (r *ImageRepo) SetReady(ctx context.Context, id string, sizeBytes int64, fi
 	return err
 }
 
+// SetDetected backfills the distro/version the fetch worker identified from
+// the ISO (docs/04-install-spec.md §4.1 auto-detection). Only empty fields
+// move — the registrant's own values always win.
+func (r *ImageRepo) SetDetected(ctx context.Context, id, distro, version string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE images SET
+		  distro = COALESCE(NULLIF(distro, ''), NULLIF($2, ''), distro),
+		  version = COALESCE(NULLIF(version, ''), NULLIF($3, ''), version),
+		  updated_at = now()
+		WHERE id = $1`, id, distro, version)
+	return err
+}
+
 // SetFailed marks a fetch dead with its reason. The row stays: the
 // registration (and its sha256 gate) is the operator's record; resubmitting
 // re-downloads.

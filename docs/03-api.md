@@ -29,6 +29,7 @@ image / template ──▶ job ──▶ task ──▶ events      编排域
 GET    /api/v1                                  # capabilities:版本/资源/发行版支持矩阵
 
 POST   /api/v1/credentials
+GET    /api/v1/credentials                      # 元数据列表(无 secret,供选择器)
 GET    /api/v1/credentials/{id}
 DELETE /api/v1/credentials/{id}
 

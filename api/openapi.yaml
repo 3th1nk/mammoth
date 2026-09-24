@@ -70,6 +70,21 @@ paths:
                 $ref: '#/components/schemas/Capabilities'
 
   /api/v1/credentials:
+    get:
+      operationId: listCredentials
+      tags: [credentials]
+      summary: List credentials (metadata only, newest first)
+      description: |
+        No secret material is ever included. The list is small by nature
+        (one entry per BMC/SSH credential the operator created), so it has
+        no pagination.
+      responses:
+        '200':
+          description: Credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialList'
     post:
       operationId: createCredential
       tags: [credentials]
@@ -1557,6 +1572,15 @@ components:
           maxLength: 255
         secret:
           $ref: '#/components/schemas/CredentialSecret'
+
+    CredentialList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Credential'
 
     Credential:
       type: object

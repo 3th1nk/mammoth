@@ -42,6 +42,20 @@ func (s *Server) CreateCredential(ctx context.Context, request gen.CreateCredent
 	return gen.CreateCredential201JSONResponse(credentialOut(cred)), nil
 }
 
+// ListCredentials returns credential metadata for pickers — the console's
+// register dialog selects an existing credential instead of typing ids.
+func (s *Server) ListCredentials(ctx context.Context, _ gen.ListCredentialsRequestObject) (gen.ListCredentialsResponseObject, error) {
+	items, err := s.Credentials.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := gen.CredentialList{Items: make([]gen.Credential, 0, len(items))}
+	for _, c := range items {
+		out.Items = append(out.Items, credentialOut(c))
+	}
+	return gen.ListCredentials200JSONResponse(out), nil
+}
+
 func (s *Server) GetCredential(ctx context.Context, request gen.GetCredentialRequestObject) (gen.GetCredentialResponseObject, error) {
 	cred, err := s.Credentials.Get(ctx, string(request.Id))
 	if err != nil {

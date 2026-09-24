@@ -25,6 +25,28 @@ func (r *CredentialRepo) Create(ctx context.Context, c *Credential) error {
 	return err
 }
 
+// List returns every credential's metadata, newest first. Secrets are
+// never part of the result — this feeds the console's credential picker.
+func (r *CredentialRepo) List(ctx context.Context) ([]*Credential, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, name, type, created_at, updated_at
+		FROM credentials ORDER BY created_at DESC, id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []*Credential
+	for rows.Next() {
+		c := &Credential{}
+		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, c)
+	}
+	return items, rows.Err()
+}
+
 func (r *CredentialRepo) Get(ctx context.Context, id string) (*Credential, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, name, type, secret_encrypted, created_at, updated_at

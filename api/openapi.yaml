@@ -69,6 +69,27 @@ paths:
               schema:
                 $ref: '#/components/schemas/Capabilities'
 
+  /api/v1/config:
+    get:
+      operationId: getConfig
+      tags: [meta]
+      summary: Effective configuration snapshot (redacted)
+      description: |
+        Read-only projection of the effective runtime configuration, keyed by
+        the environment variable names (the 12-factor fact source). Values are
+        stringified; empty effective values read as null. Keys listed in
+        `redacted` never carry their value: configured ones read as `***`,
+        unset ones as null — configured/unconfigured state is visible, values
+        are not. There is deliberately no write path: configuration is
+        deployment-owned, changes go through the env/compose layer.
+      responses:
+        '200':
+          description: Effective configuration snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigSnapshot'
+
   /api/v1/credentials:
     get:
       operationId: listCredentials
@@ -1475,6 +1496,34 @@ components:
             (boot.installer=agent) is usable on this deployment — PXE on
             plus the alpine extended ISO pool configured
             (MAMMOTH_WINDOWS_APPLY_ALPINE_ISO).
+
+    ConfigSnapshot:
+      type: object
+      description: |
+        Read-only projection of the effective runtime configuration, keyed by
+        the environment variable names (the 12-factor fact source). The write
+        path is intentionally absent: configuration is deployment-owned, and
+        changes go through the env/compose layer with a restart — a runtime
+        settings API would create a second configuration source with unclear
+        persistence semantics, exposed to a single-token trust model.
+      required: [config, redacted]
+      properties:
+        config:
+          type: object
+          additionalProperties: true
+          description: >-
+            Effective values keyed by env name, stringified (durations in Go
+            duration notation). Each value is a string, or null when the
+            effective value is empty/unset. Keys listed in redacted read as
+            "***" when configured and null when unset — configured/unconfigured
+            state is visible, values are not.
+        redacted:
+          type: array
+          description: The denylist of keys whose values never leave the
+            process (authenticating material, account names, internal
+            infrastructure endpoints).
+          items:
+            type: string
 
     DistroSupport:
       type: object

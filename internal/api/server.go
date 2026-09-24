@@ -82,6 +82,14 @@ type Deps struct {
 	// (MediaDir/images); the delete handler confines its reclamation here.
 	ImagesDir string
 
+	// Config is the effective-configuration snapshot served by GET /config
+	// (docs/04 §A6): env-keyed, stringified, secrets masked to "***" and
+	// unset keys null by the denylist carried in ConfigRedacted. Computed
+	// once at startup — configuration is process-lifetime and the endpoint
+	// is read-only by design.
+	Config         map[string]interface{}
+	ConfigRedacted []string
+
 	// Visibility is the lease window used when re-enqueueing retried tasks.
 	Visibility time.Duration
 }
@@ -281,6 +289,23 @@ func (s *Server) GetCapabilities(ctx context.Context, _ gen.GetCapabilitiesReque
 	out.DriveEraseConfirm = (*gen.CapabilitiesDriveEraseConfirm)(str(eraseConfirm))
 
 	return gen.GetCapabilities200JSONResponse(out), nil
+}
+
+// GetConfig serves the redacted effective-configuration snapshot
+// (docs/04 §A6): the deployment's env as configured, stringified, with
+// authenticating material and internal endpoints masked. The snapshot is
+// computed once at startup; there is deliberately no write path —
+// configuration is deployment-owned.
+func (s *Server) GetConfig(ctx context.Context, _ gen.GetConfigRequestObject) (gen.GetConfigResponseObject, error) {
+	out := gen.ConfigSnapshot{
+		Config:   make(map[string]interface{}, len(s.Config)),
+		Redacted: make([]string, 0, len(s.ConfigRedacted)),
+	}
+	for k, v := range s.Config {
+		out.Config[k] = v
+	}
+	out.Redacted = append(out.Redacted, s.ConfigRedacted...)
+	return gen.GetConfig200JSONResponse(out), nil
 }
 
 // ── shared helpers ──────────────────────────────────────────────────────────

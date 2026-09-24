@@ -416,6 +416,9 @@ func serve(args []string) error {
 		EraseConfirmRequired:  cfg.EraseConfirmRequired,
 		Images:                imageRepo,
 		ImagesDir:             filepath.Join(cfg.MediaDir, "images"),
+
+		Config:         cfg.Snapshot(),
+		ConfigRedacted: config.RedactedKeys,
 	}
 
 	errCh := make(chan error, 4)

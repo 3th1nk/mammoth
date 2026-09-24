@@ -365,6 +365,13 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
    - **复验轮**——22.04-crypt(性价比最高: crypt 修复仅 24.04 轮覆盖过,
      2288H 半天可补,**真机窗口第一件事**)+ Kylin/rocky10-PXE;2288H 单
      机轮装顺序覆盖(22/24/rocky9 已证明此模式可行);
+   - **openEuler 驱动接入(候选,2026-09-24 立项)**——两篇 openEuler/
+     Kylin PXE 实战文章核认:openEuler 24.03 是 anaconda RHEL9 代际
+     (pykickstart/anaconda 36),kickstart 与 rocky9 同方言,UEFI grub
+     引导流与既有机制同型——接入成本 = rocky9 家族驱动注册 + 支持矩阵
+     行 + 真机验证,无新方言工作。注意点:引擎渲染 `rootpw --plaintext`
+     (一次性随机),不涉 openEuler 默认 SM3 散列(那是 `--iscrypted`
+     手写 ks 的坑);驱动名建议 `openeuler24`。随真机窗口与复验轮顺带;
    - **真机 relay 回归**——等网络设备配 ip helper 的协调窗口(giaddr 应答
      已有单测,见 11-pxe-walkthrough §4);
    - ~~**uniontechos**~~ **✅ 已闭环(2026-09-19 真机,见第 2 项)**;剩余

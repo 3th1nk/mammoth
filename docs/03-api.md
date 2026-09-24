@@ -46,6 +46,7 @@ GET    /api/v1/machines/{id}/bios               # 控制器实时 BIOS 属性表
 GET    /api/v1/machines/{id}/health             # 控制器实时健康快照:传感器 + 电源态 + overall(带外同步读)
 GET    /api/v1/machines/{id}/sel                # 控制器系统事件日志,倒序截断 500 条(带外同步读)
 GET    /api/v1/machines/{id}/console            # 一次性 KVM URL
+POST   /api/v1/machines/batch-labels            # 批量打标签(单事务全有或全无;remove 按 key 删 + add upsert)
 POST   /api/v1/machines/{id}/install-plan       # 试算(只读;已实现 V1,见 §4)
 POST   /api/v1/machines/{id}/actions            # 单机动作 → 202 + job
 

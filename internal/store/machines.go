@@ -161,6 +161,82 @@ func (r *MachineRepo) Update(ctx context.Context, m *Machine) error {
 	return nil
 }
 
+// BatchUpdateLabels applies one add/remove label set to many machines in a
+// single transaction — all-or-nothing (docs/04 §A5): any unknown id rejects
+// the whole batch and nothing is written. Every named row is locked up
+// front, so concurrent label edits serialize instead of interleaving.
+// Per machine, remove deletes by key (missing keys are a no-op) and add
+// upserts its pairs; SQL-side remove runs first, so a key present in both
+// would let add win — the handler rejects that combination before the store
+// sees it. Returns fresh snapshots in request order.
+func (r *MachineRepo) BatchUpdateLabels(ctx context.Context, ids []string, add map[string]string, remove []string) ([]*Machine, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id FROM machines WHERE id = ANY($1) FOR UPDATE`, ids)
+	if err != nil {
+		return nil, err
+	}
+	found := make(map[string]bool, len(ids))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		found[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	for _, id := range ids {
+		if !found[id] {
+			return nil, fmt.Errorf("%w: machine %q not found", ErrNotFound, id)
+		}
+	}
+
+	addJSON, _ := json.Marshal(add)
+	if add == nil {
+		addJSON = []byte(`{}`)
+	}
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE machines
+			SET labels = (labels - $2::text[]) || $3::jsonb, updated_at = now()
+			WHERE id = $1`, id, remove, addJSON); err != nil {
+			return nil, err
+		}
+	}
+
+	out := make([]*Machine, 0, len(ids))
+	rows, err = tx.QueryContext(ctx, machineSelect+` WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byID := make(map[string]*Machine, len(ids))
+	for rows.Next() {
+		m, err := scanMachine(rows)
+		if err != nil {
+			return nil, err
+		}
+		byID[m.ID] = m
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		out = append(out, byID[id])
+	}
+	return out, tx.Commit()
+}
+
 func (r *MachineRepo) Delete(ctx context.Context, id string) error {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM machines WHERE id = $1`, id)
 	if err != nil {

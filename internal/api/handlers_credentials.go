@@ -241,6 +241,55 @@ func (s *Server) UpdateMachine(ctx context.Context, request gen.UpdateMachineReq
 	return gen.UpdateMachine200JSONResponse(machineOut(fresh)), nil
 }
 
+// BatchUpdateMachineLabels applies one add/remove label set to many machines
+// in one shot (docs/04 §A5) — the console's multi-select tagging. Synchronous
+// and all-or-nothing: an unknown id rejects the batch in full, the store
+// commits it in a single transaction. Labels are pure metadata, so no job is
+// created; a machine.labelled event per machine keeps the event feed honest.
+func (s *Server) BatchUpdateMachineLabels(ctx context.Context, request gen.BatchUpdateMachineLabelsRequestObject) (gen.BatchUpdateMachineLabelsResponseObject, error) {
+	body := request.Body
+	if body == nil || len(body.MachineIds) == 0 {
+		return nil, verr("SCHEMA_INVALID_BATCH_LABELS", "machine_ids must name at least one machine")
+	}
+	if len(body.MachineIds) > 500 {
+		return nil, verr("SCHEMA_INVALID_BATCH_LABELS", "machine_ids is capped at 500 machines per batch")
+	}
+	add := derefOr(body.Add, map[string]string{})
+	remove := derefOr(body.Remove, []string{})
+	if len(add) == 0 && len(remove) == 0 {
+		return nil, verr("SCHEMA_INVALID_BATCH_LABELS", "add and remove are both empty — nothing to apply")
+	}
+	for _, key := range remove {
+		if _, clash := add[key]; clash {
+			return nil, verr("SCHEMA_INVALID_BATCH_LABELS", "label key %q appears in both add and remove", key)
+		}
+	}
+	// Deduplicate, preserving request order: a repeated id would fire its
+	// event twice and duplicate the response entry.
+	seen := make(map[string]bool, len(body.MachineIds))
+	ids := make([]string, 0, len(body.MachineIds))
+	for _, id := range body.MachineIds {
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, string(id))
+		}
+	}
+
+	machines, err := s.Machines.BatchUpdateLabels(ctx, ids, add, remove)
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range machines {
+		s.Events.Append(ctx, "machine", m.ID, "machine.labelled",
+			map[string]any{"added": add, "removed": remove})
+	}
+	out := gen.BatchLabelResult{Machines: make([]gen.Machine, 0, len(machines))}
+	for _, m := range machines {
+		out.Machines = append(out.Machines, machineOut(m))
+	}
+	return gen.BatchUpdateMachineLabels200JSONResponse(out), nil
+}
+
 func (s *Server) DeleteMachine(ctx context.Context, request gen.DeleteMachineRequestObject) (gen.DeleteMachineResponseObject, error) {
 	if err := s.Machines.Delete(ctx, string(request.Id)); err != nil {
 		return nil, err

@@ -237,6 +237,9 @@ func (r *MachineRepo) BatchUpdateLabels(ctx context.Context, ids []string, add m
 	return out, tx.Commit()
 }
 
+// Delete deregisters a machine (docs/03-api.md §2). Machine-scoped records
+// go with it (migration 00010: layout snapshots and task rows CASCADE;
+// job shells and events stay for audit).
 func (r *MachineRepo) Delete(ctx context.Context, id string) error {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM machines WHERE id = $1`, id)
 	if err != nil {

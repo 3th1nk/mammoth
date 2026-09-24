@@ -32,8 +32,12 @@ func TestPendingRepo(t *testing.T) {
 	})
 
 	// Responder sighting creates the row; first_seen_at is pinned at birth.
-	if err := repo.TouchByMAC(ctx, mac, "uefi-x64"); err != nil {
+	created, err := repo.TouchByMAC(ctx, mac, "uefi-x64")
+	if err != nil {
 		t.Fatalf("touch: %v", err)
+	}
+	if !created {
+		t.Fatalf("first touch: created = false, want true")
 	}
 	first, err := repo.Get(ctx, mac)
 	if err != nil {
@@ -43,9 +47,15 @@ func TestPendingRepo(t *testing.T) {
 		t.Fatalf("after touch: %+v", first)
 	}
 
-	// A later sighting refreshes firmware and last_seen_at, keeps first_seen.
-	if err := repo.TouchByMAC(ctx, mac, "bios"); err != nil {
+	// A later sighting refreshes firmware and last_seen_at, keeps first_seen,
+	// and must not report itself as a new sighting — the console's live feed
+	// keys on the first one only (PXE retries would flood it otherwise).
+	created, err = repo.TouchByMAC(ctx, mac, "bios")
+	if err != nil {
 		t.Fatalf("touch again: %v", err)
+	}
+	if created {
+		t.Errorf("second touch: created = true, want false")
 	}
 	second, err := repo.Get(ctx, mac)
 	if err != nil {

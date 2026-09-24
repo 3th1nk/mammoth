@@ -30,14 +30,20 @@ type PendingMachine struct {
 // TouchByMAC records a responder sighting for an unknown MAC: the firmware
 // architecture it announced (option 93 label). The first DISCOVER creates
 // the row; later sightings refresh firmware and last_seen_at only —
-// first_seen_at stays the birth of the relationship.
-func (r *PendingRepo) TouchByMAC(ctx context.Context, mac, firmware string) error {
-	_, err := r.db.ExecContext(ctx, `
+// first_seen_at stays the birth of the relationship. Returns whether this
+// call created the row, so callers can fire a first-sighting event without
+// flooding the stream on every PXE retry.
+func (r *PendingRepo) TouchByMAC(ctx context.Context, mac, firmware string) (bool, error) {
+	// (xmax = 0) is the canonical insert-or-update discriminator: a row
+	// fresh from this INSERT has no locker. Worst case after exotic vacuum
+	// activity is a spurious true — a duplicate event, never lost data.
+	var created bool
+	err := r.db.QueryRowContext(ctx, `
 		INSERT INTO pending_machines (mac, firmware) VALUES ($1, $2)
 		ON CONFLICT (mac) DO UPDATE
-		SET firmware = EXCLUDED.firmware, last_seen_at = now()`,
-		mac, firmware)
-	return err
+		SET firmware = EXCLUDED.firmware, last_seen_at = now()
+		RETURNING (xmax = 0)`, mac, firmware).Scan(&created)
+	return created, err
 }
 
 // SaveReport records an enrollment probe's /sys scan for the MAC it booted

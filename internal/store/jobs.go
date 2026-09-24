@@ -831,11 +831,15 @@ func (r *JobRepo) RecordInstallComplete(ctx context.Context, taskID, status, det
 
 // ActiveTaskRef is the minimal identity of an unfinished task — the busy
 // gate's error detail (docs/04-install-spec.md §5: a machine with an
-// unfinished install task must have that job explicitly canceled first).
+// unfinished install task must have that job explicitly canceled first)
+// and the console's busy view (machines/{id}/current-tasks).
 type ActiveTaskRef struct {
-	ID    string
-	JobID string
-	State string
+	ID        string
+	JobID     string
+	State     string
+	FlowName  string
+	Attempt   int
+	CreatedAt time.Time
 }
 
 // ActiveInstallTasksByMachines returns, per machine, its latest unfinished
@@ -864,6 +868,31 @@ func (r *JobRepo) ActiveInstallTasksByMachines(ctx context.Context, machineIDs [
 			return nil, err
 		}
 		out[mid] = ref
+	}
+	return out, rows.Err()
+}
+
+// ActiveTasksByMachine returns every unfinished task (pending / running /
+// interrupted) of one machine, oldest first. Unlike the busy gate — which
+// only weighs install tasks — this is the full in-flight view: power and
+// discover tasks may legitimately run alongside an install.
+func (r *JobRepo) ActiveTasksByMachine(ctx context.Context, machineID string) ([]ActiveTaskRef, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, job_id, state, flow_name, stage_attempt, created_at
+		FROM tasks
+		WHERE machine_id = $1 AND state IN ('pending', 'running', 'interrupted')
+		ORDER BY created_at, id`, machineID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ActiveTaskRef
+	for rows.Next() {
+		var ref ActiveTaskRef
+		if err := rows.Scan(&ref.ID, &ref.JobID, &ref.State, &ref.FlowName, &ref.Attempt, &ref.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, ref)
 	}
 	return out, rows.Err()
 }

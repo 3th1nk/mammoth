@@ -76,10 +76,26 @@ func (s *Server) ListEvents(ctx context.Context, request gen.ListEventsRequestOb
 	return gen.ListEvents200JSONResponse(page), nil
 }
 
-// sseStream writes events to w starting after resumeID until ctx is done.
-// Poll cadence is fine-grained enough for operator UX at zero complexity cost
-// (a LISTEN/NOTIFY upgrade path stays open behind the same interface).
-func (s *Server) sseStream(ctx context.Context, w http.ResponseWriter, filter store.EventFilter, resumeID int64) error {
+// sseFrame is one server-sent event: a monotonic id, the event name, and
+// the JSON payload.
+type sseFrame struct {
+	id    int64
+	event string
+	data  any
+}
+
+// ssePoll writes SSE frames to w, resuming after resumeID and polling fetch
+// every second until ctx is done — the shared loop behind the event and
+// task-log streams. eof, when non-nil, is consulted once the backlog has
+// drained: returning true ends the stream with a terminal `eos` frame (the
+// client's cue to stop reconnecting). Periodic keepalive comments keep
+// intermediaries from reaping an idle connection. Poll cadence is
+// fine-grained enough for operator UX at zero complexity cost (a
+// LISTEN/NOTIFY upgrade path stays open behind the same interface).
+func ssePoll(ctx context.Context, w http.ResponseWriter, resumeID int64,
+	fetch func(ctx context.Context, after int64) ([]sseFrame, error),
+	eof func(ctx context.Context) bool,
+) error {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return verr("SCHEMA_SSE_UNSUPPORTED", "streaming unsupported by this connection")
@@ -92,6 +108,7 @@ func (s *Server) sseStream(ctx context.Context, w http.ResponseWriter, filter st
 	flusher.Flush()
 
 	last := resumeID
+	idle := 0
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
@@ -100,25 +117,52 @@ func (s *Server) sseStream(ctx context.Context, w http.ResponseWriter, filter st
 			return nil
 		case <-ticker.C:
 		}
+		frames, err := fetch(ctx, last)
+		if err != nil {
+			return nil // client gone or transient; SSE contract: close silently
+		}
+		for _, f := range frames {
+			data, _ := json.Marshal(f.data)
+			fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", f.id, f.event, data)
+			last = f.id
+		}
+		if len(frames) > 0 {
+			flusher.Flush()
+			idle = 0
+			continue
+		}
+		if eof != nil && eof(ctx) {
+			fmt.Fprint(w, "event: eos\ndata: {}\n\n")
+			flusher.Flush()
+			return nil
+		}
+		if idle++; idle >= 15 {
+			fmt.Fprint(w, ": keepalive\n\n")
+			flusher.Flush()
+			idle = 0
+		}
+	}
+}
+
+// sseStream streams events through the shared poll loop.
+func (s *Server) sseStream(ctx context.Context, w http.ResponseWriter, filter store.EventFilter, resumeID int64) error {
+	return ssePoll(ctx, w, resumeID, func(ctx context.Context, after int64) ([]sseFrame, error) {
 		events, err := s.Events.List(ctx, store.EventFilter{
-			AfterID:      last,
+			AfterID:      after,
 			ResourceType: filter.ResourceType,
 			ResourceID:   filter.ResourceID,
 			Type:         filter.Type,
 			Limit:        200,
 		})
 		if err != nil {
-			return nil // client gone or transient; SSE contract: close silently
+			return nil, err
 		}
+		frames := make([]sseFrame, 0, len(events))
 		for _, e := range events {
-			data, _ := json.Marshal(eventOut(e))
-			fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", e.ID, e.Type, data)
-			last = e.ID
+			frames = append(frames, sseFrame{id: e.ID, event: e.Type, data: eventOut(e)})
 		}
-		if len(events) > 0 {
-			flusher.Flush()
-		}
-	}
+		return frames, nil
+	}, nil)
 }
 
 func resumeFrom(header *string) int64 {

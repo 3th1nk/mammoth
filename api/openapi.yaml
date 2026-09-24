@@ -168,6 +168,16 @@ paths:
             items:
               type: string
               pattern: '^[^=]+=[^=]*$'
+        - name: q
+          in: query
+          description: |
+            Fuzzy search term (case-insensitive substring match) over the
+            machine id, BMC address, serial number, vendor, model, and label
+            keys/values. LIKE metacharacters in the term are matched
+            literally. Empty is ignored; combines with the other filters.
+          schema:
+            type: string
+            maxLength: 200
       responses:
         '200':
           description: Machine page
@@ -218,6 +228,29 @@ paths:
       responses:
         '204':
           description: Deleted
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/machines/{id}/current-tasks:
+    parameters:
+      - $ref: '#/components/parameters/machineId'
+    get:
+      operationId: listMachineCurrentTasks
+      tags: [machines]
+      summary: List the machine's unfinished tasks
+      description: |
+        Every task of this machine still pending, running, or interrupted
+        (an interrupted task is retryable and will run again), oldest first.
+        Empty items means the machine is free. The install×install
+        exclusivity behind 409 JOB_MACHINE_BUSY is a subset of this view —
+        power/discover tasks may legitimately run alongside an install.
+      responses:
+        '200':
+          description: Unfinished task references (possibly empty)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentTaskList'
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -548,6 +581,44 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TaskLogList'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/jobs/{id}/tasks/{taskId}/logs/stream:
+    parameters:
+      - $ref: '#/components/parameters/jobId'
+      - $ref: '#/components/parameters/taskId'
+    get:
+      operationId: streamJobTaskLogs
+      tags: [jobs]
+      summary: Stream task execution logs (SSE)
+      description: |
+        Server-sent events over the task's persisted log lines — the same
+        records as listJobTaskLogs, tailed. The stream first replays the
+        backlog after the resume point in id order, then pushes new lines as
+        they land. The watermark is the monotonic log id: reconnect with
+        Last-Event-ID to resume exactly where the connection dropped (it
+        wins over the `after` query parameter). Once the task reaches a
+        terminal state (succeeded/failed/canceled — interrupted stays open,
+        a retry resumes the same task) and the backlog has drained, the
+        server emits a final `eos` event and closes the stream.
+      parameters:
+        - name: after
+          in: query
+          description: Replay logs after this log id.
+          schema:
+            type: string
+        - name: Last-Event-ID
+          in: header
+          schema:
+            type: string
+      responses:
+        '200':
+          description: SSE stream (`text/event-stream`); `log` frames, then a terminal `eos` frame.
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/TaskLog'
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -1018,9 +1089,10 @@ paths:
       parameters:
         - name: resource_type
           in: query
+          description: "`pending` covers zero-registration sightings; `webhook` webhook lifecycle."
           schema:
             type: string
-            enum: [job, task, machine, credential]
+            enum: [job, task, machine, credential, pending, webhook]
         - name: resource_id
           in: query
           schema:
@@ -2533,6 +2605,35 @@ components:
         next_cursor:
           type: string
           nullable: true
+
+    CurrentTaskRef:
+      type: object
+      description: Minimal identity of one unfinished task (machines/{id}/current-tasks).
+      required: [task_id, job_id, flow_name, state, attempt, created_at]
+      properties:
+        task_id:
+          $ref: '#/components/schemas/TaskId'
+        job_id:
+          $ref: '#/components/schemas/JobId'
+        flow_name:
+          type: string
+          enum: [install, power, discover]
+        state:
+          $ref: '#/components/schemas/TaskState'
+        attempt:
+          type: integer
+          description: Task attempt counter (bumped on retry).
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+
+    CurrentTaskList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CurrentTaskRef'
 
     Event:
       type: object

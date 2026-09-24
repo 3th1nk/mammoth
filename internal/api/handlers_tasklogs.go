@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"strconv"
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
@@ -34,6 +35,70 @@ func taskLogOut(l store.TaskLogRecord) gen.TaskLog {
 		Attrs:   attrs,
 		Ts:      l.TS,
 	}
+}
+
+// StreamJobTaskLogs tails one task's execution log as SSE (docs/03-api.md):
+// backlog replay after the resume point, live lines as they land, and a
+// terminal `eos` frame once the task is terminal (succeeded/failed/canceled)
+// and the backlog has drained. interrupted stays open — a retry resumes the
+// same task record and the stream simply picks the new lines up.
+func (s *Server) StreamJobTaskLogs(ctx context.Context, request gen.StreamJobTaskLogsRequestObject) (gen.StreamJobTaskLogsResponseObject, error) {
+	if _, err := s.Jobs.GetJob(ctx, string(request.Id)); err != nil {
+		return nil, err
+	}
+	task, err := s.Jobs.GetTask(ctx, string(request.TaskId))
+	if err != nil {
+		return nil, err
+	}
+	if task.JobID != string(request.Id) {
+		return nil, store.ErrNotFound
+	}
+	// Last-Event-ID wins over `after`: the reconnect header carries the
+	// exact watermark the client actually saw.
+	resume := resumeFrom(request.Params.LastEventID)
+	if resume == 0 && request.Params.After != nil && *request.Params.After != "" {
+		v, err := strconv.ParseInt(*request.Params.After, 10, 64)
+		if err != nil {
+			return nil, verr("SCHEMA_INVALID_CURSOR", "after must be a task log id")
+		}
+		resume = v
+	}
+	return &taskLogStream{server: s, ctx: ctx, taskID: task.ID, resume: resume}, nil
+}
+
+type taskLogStream struct {
+	server *Server
+	ctx    context.Context
+	taskID string
+	resume int64
+}
+
+func (t *taskLogStream) VisitStreamJobTaskLogsResponse(w http.ResponseWriter) error {
+	return ssePoll(t.ctx, w, t.resume, func(ctx context.Context, after int64) ([]sseFrame, error) {
+		logs, err := t.server.Logs.List(ctx, store.TaskLogFilter{
+			TaskID:  t.taskID,
+			AfterID: after,
+			Limit:   200,
+		})
+		if err != nil {
+			return nil, err
+		}
+		frames := make([]sseFrame, 0, len(logs))
+		for _, l := range logs {
+			frames = append(frames, sseFrame{id: l.ID, event: "log", data: taskLogOut(l)})
+		}
+		return frames, nil
+	}, func(ctx context.Context) bool {
+		task, err := t.server.Jobs.GetTask(ctx, t.taskID)
+		if err != nil {
+			return false
+		}
+		switch task.State {
+		case "succeeded", "failed", "canceled":
+			return true
+		}
+		return false
+	})
 }
 
 // ListJobTaskLogs returns one task's execution trail in write order. The

@@ -135,9 +135,15 @@ func (s *Server) GetMachine(ctx context.Context, request gen.GetMachineRequestOb
 
 func (s *Server) ListMachines(ctx context.Context, request gen.ListMachinesRequestObject) (gen.ListMachinesResponseObject, error) {
 	p := request.Params
+	orderBy := ""
+	if p.OrderBy != nil {
+		orderBy = string(*p.OrderBy)
+	}
 	items, next, err := s.Machines.List(ctx, store.ListFilter{
 		State:    string(derefOr(p.State, gen.MachineState(""))),
 		Labels:   derefOr(p.Labels, nil),
+		Q:        derefOr(p.Q, ""),
+		OrderBy:  orderBy,
 		PageSize: int(derefOr(p.PageSize, 50)),
 		Cursor:   decodeCursor(p.Cursor),
 		Order:    orderOf((*string)(p.Order)),
@@ -151,6 +157,32 @@ func (s *Server) ListMachines(ctx context.Context, request gen.ListMachinesReque
 	}
 	out.NextCursor = encodeCursor(next)
 	return gen.ListMachines200JSONResponse(out), nil
+}
+
+// ListMachineCurrentTasks is the machine's in-flight view — the console's
+// busy badge and reinstall precheck (empty items means free). It reads the
+// unfinished tasks straight from the store instead of inferring them from
+// the job list, so 409 JOB_MACHINE_BUSY surprises become a pre-check.
+func (s *Server) ListMachineCurrentTasks(ctx context.Context, request gen.ListMachineCurrentTasksRequestObject) (gen.ListMachineCurrentTasksResponseObject, error) {
+	if _, err := s.Machines.Get(ctx, string(request.Id)); err != nil {
+		return nil, err
+	}
+	refs, err := s.Jobs.ActiveTasksByMachine(ctx, string(request.Id))
+	if err != nil {
+		return nil, err
+	}
+	out := gen.CurrentTaskList{Items: []gen.CurrentTaskRef{}}
+	for _, ref := range refs {
+		out.Items = append(out.Items, gen.CurrentTaskRef{
+			TaskId:    gen.TaskId(ref.ID),
+			JobId:     gen.JobId(ref.JobID),
+			FlowName:  gen.CurrentTaskRefFlowName(ref.FlowName),
+			State:     gen.TaskState(ref.State),
+			Attempt:   ref.Attempt,
+			CreatedAt: ref.CreatedAt,
+		})
+	}
+	return gen.ListMachineCurrentTasks200JSONResponse(out), nil
 }
 
 func (s *Server) UpdateMachine(ctx context.Context, request gen.UpdateMachineRequestObject) (gen.UpdateMachineResponseObject, error) {

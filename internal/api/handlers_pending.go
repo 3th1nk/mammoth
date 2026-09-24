@@ -40,6 +40,11 @@ func (s *Server) ReportEnrollment(ctx context.Context, request gen.ReportEnrollm
 	if err := s.Pending.SaveReport(ctx, mac, raw); err != nil {
 		return nil, err
 	}
+	// Once per probe boot — not a flood path like the PXE DISCOVER stream.
+	// The console's live pending feed keys on these two event types.
+	s.Events.Append(ctx, "pending", mac, "pending.reported", map[string]any{
+		"disks": len(request.Body.Disks),
+	})
 	obs.FromContext(ctx).InfoContext(ctx, "enrollment report recorded",
 		"mac", mac, "disks", len(request.Body.Disks))
 	return gen.ReportEnrollment204Response{}, nil

@@ -324,10 +324,17 @@ func serve(args []string) error {
 					// trace — pending_machines is the zero-registration ledger
 					// (docs/09-roadmap.md). Firmware accumulates even before
 					// the enrollment probe has ever booted.
-					if terr := pendingRepo.TouchByMAC(octx, mac, string(arch)); terr != nil {
+					created, terr := pendingRepo.TouchByMAC(octx, mac, string(arch))
+					if terr != nil {
 						logger.Warn("pending sighting persist failed", "mac", mac, "err", terr)
 					} else {
 						logger.Debug("pending sighting recorded", "mac", mac, "arch", arch)
+						// First trace only: the DISCOVER retry storm must not
+						// flood the event stream — pending sightings are the
+						// console's live feed.
+						if created {
+							eventRepo.Append(octx, "pending", mac, "pending.sighted", map[string]any{"firmware": string(arch)})
+						}
 					}
 				}
 			},

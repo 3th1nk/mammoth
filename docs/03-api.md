@@ -33,10 +33,11 @@ GET    /api/v1/credentials/{id}
 DELETE /api/v1/credentials/{id}
 
 POST   /api/v1/machines
-GET    /api/v1/machines?state=ready&labels=rack=A3&cursor=&page_size=50
+GET    /api/v1/machines?state=ready&labels=rack=A3&q=SN-QA&cursor=&page_size=50
 GET    /api/v1/machines/{id}
 PATCH  /api/v1/machines/{id}
 DELETE /api/v1/machines/{id}
+GET    /api/v1/machines/{id}/current-tasks      # 未完结任务视图(装 busy 徽章/重装预检)
 GET    /api/v1/machines/{id}/layout
 GET    /api/v1/machines/{id}/drives             # 控制器实时物理盘表(带外同步读)
 GET    /api/v1/machines/{id}/bios               # 控制器实时 BIOS 属性表(带外同步读)
@@ -50,6 +51,7 @@ POST   /api/v1/jobs/{id}/cancel
 GET    /api/v1/jobs/{id}/tasks?state=failed
 GET    /api/v1/jobs/{id}/tasks/{tid}
 GET    /api/v1/jobs/{id}/tasks/{tid}/logs       # 任务执行日志(日志双写落库半边)
+GET    /api/v1/jobs/{id}/tasks/{tid}/logs/stream # 日志 SSE(回放+尾随,终态发 eos 收流)
 POST   /api/v1/jobs/{id}/tasks/{tid}/retry
 GET    /api/v1/jobs/{id}/events                 # job 级 SSE
 
@@ -135,11 +137,11 @@ task:  pending → running → succeeded | failed | canceled
 | 错误 | RFC 9457 `application/problem+json`,扩展 `code`(机器可读错误码,注册表维护)与 `retryable` |
 | 幂等 | `Idempotency-Key` header 适用于所有创建类 POST;24h 窗口内重放返回原结果 |
 | 分页 | cursor 制:`?page_size=&cursor=`,响应含 `next_cursor`;不提供 offset 深翻页 |
-| 过滤/排序 | `?state=failed&labels=env=prod`;`?order_by=created_at&order=desc` |
+| 过滤/排序 | `?state=failed&labels=env=prod`;机器列表另有模糊搜索 `?q=`(对机器 ID、BMC 地址、序列号、厂商、型号、label 键值做大小写不敏感子串匹配,LIKE 元字符按字面处理,与其它过滤条件 AND 组合);`?order_by=created_at&order=desc`(游标键随 order_by 走) |
 | 时间 | RFC 3339 UTC;时长字段以 `_seconds` / `_duration_ms` 后缀显式标注单位 |
 | 凭证 | 只写;支持请求内联(服务端转存为 credential 资源并返回引用) |
 | 追踪 | 每响应 `X-Request-Id`;task 日志与事件全链路携带 `task_id` |
-| 事件 | SSE(`text/event-stream`);事件类型:`task.stage_changed` `task.state_changed` `job.state_changed` `machine.discovered` 等 |
+| 事件 | SSE(`text/event-stream`);事件类型:`task.stage_changed` `task.state_changed` `job.state_changed` `machine.discovered` `pending.sighted`(零注册首见) `pending.reported`(探针报告落库)等;流空闲期以 `: keepalive` 注释帧保活,任务日志流在终态回放完后发 `eos` 收流 |
 | 契约 | OpenAPI 3.1;SDK 由 spec 生成(Go/Python/TypeScript);`GET /api/v1` 返回能力自描述 |
 | 鉴权 | Bearer token;首版内置静态 token 管理,预留外部 IdP 适配点 |
 

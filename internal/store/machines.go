@@ -36,19 +36,29 @@ func (r *MachineRepo) Get(ctx context.Context, id string) (*Machine, error) {
 }
 
 // ListFilter narrows machine listings (docs/03-api.md §4: state + labels
-// equality, cursor pagination).
+// equality, free-text q over the identity columns, cursor pagination).
 type ListFilter struct {
 	State    string
 	Labels   []string // "k=v" pairs
+	Q        string   // fuzzy term over id/bmc/serial/vendor/model/labels
+	OrderBy  string   // created_at (default) | updated_at
 	PageSize int
 	Cursor   *Cursor
 	Order    string // asc | desc
 }
 
-// Cursor is an opaque keyset continuation token over (created_at, id).
+// Cursor is an opaque keyset continuation token. CreatedAt carries the sort
+// column's timestamp — whatever order_by the page was requested with; the
+// column itself rides the request, not the token.
 type Cursor struct {
 	CreatedAt time.Time
 	ID        string
+}
+
+// likeTerm escapes LIKE metacharacters and wraps the term for ILIKE — the
+// user's text matches literally, never as a pattern.
+func likeTerm(q string) string {
+	return "%" + strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(q) + "%"
 }
 
 func (r *MachineRepo) List(ctx context.Context, f ListFilter) ([]*Machine, *Cursor, error) {
@@ -63,13 +73,27 @@ func (r *MachineRepo) List(ctx context.Context, f ListFilter) ([]*Machine, *Curs
 		args = append(args, json.RawMessage(fmt.Sprintf(`{"%s":"%s"}`, k, v)))
 		where = append(where, fmt.Sprintf("labels @> $%d", len(args)))
 	}
+	if f.Q != "" {
+		args = append(args, likeTerm(f.Q))
+		n := len(args)
+		where = append(where, fmt.Sprintf(
+			"(id ILIKE $%d OR bmc_address ILIKE $%d OR serial_number ILIKE $%d"+
+				" OR vendor ILIKE $%d OR model ILIKE $%d OR labels::text ILIKE $%d)",
+			n, n, n, n, n, n))
+	}
+	// Keyset pagination keys on the requested sort column so order_by
+	// actually orders (the contract has always offered updated_at).
+	sortCol := "created_at"
+	if f.OrderBy == "updated_at" {
+		sortCol = "updated_at"
+	}
 	if f.Cursor != nil {
 		args = append(args, f.Cursor.CreatedAt, f.Cursor.ID)
 		op := "<"
 		if f.Order == "asc" {
 			op = ">"
 		}
-		where = append(where, fmt.Sprintf("(created_at, id) %s ($%d, $%d)", op, len(args)-1, len(args)))
+		where = append(where, fmt.Sprintf("(%s, id) %s ($%d, $%d)", sortCol, op, len(args)-1, len(args)))
 	}
 	order := "desc"
 	if f.Order == "asc" {
@@ -83,7 +107,7 @@ func (r *MachineRepo) List(ctx context.Context, f ListFilter) ([]*Machine, *Curs
 
 	rows, err := r.db.QueryContext(ctx, machineSelect+
 		" WHERE "+strings.Join(where, " AND ")+
-		" ORDER BY created_at "+order+", id "+order+
+		" ORDER BY "+sortCol+" "+order+", id "+order+
 		fmt.Sprintf(" LIMIT $%d", len(args)), args...)
 	if err != nil {
 		return nil, nil, err
@@ -106,7 +130,11 @@ func (r *MachineRepo) List(ctx context.Context, f ListFilter) ([]*Machine, *Curs
 	if len(items) > limit {
 		items = items[:limit]
 		last := items[len(items)-1]
-		next = &Cursor{CreatedAt: last.CreatedAt, ID: last.ID}
+		sortKey := last.CreatedAt
+		if sortCol == "updated_at" {
+			sortKey = last.UpdatedAt
+		}
+		next = &Cursor{CreatedAt: sortKey, ID: last.ID}
 	}
 	return items, next, nil
 }

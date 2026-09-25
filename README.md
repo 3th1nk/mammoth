@@ -308,7 +308,7 @@ onboarding, event audit with HMAC-signed webhooks, a ⌘K command palette, and
 dark mode. Run it beside the engine with `docker compose`, or `npm run dev` for
 local development.
 
-![Mammoth Console](https://raw.githubusercontent.com/3th1nk/mammoth-console/main/docs/screenshots/machines.png)
+![Mammoth Console](https://github.com/3th1nk/mammoth-console/raw/main/docs/screenshots/machines.png)
 
 ## Development
 

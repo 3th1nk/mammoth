@@ -282,7 +282,7 @@ docker compose -f deploy/compose.faceted.yml up -d      # 1×api + N×runner + 1
 事件审计与 HMAC 签名 webhook、⌘K 全局命令面板、暗色模式。`docker compose`
 伴引擎部署,或 `npm run dev` 本地开发。
 
-![Mammoth Console](https://raw.githubusercontent.com/3th1nk/mammoth-console/main/docs/screenshots/machines.png)
+![Mammoth Console](https://github.com/3th1nk/mammoth-console/raw/main/docs/screenshots/machines.png)
 
 ## 开发
 

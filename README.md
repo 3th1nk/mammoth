@@ -294,6 +294,22 @@ docker compose -f deploy/compose.faceted.yml up -d      # 1×api + N×runner + 1
 Restricted networks: `--build-arg RUNTIME_IMAGE=<mirror>/distroless/static-debian12:nonroot`
 and `--build-arg GOPROXY=https://goproxy.cn,direct`.
 
+## Official console
+
+Prefer a UI over cURL? **[mammoth-console](https://github.com/3th1nk/mammoth-console)**
+is the official web console for this engine — a single-page Vue 3 app with zero
+private backend: every capability boundary is driven by `GET /api/v1`
+(capabilities), and every action goes through the same public API you just used.
+
+Machine lifecycle (register / auto-discovery / power / health & SEL / BIOS / drive
+erase with two-stage confirmations), a four-step install wizard with an
+install-plan dry run, live task & log streaming (SSE), zero-registration
+onboarding, event audit with HMAC-signed webhooks, a ⌘K command palette, and
+dark mode. Run it beside the engine with `docker compose`, or `npm run dev` for
+local development.
+
+![Mammoth Console](https://raw.githubusercontent.com/3th1nk/mammoth-console/main/docs/screenshots/machines.png)
+
 ## Development
 
 ```bash

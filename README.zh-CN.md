@@ -271,6 +271,19 @@ docker compose -f deploy/compose.faceted.yml up -d      # 1×api + N×runner + 1
 受限网络:`--build-arg RUNTIME_IMAGE=<mirror>/distroless/static-debian12:nonroot`
 与 `--build-arg GOPROXY=https://goproxy.cn,direct`。
 
+## 官方控制台
+
+不想敲 cURL?**[mammoth-console](https://github.com/3th1nk/mammoth-console)**
+是本引擎的官方 Web 控制台——零私有后端的 Vue 3 单页应用:所有能力边界由
+`GET /api/v1`(capabilities)驱动,所有动作都走你刚刚用过的同一套公开 API。
+
+机器全生命周期(注册/自动盘查/电源/健康与 SEL/BIOS/擦盘,高危动作两段式确认)、
+四步装机向导(install-plan 试算预览)、任务与日志实时流(SSE)、零注册入门、
+事件审计与 HMAC 签名 webhook、⌘K 全局命令面板、暗色模式。`docker compose`
+伴引擎部署,或 `npm run dev` 本地开发。
+
+![Mammoth Console](https://raw.githubusercontent.com/3th1nk/mammoth-console/main/docs/screenshots/machines.png)
+
 ## 开发
 
 ```bash

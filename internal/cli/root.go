@@ -38,6 +38,7 @@ API access: --api / --token flags or MAMMOTH_API_URL / MAMMOTH_API_TOKEN.`,
 
 	root.AddCommand(serve, versionCmd(), tokenCmd())
 	root.AddCommand(sandboxCmd())
+	root.AddCommand(mcpCmd(newClient))
 	root.AddCommand(credentialsCmd(newClient))
 	root.AddCommand(machinesCmd(newClient))
 	root.AddCommand(installCmd(newClient))

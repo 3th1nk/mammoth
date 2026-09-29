@@ -89,7 +89,7 @@ func printJobState(st *State) {
 	var job struct {
 		State string `json:"state"`
 	}
-	if err := api.get("/api/v1/jobs/"+st.JobID, &job); err != nil {
+	if err := api.Get("/api/v1/jobs/"+st.JobID, &job); err != nil {
 		fmt.Printf("job %s: unreachable (%v)\n", st.JobID, err)
 		return
 	}
@@ -97,7 +97,7 @@ func printJobState(st *State) {
 	var tasks struct {
 		Items []taskView `json:"items"`
 	}
-	if err := api.get(fmt.Sprintf("/api/v1/jobs/%s/tasks?page_size=200", st.JobID), &tasks); err != nil {
+	if err := api.Get(fmt.Sprintf("/api/v1/jobs/%s/tasks?page_size=200", st.JobID), &tasks); err != nil {
 		return
 	}
 	for _, t := range tasks.Items {

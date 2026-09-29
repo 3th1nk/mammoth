@@ -1,12 +1,8 @@
 package sandbox
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -14,61 +10,13 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/3th1nk/mammoth/internal/apiclient"
 )
 
-// ── API helper ──────────────────────────────────────────────────────────────
-// Duplicated from internal/cli on purpose: the cli package imports sandbox to
-// mount the subcommand, so the dependency cannot point the other way.
-
-type apiClient struct {
-	base  string
-	token string
-	http  *http.Client
-}
-
-func newAPI(token string) *apiClient {
-	return &apiClient{base: apiBase(), token: token, http: &http.Client{Timeout: 30 * time.Second}}
-}
-
-func (a *apiClient) do(method, path string, body any, out any) error {
-	var rd io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		rd = bytes.NewReader(b)
-	}
-	req, err := http.NewRequest(method, a.base+path, rd)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+a.token)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := a.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	payload, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
-		var p struct{ Code, Detail string }
-		if json.Unmarshal(payload, &p) == nil && p.Code != "" {
-			return fmt.Errorf("%s %s: %s (%s)", method, path, p.Detail, p.Code)
-		}
-		return fmt.Errorf("%s %s: %s", method, path, strings.TrimSpace(string(payload)))
-	}
-	if out != nil && len(payload) > 0 {
-		return json.Unmarshal(payload, out)
-	}
-	return nil
-}
-
-func (a *apiClient) get(path string, out any) error { return a.do(http.MethodGet, path, nil, out) }
-func (a *apiClient) post(path string, body, out any) error {
-	return a.do(http.MethodPost, path, body, out)
+// newAPI builds the shared API client for the sandbox's throwaway server.
+func newAPI(token string) *apiclient.Client {
+	return apiclient.NewClient(apiBase(), token)
 }
 
 // ── install spec ────────────────────────────────────────────────────────────
@@ -251,7 +199,7 @@ func runUp(ctx context.Context, exe string, state *State, save func()) error {
 	var cred struct {
 		ID string `json:"id"`
 	}
-	if err := api.post("/api/v1/credentials", map[string]any{
+	if err := api.Post("/api/v1/credentials", map[string]any{
 		"type": "bmc", "name": "sandbox",
 		"secret": map[string]string{"username": "sandbox", "password": "sandbox"},
 	}, &cred); err != nil {
@@ -264,7 +212,7 @@ func runUp(ctx context.Context, exe string, state *State, save func()) error {
 		var m struct {
 			ID string `json:"id"`
 		}
-		if err := api.post("/api/v1/machines", map[string]any{
+		if err := api.Post("/api/v1/machines", map[string]any{
 			"bmc": map[string]any{
 				"address":       fmt.Sprintf("fake://sandbox-node-%d-%d", i+1, stamp),
 				"protocol":      "fake",
@@ -292,7 +240,7 @@ func runUp(ctx context.Context, exe string, state *State, save func()) error {
 	var job struct {
 		ID string `json:"id"`
 	}
-	if err := api.post("/api/v1/jobs", map[string]any{
+	if err := api.Post("/api/v1/jobs", map[string]any{
 		"type":    "install",
 		"targets": map[string]any{"machine_ids": state.MachineIDs},
 		"spec":    buildSpec(isoPath, pubKey),
@@ -317,7 +265,7 @@ func runUp(ctx context.Context, exe string, state *State, save func()) error {
 // bootGuests polls the job's tasks; as soon as a task's boot ISO is rendered
 // (<media>/boot-<token>.iso) its qemu guest starts. Returns when every node
 // has a guest in the installer.
-func bootGuests(ctx context.Context, api *apiClient, state *State, save func()) error {
+func bootGuests(ctx context.Context, api *apiclient.Client, state *State, save func()) error {
 	mediaDir := filepath.Join(Dir(), "media")
 	booted := make([]bool, state.Nodes)
 	deadline := time.Now().Add(prepareMedia)
@@ -325,7 +273,7 @@ func bootGuests(ctx context.Context, api *apiClient, state *State, save func()) 
 		var tasks struct {
 			Items []taskView `json:"items"`
 		}
-		if err := api.get(fmt.Sprintf("/api/v1/jobs/%s/tasks?page_size=200", state.JobID), &tasks); err != nil {
+		if err := api.Get(fmt.Sprintf("/api/v1/jobs/%s/tasks?page_size=200", state.JobID), &tasks); err != nil {
 			return err
 		}
 		for _, t := range tasks.Items {
@@ -380,13 +328,13 @@ func bootGuests(ctx context.Context, api *apiClient, state *State, save func()) 
 	}
 }
 
-func waitReady(ctx context.Context, api *apiClient, id string) error {
+func waitReady(ctx context.Context, api *apiclient.Client, id string) error {
 	deadline := time.Now().Add(60 * time.Second)
 	for {
 		var m struct {
 			State string `json:"state"`
 		}
-		if err := api.get("/api/v1/machines/"+id, &m); err == nil && m.State == "ready" {
+		if err := api.Get("/api/v1/machines/"+id, &m); err == nil && m.State == "ready" {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -400,20 +348,20 @@ func waitReady(ctx context.Context, api *apiClient, id string) error {
 	}
 }
 
-func watchInstall(ctx context.Context, api *apiClient, state *State) error {
+func watchInstall(ctx context.Context, api *apiclient.Client, state *State) error {
 	deadline := time.Now().Add(installWait)
 	prev := ""
 	for {
 		var job struct {
 			State string `json:"state"`
 		}
-		if err := api.get("/api/v1/jobs/"+state.JobID, &job); err != nil {
+		if err := api.Get("/api/v1/jobs/"+state.JobID, &job); err != nil {
 			return err
 		}
 		var tasks struct {
 			Items []taskView `json:"items"`
 		}
-		if err := api.get(fmt.Sprintf("/api/v1/jobs/%s/tasks?page_size=200", state.JobID), &tasks); err != nil {
+		if err := api.Get(fmt.Sprintf("/api/v1/jobs/%s/tasks?page_size=200", state.JobID), &tasks); err != nil {
 			return err
 		}
 		if line := progressLine(state, tasks.Items); line != prev {

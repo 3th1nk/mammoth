@@ -74,6 +74,32 @@ Port collisions are handled: override `MAMMOTH_SANDBOX_HTTP_PORT`,
 are fake-BMC demos — real fleets speak Redfish/IPMI through the same API and
 install specs.
 
+## Drive it from your AI — the MCP server
+
+`mammoth mcp serve` exposes the same API as MCP tools over stdio: register
+machines, drive discovery, submit declarative installs, track jobs to
+completion, read task logs. All tools are read-only except `install_submit`
+(which wipes and reinstalls the targets) and `job_cancel`.
+
+```json
+{
+  "mcpServers": {
+    "mammoth": {
+      "command": "/usr/local/bin/mammoth",
+      "args": ["mcp", "serve"],
+      "env": {
+        "MAMMOTH_API_URL": "http://127.0.0.1:8080",
+        "MAMMOTH_API_TOKEN": "<token>"
+      }
+    }
+  }
+}
+```
+
+Point Claude Desktop or Cursor at the sandbox (above) and just ask:
+*"machines_list, then install Rocky 9 from this ISO on every ready machine
+and wait for the job"* — the mammoth task, tamed by one sentence.
+
 ## At a glance
 
 **One pipeline, three inventory paths, two boot carriers, four installer

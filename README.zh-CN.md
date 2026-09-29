@@ -66,6 +66,31 @@ bin/mammoth sandbox down      # 全部停止;ISO 缓存与日志保留
 `MAMMOTH_SANDBOX_DB_PORT`、`MAMMOTH_SANDBOX_SSH_PORT`。沙箱机器是 fake BMC
 演示——真实机群通过同一套 API 与安装规格说 Redfish/IPMI。
 
+## 让 AI 来驱动——MCP server
+
+`mammoth mcp serve` 把同一套 API 以 MCP 工具的形式暴露在 stdio 上:注册机器、
+驱动盘查、提交声明式装机、跟踪任务到终态、读取任务日志。除 `install_submit`
+(会清盘重装目标机)与 `job_cancel` 外,其余工具均为只读。
+
+```json
+{
+  "mcpServers": {
+    "mammoth": {
+      "command": "/usr/local/bin/mammoth",
+      "args": ["mcp", "serve"],
+      "env": {
+        "MAMMOTH_API_URL": "http://127.0.0.1:8080",
+        "MAMMOTH_API_TOKEN": "<token>"
+      }
+    }
+  }
+}
+```
+
+把 Claude Desktop 或 Cursor 指向上面的沙箱,然后直接说:
+「列一下机器,把所有 ready 的机器都装上 Rocky 9,等任务完成」——
+猛犸级的任务,一句话驯服。
+
 ## 一图看懂
 
 **一条流水线,三条盘查通路,两种引导载体,四种安装器方言。**

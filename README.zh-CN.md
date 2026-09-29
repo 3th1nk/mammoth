@@ -38,6 +38,34 @@ Mammoth 顺着这根心跳找到机器、盘点骨骼、听你声明它该成为
 
 顶部那只披着长毛的 gopher 说的也是同一件事:小个子(单二进制、自包含),干重活。
 
+## 五分钟上手——沙箱
+
+不需要 BMC 硬件,也不需要第二台机器:`mammoth sandbox up` 把笔记本变成一个小机房——
+带模拟 BMC 的虚拟机完成注册、盘查、声明式装机(真实安装 alpine,走默认的
+virtual_media 载体),装完二次起盘,直接 SSH 进去。
+
+前置条件:Go ≥ 1.26、Docker、QEMU、xorriso、curl。
+
+```bash
+brew install qemu xorriso     # linux:sudo apt-get install qemu-system-x86 qemu-utils xorriso
+go build -o bin/mammoth ./cmd/mammoth
+bin/mammoth sandbox up        # --nodes N(1–5,默认 3)
+```
+
+Docker 只用来跑 PostgreSQL;guest 是相互隔离的 slirp NAT——无需网桥、特权容器,
+也不用 root。资源按每台 guest 约 2 GB 内存 + 1 个核估算(3 台约 6 GB;无 KVM 时
+每台装机需数分钟)。装机 job 全绿之后:
+
+```bash
+ssh -i ~/.mammoth-sandbox/id_ed25519 -p 2222 root@127.0.0.1   # sandbox-node-1
+bin/mammoth sandbox status    # 正在跑什么、装到哪一步
+bin/mammoth sandbox down      # 全部停止;ISO 缓存与日志保留
+```
+
+端口冲突可通过环境变量调整:`MAMMOTH_SANDBOX_HTTP_PORT`、
+`MAMMOTH_SANDBOX_DB_PORT`、`MAMMOTH_SANDBOX_SSH_PORT`。沙箱机器是 fake BMC
+演示——真实机群通过同一套 API 与安装规格说 Redfish/IPMI。
+
 ## 一图看懂
 
 **一条流水线,三条盘查通路,两种引导载体,四种安装器方言。**

@@ -43,6 +43,37 @@ address and a credential; get back a machine that runs.
 The gopher in mammoth fur at the top says the same thing: a small binary
 (single, self-contained) doing mammoth-sized work.
 
+## Try it in 5 minutes — the sandbox
+
+No BMC hardware, no second machine: `mammoth sandbox up` turns a laptop into
+a small datacenter — virtual machines with simulated BMCs get registered,
+inventoried and provisioned with real alpine systems, end to end through the
+default virtual-media carrier, then second-booted for SSH.
+
+Requires: Go ≥ 1.26, Docker, QEMU, xorriso, curl.
+
+```bash
+brew install qemu xorriso     # linux: sudo apt-get install qemu-system-x86 qemu-utils xorriso
+go build -o bin/mammoth ./cmd/mammoth
+bin/mammoth sandbox up        # --nodes N (1–5, default 3)
+```
+
+Docker supplies only PostgreSQL; guests are isolated slirp NATs — no bridges,
+no privileged containers, no root. Budget roughly 2 GB RAM and one CPU core
+per guest (3 guests ≈ 6 GB; without KVM a full install runs a few minutes
+per guest). When the install job goes green:
+
+```bash
+ssh -i ~/.mammoth-sandbox/id_ed25519 -p 2222 root@127.0.0.1   # sandbox-node-1
+bin/mammoth sandbox status    # what is running, how far the install got
+bin/mammoth sandbox down      # stop everything; ISO cache and logs are kept
+```
+
+Port collisions are handled: override `MAMMOTH_SANDBOX_HTTP_PORT`,
+`MAMMOTH_SANDBOX_DB_PORT`, `MAMMOTH_SANDBOX_SSH_PORT`. The sandbox machines
+are fake-BMC demos — real fleets speak Redfish/IPMI through the same API and
+install specs.
+
 ## At a glance
 
 **One pipeline, three inventory paths, two boot carriers, four installer

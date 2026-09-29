@@ -37,6 +37,7 @@ API access: --api / --token flags or MAMMOTH_API_URL / MAMMOTH_API_TOKEN.`,
 	newClient := func() *Client { return NewClient(apiURL, token) }
 
 	root.AddCommand(serve, versionCmd(), tokenCmd())
+	root.AddCommand(sandboxCmd())
 	root.AddCommand(credentialsCmd(newClient))
 	root.AddCommand(machinesCmd(newClient))
 	root.AddCommand(installCmd(newClient))

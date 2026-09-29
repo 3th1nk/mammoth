@@ -120,7 +120,7 @@ func agentScript() string {
 # any failing command would kill the whole runtime silently (no report, no
 # shell). This runtime handles its own errors: strip the -e and re-exec. The
 # child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
-SCRIPT_VERSION="ab-v13"
+SCRIPT_VERSION="ab-v14"
 case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
 log "agent runtime $SCRIPT_VERSION starting"
 
@@ -180,24 +180,31 @@ bringup_network() {
 }
 
 report() { # report <ok|failed> <detail>
-    DETAIL=$(printf '%s' "$2" | tr -d '"\\' | cut -c1-700)
+    # The body must survive json.Decoder no matter what went into $2: bare
+    # control bytes (<0x20) inside a JSON string are a parse error, and a
+    # rejected report swallows the failure (observed as three consecutive
+    # 400s with the task stuck running). Strip controls first, then the
+    # quoting characters, then truncate.
+    DETAIL=$(printf '%s' "$2" | tr -d '\000-\037\177' | tr -d '"\\' | cut -c1-700)
     printf '{"status":"%s","detail":"%s"}' "$1" "$DETAIL" > /tmp/mammoth-report.json
+    log "report body: $(cat /tmp/mammoth-report.json 2>/dev/null)"
     bringup_network || return 1
     for i in 1 2 3; do
         if wget -q -T 10 -O /dev/null --post-file=/tmp/mammoth-report.json "$MAMMOTH_COMPLETE_URL"; then
             log "completion reported ($1)"; return 0
         fi
-        log "report attempt $i failed"; sleep 2
+        log "report attempt $i failed (exit $?)"; sleep 2
     done
     return 1
 }
 
 bail() { # bail <stage> <detail>
     log "FATAL ($1): $2"
-    ERRTRAIL=$(tail -c 400 /tmp/mammoth-storage.err 2>/dev/null | tr '\n' ' ' | tr -d '"\\')
+    ERRTRAIL=$(cat /tmp/mammoth-storage.err /tmp/mammoth-config.err 2>/dev/null | tail -c 400 | tr '\n' ' ' | tr -d '"\\')
     LOGTRAIL=$(tail -c 400 /tmp/mammoth-log.txt 2>/dev/null | tr '\n' '|' | tr -d '"\\')
     TMPTYPE=$(df -h /tmp 2>/dev/null | tail -1 | cut -d" " -f1)
-    report failed "$1: $2 [script: ${SCRIPT_VERSION:-unknown}] [err: ${ERRTRAIL:-none}] [log: ${LOGTRAIL:-none}] [tmpfs: ${TMPTYPE:-unknown}]"
+    report failed "$1: $2 [script: ${SCRIPT_VERSION:-unknown}] [err: ${ERRTRAIL:-none}] [log: ${LOGTRAIL:-none}] [tmpfs: ${TMPTYPE:-unknown}]" \
+        || log "completion report unreachable — the body is in the report-body line above"
     log "dropping to shell for diagnosis (BMC SOL)"
     exec /bin/sh
 }
@@ -483,11 +490,15 @@ configure_target() {
     # fallback), written into shadow — a plaintext shadow entry would make
     # the machine unloginnable (ubuntu22 real-hardware finding, mirrored).
     log "config: root password hash"
-    hash=$(busybox cryptpw -m sha512 "$MAMMOTH_ROOT_PASSWORD" 2>/dev/null)
-    [ -n "$hash" ] || hash=$(openssl passwd -6 "$MAMMOTH_ROOT_PASSWORD" 2>/dev/null)
-    [ -n "$hash" ] || return 1
+    hash=$(busybox cryptpw -m sha512 "$MAMMOTH_ROOT_PASSWORD" 2>>/tmp/mammoth-config.err)
+    [ -n "$hash" ] || hash=$(openssl passwd -6 "$MAMMOTH_ROOT_PASSWORD" 2>>/tmp/mammoth-config.err)
+    if [ -z "$hash" ]; then
+        log "config: cryptpw and openssl both failed to hash — see /tmp/mammoth-config.err"
+        return 1
+    fi
     awk -F: -v h="$hash" 'BEGIN{OFS=":"} $1=="root"{$2=h} {print}' "$TARGET/etc/shadow" > "$TARGET/etc/shadow.new" \
-        && mv "$TARGET/etc/shadow.new" "$TARGET/etc/shadow" || return 1
+        && mv "$TARGET/etc/shadow.new" "$TARGET/etc/shadow" \
+        || { log "config: shadow rewrite failed"; return 1; }
     log "config: ssh keys + permit root login"
     if [ -n "$MAMMOTH_SSH_KEYS" ]; then
         mkdir -p "$TARGET/root/.ssh" && chmod 700 "$TARGET/root/.ssh"

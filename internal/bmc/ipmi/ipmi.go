@@ -1,8 +1,9 @@
 // Package ipmi implements the narrow IPMI subset Mammoth needs over a pure-Go
 // stack (github.com/vmware/goipmi), honoring decision D5: no ipmitool shell
 // out, no system package dependency. Scope (docs/07-bmc.md §2): chassis
-// power, boot device, identity probe; virtual media and KVM are OEM commands
-// and reported as unsupported until vendor drivers add them.
+// power, boot device, identity probe, FRU-limited inventory (fru.go); virtual
+// media and KVM are OEM commands and reported as unsupported until vendor
+// drivers add them.
 package ipmi
 
 import (
@@ -79,6 +80,13 @@ func (d *Driver) Probe(ctx context.Context, addr string, cred bmc.Credentials) (
 	power, perr := d.powerState(ctx, client)
 	if perr == nil {
 		info.PowerState = power
+	}
+	// FRU backfill (best-effort): model from the board area, serial from the
+	// product area (the service tag on Dell) with the board serial as
+	// fallback. Feeds discovery backfill and the compat vendor matrix,
+	// which keys on model and otherwise never matches an IPMI-only machine.
+	if area, aerr := readFRUArea(client, fruDeviceID); aerr == nil {
+		info.Model, info.SerialNumber = fruIdentity(area)
 	}
 	return info, nil
 }
@@ -214,9 +222,19 @@ func (d *Driver) ConsoleURL(_ context.Context, _ string, _ bmc.Credentials) (str
 		Detail: "IPMI offers serial-over-LAN only, no KVM URL"}
 }
 
-func (d *Driver) CollectInventory(_ context.Context, _ string, _ bmc.Credentials) (bmc.HardwareView, error) {
-	return bmc.HardwareView{}, &bmc.Error{Kind: bmc.KindUnsupported, Op: "collect_inventory",
-		Detail: "IPMI yields FRU/limited inventory; use the redfish probe"}
+// CollectInventory returns the FRU-limited view docs/07-bmc.md §2 promises
+// for IPMI: chassis identity (serial/service tag) with a partial-coverage
+// note stating exactly what standard IPMI cannot see. cpu/memory/disks/nics
+// are Redfish territory; the read never fails the discovery over a missing
+// slice — the notes carry the degradation instead.
+func (d *Driver) CollectInventory(_ context.Context, addr string, cred bmc.Credentials) (bmc.HardwareView, error) {
+	client, err := d.connect(addr, cred)
+	if err != nil {
+		return bmc.HardwareView{}, err
+	}
+	defer client.Close()
+	area, aerr := readFRUArea(client, fruDeviceID)
+	return fruHardwareView(area, aerr), nil
 }
 
 func splitHostPort(addr string) (string, int) {

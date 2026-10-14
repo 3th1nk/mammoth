@@ -63,7 +63,7 @@ Reset 拒绝时以 `ForceRestart` 重试重启类动作;自签名 TLS 经
 | 引导设备 | ✅ `BootSourceOverride` | ✅ `chassis bootdev` |
 | 虚拟介质 | ✅ `InsertMedia`;未通告时回退 OEM 动作(华为 VmmControl 已实装,NFS/CIFS) | ⚠️ 厂商私有(OEM 命令) |
 | KVM | ⚠️ OEM 领地(Redfish 无标准资源);**OEM 映射未实装**——真机定案裸路径 URL 直开不可用,需 SSO 直链(§5、compat/huawei.md),现返回 `BMC_UNSUPPORTED` | ❌(仅 SOL 串口) |
-| 硬件盘查 | ✅ Storage/Ethernet/Processor/Memory(宽容解析违规固件) | ⚠️ 有限(FRU/传感器) |
+| 硬件盘查 | ✅ Storage/Ethernet/Processor/Memory(宽容解析违规固件) | ⚠️ 有限(FRU 已实装;传感器无 SDR 栈) |
 | RAID 卷管理 | ✅ `VolumeCreator`(标准载荷被拒时走 OEM 载荷,如华为 DriveID) | ❌ |
 | 固件清单 | ✅ `FirmwareInventoryProvider`(UpdateService/FirmwareInventory,宽容解析,缺链接/坏条目降级) | ❌(能力缺失即无数据,盘查不失败) |
 | BIOS 配置 | ✅ `BiosSetter`(Bios 属性表读 / @Redfish.Settings 设置对象 PATCH,ETag If-Match,读改写保 pending,202 任务轮询) | ❌ |

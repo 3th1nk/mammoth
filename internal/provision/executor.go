@@ -542,8 +542,8 @@ func (e *Executor) runDiscover(ctx context.Context, task *store.Task, job *store
 		}
 		return e.probeRamdisk(ctx, task, usePXE)
 	}
-	if probeKind != "auto" && probeKind != "redfish" {
-		return classifiedErr("SCHEMA_INVALID_ACTION", false, "unknown probe kind %s", probeKind)
+	if err := probeKindReject(probeKind, proto); err != nil {
+		return err
 	}
 
 	_ = e.Machines.SetState(ctx, task.MachineID, "discovering")
@@ -567,7 +567,10 @@ func (e *Executor) runDiscover(ctx context.Context, task *store.Task, job *store
 	case herr == nil:
 		hardware = hw.(bmc.HardwareView)
 	case bmcKind(herr) == bmc.KindUnsupported:
-		// identity-only machine (e.g. ipmi-only): coverage notes stay empty
+		// Driver has no inventory at all: discovery stays green (the BMC
+		// answered, identity landed) but coverage must never be the
+		// ambiguous empty string — put the degradation on the record.
+		hardware.Note(string(proto) + " driver: no inventory support, identity-only machine")
 	default:
 		return e.discoverFailed(ctx, task, herr)
 	}
@@ -622,6 +625,25 @@ func (e *Executor) runDiscover(ctx context.Context, task *store.Task, job *store
 		return e.collectLayout(ctx, task, false)
 	}
 	return nil
+}
+
+// probeKindReject validates an explicit probe request against the machine's
+// resolved BMC protocol. An explicit redfish request on a non-redfish machine
+// is refused outright rather than silently downgraded to the fallback
+// identity path — the same discipline as inband_ssh's missing-SSH reject.
+func probeKindReject(probeKind string, proto bmc.Protocol) error {
+	switch probeKind {
+	case "", "auto":
+		return nil
+	case "redfish":
+		if proto != bmc.ProtocolRedfish {
+			return classifiedErr("SCHEMA_INVALID_ACTION", false,
+				"probe redfish requires a redfish BMC; machine speaks %s", proto)
+		}
+		return nil
+	default:
+		return classifiedErr("SCHEMA_INVALID_ACTION", false, "unknown probe kind %s", probeKind)
+	}
 }
 
 // collectLayout runs the inband_ssh probe and persists the snapshot. With

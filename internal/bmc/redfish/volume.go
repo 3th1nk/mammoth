@@ -349,20 +349,13 @@ func matchingVolume(ctx context.Context, c *gofish.APIClient, st *storageRef, sp
 }
 
 func listVolumeNames(ctx context.Context, c *gofish.APIClient, st *storageRef) ([]string, error) {
-	raw, err := getRaw(c, st.odataID+"/Volumes")
+	members, err := followCollection(func(url string) ([]byte, error) { return getRaw(c, url) },
+		"list_volumes", st.odataID+"/Volumes")
 	if err != nil {
 		return nil, err
 	}
-	var col struct {
-		Members []struct {
-			ODataID string `json:"@odata.id"`
-		} `json:"Members"`
-	}
-	if err := json.Unmarshal(raw, &col); err != nil {
-		return nil, err
-	}
-	names := make([]string, 0, len(col.Members))
-	for _, m := range col.Members {
+	names := make([]string, 0, len(members))
+	for _, m := range members {
 		names = append(names, m.ODataID[strings.LastIndex(m.ODataID, "/")+1:])
 	}
 	return names, nil

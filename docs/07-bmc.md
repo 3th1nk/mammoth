@@ -69,7 +69,7 @@ Reset 拒绝时以 `ForceRestart` 重试重启类动作;自签名 TLS 经
 | BIOS 配置 | ✅ `BiosSetter`(Bios 属性表读 / @Redfish.Settings 设置对象 PATCH,ETag If-Match,读改写保 pending,202 任务轮询) | ❌ |
 | 安全擦除 | ✅ `DriveEraser`(逐盘 `#Drive.SecureErase` 动作,serial 先全量解析再下发,202 任务轮询) | ❌ |
 | 健康传感 | ✅ `HealthProvider`(Chassis→Thermal/Power 宽容 walk,overall 取 worst-of,absent 即 unknown 不拖累) | ❌(goipmi 无 SDR,缺能力即端点 422) |
-| 事件日志 | ✅ `SELReader`(Managers→LogServices→Entries,倒序截断 500 条) | ❌(同上) |
+| 事件日志 | ✅ `SELReader`(Managers→LogServices→Entries,跟 `Members@odata.nextLink` 翻页,倒序截断 500 条) | ❌(同上) |
 | 一次性引导 | ✅ | ✅ |
 
 ### 6.1 BiosSetter 两段式确认契约(高危动作范式的定稿形态)
@@ -88,6 +88,13 @@ Reset 拒绝时以 `ForceRestart` 重试重启类动作;自签名 TLS 经
    capabilities 的 `bios_set_confirm` 导出;
 4. **活读面**:`GET /machines/{id}/bios` 同步返回当前属性表(console
    先例的同步 BMC 读,契约声明 502)。
+
+**生效纪律(下游必须知道)**:pending 值以硬断电循环(PowerCycle)保证
+应用——GracefulRestart / OS 内 reboot 不保证触发 BIOS 应用,属性停留在
+pending(批量交付实战反复踩到)。装机链路天然满足(vMedia 起步即 hard
+cycle);绕开装机单独下发 BIOS 的调用方,须自行跟进一次 `cycle` 再复
+读 `GET /machines/{id}/bios` 活表确认落定——PATCH 2xx/任务 done 只代
+表 BMC 收下了 pending,不代表属性已生效。
 
 ### 6.2 DriveEraser 两段式确认契约(NIST 800-88 介质擦除)
 

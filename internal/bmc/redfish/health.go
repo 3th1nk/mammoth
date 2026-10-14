@@ -58,16 +58,9 @@ func walkHealth(get func(string) ([]byte, error)) (bmc.HealthView, error) {
 		return bmc.HealthView{}, &bmc.Error{Kind: bmc.KindUnsupported, Op: "health",
 			Detail: "service root carries no Chassis collection"}
 	}
-	collRaw, err := get(root.Chassis.ODataID)
+	members, err := followCollection(get, "health", root.Chassis.ODataID)
 	if err != nil {
 		return bmc.HealthView{}, err
-	}
-	var coll struct {
-		Members []odataLink `json:"Members"`
-	}
-	if json.Unmarshal(collRaw, &coll) != nil {
-		return bmc.HealthView{}, &bmc.Error{Kind: bmc.KindProtocolError, Op: "health",
-			Detail: "Chassis collection undecodable"}
 	}
 
 	view := bmc.HealthView{Health: bmc.SensorOK, Sensors: []bmc.SensorReading{}}
@@ -84,7 +77,7 @@ func walkHealth(get func(string) ([]byte, error)) (bmc.HealthView, error) {
 		}
 	}
 
-	for _, m := range coll.Members {
+	for _, m := range members {
 		if m.ODataID == "" {
 			continue
 		}
@@ -258,9 +251,9 @@ func (d *Driver) SystemEventLog(ctx context.Context, addr string, cred bmc.Crede
 // Entries collections with the fetcher injected. Log collections are
 // append-ordered oldest→newest (DSP0268 LogService semantics; ring buffers
 // wrap but keep the order), so the cap takes the collection tail before
-// fetching entry bodies — one GET for the links, bmc.SELMaxEntries GETs at
-// most for content. A log service without Entries, or a broken entry,
-// degrades the read — never fails it.
+// fetching entry bodies — the nextLink chase gathers the links, then at
+// most bmc.SELMaxEntries GETs fetch content. A log service without
+// Entries, or a broken entry, degrades the read — never fails it.
 func walkSEL(get func(string) ([]byte, error)) ([]bmc.SELEntry, error) {
 	rootRaw, err := get("/redfish/v1/")
 	if err != nil {
@@ -273,20 +266,13 @@ func walkSEL(get func(string) ([]byte, error)) ([]bmc.SELEntry, error) {
 		return nil, &bmc.Error{Kind: bmc.KindUnsupported, Op: "sel",
 			Detail: "service root carries no Managers collection"}
 	}
-	mgrCollRaw, err := get(root.Managers.ODataID)
+	mgrMembers, err := followCollection(get, "sel", root.Managers.ODataID)
 	if err != nil {
 		return nil, err
 	}
-	var mgrColl struct {
-		Members []odataLink `json:"Members"`
-	}
-	if json.Unmarshal(mgrCollRaw, &mgrColl) != nil {
-		return nil, &bmc.Error{Kind: bmc.KindProtocolError, Op: "sel",
-			Detail: "Managers collection undecodable"}
-	}
 
 	var entries []bmc.SELEntry
-	for _, mgr := range mgrColl.Members {
+	for _, mgr := range mgrMembers {
 		if mgr.ODataID == "" {
 			continue
 		}
@@ -300,17 +286,11 @@ func walkSEL(get func(string) ([]byte, error)) ([]bmc.SELEntry, error) {
 		if json.Unmarshal(mgrRaw, &m) != nil || m.LogServices == nil || m.LogServices.ODataID == "" {
 			continue
 		}
-		lsCollRaw, err := get(m.LogServices.ODataID)
+		lsMembers, err := followCollection(get, "sel", m.LogServices.ODataID)
 		if err != nil {
 			continue
 		}
-		var lsColl struct {
-			Members []odataLink `json:"Members"`
-		}
-		if json.Unmarshal(lsCollRaw, &lsColl) != nil {
-			continue
-		}
-		for _, ls := range lsColl.Members {
+		for _, ls := range lsMembers {
 			if ls.ODataID == "" {
 				continue
 			}
@@ -331,7 +311,9 @@ func walkSEL(get func(string) ([]byte, error)) ([]bmc.SELEntry, error) {
 	return entries, nil
 }
 
-// walkSELService reads one log service's entries collection.
+// walkSELService reads one log service's entries collection, following the
+// nextLink pages — vendors cap page size (75 entries is a common default),
+// and the newest records live on the last page.
 func walkSELService(get func(string) ([]byte, error), serviceURL string) []bmc.SELEntry {
 	svcRaw, err := get(serviceURL)
 	if err != nil {
@@ -343,19 +325,11 @@ func walkSELService(get func(string) ([]byte, error), serviceURL string) []bmc.S
 	if json.Unmarshal(svcRaw, &svc) != nil || svc.Entries == nil || svc.Entries.ODataID == "" {
 		return nil
 	}
-	collRaw, err := get(svc.Entries.ODataID)
+	links, err := followCollection(get, "sel", svc.Entries.ODataID)
 	if err != nil {
 		return nil
 	}
-	var coll struct {
-		Members []odataLink `json:"Members"`
-	}
-	if json.Unmarshal(collRaw, &coll) != nil {
-		return nil
-	}
-
-	// Collection-order tail: the newest records live at the end.
-	links := coll.Members
+	// Collection-order tail across pages: the newest records live at the end.
 	if len(links) > bmc.SELMaxEntries {
 		links = links[len(links)-bmc.SELMaxEntries:]
 	}

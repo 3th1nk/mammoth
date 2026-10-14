@@ -73,23 +73,16 @@ func walkFirmware(get func(string) ([]byte, error)) ([]bmc.FirmwareComponent, er
 		return nil, &bmc.Error{Kind: bmc.KindUnsupported, Op: "firmware_inventory",
 			Detail: "UpdateService carries no FirmwareInventory collection"}
 	}
-	collRaw, err := get(update.FirmwareInventory.ODataID)
+	members, err := followCollection(get, "firmware_inventory", update.FirmwareInventory.ODataID)
 	if err != nil {
 		return nil, err
-	}
-	var coll struct {
-		Members []odataLink `json:"Members"`
-	}
-	if json.Unmarshal(collRaw, &coll) != nil {
-		return nil, &bmc.Error{Kind: bmc.KindProtocolError, Op: "firmware_inventory",
-			Detail: "FirmwareInventory collection undecodable"}
 	}
 
 	// lenientFirmware mirrors the lenient-processor discipline: only the
 	// consumed fields, no strict typing on the rest (vendors violate the
 	// spec in the fields we don't read — that must not fail the entry).
-	components := make([]bmc.FirmwareComponent, 0, len(coll.Members))
-	for _, m := range coll.Members {
+	components := make([]bmc.FirmwareComponent, 0, len(members))
+	for _, m := range members {
 		if m.ODataID == "" {
 			continue
 		}

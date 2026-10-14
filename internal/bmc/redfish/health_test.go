@@ -196,6 +196,102 @@ func TestWalkSEL(t *testing.T) {
 	}
 }
 
+func TestWalkSELPaged(t *testing.T) {
+	// Vendors cap Entries per page (75 is a common default) and continue
+	// through Members@odata.nextLink. Collections are append-ordered
+	// oldest→newest, so the newest records live on the LAST page — a walk
+	// that stops at page one reports the museum wing and misses the
+	// rescue-room question ("what happened lately").
+	root := `{"Managers":{"@odata.id":"/redfish/v1/Managers"}}`
+	mgrColl := `{"Members":[{"@odata.id":"/redfish/v1/Managers/1"}]}`
+	mgr1 := `{"LogServices":{"@odata.id":".../LogServices"}}`
+	lsColl := `{"Members":[{"@odata.id":".../LogServices/SEL"}]}`
+	sel := `{"Entries":{"@odata.id":".../Entries"}}`
+	page1 := `{"Members":[
+		{"@odata.id":".../Entries/1"},
+		{"@odata.id":".../Entries/2"}],
+		"Members@odata.nextLink":"/redfish/v1/Managers/1/LogServices/SEL/Entries?$skip=2"}`
+	page2 := `{"Members":[
+		{"@odata.id":".../Entries/3"},
+		{"@odata.id":".../Entries/4"}]}`
+
+	tree := map[string]string{
+		"/redfish/v1/":           root,
+		"/redfish/v1/Managers":   mgrColl,
+		"/redfish/v1/Managers/1": mgr1,
+		".../LogServices":        lsColl,
+		".../LogServices/SEL":    sel,
+		".../Entries":            page1,
+		"/redfish/v1/Managers/1/LogServices/SEL/Entries?$skip=2": page2,
+		".../Entries/1": `{"Id":"1","Created":"2026-09-20T01:00:00Z","Severity":"OK","Message":"boot"}`,
+		".../Entries/2": `{"Id":"2","Created":"2026-09-21T01:00:00Z","Severity":"OK","Message":"temp high"}`,
+		".../Entries/3": `{"Id":"3","Created":"2026-09-22T01:00:00Z","Severity":"OK","Message":"fine"}`,
+		".../Entries/4": `{"Id":"4","Created":"2026-09-23T01:00:00Z","Severity":"Critical","Message":"psu lost"}`,
+	}
+	get := func(url string) ([]byte, error) {
+		if raw, ok := tree[url]; ok {
+			return []byte(raw), nil
+		}
+		return nil, &bmc.Error{Kind: bmc.KindUnreachable, Op: "sel", Detail: url}
+	}
+
+	got, err := walkSEL(get)
+	if err != nil {
+		t.Fatalf("walkSEL: %v", err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("entries from both pages must come back, got %d", len(got))
+	}
+	// Newest first ACROSS pages: the critical PSU loss on page two — the
+	// record the read exists for — leads the list.
+	if got[0].ID != "4" || got[0].Severity != "critical" {
+		t.Fatalf("newest record must lead: %+v", got[0])
+	}
+	if got[3].ID != "1" {
+		t.Fatalf("oldest record must close the list: %+v", got[3])
+	}
+}
+
+func TestWalkHealthPagedChassis(t *testing.T) {
+	// A multi-chassis enclosure pages its Chassis collection too; both
+	// chassis' sensors must be sampled.
+	root := `{"Chassis":{"@odata.id":"/redfish/v1/Chassis"}}`
+	coll := `{"Members":[{"@odata.id":"/redfish/v1/Chassis/1"}],
+		"Members@odata.nextLink":"/redfish/v1/Chassis?page=2"}`
+	coll2 := `{"Members":[{"@odata.id":"/redfish/v1/Chassis/2"}]}`
+	chassis := func(n string) string {
+		return `{"PowerState":"On","Status":{"Health":"OK"},
+			"Thermal":{"@odata.id":"/redfish/v1/Chassis/` + n + `/Thermal"}}`
+	}
+	thermal := func(n, fan string) string {
+		return `{"Fans":[{"Name":"Fan ` + fan + `","Reading":6000,"ReadingUnits":"RPM","Status":{"Health":"OK"}}]}`
+	}
+
+	tree := map[string]string{
+		"/redfish/v1/":                  root,
+		"/redfish/v1/Chassis":           coll,
+		"/redfish/v1/Chassis?page=2":    coll2,
+		"/redfish/v1/Chassis/1":         chassis("1"),
+		"/redfish/v1/Chassis/2":         chassis("2"),
+		"/redfish/v1/Chassis/1/Thermal": thermal("1", "A"),
+		"/redfish/v1/Chassis/2/Thermal": thermal("2", "B"),
+	}
+	get := func(url string) ([]byte, error) {
+		if raw, ok := tree[url]; ok {
+			return []byte(raw), nil
+		}
+		return nil, &bmc.Error{Kind: bmc.KindUnreachable, Op: "health", Detail: url}
+	}
+
+	got, err := walkHealth(get)
+	if err != nil {
+		t.Fatalf("walkHealth: %v", err)
+	}
+	if len(got.Sensors) != 2 {
+		t.Fatalf("sensors from both chassis pages must be sampled, got %d: %+v", len(got.Sensors), got.Sensors)
+	}
+}
+
 func TestWalkSELOldestFirstCollection(t *testing.T) {
 	// Collections arrive oldest→newest; the walk must return newest first
 	// regardless (the 500-entry cap selects the collection tail before

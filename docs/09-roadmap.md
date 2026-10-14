@@ -383,6 +383,15 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
 
 - 多机 Raid/LVM 拓扑编排
 - gRPC 内部面间协议(当前为队列 + DB,足够)
+- **redfish over 169.254(host↔BMC 带内通道)**——服务器 BMC 经
+  NCSI/共享网卡与宿主 OS 间存在链路本地直连(常见 169.254.0.0/16,
+  如 Dell iDRAC 169.254.0.1、华为 iBMC 169.254.95.118),OS 内不经
+  管理网即可直达 Redfish。对 mammoth 的形态:带内探针侧复用现有
+  redfish driver,作 `probe: auto` 降级链的又一臂——无独立管理网部署
+  (边缘机房/单机交付)下,盘查/健康/SEL 可经宿主 OS 内直连采集,
+  注册仍走常规管理面。前置:真实需求触发(无管理网场景)+ 各厂商
+  链路本地地址与凭证边界摸底(放入 compat 矩阵);风险:该通道固件
+  默认开关不一,只作增强通路,永不作注册主路径。
 
 - **vMedia 安装器 syslog 通道(观测面)✅ 已落地(2026-09-24,按本节定案)**——
   ①渲染层:kickstart 系 `inst.syslog=`、casper/autoinstall 与 d-i

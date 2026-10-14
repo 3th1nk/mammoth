@@ -103,9 +103,21 @@
   配置驱动,installer 期 seed 管不到它——对 target cloud-init 的任何
   期望都要以 late-command 落文件的方式实现(如 emit_keys_to_console)。
 
+## P8 BMC 上传挂死:Expect: 100-continue
+
+- **本质**:curl 等客户端对大 body 自动携带 `Expect: 100-continue`,部分
+  BMC 固件对固件上传类请求既不回 `100 Continue` 也不回错误,客户端干等
+  至超时(批量交付实战:固件上传全数挂死,剥掉该头即过)。Go net/http
+  默认**不**自动发送该头,mammoth 现有通路(remote-URI 挂载、gofish JSON
+  往返)天然免疫;触发条件是未来落码的**固件上传**(UpdateService
+  MultipartUpload / SimpleUpdate)与**本地 staged 介质上传**。
+- **对策**:上传实现一律不携带 Expect(或剥除);上传请求必挂 deadline;
+  固件更新实现时假 BMC 补"无 100 响应"回归用例,真机首验必过一遍上传。
+- **已落地**:无(预防性知识,面向 roadmap 固件更新项)。
+
 ## 使用方式
 
-- 新机型联调:先对照 P1-P4 的"证据形态"识别问题类别,再去厂商文档找
+- 新机型联调:先对照 P1-P8 的"证据形态"识别问题类别,再去厂商文档找
   实测细节;
 - 新方言/新载体实现:P1 三层与 P2 ①③ 是自查清单,缺任一层视为未完成;
 - 本文只写模式,不写厂商参数;实测证据、quirk 细节、固件版本分界见各

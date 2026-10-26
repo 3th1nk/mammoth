@@ -209,6 +209,23 @@ func BuildBootISO(ctx context.Context, opt BootMediaOptions, kernelArgs string) 
 		}
 	}
 
+	// Answer files at the ISO ROOT: anaconda's cdrom:/ks.cfg reads the ks
+	// offline from the boot medium — the RHEL assembly carries no packages
+	// (inst.repo carries the source over the network), but the answer file
+	// itself must not depend on the early network (lab L2s without a site
+	// DHCP leave ip=dhcp nowhere to land; real-hardware: anaconda stalled at
+	// the ks fetch while the ks sat unbaked on this very assembly).
+	for name, content := range opt.SeedFiles {
+		dest := filepath.Join(work, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return "", err
+		}
+		_ = os.Remove(dest)
+		if err := os.WriteFile(dest, []byte(content), 0o644); err != nil {
+			return "", fmt.Errorf("bake seed file %s: %w", name, err)
+		}
+	}
+
 	// Bootloader configs: identical kernel args for BIOS (isolinux) and UEFI
 	// (grub). syslinux resolves config paths relative to the config's own
 	// directory — ../ reaches the single copy in /images/pxeboot/ (upstream

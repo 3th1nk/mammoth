@@ -182,6 +182,10 @@ func FetchToFile(ctx context.Context, client *http.Client, sourceURL, wantSHA256
 	if err != nil {
 		return "", 0, fmt.Errorf("images: %w", err)
 	}
+	// The Go default UA ("Go-http-client/1.1") is blanket-403'd by public
+	// mirror anti-script rules (aliyun/tuna observed) while plain curl with
+	// any named UA passes — identify ourselves honestly instead.
+	req.Header.Set("User-Agent", "mammoth-image-fetcher (+https://github.com/3th1nk/mammoth)")
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", 0, fmt.Errorf("images: fetch %s: %w", sourceURL, err)

@@ -63,14 +63,23 @@ func (r *Relay) Push(ctx context.Context, localPath, relName string) (string, er
 	}
 	defer session.Close()
 
-	tmp := "." + filepath.Base(relName) + ".part"
-	remote := r.Dir + "/" + relName
-	// One shot: stream into the temp name, rename into place atomically.
 	session.Stdin = f
-	if err := session.Run(fmt.Sprintf("mkdir -p %q && cat > %q && mv %q %q", filepath.Dir(remote), r.Dir+"/"+relName, r.Dir+"/"+tmp, remote)); err != nil {
+	// One shot: stream into the temp name, rename into place atomically.
+	// cat lands the bytes in the TEMP name and mv publishes it — the old
+	// shape wrote the final name directly and then mv-ed a never-created
+	// temp onto it: every push transferred fully and died at mv (exit 1).
+	if err := session.Run(pushCommand(r.Dir, relName)); err != nil {
 		return "", fmt.Errorf("mediarelay: push %s: %w", relName, err)
 	}
 	return relName, nil
+}
+
+// pushCommand builds the remote one-shot: mkdir the subtree, stream stdin
+// into the temp name, publish by rename.
+func pushCommand(dir, relName string) string {
+	remote := dir + "/" + relName
+	tmp := dir + "/." + filepath.Base(relName) + ".part"
+	return fmt.Sprintf("mkdir -p %q && cat > %q && mv %q %q", filepath.Dir(remote), tmp, tmp, remote)
 }
 
 // Remove deletes a file from the export directory (best-effort callers log).

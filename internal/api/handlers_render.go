@@ -85,9 +85,23 @@ func (s *Server) ReportInstallComplete(ctx context.Context, request gen.ReportIn
 	// fact no spec or addressing scheme can guarantee (DHCP, reserved or
 	// declared). Recording it keeps verify_ready and later in-band probes
 	// pointed at reality. Best-effort: a loopback/absent peer leaves the
-	// recorded address untouched.
-	if ip := net.ParseIP(ClientIPFromContext(ctx)); ip != nil && ip.IsPrivate() && !ip.IsLoopback() {
-		if uerr := s.Machines.SetSSHAddress(ctx, task.MachineID, ip.String()); uerr == nil {
+	// recorded address untouched — but silently: the peer is logged on
+	// every completion and a refused write warns, so a pipeline that
+	// degrades verify_ready to the completion-report surface (real run:
+	// the bond health check skipped for lack of an in-band target) shows
+	// exactly which side lost the address.
+	clientIP := ClientIPFromContext(ctx)
+	ip := net.ParseIP(clientIP)
+	switch {
+	case ip == nil || !ip.IsPrivate() || ip.IsLoopback():
+		obs.FromContext(ctx).WarnContext(ctx, "completion report peer address not recorded",
+			obs.FieldMachineID, task.MachineID, "client_ip", clientIP,
+			"reason", "empty, unparseable, public or loopback — verify_ready will degrade to the completion-report surface")
+	default:
+		if uerr := s.Machines.SetSSHAddress(ctx, task.MachineID, ip.String()); uerr != nil {
+			obs.FromContext(ctx).WarnContext(ctx, "machine ssh address write failed",
+				obs.FieldMachineID, task.MachineID, "ssh_address", ip.String(), "err", uerr.Error())
+		} else {
 			obs.FromContext(ctx).InfoContext(ctx, "machine ssh address refreshed from completion report",
 				obs.FieldMachineID, task.MachineID, "ssh_address", ip.String())
 		}

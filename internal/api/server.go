@@ -113,6 +113,15 @@ type Enrollment struct {
 func New(d Deps, apiToken string) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
+	// The generated strict handlers pass the *gin.Context AS the handler's
+	// ctx (it satisfies context.Context). Without ContextWithFallback,
+	// gin.Context.Value() does NOT fall through to the request context for
+	// non-string keys — request-scoped values recorded by middleware above
+	// (the completion endpoint's peer address, middleware.go clientIPKey)
+	// read back as nil: the install completion silently stopped recording
+	// the machine's live address and verify_ready degraded to the
+	// completion-report surface on every install (real-hardware).
+	router.ContextWithFallback = true
 	router.Use(gin.Recovery(), RequestID(), ClientIP(), OTelSpan(), MetricsMiddleware(d.Metrics))
 
 	srv := &Server{Deps: d}

@@ -709,3 +709,101 @@ func TestRenderSyslogArg(t *testing.T) {
 		t.Errorf("syslog host malformed: %q", boot.KernelArgs)
 	}
 }
+
+// Bond declaration handling (docs/04-install-spec.md §5.2): numeric mode
+// aliases fold to kernel names, the miimon default applies, bonds name by
+// declaration order (bond0/bond1 — not entry index, so a plain interface
+// between them cannot shift a vlan.link), and --bondopts is deterministic
+// (mode first, params sorted) because the answer file is snapshotted for
+// offline audit and replay.
+func TestNetworkShellBondNormalization(t *testing.T) {
+	d := New("rocky9")
+	entries := []render.NetworkEntry{
+		{
+			Bond: &render.NetBond{
+				SlavesMACs: []string{"AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"},
+				Mode:       "4", // numeric alias
+				Params:     map[string]string{"lacp_rate": "fast"},
+			},
+			Addresses: []string{"172.16.1.11/24"},
+			Routes:    []render.NetRoute{{To: "default", Via: "172.16.1.1"}},
+		},
+		{Match: &render.NetMatch{MAC: "AA:BB:CC:DD:EE:09"}, Addresses: []string{"10.0.0.9/24"}},
+		{
+			Bond: &render.NetBond{
+				SlavesMACs: []string{"AA:BB:CC:DD:EE:03", "AA:BB:CC:DD:EE:04"},
+				Mode:       "active-backup",
+				// no params — the miimon default must apply
+			},
+			Addresses: []string{"172.16.2.11/24"},
+		},
+	}
+	sh, err := d.networkShell(entries, "node-01")
+	if err != nil {
+		t.Fatalf("networkShell: %v", err)
+	}
+	for _, want := range []string{
+		"--device=bond0 --bondslaves=$bond_slaves --bondopts=mode=802.3ad,lacp_rate=fast,miimon=100",
+		"--device=bond1 --bondslaves=$bond_slaves --bondopts=mode=active-backup,miimon=100",
+	} {
+		if !strings.Contains(sh, want) {
+			t.Errorf("bond stanza missing %q in:\n%s", want, sh)
+		}
+	}
+
+	// Rejected declarations fail the render with the accepted modes listed.
+	for _, tc := range []struct{ label, mode string }{
+		{"unknown name", "lacp"},
+		{"number out of range", "7"},
+		{"empty", ""},
+	} {
+		in := entries[0]
+		in.Bond = &render.NetBond{SlavesMACs: []string{"AA:BB:CC:DD:EE:01"}, Mode: tc.mode}
+		if _, err := d.networkShell([]render.NetworkEntry{in}, "n"); err == nil || !strings.Contains(err.Error(), "active-backup") {
+			t.Errorf("%s: mode %q must reject with the accepted list, got %v", tc.label, tc.mode, err)
+		}
+	}
+	in := entries[0]
+	in.Bond = &render.NetBond{SlavesMACs: []string{"AA:BB:CC:DD:EE:01", ""}, Mode: "1"}
+	if _, err := d.networkShell([]render.NetworkEntry{in}, "n"); err == nil {
+		t.Errorf("slave without a mac must reject")
+	}
+}
+
+// The spec's v2/netplan spellings fold to kernel names at Normalized — the
+// --bondopts vocabulary is kernel sysfs, and that is what anaconda hands to
+// the bonding module. Multi-target arp_ip_target cannot ride the
+// comma-separated option list and rejects.
+func TestNetworkShellBondParamVocabulary(t *testing.T) {
+	d := New("rocky9")
+	sh, err := d.networkShell([]render.NetworkEntry{
+		{
+			Bond: &render.NetBond{
+				SlavesMACs: []string{"AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"},
+				Mode:       "802.3ad",
+				Params:     map[string]string{"lacp-rate": "fast", "transmit-hash-policy": "layer3+4"},
+			},
+			Addresses: []string{"172.16.1.11/24"},
+		},
+	}, "node-01")
+	if err != nil {
+		t.Fatalf("networkShell: %v", err)
+	}
+	if !strings.Contains(sh, "--bondopts=mode=802.3ad,lacp_rate=fast,miimon=100,xmit_hash_policy=layer3+4") {
+		t.Errorf("v2 spellings must fold to kernel names in --bondopts, got:\n%s", sh)
+	}
+
+	in := render.NetworkEntry{
+		Bond: &render.NetBond{SlavesMACs: []string{"AA:BB:CC:DD:EE:01"}, Mode: "1",
+			Params: map[string]string{"arp_interval": "500", "arp_ip_target": "10.0.0.1 10.0.0.2"}},
+		Addresses: []string{"172.16.1.11/24"},
+	}
+	if _, err := d.networkShell([]render.NetworkEntry{in}, "n"); err == nil || !strings.Contains(err.Error(), "arp_ip_target") {
+		t.Errorf("multi arp_ip_target must reject on kickstart, got %v", err)
+	}
+	// a single target rides fine
+	in.Bond.Params["arp_ip_target"] = "10.0.0.1"
+	if _, err := d.networkShell([]render.NetworkEntry{in}, "n"); err != nil {
+		t.Errorf("single arp_ip_target must render: %v", err)
+	}
+}

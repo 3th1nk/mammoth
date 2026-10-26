@@ -9,7 +9,9 @@ package render
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -315,6 +317,177 @@ type NetBond struct {
 	SlavesMACs []string          `json:"slaves_macs,omitempty"`
 	Mode       string            `json:"mode,omitempty"`
 	Params     map[string]string `json:"params,omitempty"`
+}
+
+// bondModes maps every accepted spec spelling of a bonding mode to its
+// kernel name — the canonical name plus the numeric alias. The kernel name
+// is what both output paths take verbatim (anaconda --bondopts, curtin bond
+// parameters).
+var bondModes = map[string]string{
+	"0": "balance-rr", "balance-rr": "balance-rr",
+	"1": "active-backup", "active-backup": "active-backup",
+	"2": "balance-xor", "balance-xor": "balance-xor",
+	"3": "broadcast", "broadcast": "broadcast",
+	"4": "802.3ad", "802.3ad": "802.3ad",
+	"5": "balance-tlb", "balance-tlb": "balance-tlb",
+	"6": "balance-alb", "balance-alb": "balance-alb",
+}
+
+const bondModeList = "balance-rr(0), active-backup(1), balance-xor(2), broadcast(3), 802.3ad(4), balance-tlb(5), balance-alb(6)"
+
+// bondParamAliases folds the cloud-init network-config v2 / netplan spellings
+// (and the kernel's own synonyms) onto the canonical kernel parameter names —
+// the one vocabulary the spec contract speaks internally. The netplan names
+// mirror netplan's parse.c bond table; num_unsol_na is a documented kernel
+// alias of num_grat_arp.
+var bondParamAliases = map[string]string{
+	"mii-monitor-interval":    "miimon",
+	"lacp-rate":               "lacp_rate",
+	"transmit-hash-policy":    "xmit_hash_policy",
+	"fail-over-mac-policy":    "fail_over_mac",
+	"primary-reselect-policy": "primary_reselect",
+	"arp-interval":            "arp_interval",
+	"arp-ip-targets":          "arp_ip_target",
+	"arp-validate":            "arp_validate",
+	"arp-all-targets":         "arp_all_targets",
+	"up-delay":                "up",
+	"down-delay":              "down",
+	"ad-select":               "ad_select",
+	"all-slaves-active":       "all_slaves_active",
+	"all-members-active":      "all_slaves_active",
+	"min-links":               "min_links",
+	"gratuitous-arp":          "num_grat_arp",
+	"gratuitious-arp":         "num_grat_arp",
+	"packets-per-slave":       "packets_per_slave",
+	"packets-per-member":      "packets_per_slave",
+	"learn-packet-interval":   "learn_pkt_interval",
+	"resend-igmp":             "resend_igmp",
+	"num_unsol_na":            "num_grat_arp",
+}
+
+// bondParamNames is the accepted canonical set (post-fold). Kernel-only
+// names netplan lacks (use_carrier, ad_actor_*, tlb_dynamic_lb) are valid
+// spec vocabulary — the ubuntu dialect rejects them at ITS render when it
+// cannot express them (docs/04-install-spec.md §5.3 discipline).
+var bondParamNames = []string{
+	"ad_actor_sys_prio", "ad_actor_system", "ad_select", "ad_user_port_key",
+	"all_slaves_active", "arp_all_targets", "arp_interval", "arp_ip_target",
+	"arp_validate", "down", "fail_over_mac", "lacp_rate", "learn_pkt_interval",
+	"miimon", "min_links", "num_grat_arp", "packets_per_slave", "primary",
+	"primary_reselect", "resend_igmp", "tlb_dynamic_lb", "up", "use_carrier",
+	"xmit_hash_policy",
+}
+
+// Normalized returns a validated copy of the bond declaration: the mode
+// folded to its kernel name (numeric aliases accepted, unknown values
+// rejected), the params folded onto canonical kernel names (netplan v2
+// spellings accepted; the same key declared twice under two spellings
+// rejected; unknown keys rejected — a typo'd param is silently inert
+// downstream, the exact failure class this validation exists to catch)
+// and the link-monitoring default applied. Renderers call it before
+// emitting stanzas — a rejected declaration fails the render
+// (RENDER_FAILED), far from the machine.
+//
+// params without miimon get the default 100 — the same value and the same
+// arp_interval carve-out the kernel itself applies since v4.18 (commit
+// c1f897ce186a). Rendering it explicitly keeps the emitted config
+// independent of the runtime kernel's era: pre-4.18 kernels default to 0,
+// where the bond comes up and failover silently never happens. A declared
+// arp_interval is its own monitoring and mutually exclusive with miimon
+// (the kernel disables one when the other is set), so the default stays
+// out there.
+func (b *NetBond) Normalized() (NetBond, error) {
+	out := NetBond{SlavesMACs: b.SlavesMACs, Mode: strings.ToLower(strings.TrimSpace(b.Mode)), Params: map[string]string{}}
+	if out.Mode == "" {
+		return out, fmt.Errorf("bond mode required; accepted: %s", bondModeList)
+	}
+	name, ok := bondModes[out.Mode]
+	if !ok {
+		return out, fmt.Errorf("bond mode %q unknown; accepted: %s", b.Mode, bondModeList)
+	}
+	out.Mode = name
+	if len(out.SlavesMACs) == 0 {
+		return out, fmt.Errorf("bond declares no slave interfaces")
+	}
+	for _, m := range out.SlavesMACs {
+		if strings.TrimSpace(m) == "" {
+			return out, fmt.Errorf("bond slaves must be selected by mac (an interface selector resolved to no mac)")
+		}
+	}
+	canonical := map[string]string{} // folded name → the raw key that brought it
+	for k, v := range b.Params {
+		raw := strings.ToLower(strings.TrimSpace(k))
+		k = raw
+		if alt, ok := bondParamAliases[k]; ok {
+			k = alt
+		}
+		if !slices.Contains(bondParamNames, k) {
+			return out, fmt.Errorf("bond param %q unknown; accepted: %s", k, strings.Join(bondParamNames, ", "))
+		}
+		if prev, dup := canonical[k]; dup {
+			return out, fmt.Errorf("bond param declared twice (%s and %s)", prev, raw)
+		}
+		canonical[k] = raw
+		out.Params[k] = strings.ReplaceAll(v, ",", " ")
+	}
+	if out.Params["miimon"] == "" && out.Params["arp_interval"] == "" {
+		out.Params["miimon"] = "100"
+	}
+	return out, nil
+}
+
+// BondName is the interface name of the seq'th declared bond (bond0,
+// bond1, …) — the single source of the naming convention that
+// vlan.link references.
+func BondName(seq int) string { return fmt.Sprintf("bond%d", seq) }
+
+// BondExpected is the post-install verification contract for one declared
+// bond: snapshotted into the task context at render time and cross-checked
+// against the live system in verify_ready (docs/06-install-pipeline.md §4)
+// — a bond that came up with the wrong members (MAC typo, half the pairs
+// down, switch-side aggregation missing) installs "green" and dies in
+// production; this is what catches it.
+type BondExpected struct {
+	Name      string   `json:"name"`            // bond0, bond1 … (declaration order)
+	SlaveMACs []string `json:"slave_macs"`      // sorted, lowercase
+	Mode      string   `json:"mode"`            // kernel name
+	MIImon    int      `json:"miimon"`          // expected sysfs miimon; 0 = ARP monitoring declared
+	Active    bool     `json:"active_required"` // active-backup: an active member must exist
+}
+
+// BondExpectations snapshots the declared bonds in verification form —
+// declaration-order naming, normalized declarations. Called after a
+// successful render (every bond already passed Normalized), so the error
+// return is defensive.
+func BondExpectations(entries []NetworkEntry) ([]BondExpected, error) {
+	var out []BondExpected
+	seq := 0
+	for _, e := range entries {
+		if e.Bond == nil {
+			continue
+		}
+		bond, err := e.Bond.Normalized()
+		if err != nil {
+			return nil, err
+		}
+		macs := make([]string, 0, len(bond.SlavesMACs))
+		for _, m := range bond.SlavesMACs {
+			macs = append(macs, strings.ToLower(m))
+		}
+		sort.Strings(macs)
+		miimon := 0
+		if v, declared := bond.Params["miimon"]; declared {
+			if n, perr := strconv.Atoi(strings.TrimSpace(v)); perr == nil {
+				miimon = n
+			}
+		}
+		out = append(out, BondExpected{
+			Name: BondName(seq), SlaveMACs: macs, Mode: bond.Mode,
+			MIImon: miimon, Active: bond.Mode == "active-backup",
+		})
+		seq++
+	}
+	return out, nil
 }
 
 type NetVLAN struct {

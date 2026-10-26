@@ -2541,6 +2541,20 @@ components:
         bond:
           type: object
           required: [interfaces, mode]
+          description: >-
+            Bonds name bond0, bond1, … in declaration order (independent of
+            the entry's position in the network array); vlan.link references
+            that name. params speak kernel names (miimon, lacp_rate, …) —
+            cloud-init v2/netplan spellings (mii-monitor-interval,
+            lacp-rate, arp-ip-targets, …) are accepted and folded onto the
+            canonical names; the same key declared twice under two spellings
+            rejects, unknown keys reject. Multi-value targets (arp-ip-targets)
+            take a JSON array. params without miimon or arp_interval get the
+            default miimon=100 — the kernel's own default since v4.18 (older
+            kernels default to 0: link monitoring off); a declared
+            arp_interval is ARP monitoring and excludes miimon. The declared
+            bonds are cross-checked against the live system after install
+            (INSTALL_BOND_MISMATCH on member/mode/miimon drift).
           properties:
             interfaces:
               type: array
@@ -2554,7 +2568,11 @@ components:
                     type: string
             mode:
               type: string
-              description: e.g. active-backup, 802.3ad, balance-tlb.
+              description: >-
+                Kernel bonding mode: balance-rr(0) | active-backup(1) |
+                balance-xor(2) | broadcast(3) | 802.3ad(4) | balance-tlb(5) |
+                balance-alb(6). Numeric aliases normalize to the name; unknown
+                values are rejected at render (RENDER_FAILED).
             params:
               type: object
               additionalProperties: true

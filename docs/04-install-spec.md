@@ -218,7 +218,7 @@ POST /api/v1/jobs
   {
     "bond": {
       "interfaces": [ { "match": { "mac": "aa:..01" } }, { "match": { "mac": "aa:..02" } } ],
-      "mode": "802.3ad",                       // active-backup | 802.3ad | balance-tlb | ...
+      "mode": "802.3ad",                       // 内核名或数字别名 0-6,归一为内核名
       "params": { "miimon": 100, "lacp_rate": "fast" }
     },
     "addresses": ["172.16.1.11/24"],
@@ -230,6 +230,30 @@ POST /api/v1/jobs
   }
 ]
 ```
+
+**bond 语义**(渲染期校验,违规即 `RENDER_FAILED`):
+
+- `mode` 接受内核名或数字别名 `balance-rr(0) | active-backup(1) | balance-xor(2) | broadcast(3) |
+  802.3ad(4) | balance-tlb(5) | balance-alb(6)`,归一为内核名;未知值渲染期拒绝并回显取值表。
+- bond 按**声明顺序**命名 `bond0`、`bond1`…(与条目在 network 数组中的位置无关),`vlan.link` 引用该名字。
+- `params` 的规范词汇是内核名(`miimon`、`lacp_rate`、`xmit_hash_policy`…);cloud-init v2/netplan
+  拼写(`mii-monitor-interval`、`lacp-rate`、`arp-ip-targets`…)同样接受,入口折叠为内核名。
+  同一参数两种拼写同现 → 拒绝;未知键 → 拒绝(拼写错的参数下游是静默失效,这正是校验要拦的);
+  多值目标(`arp-ip-targets`)写 JSON 数组,规范形态为空格分隔。
+- 出口词汇按方言:**rocky9 系** `--bondopts` 用内核名(sysfs 直通);**ubuntu 系** netplan 形状
+  出口时翻译为 netplan 拼写(netplan 解析表只认 netplan 名,内核名键会被静默丢弃)——netplan
+  无法表达的内核专有参数(`use_carrier`、`ad_actor_*`、`tlb_dynamic_lb`)在 ubuntu 渲染期拒绝。
+  kickstart `--bondopts` 逗号分隔选项,`arp_ip_target` 仅支持单目标,多目标渲染期拒绝。
+- `params` 未声明链路监测时注入默认 `miimon: 100`——与内核 v4.18 起的自身默认一致
+  (commit c1f897ce186a,条件同为未声明 `arp_interval`);显式渲染使产物不依赖运行内核
+  年代(4.18 前默认 0 = 监测关闭,主备切换永不发生)。声明了 `arp_interval` 的按 ARP
+  监测走,不注入(内核 ARP/MII 监测互斥,后设者顶掉先设者)。
+- `802.3ad` 要求交换机侧配好 LACP 聚合口,否则装完不通;建议显式 `xmit_hash_policy`
+  (内核缺省 layer2,跨层负载常见选 layer3+4)。
+- slave 以 mac 选择,空选择器(如 match 未携带 mac)渲染期拒绝。
+- **装后核验**:归一化 bond 声明随任务上下文快照,verify_ready 带内比对实测
+  `/sys/class/net/*/bonding/*`(成员 MAC 集/mode/miimon/active-backup 的 active 成员),
+  不符 → `INSTALL_BOND_MISMATCH`(docs/06-install-pipeline.md §4)。
 
 接口选择优先级:**mac > pci_address > name**。MAC 与硬件一一对应,是批量场景唯一
 跨发行版稳定的选择器;`name` 受发行版命名方案(eno/ens/eth)影响,仅在用户明确知道

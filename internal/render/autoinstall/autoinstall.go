@@ -89,7 +89,10 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if err != nil {
 		return nil, render.BootParams{}, err
 	}
-	network := netplanConfig(in.Network)
+	network, err := netplanConfig(in.Network)
+	if err != nil {
+		return nil, render.BootParams{}, err
+	}
 
 	// late-commands: ALL post-install side effects happen here, in the
 	// installer (real-hardware lesson: anything left to the target system's
@@ -633,9 +636,38 @@ func resolveDiskEarlyCommand(in render.InstallInputs) string {
 	return "sh /cdrom/run/mammoth/resolve-disk.sh"
 }
 
-func netplanConfig(entries []render.NetworkEntry) map[string]any {
+// bondParamNetplan maps the canonical kernel parameter names onto the
+// netplan spellings — the vocabulary the ubuntu chain actually consumes
+// (subiquity's model is netplan-only, and netplan's parse.c bond table
+// keys on the netplan names; kernel names are not in it and stay inert).
+// Keys ABSENT from this map are kernel-only params netplan cannot express
+// (use_carrier, ad_actor_*, tlb_dynamic_lb) — the ubuntu dialect rejects
+// them at render (docs/04-install-spec.md §5.3 discipline).
+var bondParamNetplan = map[string]string{
+	"miimon":             "mii-monitor-interval",
+	"lacp_rate":          "lacp-rate",
+	"xmit_hash_policy":   "transmit-hash-policy",
+	"fail_over_mac":      "fail-over-mac-policy",
+	"primary_reselect":   "primary-reselect-policy",
+	"arp_interval":       "arp-interval",
+	"arp_ip_target":      "arp-ip-targets",
+	"arp_validate":       "arp-validate",
+	"arp_all_targets":    "arp-all-targets",
+	"up":                 "up-delay",
+	"down":               "down-delay",
+	"ad_select":          "ad-select",
+	"all_slaves_active":  "all-slaves-active",
+	"min_links":          "min-links",
+	"num_grat_arp":       "gratuitous-arp",
+	"packets_per_slave":  "packets-per-slave",
+	"learn_pkt_interval": "learn-packet-interval",
+	"resend_igmp":        "resend-igmp",
+	"primary":            "primary",
+}
+
+func netplanConfig(entries []render.NetworkEntry) (map[string]any, error) {
 	if len(entries) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := map[string]any{"version": 2}
 	ethernets := map[string]any{}
@@ -671,11 +703,19 @@ func netplanConfig(entries []render.NetworkEntry) map[string]any {
 		}
 	}
 
+	// Bonds name by declaration order (bond0, bond1, …) — vlan.link references
+	// that name, so the numbering must not shift when a plain interface sits
+	// between two bonds.
+	bondSeq := 0
 	for i, e := range entries {
 		switch {
 		case e.Bond != nil:
+			bond, err := e.Bond.Normalized()
+			if err != nil {
+				return nil, fmt.Errorf("network[%d]: %w", i, err)
+			}
 			var ids []string
-			for _, mac := range e.Bond.SlavesMACs {
+			for _, mac := range bond.SlavesMACs {
 				id := fmt.Sprintf("if-%s-%d", strings.ToLower(strings.ReplaceAll(mac, ":", "")), i)
 				eth := map[string]any{
 					"match": map[string]any{"macaddress": strings.ToLower(mac)},
@@ -686,19 +726,32 @@ func netplanConfig(entries []render.NetworkEntry) map[string]any {
 				ethernets[id] = eth
 				ids = append(ids, id)
 			}
+			// Canonical kernel-name params translate to the netplan spellings
+			// here — the outbound side of the spec-vocabulary fold
+			// (NetBond.Normalized). Kernel-only params without a netplan
+			// form reject rather than emit a key netplan will silently drop.
 			params := map[string]any{
-				"mode": e.Bond.Mode,
+				"mode": bond.Mode,
 			}
-			// netplan parameter names: miimon → mii-monitor-interval etc.
-			for k, v := range e.Bond.Params {
-				params[k] = v
+			for k, v := range bond.Params {
+				np, ok := bondParamNetplan[k]
+				if !ok {
+					return nil, fmt.Errorf("network[%d]: bond param %q has no netplan form (kernel-only; the netplan-shaped network section cannot express it)", i, k)
+				}
+				if k == "arp_ip_target" {
+					// netplan takes the target list as a YAML sequence.
+					params[np] = strings.Fields(v)
+					continue
+				}
+				params[np] = v
 			}
-			bond := map[string]any{
+			b := map[string]any{
 				"interfaces": ids,
 				"parameters": params,
 			}
-			applyAddrs(bond, e)
-			bonds[fmt.Sprintf("bond%d", i)] = bond
+			applyAddrs(b, e)
+			bonds[render.BondName(bondSeq)] = b
+			bondSeq++
 		case e.VLAN != nil:
 			vlans := map[string]any{}
 			v := map[string]any{"id": e.VLAN.ID, "link": e.VLAN.Link}
@@ -736,7 +789,7 @@ func netplanConfig(entries []render.NetworkEntry) map[string]any {
 	if len(bonds) > 0 {
 		out["bonds"] = bonds
 	}
-	return out
+	return out, nil
 }
 
 func scriptLine(s render.ScriptEntry) string {

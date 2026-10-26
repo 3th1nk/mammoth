@@ -164,6 +164,16 @@ iPXE    ──HTTP GET /netboot/files/<token>/…──▶ kernel/initrd(+modloo
   登录前回调,已证明镜像落盘且网络可用),不做带内探活——机器档案残留的
   ssh 凭证不参与,否则只会在无 sshd 的系统上耗尽轮询预算误报
   INSTALL_NOT_REACHABLE;装后快照刷新随之不适用;
+- **bond 健康核验**:spec 声明了 bond 的任务,渲染时把归一化声明(bond 名、
+  成员 MAC 集、mode、miimon)快照进任务上下文;verify_ready 带内采集时同读
+  `/sys/class/net/*/bonding/*`,逐项比对——成员 MAC 集不符(交换机口没配、
+  MAC 写错)、mode/miimon 漂移(LACP rate 被 netplan 静默丢弃那类)、
+  active-backup 无 active 成员 → `INSTALL_BOND_MISMATCH`(可重试,重试耗尽即
+  终态失败)。这补的是"装机全绿但 bond 不通"的盲区:装完可达性若依赖
+  bond 本身,失联走 INSTALL_NOT_REACHABLE;bond 半残(单口活着)时只有
+  这一步能抓到。带内不可达(无凭证/认证未配)时降级为
+  `task.verify_ready_degraded` 事件,bond 视为未核验,完成上报仍是验证面;
+  采集输出缺 bond 段(旧采集形态)同理降级而非误判为"无 bond";
 - 恢复引导顺序。
 
 ## 6. 发行版驱动(OS Driver)

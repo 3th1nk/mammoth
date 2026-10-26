@@ -11,6 +11,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -45,7 +47,12 @@ type installTaskContext struct {
 		Raid  []render.ResolvedRaid `json:"raid,omitempty"`
 	} `json:"resolved,omitempty"`
 	RaidBindings map[string]string `json:"raid_bindings,omitempty"`
-	Install      *installProgress  `json:"install,omitempty"`
+	// BondChecks snapshots the declared bonds in verification form
+	// (render.BondExpectations) — verify_ready cross-checks the live
+	// system against it when in-band access is configured; without it the
+	// declared bonds go unverified (degrade event, docs/06-install-pipeline.md §4).
+	BondChecks []render.BondExpected `json:"bond_checks,omitempty"`
+	Install    *installProgress      `json:"install,omitempty"`
 }
 
 type installProgress struct {
@@ -197,7 +204,7 @@ func (n networkView) toRender() render.NetworkEntry {
 		}
 		params := map[string]string{}
 		for k, v := range n.Bond.Params {
-			params[k] = fmt.Sprint(v) // numeric/bool params stringify (miimon 100 → "100")
+			params[k] = stringifyParam(v)
 		}
 		out.Bond = &render.NetBond{SlavesMACs: macs, Mode: n.Bond.Mode, Params: params}
 	}
@@ -211,6 +218,21 @@ func (n networkView) toRender() render.NetworkEntry {
 	out.Nameservers = n.Nameservers.Addresses
 	out.Search = n.Nameservers.Search
 	return out
+}
+
+// stringifyParam renders one JSON bond-param value into its canonical string
+// form: scalars stringify (miimon 100 → "100"), lists space-join (netplan's
+// arp-ip-targets arrives as a JSON array → "10.0.0.1 10.0.0.2" — the
+// canonical multi-value form the renderers split back apart).
+func stringifyParam(v any) string {
+	if list, ok := v.([]any); ok {
+		parts := make([]string, 0, len(list))
+		for _, item := range list {
+			parts = append(parts, fmt.Sprint(item))
+		}
+		return strings.Join(parts, " ")
+	}
+	return fmt.Sprint(v)
 }
 
 type storageDiskView struct {
@@ -1052,6 +1074,14 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		"boot":      boot,
 		"media_uri": ictx.MediaURI,
 	}
+	// Post-install bond verification contract (docs/06-install-pipeline.md §4):
+	// the normalized declarations ride the task context so verify_ready can
+	// hold the live system against what was asked, not what the answer file
+	// happens to encode. Render just succeeded, so the expectation build
+	// cannot fail — the guard is defensive only.
+	if checks, cerr := render.BondExpectations(in.Network); cerr == nil && len(checks) > 0 {
+		patch["bond_checks"] = checks
+	}
 	if ictx.BootStrategy != "" {
 		patch["boot_strategy"] = ictx.BootStrategy
 	}
@@ -1538,6 +1568,7 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 	// RT consistency: when in-band access is configured, confirm the new
 	// system answers (docs/06-install-pipeline.md §4). Without in-band
 	// credentials the completion report is the verification surface.
+	bondChecked := false
 	m, err := e.Machines.Get(ctx, task.MachineID)
 	if err != nil {
 		return err
@@ -1612,10 +1643,35 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 						} else {
 							obs.FromContext(ctx).WarnContext(ctx, "post-install snapshot save failed", "err", verr.Error())
 						}
+						// Bond health (docs/06-install-pipeline.md §4): the live
+						// system is held against the declared contract — a bond
+						// that came up with the wrong members or without link
+						// monitoring installs "green" and dies in production.
+						// nil Bonds means the collection predates the bond
+						// section (recorded fixtures) — facts unavailable, not
+						// "no bonds".
+						if len(ictx.BondChecks) > 0 {
+							if res.Bonds == nil {
+								e.bondUnverifiedEvent(ctx, task, "in-band collection carried no bond facts")
+							} else if berr := verifyBonds(res, ictx.BondChecks); berr != nil {
+								return classifiedErr("INSTALL_BOND_MISMATCH", true, "%s", berr.Error())
+							} else {
+								bondChecked = true
+								obs.FromContext(ctx).InfoContext(ctx, "post-install bond health verified",
+									"machine", task.MachineID, "bonds", len(ictx.BondChecks))
+							}
+						}
 					}
 				}
 			}
 		}
+	}
+
+	// Declared bonds the in-band path could not reach stay unverified —
+	// surfaced as a degrade event rather than silently green (windows
+	// never reaches here with bonds: its render rejects them).
+	if len(ictx.BondChecks) > 0 && !bondChecked {
+		e.bondUnverifiedEvent(ctx, task, "in-band probe unavailable (no credentials or auth not configured)")
 	}
 
 	// Success compensation: eject all media, restore boot order.
@@ -1636,6 +1692,59 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 	_ = e.Machines.SetState(ctx, task.MachineID, "ready")
 	obs.FromContext(ctx).InfoContext(ctx, "install verified ready")
 	return nil
+}
+
+// verifyBonds holds the live system against the declared bond contract:
+// members by MAC (the batch-stable selector the spec speaks), kernel mode,
+// link-monitoring interval, and — for active-backup — a present, declared
+// active member (its whole failover story).
+func verifyBonds(res *inbandssh.Result, checks []render.BondExpected) error {
+	byName := map[string]inbandssh.BondFacts{}
+	for _, b := range res.Bonds {
+		byName[b.Name] = b
+	}
+	linkMAC := map[string]string{}
+	for _, n := range res.NICs {
+		linkMAC[n.Name] = strings.ToLower(n.MAC)
+	}
+	for _, want := range checks {
+		got, ok := byName[want.Name]
+		if !ok {
+			return fmt.Errorf("bond %s: declared but not present on the installed system", want.Name)
+		}
+		gotMACs := make([]string, 0, len(got.Slaves))
+		for _, s := range got.Slaves {
+			m, ok := linkMAC[s]
+			if !ok {
+				return fmt.Errorf("bond %s: member %s has no link fact (mac unknown)", want.Name, s)
+			}
+			gotMACs = append(gotMACs, m)
+		}
+		sort.Strings(gotMACs)
+		if !slices.Equal(gotMACs, want.SlaveMACs) {
+			return fmt.Errorf("bond %s: members %v, declared %v", want.Name, gotMACs, want.SlaveMACs)
+		}
+		if got.Mode != want.Mode {
+			return fmt.Errorf("bond %s: mode %q, declared %q", want.Name, got.Mode, want.Mode)
+		}
+		if want.MIImon > 0 && got.MIImon != want.MIImon {
+			return fmt.Errorf("bond %s: miimon %d, declared %d (monitoring off = failover never happens)", want.Name, got.MIImon, want.MIImon)
+		}
+		if want.Active && !slices.Contains(gotMACs, linkMAC[got.Active]) {
+			return fmt.Errorf("bond %s: active member %q missing or undeclared", want.Name, got.Active)
+		}
+	}
+	return nil
+}
+
+// bondUnverifiedEvent records the degrade: declared bonds the in-band path
+// could not check. The completion report remains the only verification
+// surface in that case (docs/06-install-pipeline.md §4).
+func (e *Executor) bondUnverifiedEvent(ctx context.Context, task *store.Task, reason string) {
+	obs.FromContext(ctx).WarnContext(ctx, "verify_ready degraded: declared bonds not verified", "machine", task.MachineID, "reason", reason)
+	e.Events.Append(ctx, "task", task.ID, "task.verify_ready_degraded", map[string]any{
+		"reason": "declared bonds not verified: " + reason,
+	})
 }
 
 // verifyReadyWait is the poll budget for the post-install in-band wait.

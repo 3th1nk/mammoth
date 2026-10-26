@@ -596,3 +596,102 @@ func TestRenderAutoinstallPXETargetNetplan(t *testing.T) {
 		t.Errorf("dhcp-only spec must not write target netplan:\n%s", lateDH)
 	}
 }
+
+// Bonds name by declaration order (bond0/bond1 — not entry index, so a
+// plain interface between them cannot shift a vlan.link), numeric mode
+// aliases fold to kernel names, and the miimon default applies when the
+// spec declares no monitoring — curtin consumes kernel-name parameters
+// verbatim.
+func TestNetplanBondsDeclarationOrderAndDefaults(t *testing.T) {
+	entries := []render.NetworkEntry{
+		{Match: &render.NetMatch{MAC: "AA:BB:CC:DD:EE:09"}, Addresses: []string{"10.0.0.9/24"}},
+		{
+			Bond: &render.NetBond{
+				SlavesMACs: []string{"AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"},
+				Mode:       "1", // numeric alias, no params
+			},
+			Addresses: []string{"172.16.1.11/24"},
+			Routes:    []render.NetRoute{{To: "default", Via: "172.16.1.1"}},
+		},
+	}
+	net, err := netplanConfig(entries)
+	if err != nil {
+		t.Fatalf("netplanConfig: %v", err)
+	}
+	bonds := net["bonds"].(map[string]any)
+	if len(bonds) != 1 {
+		t.Fatalf("one bond declared, got %v", bonds)
+	}
+	// The bond sits at entry index 1 but is the FIRST bond — declaration
+	// order names it bond0, so a vlan.link="bond0" stays stable.
+	bond0, ok := bonds["bond0"].(map[string]any)
+	if !ok {
+		t.Fatalf("first bond must be bond0 (declaration order, not entry index): %v", bonds)
+	}
+	params := bond0["parameters"].(map[string]any)
+	if params["mode"] != "active-backup" {
+		t.Errorf("numeric mode alias must fold to the kernel name, got %v", params["mode"])
+	}
+	// outbound: kernel-name params translate to the netplan spellings the
+	// ubuntu chain consumes (netplan parse.c has no miimon key — a kernel
+	// name here would be silently inert).
+	if params["mii-monitor-interval"] != "100" {
+		t.Errorf("miimon must emit under its netplan spelling, got %v", params)
+	}
+	if _, inert := params["miimon"]; inert {
+		t.Errorf("kernel-name keys must not leak into netplan output, got %v", params)
+	}
+
+	if _, err := netplanConfig([]render.NetworkEntry{
+		{Bond: &render.NetBond{SlavesMACs: []string{"AA:BB:CC:DD:EE:01"}, Mode: "lacp"}},
+	}); err == nil || !strings.Contains(err.Error(), "active-backup") {
+		t.Errorf("unknown mode must fail the render with the accepted list, got %v", err)
+	}
+}
+
+// Outbound vocabulary: the spec's canonical kernel names emit under their
+// netplan spellings (arp_ip_target → the arp-ip-targets YAML sequence),
+// and kernel-only params netplan cannot express reject at render — the
+// alternative is a key netplan silently drops.
+func TestNetplanBondParamTranslation(t *testing.T) {
+	net, err := netplanConfig([]render.NetworkEntry{
+		{
+			Bond: &render.NetBond{
+				SlavesMACs: []string{"AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"},
+				Mode:       "802.3ad",
+				Params: map[string]string{
+					"miimon":           "100",
+					"lacp_rate":        "fast",
+					"xmit_hash_policy": "layer3+4",
+					"arp_ip_target":    "10.0.0.1 10.0.0.2",
+				},
+			},
+			Addresses: []string{"172.16.1.11/24"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("netplanConfig: %v", err)
+	}
+	bond := net["bonds"].(map[string]any)["bond0"].(map[string]any)
+	params := bond["parameters"].(map[string]any)
+	for k, want := range map[string]any{
+		"lacp-rate":            "fast",
+		"transmit-hash-policy": "layer3+4",
+	} {
+		if params[k] != want {
+			t.Errorf("param %s = %v, want %v", k, params[k], want)
+		}
+	}
+	targets, ok := params["arp-ip-targets"].([]string)
+	if !ok || len(targets) != 2 || targets[0] != "10.0.0.1" || targets[1] != "10.0.0.2" {
+		t.Errorf("arp-ip-targets must emit as the netplan sequence, got %v", params["arp-ip-targets"])
+	}
+
+	// kernel-only param: rejected, not emitted to be silently dropped
+	if _, err := netplanConfig([]render.NetworkEntry{
+		{Bond: &render.NetBond{SlavesMACs: []string{"AA:BB:CC:DD:EE:01"}, Mode: "1",
+			Params: map[string]string{"use_carrier": "0"}}},
+	}); err == nil || !strings.Contains(err.Error(), "use_carrier") {
+		t.Errorf("netplan-unmappable param must reject, got %v", err)
+	}
+}

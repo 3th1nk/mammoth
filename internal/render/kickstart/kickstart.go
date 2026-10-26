@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/netip"
 	"path"
+	"sort"
 	"strings"
 	"text/template"
 
@@ -479,9 +480,17 @@ func (d *Driver) networkShell(entries []render.NetworkEntry, hostname string) (s
 	if !deviceByMAC {
 		b.WriteString("iface_by_mac() { for d in /sys/class/net/*; do [ \"$(cat \"$d/address\")\" = \"$1\" ] && basename \"$d\" && return 0; done; return 1; }\n")
 	}
+	// Bonds name by declaration order (bond0, bond1, …), not by entry index —
+	// vlan.link references that name, so the numbering must not shift when a
+	// plain interface sits between two bonds.
+	bondSeq := 0
 	for i, e := range entries {
 		switch {
 		case e.Bond != nil:
+			bond, err := e.Bond.Normalized()
+			if err != nil {
+				return "", fmt.Errorf("network[%d]: %w", i, err)
+			}
 			if len(e.Addresses) == 0 {
 				return "", fmt.Errorf("network[%d]: bond requires addresses", i)
 			}
@@ -490,16 +499,30 @@ func (d *Driver) networkShell(entries []render.NetworkEntry, hostname string) (s
 				return "", fmt.Errorf("network[%d]: %w", i, err)
 			}
 			var slaves []string
-			for _, mac := range e.Bond.SlavesMACs {
+			for _, mac := range bond.SlavesMACs {
 				slaves = append(slaves, fmt.Sprintf("$(iface_by_mac %s)", strings.ToLower(mac)))
 			}
-			opts := []string{"mode=" + e.Bond.Mode}
-			for k, v := range e.Bond.Params {
-				opts = append(opts, k+"="+v)
+			// --bondopts is a comma-separated option list: an arp_ip_target
+			// value carrying a second target cannot be expressed (the kernel
+			// sysfs takes repeated single writes) — reject instead of
+			// emitting a broken stanza.
+			if targets := strings.Fields(bond.Params["arp_ip_target"]); len(targets) > 1 {
+				return "", fmt.Errorf("network[%d]: kickstart --bondopts cannot carry multiple arp_ip_target (declare one target, or a dialect without the comma limit)", i)
+			}
+			// Params sorted: the answer file is snapshotted for offline audit
+			// and replay — the stanza must not depend on map iteration order.
+			keys := make([]string, 0, len(bond.Params))
+			for k := range bond.Params {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			opts := []string{"mode=" + bond.Mode}
+			for _, k := range keys {
+				opts = append(opts, k+"="+bond.Params[k])
 			}
 			fmt.Fprintf(&b, "bond_slaves=$(IFS=,; echo \"%s\")\n", strings.Join(slaves, ",")) //nolint:govet
-			fmt.Fprintf(&b, "echo \"network --device=bond0 --bondslaves=$bond_slaves --bondopts=%s --bootproto=static --ip=%s --netmask=%s",
-				strings.Join(opts, ","), addr.ip, addr.mask)
+			fmt.Fprintf(&b, "echo \"network --device=%s --bondslaves=$bond_slaves --bondopts=%s --bootproto=static --ip=%s --netmask=%s",
+				render.BondName(bondSeq), strings.Join(opts, ","), addr.ip, addr.mask)
 			gw := defaultVia(e.Routes)
 			if gw != "" {
 				fmt.Fprintf(&b, " --gateway=%s", gw)
@@ -511,6 +534,7 @@ func (d *Driver) networkShell(entries []render.NetworkEntry, hostname string) (s
 				fmt.Fprintf(&b, " --mtu=%d", e.MTU)
 			}
 			b.WriteString(" --activate\"\n")
+			bondSeq++
 		case e.VLAN != nil:
 			addr, err := cidrSplit(first(e.Addresses))
 			if err != nil {

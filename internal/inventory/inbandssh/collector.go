@@ -53,6 +53,11 @@ echo '===LINK==='
 ip -j link 2>/dev/null || true
 echo '===PARTS==='
 for f in /sys/block/*/*/start; do printf '%s ' "$f"; cat "$f"; done 2>/dev/null || true
+echo '===BOND==='
+for d in /sys/class/net/*; do
+  [ -d "$d/bonding" ] || continue
+  printf '%s|mode=%s|miimon=%s|slaves=%s|active=%s\n' "${d##*/}" "$(cat "$d/bonding/mode" 2>/dev/null)" "$(cat "$d/bonding/miimon" 2>/dev/null)" "$(cat "$d/bonding/slaves" 2>/dev/null)" "$(cat "$d/bonding/active_slave" 2>/dev/null)"
+done 2>/dev/null || true
 echo '===ENV==='
 for m in /run/anaconda /run/subiquity /run/debian-installer /lib/debian-installer; do [ -e "$m" ] && echo "$m"; done 2>/dev/null || true`
 
@@ -61,6 +66,7 @@ const (
 	secLSBLK = "===BLKID==="
 	secBLKID = "===LINK==="
 	secLINK  = "===PARTS==="
+	secBOND  = "===BOND==="
 	secENV   = "===ENV==="
 )
 
@@ -74,6 +80,11 @@ type Collector struct {
 type Result struct {
 	Layout Layout
 	NICs   []NICFacts
+	// Bonds carries the live bond facts when the target ran a collector
+	// with the bond section — nil when the section is absent (recorded
+	// fixtures predating it): that reads as "facts unavailable", NOT as
+	// "no bonds", and verify_ready degrades instead of failing on it.
+	Bonds []BondFacts
 	// InstallerEnv reports that the session landed in a running installer
 	// environment (anaconda/subiquity/d-i markers present) rather than a
 	// regular system. verify_ready refuses to verify against it; discovery
@@ -113,6 +124,16 @@ type NICFacts struct {
 	Name   string `json:"name"`
 	MAC    string `json:"mac"`
 	LinkUp bool   `json:"link_up"`
+}
+
+// BondFacts is the live bond state read from sysfs. MAC join happens via
+// NICs — every bond member is also a link in the LINK section.
+type BondFacts struct {
+	Name   string   `json:"name"`
+	Mode   string   `json:"mode,omitempty"` // kernel name (sysfs "802.3ad 4" → "802.3ad")
+	MIImon int      `json:"miimon"`         // 0 = link monitoring off
+	Slaves []string `json:"slaves"`         // member link names
+	Active string   `json:"active,omitempty"`
 }
 
 // Error is the classified probe failure. Code uses the registry vocabulary:
@@ -193,7 +214,7 @@ type blkidDev struct {
 
 // parse converts the combined script output. Exported for tests.
 func parse(out string) (*Result, error) {
-	lsblkOut, blkidOut, linkOut, partsOut, envOut, err := splitSections(out)
+	lsblkOut, blkidOut, linkOut, partsOut, bondOut, envOut, err := splitSections(out)
 	if err != nil {
 		return nil, err
 	}
@@ -250,27 +271,84 @@ func parse(out string) (*Result, error) {
 		// parse outcome but keep the snapshot.
 		nics = nil
 	}
-	return &Result{Layout: layout, NICs: nics, InstallerEnv: strings.TrimSpace(envOut) != ""}, nil
+	return &Result{Layout: layout, NICs: nics, Bonds: parseBonds(bondOut), InstallerEnv: strings.TrimSpace(envOut) != ""}, nil
 }
 
-func splitSections(out string) (lsblk, blkid, link, parts, env string, err error) {
+func splitSections(out string) (lsblk, blkid, link, parts, bond, env string, err error) {
 	i1 := strings.Index(out, secLSBLK)
 	i2 := strings.Index(out, secBLKID)
 	i3 := strings.Index(out, secLINK)
 	if i1 < 0 || i2 < 0 || i3 < 0 {
-		return "", "", "", "", "", fmt.Errorf("output missing section markers (lsblk=%v blkid=%v link=%v)", i1 >= 0, i2 >= 0, i3 >= 0)
+		return "", "", "", "", "", "", fmt.Errorf("output missing section markers (lsblk=%v blkid=%v link=%v)", i1 >= 0, i2 >= 0, i3 >= 0)
 	}
 	lsblk = out[:i1]
 	blkid = out[i1+len(secLSBLK) : i2]
 	link = out[i2+len(secBLKID) : i3]
-	parts = out[i3+len(secLINK):]
-	// The installer-marker section is optional: recorded fixtures and older
-	// collected outputs may not carry it; absence reads as "not an installer".
-	if i4 := strings.Index(parts, secENV); i4 >= 0 {
-		env = parts[i4+len(secENV):]
-		parts = parts[:i4]
+	tail := out[i3+len(secLINK):]
+	// The bond and installer-marker sections are optional: recorded fixtures
+	// and older collected outputs may not carry them. Bond absence reads as
+	// "facts unavailable" (nil, NOT "no bonds") — verify_ready degrades on
+	// it; env absence reads as "not an installer".
+	if i4 := strings.Index(tail, secBOND); i4 >= 0 {
+		parts = tail[:i4]
+		bond = tail[i4+len(secBOND):]
+		if i5 := strings.Index(bond, secENV); i5 >= 0 {
+			env = bond[i5+len(secENV):]
+			bond = bond[:i5]
+		}
+	} else {
+		parts = tail
+		if i5 := strings.Index(tail, secENV); i5 >= 0 {
+			env = tail[i5+len(secENV):]
+			parts = tail[:i5]
+		}
 	}
-	return lsblk, blkid, link, parts, env, nil
+	return lsblk, blkid, link, parts, bond, env, nil
+}
+
+// parseBonds reads the ===BOND=== section — one line per bond:
+//
+//	bond0|mode=802.3ad|miimon=100|slaves=ens1f0 ens1f1|active=ens1f0
+//
+// The sysfs mode reads as "<name> <number>"; the name is the compare key.
+// Returns nil when the section is absent (recorded fixtures predating it),
+// an empty (non-nil) slice when the machine simply has no bonds.
+func parseBonds(out string) []BondFacts {
+	if out == "" {
+		return nil
+	}
+	bonds := []BondFacts{}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		name, rest, ok := strings.Cut(line, "|")
+		if !ok {
+			continue
+		}
+		f := BondFacts{Name: strings.TrimSpace(name), Slaves: []string{}}
+		for _, kv := range strings.Split(rest, "|") {
+			k, v, ok := strings.Cut(kv, "=")
+			if !ok {
+				continue
+			}
+			switch k {
+			case "mode":
+				if fields := strings.Fields(v); len(fields) > 0 {
+					f.Mode = fields[0]
+				}
+			case "miimon":
+				f.MIImon, _ = strconv.Atoi(strings.TrimSpace(v))
+			case "slaves":
+				f.Slaves = strings.Fields(v)
+			case "active":
+				f.Active = strings.TrimSpace(v)
+			}
+		}
+		bonds = append(bonds, f)
+	}
+	return bonds
 }
 
 func parseLSBLK(out string) ([]lsblkDisk, error) {

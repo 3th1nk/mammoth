@@ -208,3 +208,52 @@ func TestCollectInstallerEnvMarker(t *testing.T) {
 		t.Errorf("installer-env session must still carry the layout")
 	}
 }
+
+// The BOND section carries the live bond state (post-install health check,
+// docs/06-install-pipeline.md §4). Absence (recorded fixtures predating it)
+// reads as "facts unavailable" (nil) — NOT as "no bonds"; a present-but-empty
+// section is authoritative: the machine has no bonds.
+func TestCollectBonds(t *testing.T) {
+	// absence: nil, distinguishable from empty
+	res, err := parse(fixture)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if res.Bonds != nil {
+		t.Errorf("fixture without BOND section must yield nil Bonds, got %v", res.Bonds)
+	}
+
+	bonded := fixture + `===BOND===
+bond0|mode=802.3ad 4|miimon=100|slaves=eno1 eno2|active=eno1
+` + `===ENV===
+/run/anaconda
+`
+	res, err = parse(bonded)
+	if err != nil {
+		t.Fatalf("parse bonded fixture: %v", err)
+	}
+	if len(res.Bonds) != 1 {
+		t.Fatalf("one bond line expected, got %+v", res.Bonds)
+	}
+	b := res.Bonds[0]
+	if b.Name != "bond0" || b.Mode != "802.3ad" || b.MIImon != 100 {
+		t.Errorf("bond facts wrong: %+v", b)
+	}
+	if len(b.Slaves) != 2 || b.Slaves[0] != "eno1" || b.Slaves[1] != "eno2" || b.Active != "eno1" {
+		t.Errorf("bond members/active wrong: %+v", b)
+	}
+	if !res.InstallerEnv {
+		t.Errorf("ENV after BOND must still parse")
+	}
+
+	// present but empty: a real machine without bonds
+	empty := fixture + `===BOND===
+`
+	res, err = parse(empty)
+	if err != nil {
+		t.Fatalf("parse empty-bond fixture: %v", err)
+	}
+	if res.Bonds == nil || len(res.Bonds) != 0 {
+		t.Errorf("empty BOND section must read as no bonds (non-nil), got %v", res.Bonds)
+	}
+}

@@ -362,6 +362,15 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
      不转发,注释与 validateStorageExtras 定案);③**
      能力边界(等真实需求触发再排)**——edition 选择(现硬编码
      SERVERSTANDARDCORE,windows.go:144)、RAID、bond/vlan。
+   - **库引用(image.id)× anaconda 方言的 inst.repo 缺口(2026-10-27 新环境实录,待修)**——
+     kickstart 驱动把 ImageSource 原样拼进 inst.repo:库引用流解析出的本地 FilePath 与
+     http-ISO URL 都是 anaconda 不收的形态(仅 nfs:host:/path.iso / 真树 URL / cdrom 可用,
+     nfs 特判已有)。本轮 nfs:// 源绕行真机闭环(源盘驻 .5 nfsd);正式修法 = prepare 阶段
+     派生 nfs repo 形态并(按需)经 relay 中继源盘,或库行直接承载 nfs 形态源。
+   - **MediaBaseURI 单旋钮双消费者注意(2026-10-27)**——该 base 同时派生 BMC vMedia 的
+     media_uri 与 casper/安装器的 nfsroot:部署形态必须让**同一 NFS 服务端**同时可达
+     两者(引擎主机内核 nfsd 导出 MediaDir 为定案;nfsx 对华为 iBMC 不兼容,见
+     compat/huawei.md vMedia 节;.5 边缘节点只承担 PXE 的 dnsmasq/TFTP)。
    - **复验轮**——22.04-crypt(性价比最高: crypt 修复仅 24.04 轮覆盖过,
      2288H 半天可补,**真机窗口第一件事**)+ Kylin/rocky10-PXE;2288H 单
      机轮装顺序覆盖(22/24/rocky9 已证明此模式可行);

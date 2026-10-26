@@ -109,6 +109,13 @@ POST /redfish/v1/Managers/1/VirtualMedia/CD/Oem/Huawei/Actions/VirtualMedia.VmmC
   操作超时预算需覆盖这一段(MAMMOTH_BMC_TIMEOUT 建议 ≥60s);
 - Connect 前必须先 Disconnect:槽位被占时直接 Connect 报
   `iBMC.1.0.ConnectionOccupied`。驱动固定"先断后连"(断开失败静默忽略)。
+- **NFS 服务端选型:内核 nfsd 实证可用,引擎内嵌 nfsx 不兼容(2026-10-27 新环境实测)**——
+  同一 iBMC 6.41 对同一 ISO URI:内核 nfsd(TCP+UDP,标准 rpcbind/mountd)挂载成功;
+  引擎内嵌 nfsx(go-nfs,纯 TCP,自研 portmapper 把 mountd/nfs 全应答到 2049)下
+  抓包显示 BMC 的 portmapper GETPORT 往返正常、2049 上仅 NULL ping(应答 OK)后即关闭,
+  无 MNT/LOOKUP——VmmControl 以 Connect task exception 收场。**部署定案:华为 BMC 的
+  vMedia 源用主机内核 nfsd(部署层 nfs-server),不用 nfsx**;跨网段挂载(路由可达)实测无碍。
+  nfsx 保留给非 BMC 消费者(casper NFS root 等 Linux 内核客户端,TCP 足够)。
 
 驱动修复:`redfish.MountMedia/EjectMedia` 在标准动作未通告时回退到
 VmmControl(任务轮询至终态,失败分类为 BMC_PROTOCOL_ERROR 并携带 iBMC

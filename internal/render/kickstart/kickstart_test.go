@@ -99,7 +99,7 @@ func TestRenderWipeStorageAndBond(t *testing.T) {
 		t.Errorf("hostname missing")
 	}
 
-	if boot.KernelArgs != "ip=dhcp inst.ks=https://m/render/tok123/ks.cfg inst.repo=https://mirror.example/rocky9 inst.text inst.syslog=m" {
+	if boot.KernelArgs != "ip=dhcp inst.ks=cdrom:/ks.cfg inst.repo=https://mirror.example/rocky9 inst.text inst.syslog=m" {
 		t.Errorf("boot params wrong: %q", boot.KernelArgs)
 	}
 }
@@ -428,7 +428,9 @@ func TestEarlyNetworkArgsFromSpec(t *testing.T) {
 	if !strings.HasPrefix(boot.KernelArgs, want+" ") {
 		t.Errorf("early net args missing: %q", boot.KernelArgs)
 	}
-	if !strings.Contains(boot.KernelArgs, "inst.ks=u/ks.cfg") {
+	if !strings.Contains(boot.KernelArgs, "inst.ks=cdrom:/ks.cfg") {
+		// vMedia: the answer file rides the repacked ISO — read offline from
+		// the boot media (no early-network dependency for the ks fetch).
 		t.Errorf("inst.ks lost: %q", boot.KernelArgs)
 	}
 }

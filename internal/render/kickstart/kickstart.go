@@ -967,8 +967,8 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	}
 
 	answers := []render.AnswerFile{{Name: "ks.cfg", Content: buf.String()}}
-	// Early network (dracut ip=/ifname=): the answer file is a remote URL on
-	// the boot media's kernel command line — anaconda must have network up
+	// Early network (dracut ip=/ifname=): the PXE answer file is a remote URL
+	// on the boot media's kernel command line — anaconda must have network up
 	// BEFORE it can fetch it, and without an ip= argument it configures none
 	// (real-hardware finding: the installer sat idle and never fetched the
 	// kickstart). Spec-defined static interfaces become pinned dracut args
@@ -979,7 +979,17 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if early == "" {
 		early = "ip=dhcp"
 	}
-	kernelArgs := fmt.Sprintf("inst.ks=%s inst.repo=%s%s", primaryURL, repo, d.instTextArg())
+	// vMedia: the answer file is baked onto the repacked ISO — read it
+	// offline from the boot media (anaconda's cdrom: prefix). The URL form
+	// needs the early network to reach mammoth, which environments without a
+	// reachable early path (lab L2s with no site DHCP: ip=dhcp lands nowhere)
+	// cannot provide — real-hardware: anaconda stalled at the ks fetch with
+	// zero network traffic while the ks sat on the mounted CD.
+	ksRef := primaryURL
+	if in.Netboot == nil {
+		ksRef = "cdrom:/ks.cfg"
+	}
+	kernelArgs := fmt.Sprintf("inst.ks=%s inst.repo=%s%s", ksRef, repo, d.instTextArg())
 	if early != "" {
 		kernelArgs = early + " " + kernelArgs
 	}

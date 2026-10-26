@@ -30,6 +30,14 @@ func (s *Server) CreateInstallPlan(ctx context.Context, request gen.CreateInstal
 	if err != nil {
 		return nil, err
 	}
+	// Library refs resolve exactly like a real submission (resolveImageRefs
+	// is the submit-side gate): image.id → file path + sha256 checksum. The
+	// plan must reject a fetching/failed image the same way the submission
+	// would — same validation surface, docs/03-api.md §4.
+	raw, err = s.resolveImageRefs(ctx, raw)
+	if err != nil {
+		return nil, err
+	}
 	plan, err := provision.PlanInstall(ctx, raw, &hw, s.Render)
 	if err != nil {
 		return nil, err

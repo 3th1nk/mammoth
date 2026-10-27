@@ -156,15 +156,17 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 				"%s", perr.Error())
 		}
-		// Per-task nocloud seed INSIDE the NFS-rooted pool tree: the casper
-		// live env reads it offline from its own root (ds=nocloud;
-		// file:///mammoth-seed/<token>/ — the live root IS this tree). The
-		// remote ds=nocloud-net form died on install L2s where the live env
-		// had no usable route to the engine (real-hardware: the live env
-		// held a DHCP lease but never fetched the seed; subiquity fell back
-		// to the interactive language picker). The pool tree's TTL sweep
-		// reclaims per-task seed dirs with the tree.
-		seedDir := filepath.Join(poolDir, "mammoth-seed", ictx.Token)
+		// Answer files AT THE POOL TREE ROOT: casper copies medium-root
+		// user-data/meta-data into the live env's /var/lib/cloud/seed/nocloud
+		// (the documented casper autoinstall-on-medium pattern — the vMedia
+		// carrier's CD-root seed is the same shape), and the
+		// ds=nocloud-net;s=file:///cdrom/ read lands on the same files. The
+		// remote-only seed died on install L2s where the live env had no
+		// usable route to the engine (real-hardware: the live env held a
+		// DHCP lease but never fetched the seed; subiquity fell back to the
+		// interactive language picker). The pool tree's TTL sweep reclaims
+		// the per-task files with the tree.
+		seedDir := poolDir
 		for _, a := range b.Answers {
 			dest := filepath.Join(seedDir, a.Name)
 			if merr := os.MkdirAll(filepath.Dir(dest), 0o755); merr != nil {

@@ -333,7 +333,7 @@ func TestRenderNetbootCasperArgs(t *testing.T) {
 		t.Fatalf("render: %v", err)
 	}
 	if boot.NetbootKernelArgs == "" ||
-		!strings.Contains(boot.NetbootKernelArgs, "ds=nocloud-net;s=file:///cdrom/") ||
+		!strings.Contains(boot.NetbootKernelArgs, "ds=nocloud-net;s=http://10.0.0.1:8080/render/toku/") ||
 		!strings.Contains(boot.NetbootKernelArgs, "boot=casper netboot=nfs nfsroot=10.0.0.1:/export/netboot/toku/iso") ||
 		!strings.Contains(boot.NetbootKernelArgs, "nfsopts=tcp,v3") ||
 		!strings.Contains(boot.NetbootKernelArgs, "syslog=10.0.0.1") ||

@@ -160,6 +160,31 @@ tcpdump -ni <装机口> 'udp port 67 or udp port 69 or udp port 4011'
 filename( mammoth 应答内容)、TFTP RRQ 是否出现(引导项是否生效)、ACK0
 是否缺失(X722 形态,tftp 容忍已覆盖)。
 
+### 4.7 安装器起来了但 autoinstall 没生效:seed 拉取三步定位(2026-10-28)
+
+PXE 载体独有的中间故障带:引导链全绿(script/kernel/initrd 200、NFS live
+根挂起、机器可 ping)但装机器停在交互界面。按序三步,不要跳步:
+
+1. **拉引擎实际下发的引导项原文**,别猜内核收到了什么:
+   `curl http://<engine>/netboot/script?mac=<装机MAC>`——内核参数行
+   是否完整、分号形态是否符合 loader 语义(iPXE 裸 `;`、GRUB `\;`,
+   详见 [patterns P3](compat/patterns.md);`\;` 曾是五轮 interactive
+   的总根因);
+2. **抓答案端点 HTTP**(决定性判据):引擎侧
+   `tcpdump -A -s0 "tcp port <port> and src net <装机网段>"`,窗口覆盖
+   引导后全程(seed fetch 在 live 起来后 ~2 分钟一次)。抓到
+   `GET /render/<token>/meta-data|user-data` = 数据源已激活,问题在
+   seed 内容;零请求 = 参数行/数据源未激活,回第 1 步;
+3. **串口实证**(`/proc/cmdline`、cloud-init 决策):PXE 参数行带
+   `console=ttyS0,115200n8` 后用 SOL 观察
+   (`ipmitool sol activate`,需真实 tty;casper 的 `syslog=` 无实现,
+   UDP sink 不会收到任何东西)。注意安装器 live 环境自带 sshd
+   (22 端口开放是常态),不要误判成装好的系统。
+
+另两条运维行为备忘:INSTALL_TIMEOUT 的重试**不重新引导**(新参数要
+生效必须取消旧 job 重起新 job);取消遇上引擎重启时 job 可能停在
+running 不落账(JOB_MACHINE_BUSY),对同一 job 再打一次 cancel 即结算。
+
 ## 5. 外部 DHCP+TFTP:逃生门形态(2026-09-18)
 
 builtin 模式的接力链(mammoth 亲历三跳:proxyDHCP→TFTP→HTTP)在 mammoth

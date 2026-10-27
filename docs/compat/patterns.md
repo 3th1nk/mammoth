@@ -36,13 +36,31 @@
   URL seed 在 netcfg 之后加载——netboot 载体的静态网配必须走内核参数)、
   kickstart(ifname=)。
 
-## P3 PXE 参数行被引导器截断
+## P3 PXE 参数行被引导器截断/投毒:分号策略按 loader 各表
 
-- **本质**:GRUB 把 `;` 当命令分隔符——`ds=nocloud-net;s=URL` 之后的
-  全部内核参数被静默丢弃(内核只收到前几个参数,报错毫无提示)。
-- **对策**:渲染进 grub.cfg 的内核参数一律转义 `;` 为 `\;`(sanitizeArgs);
-  回归测试须断言"参数整行完整"而非仅首参数存在。
-- **已落地**:internal/netboot RenderGRUB/sanitizeArgs。
+- **本质**:`;` 在两个 loader 里的语义相反,一套转义通吃必然毒死一头。
+  **GRUB**:`;` 是命令分隔符,未转义时 linux 行在第一个分号处被截断
+  (2288H 真机:内核只收到前几个参数,无 ip=/BOOTIF/nfsroot,casper
+  落入交互);`\;` grub 会解转义,内核收到干净的 `;`。
+  **iPXE**:tokenizer 只按空白分词、**无任何转义处理**(src/core/exec.c
+  split_command/command_terminator 实证),命令终止符是整个 token 恰好
+  等于 `;`——词内分号连同反斜杠**原样进 /proc/cmdline**。
+  `ds=nocloud-net\;s=URL` 这种带尾反斜杠的 token 让 cloud-init 的
+  parse_cmdline_data 配不上数据源标记 → datasource 永不激活 → seed
+  永不拉取 → subiquity 每轮回退交互式(2288H 五轮 interactive 的总根因;
+  期间换过 ds 形态 nocloud/nocloud-net、换过 seed 落位、换过载体,全部
+  无效——毒在 loader 层,与 cloud-init 侧语义无关)。
+- **对策**:分号策略按 loader 拆双 flavor——GRUB 保 `\;`(sanitizeArgs),
+  iPXE 只折叠空白、裸分号(sanitizeIpxeArgs);iPXE 词内分号不是终止符,
+  原样透传即正确形态。回归测试双向都要有:GRUB 断言"参数整行完整",
+  iPXE 断言"无反斜杠残留"。
+- **教训**:同一内核参数行进不同 loader 是不同的编译问题;排障时先
+  拉引擎实际下发的引导项原文(`/netboot/script?mac=…`),对照内核侧
+  真实收到的 cmdline(dmesg `Command line:` 行,SOL/串口可读),不要
+  在参数语义层反复换形态空转。
+- **已落地**:internal/netboot/script.go(sanitizeArgs/sanitizeIpxeArgs)、
+  script_test.go(TestSanitizeArgsEscapesSemicolon/
+  TestRenderScriptKeepsRawSemicolon);实证轮 2026-10-28(8cd5e4b)。
 
 ## P4 安装器"缺文件就死等"与探测文件
 
@@ -79,6 +97,24 @@
   (related-work §2)。
 - **已落地**:inbandssh ENV 探测、preseed post-install 拷日志;
   syslog sink 为近期行动项。
+- **2026-10-28 实测补充(PXE/casper 载体)**:
+  - `syslog=` 内核参数在 casper(22.04)里**无实现**——initramfs 与
+    live 环境都没有对应转发逻辑,引擎侧 UDP 514 sink 五轮零包是必然,
+    不要再往这条通道投资;真观测面是**串口**:PXE 参数行加
+    `console=ttyS0,115200n8` 后,SOL(`ipmitool sol activate`,需真实
+    tty,ssh -tt 或落盘捕获)能带全程内核/cloud-init/subiquity 输出。
+  - **"seed 是否被拉走"的决定性判据**是引擎答案端点的 HTTP 抓包:
+    `tcpdump -A -s0 "tcp port <port> and src net <装机网段>"`,抓到
+    `GET /render/<token>/meta-data|user-data|vendor-data` = cloud-init
+    数据源激活;零请求 = 引导链/参数行问题(先查 P3 的脚本原文)。
+    注意 fetch 发生在 live 起来后 ~2 分钟,抓包窗口要覆盖引导后全程。
+  - **INSTALL_TIMEOUT 的重试不重新引导**(boot stage 只 attempt:1,
+    install_os 反复加 attempt)——装机器停在交互界面时,重试只是在
+    原地续等;要让机器吃到新参数必须起新任务(取消旧 job → 等机器
+    释放 → 新 job 触发 boot stage)。
+  - 取消与引擎重启竞态:重启后 reaper 中断孤儿任务,但 job 行可能
+    停在 running 不落账(JOB_MACHINE_BUSY 409),对同一 job 再打一次
+    cancel 即结算。
 
 ## P7 共享二层网络的地址治理(2026-09-17 夜补)
 

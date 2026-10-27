@@ -106,9 +106,21 @@ anaconda 19.31(python2 世代)+ util-linux 2.23 的四处方言差异,均已内�
 
 ### ubuntu22(autoinstall)
 
-- 应答文件:nocloud seed(`meta-data` + `user-data`,烘入 ISO 根,经
-  `ds=nocloud-net;s=file:///cdrom/` 离线加载——远程 seed 依赖 casper 早期组网,
-  真机已证不可靠);
+- 应答文件:nocloud seed(`meta-data` + `user-data`),载体决定送达通道:
+  - **vMedia**:seed 烘进重建 ISO 的 live rootfs 内嵌 seed 目录
+    (`/var/lib/cloud/seed/nocloud/`,squashfs 重排)——cloud-init 的
+    seed 目录查找是两形态数据源都走的通道,零网络依赖;
+  - **PXE/casper**:seedfrom 走引擎 HTTP 答案目录
+    (`ds=nocloud-net;s=http://<engine>/render/<token>/`,2026-10-28
+    真机六阶段闭环)。能 NFS 挂起 live 根就证明引擎 HTTP 可达,
+    同栈无额外依赖;
+  - **cloud-init 24.2 语义边界**(源码实证):DataSourceNoCloudNet 的
+    seedfrom 白名单只有 http(s)/ftp(supported_seed_starts),`file://`
+    必拒("Seed from … not supported");`file://` 只有本地 nocloud 形态
+    支持。kernel args 里的 `file:///cdrom/` seedfrom 在 vMedia 形态从未
+    承载过语义(seed 目录兜底),勿再沿用;
+  - casper NFS-root 形态下树根(= 介质根)会被 casper `mount -o move`
+    进 live 根(initramfs 05mountpoints),`/cdrom` 可见性本身不是坑。
 - 网络:netplan(cloud-init network-config v2),bond slaves 用 `match.macaddress`;
 - 存储:curtin storage config(disk→partition→format→mount 链);
   keep: disk = 该盘不进入 curtin 配置;
@@ -118,7 +130,9 @@ anaconda 19.31(python2 世代)+ util-linux 2.23 的四处方言差异,均已内�
   静默失效)——root 口令(chpasswd)、authorized_keys、PermitRootLogin、
   hostname 全部经 `late-commands`/`curtin in-target` 落盘;
 - 显式 `shutdown: reboot`——否则 subiquity 在 curtin 完成后停滞不重启;
-- root 口令:留空 = 安装期随机生成(经任务事件一次性下发)。
+- root 口令:留空 = 安装期随机生成(经任务事件一次性下发);
+- PXE 载体排障入口见 [patterns P3](patterns.md)(分号投毒)与
+  [patterns P6](patterns.md)(seed 拉取判据/串口观测)。
 
 ### debian12(preseed)
 

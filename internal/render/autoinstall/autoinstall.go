@@ -329,7 +329,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 				in.Netboot.StaticIP, in.Netboot.StaticRouter, in.Netboot.StaticMask)
 		}
 		boot.NetbootKernelArgs = fmt.Sprintf(
-			"autoinstall ds=nocloud;s=file:///cdrom/ %s boot=casper netboot=nfs nfsroot=%s nfsopts=tcp,v3",
+			"autoinstall ds=nocloud-net;s=file:///cdrom/ %s boot=casper netboot=nfs nfsroot=%s nfsopts=tcp,v3",
 			ipArg, in.Netboot.NFSRootURL)
 		if host := render.SyslogHost(in.AnswerBaseURL); host != "" {
 			boot.NetbootKernelArgs += " syslog=" + host

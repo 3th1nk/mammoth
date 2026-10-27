@@ -180,7 +180,7 @@ func TestRenderAutoinstallWipeAndBond(t *testing.T) {
 		t.Errorf("offline-apt tolerance cleanup missing:\n%s", late)
 	}
 
-	if boot.KernelArgs != "autoinstall ds=nocloud;s=file:///cdrom/ syslog=m" {
+	if boot.KernelArgs != "autoinstall ds=nocloud-net;s=file:///cdrom/ syslog=m" {
 		t.Errorf("boot params wrong: %q", boot.KernelArgs)
 	}
 }

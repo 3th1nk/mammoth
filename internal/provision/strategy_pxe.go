@@ -156,24 +156,18 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 				"%s", perr.Error())
 		}
-		// Answer files into the CASPER SEED DIR on the NFS-rooted tree:
-		// var/lib/cloud/seed/nocloud/{meta-data,user-data} — the canonical
-		// casper autoinstall-on-NFS-root location. The live env's root IS
-		// this tree, so cloud-init's nocloud datasource (which casper pins
-		// to seed=/var/lib/cloud/seed/nocloud — KVM cloud-init status
-		// evidence) reads OUR user-data instead of the rootfs's 308-byte
-		// placeholder. The remote ds=nocloud-net URL form died on install
-		// L2s where the live env had no usable route to the engine
-		// (real-hardware: the live env held a DHCP lease but never fetched
-		// the seed; subiquity fell back to the interactive language
-		// picker). The seed is consumed at each boot; the pool tree's TTL
-		// sweep reclaims it with the tree.
+		// Answer files AT THE POOL TREE ROOT: casper (ds=nocloud, the LOCAL
+		// form) copies medium-root user-data/meta-data into the live env's
+		// /var/lib/cloud/seed/nocloud at boot — the medium root is where
+		// casper looks for the seed. The remote ds=nocloud-net URL form died
+		// on install L2s where the live env had no usable route to the
+		// engine (real-hardware: the live env held a DHCP lease but never
+		// fetched the seed; subiquity fell back to the interactive language
+		// picker). The pool tree's TTL sweep reclaims the per-task files
+		// with the tree.
+		seedDir := poolDir
 		for _, a := range b.Answers {
-			rel := a.Name
-			if rel == "meta-data" || rel == "user-data" {
-				rel = filepath.Join("var/lib/cloud/seed/nocloud", rel)
-			}
-			dest := filepath.Join(poolDir, rel)
+			dest := filepath.Join(seedDir, a.Name)
 			if merr := os.MkdirAll(filepath.Dir(dest), 0o755); merr != nil {
 				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true, "%s", merr.Error())
 			}

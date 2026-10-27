@@ -70,6 +70,12 @@ type NetbootInputs struct {
 	// NFSRootURL is the NFS install-source tree in casper's nfsroot form
 	// (host:/path — MediaBaseURI + the shared pool-store path).
 	NFSRootURL string
+	// AptMirror is the apt mirror the installer env should use for package
+	// fetches (deployment-configured; empty = the distro default). Rendered
+	// into the seed's apt module — without it, subiquity checks the distro
+	// default mirror, which offline/mirrorless install L2s fail and gate
+	// the install behind a dialog (real-hardware, 2288H).
+	AptMirror string
 	// InstallSMBUNC/User/Password feed the windows wimboot carrier's
 	// startnet: WinPE maps this deployment-provided SMB export and runs
 	// setup from it (the SMB analog of the NFS media export — docs/compat/

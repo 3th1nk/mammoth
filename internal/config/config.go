@@ -112,6 +112,10 @@ type Config struct {
 	// PXE submissions are rejected at the gate. User/Password are optional
 	// share credentials (guest exports need none).
 	WindowsInstallSMBUNC      string
+	// UbuntuAptMirror is the apt mirror the ubuntu PXE installer env uses
+	// for package fetches (MAMMOTH_UBUNTU_APT_MIRROR; empty = the distro
+	// default mirror).
+	UbuntuAptMirror string
 	WindowsInstallSMBUser     string
 	WindowsInstallSMBPassword string
 	BootSettleDelay           time.Duration
@@ -266,6 +270,7 @@ func FromEnv() (Config, error) {
 	setString(&c.MediaWorkDir, "MAMMOTH_MEDIA_WORKDIR", &errs)
 	setString(&c.MediaBaseURI, "MAMMOTH_MEDIA_BASE_URI", &errs)
 	setString(&c.WindowsInstallSMBUNC, "MAMMOTH_WINDOWS_INSTALL_SMB_UNC", &errs)
+	setString(&c.UbuntuAptMirror, "MAMMOTH_UBUNTU_APT_MIRROR", &errs)
 	setString(&c.WindowsInstallSMBUser, "MAMMOTH_WINDOWS_INSTALL_SMB_USER", &errs)
 	setString(&c.WindowsInstallSMBPassword, "MAMMOTH_WINDOWS_INSTALL_SMB_PASSWORD", &errs)
 	setString(&c.MediaRelayAddr, "MAMMOTH_MEDIA_RELAY_ADDR", &errs)

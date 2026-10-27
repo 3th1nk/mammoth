@@ -52,6 +52,11 @@ type Executor struct {
 	// the SMB analog of MediaBaseURI's NFS export). Empty share = windows PXE
 	// submissions are rejected at the gate.
 	WindowsInstallSMBUNC      string
+	// UbuntuAptMirror is the apt mirror the ubuntu PXE installer env uses
+	// for package fetches (the seed's apt/primary; empty = the distro
+	// default mirror — unreachable from mirrorless install L2s, where the
+	// subiquity mirror check gates the install behind a dialog).
+	UbuntuAptMirror string
 	WindowsInstallSMBUser     string
 	WindowsInstallSMBPassword string
 	// MediaUploader, when configured, moves the assembled boot ISO into the

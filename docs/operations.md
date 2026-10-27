@@ -275,6 +275,7 @@ windows wimboot 载体的 install 源是**部署层 SMB 只读共享**(与 NFS �
 导出同哲学,引擎不内建 SMB 服务面——SMB 交 samba/Windows 文件共享):
 
 ```sh
+MAMMOTH_UBUNTU_APT_MIRROR='http://mirrors.aliyun.com/ubuntu/'  # 可选;ubuntu PXE 装机环境的 apt 镜像(镜像检查失败会弹交互对话框;离线机房配内网镜像)
 MAMMOTH_WINDOWS_INSTALL_SMB_UNC='\\198.51.100.248\mammoth-media'  # 必填,UNC
 MAMMOTH_WINDOWS_INSTALL_SMB_USER=''      # 可选;空 = guest 导出
 MAMMOTH_WINDOWS_INSTALL_SMB_PASSWORD=''

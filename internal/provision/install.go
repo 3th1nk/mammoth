@@ -957,6 +957,7 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 			}
 			in.Netboot = &render.NetbootInputs{
 				InstallSMBUNC:      e.WindowsInstallSMBUNC,
+				AptMirror:          e.UbuntuAptMirror,
 				InstallSMBUser:     e.WindowsInstallSMBUser,
 				InstallSMBPassword: e.WindowsInstallSMBPassword,
 				// Windows separators, not filepath.Join — this string lands

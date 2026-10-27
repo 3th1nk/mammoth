@@ -213,22 +213,23 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		}
 	}
 
+	// subiquity refuses to start an unattended install without identity
+	// ("neither identity nor user-data provided" — it checks BEFORE
+	// curtin ever runs, so the late-command chpasswd alone is not enough;
+	// real-hardware finding, PXE carrier). The password here is the same
+	// one-time value the late command re-applies on the target.
+	identity := map[string]any{
+		"hostname": in.Hostname,
+		"username": "mammoth",
+		"password": rootpwCrypt,
+	}
 	auto := map[string]any{
 		"version": 1,
 		"locale":  "en_US.UTF-8",
 		"keyboard": map[string]any{
 			"layout": "us",
 		},
-		// subiquity refuses to start an unattended install without identity
-		// ("neither identity nor user-data provided" — it checks BEFORE
-		// curtin ever runs, so the late-command chpasswd alone is not enough;
-		// real-hardware finding, PXE carrier). The password here is the same
-		// one-time value the late command re-applies on the target.
-		"identity": map[string]any{
-			"hostname": in.Hostname,
-			"username": "mammoth",
-			"password": rootpwCrypt,
-		},
+		"identity": identity,
 		"ssh": map[string]any{
 			"install-server": true,
 			"allow-pw":       true,
@@ -254,6 +255,15 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	}
 	if len(network) > 0 {
 		auto["network"] = network
+	}
+	// The installer-env apt mirror (deployment-configured): subiquity checks
+	// its apt mirror at install start; the distro default (archive.ubuntu.com)
+	// is unreachable from mirrorless install L2s and the check gates the
+	// install behind a dialog (real-hardware: 2288H, the 22.04.5 PXE round).
+	if in.Netboot != nil && in.Netboot.AptMirror != "" {
+		auto["apt"] = map[string]any{
+			"primary": []map[string]any{{"arches": []string{"default"}, "uri": in.Netboot.AptMirror}},
+		}
 	}
 
 	userData := map[string]any{

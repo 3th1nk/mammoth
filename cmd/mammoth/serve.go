@@ -499,6 +499,7 @@ func serve(args []string) error {
 			MediaWorkDir:              cfg.MediaWorkDir,
 			MediaBaseURI:              cfg.MediaBaseURI,
 			WindowsInstallSMBUNC:      cfg.WindowsInstallSMBUNC,
+			UbuntuAptMirror:           cfg.UbuntuAptMirror,
 			WindowsInstallSMBUser:     cfg.WindowsInstallSMBUser,
 			WindowsInstallSMBPassword: cfg.WindowsInstallSMBPassword,
 			BootSettleDelay:           cfg.BootSettleDelay,

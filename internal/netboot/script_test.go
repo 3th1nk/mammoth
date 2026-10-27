@@ -274,3 +274,26 @@ func TestSanitizeArgsEscapesSemicolon(t *testing.T) {
 		t.Fatalf("grub.cfg has double spaces:\n%s", cfg)
 	}
 }
+
+// The iPXE flavor must be the OPPOSITE: iPXE's tokenizer has no escape
+// handling (exec.c splits on whitespace, and its command terminator is a
+// token exactly equal to ";"), so "\;" reaches the kernel verbatim and
+// cloud-init's parse_cmdline_data cannot key "ds=nocloud-net" out of the
+// trailing-backslash token — the datasource never activates and the seed
+// URL is never fetched (2288H: five interactive-fallback rounds).
+func TestRenderScriptKeepsRawSemicolon(t *testing.T) {
+	in := "autoinstall ds=nocloud-net;s=http://10.0.0.1:8080/render/toku/ ip=dhcp console=ttyS0,115200n8 boot=casper"
+	s := RenderScript(&Entry{MAC: "02:00:00:00:00:00", TaskID: "tsk", Token: "toku",
+		Kernel: "vmlinuz", Initrd: "initrd.img", KernelArgs: in}, "http://10.0.0.1:8080")
+	if !strings.Contains(s, "ds=nocloud-net;s=http://10.0.0.1:8080/render/toku/ ") {
+		t.Fatalf("ipxe script lost the raw semicolon seedfrom:\n%s", s)
+	}
+	if strings.Contains(s, `\;`) {
+		t.Fatalf("ipxe script leaked a backslash escape (poisons the kernel cmdline):\n%s", s)
+	}
+	enroll := RenderEnrollScript(&Entry{Token: "enroll", Kernel: "vmlinuz",
+		Initrd: "initrd.img", KernelArgs: in}, "http://10.0.0.1:8080", "02:00:00:00:00:00")
+	if strings.Contains(enroll, `\;`) {
+		t.Fatalf("enroll script leaked a backslash escape:\n%s", enroll)
+	}
+}

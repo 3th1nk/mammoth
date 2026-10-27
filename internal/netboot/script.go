@@ -92,7 +92,7 @@ func RenderScript(e *Entry, baseURL string) string {
 	fmt.Fprintf(&b, "#!ipxe\n")
 	fmt.Fprintf(&b, "# mammoth boot entry mac=%s task=%s kind=%s\n", e.MAC, e.TaskID, e.Kind)
 	fmt.Fprintf(&b, "kernel %s/netboot/files/%s/%s %s\n",
-		strings.TrimSuffix(baseURL, "/"), e.Token, e.Kernel, sanitizeArgs(e.KernelArgs))
+		strings.TrimSuffix(baseURL, "/"), e.Token, e.Kernel, sanitizeIpxeArgs(e.KernelArgs))
 	fmt.Fprintf(&b, "initrd %s/netboot/files/%s/%s\n",
 		strings.TrimSuffix(baseURL, "/"), e.Token, e.Initrd)
 	b.WriteString("boot\n")
@@ -146,23 +146,40 @@ func RenderEnrollScript(e *Entry, baseURL, mac string) string {
 	fmt.Fprintf(&b, "#!ipxe\n")
 	fmt.Fprintf(&b, "# mammoth enroll entry mac=%s\n", mac)
 	fmt.Fprintf(&b, "kernel %s/netboot/enroll-file/%s %s enroll_mac=%s\n",
-		strings.TrimSuffix(baseURL, "/"), e.Kernel, sanitizeArgs(e.KernelArgs), mac)
+		strings.TrimSuffix(baseURL, "/"), e.Kernel, sanitizeIpxeArgs(e.KernelArgs), mac)
 	fmt.Fprintf(&b, "initrd %s/netboot/enroll-file/%s\n",
 		strings.TrimSuffix(baseURL, "/"), e.Initrd)
 	b.WriteString("boot\n")
 	return b.String()
 }
 
-// sanitizeArgs collapses whitespace runs so the args stay on the kernel
-// line — upstream composes them from trusted templates, this only guards
-// against accidental newlines breaking the script. Semicolons are escaped
-// for the GRUB parser: an unescaped ";" is grub's command separator, which
-// truncates the linux line at the first one (real-hardware 2288H: the
-// ubuntu args "autoinstall ds=nocloud-net;s=http://... ip=... boot=casper"
-// lost everything after the ";", the kernel booted with no ip=/BOOTIF/
-// nfsroot at all and casper fell into its interactive prompt).
+// Semicolon policy is per-loader, and getting it wrong poisons the kernel
+// command line in opposite ways:
+//
+//   - GRUB (sanitizeArgs): an unescaped ";" is grub's command separator even
+//     mid-token — it truncates the linux line at the first one (real-hardware
+//     2288H: the ubuntu args "autoinstall ds=nocloud-net;s=http://...
+//     ip=... boot=casper" lost everything after the ";", the kernel booted
+//     with no ip=/BOOTIF/nfsroot at all and casper fell into its interactive
+//     prompt). Escaped "\;" grub strips before composing the kernel cmdline.
+//
+//   - iPXE (sanitizeIpxeArgs): the script tokenizer splits on whitespace only
+//     and its command terminator is a token exactly equal to ";" (exec.c
+//     strcmp) — a ";" inside a word reaches the kernel verbatim, backslash
+//     escapes included. Writing "\;" here put a literal backslash into
+//     /proc/cmdline: cloud-init's parse_cmdline_data then cannot key the
+//     "ds=nocloud-net" marker out of "nocloud-net\\", the datasource never
+//     activated, and the seed URL was never fetched (real-hardware 2288H:
+//     five more interactive-fallback rounds across both ds markers, seed
+//     placements and carriers with the answer URL proven reachable).
 func sanitizeArgs(s string) string {
 	return strings.ReplaceAll(strings.Join(strings.Fields(s), " "), ";", `\;`)
+}
+
+// sanitizeIpxeArgs is the iPXE flavor of sanitizeArgs: whitespace collapse
+// only — semicolons ride the kernel line raw.
+func sanitizeIpxeArgs(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // RenderGRUB renders the GRUB config for an entry (UEFI Secure Boot chain:

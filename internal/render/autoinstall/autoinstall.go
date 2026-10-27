@@ -337,10 +337,15 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 				in.Netboot.StaticIP, in.Netboot.StaticRouter, in.Netboot.StaticMask)
 		}
 		// The seedfrom URL must carry the trailing slash: cloud-init
-		// urlappend joins user-data/meta-data onto it verbatim.
+		// urlappend joins user-data/meta-data onto it verbatim. console=ttyS0
+		// mirrors the boot onto the BMC serial line: SOL (ipmitool sol
+		// activate) then carries the whole install — kernel, cloud-init
+		// datasource decisions, subiquity — to the engine operator even when
+		// no human can sit at the VGA console (five interactive-fallback
+		// rounds on the 2288H went undiagnosed without this).
 		seedBase := strings.TrimSuffix(in.AnswerBaseURL, "/") + "/"
 		boot.NetbootKernelArgs = fmt.Sprintf(
-			"autoinstall ds=nocloud-net;s=%s %s boot=casper netboot=nfs nfsroot=%s nfsopts=tcp,v3",
+			"autoinstall ds=nocloud-net;s=%s %s console=ttyS0,115200n8 boot=casper netboot=nfs nfsroot=%s nfsopts=tcp,v3",
 			seedBase, ipArg, in.Netboot.NFSRootURL)
 		if host := render.SyslogHost(in.AnswerBaseURL); host != "" {
 			boot.NetbootKernelArgs += " syslog=" + host

@@ -151,9 +151,29 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 				"distro ISO hash failed: %s", err.Error())
 		}
-		if _, err := EnsurePoolTree(ctx, e, distroISO, sha, pool, nil); err != nil {
+		poolDir, perr := EnsurePoolTree(ctx, e, distroISO, sha, pool, nil)
+		if perr != nil {
 			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
-				"%s", err.Error())
+				"%s", perr.Error())
+		}
+		// Per-task nocloud seed INSIDE the NFS-rooted pool tree: the casper
+		// live env reads it offline from its own root (ds=nocloud;
+		// file:///mammoth-seed/<token>/ — the live root IS this tree). The
+		// remote ds=nocloud-net form died on install L2s where the live env
+		// had no usable route to the engine (real-hardware: the live env
+		// held a DHCP lease but never fetched the seed; subiquity fell back
+		// to the interactive language picker). The pool tree's TTL sweep
+		// reclaims per-task seed dirs with the tree.
+		seedDir := filepath.Join(poolDir, "mammoth-seed", ictx.Token)
+		for _, a := range b.Answers {
+			dest := filepath.Join(seedDir, a.Name)
+			if merr := os.MkdirAll(filepath.Dir(dest), 0o755); merr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true, "%s", merr.Error())
+			}
+			if werr := os.WriteFile(dest, []byte(a.Content), 0o644); werr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+					"seed file %s: %s", a.Name, werr.Error())
+			}
 		}
 	}
 

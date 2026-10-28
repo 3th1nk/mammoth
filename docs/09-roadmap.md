@@ -371,9 +371,12 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
      media_uri 与 casper/安装器的 nfsroot:部署形态必须让**同一 NFS 服务端**同时可达
      两者(引擎主机内核 nfsd 导出 MediaDir 为定案;nfsx 对华为 iBMC 不兼容,见
      compat/huawei.md vMedia 节;.5 边缘节点只承担 PXE 的 dnsmasq/TFTP)。
-   - **复验轮**——22.04-crypt(性价比最高: crypt 修复仅 24.04 轮覆盖过,
-     2288H 半天可补,**真机窗口第一件事**)+ Kylin/rocky10-PXE;2288H 单
-     机轮装顺序覆盖(22/24/rocky9 已证明此模式可行);
+   - **复验轮**——~~22.04-crypt~~ **✅ 已闭环(2026-10-28,.250 环境九轮
+     真机:静态网 + root_password 全链通过,顺带修复 late-commands 裸
+     /target 失效 / root 密码 $ 展开 / netplan 缺 network: 包装三层,
+     见 HANDOFF 同名条目)**;余项 = Kylin/rocky10-PXE + 22.04-crypt 的
+     bond 声明顺带轮(等 eno2 接线);2288H 单机轮装顺序覆盖
+     (22/24/rocky9 已证明此模式可行);
    - **openEuler 驱动接入(候选,2026-09-24 立项)**——两篇 openEuler/
      Kylin PXE 实战文章核认:openEuler 24.03 是 anaconda RHEL9 代际
      (pykickstart/anaconda 36),kickstart 与 rocky9 同方言,UEFI grub

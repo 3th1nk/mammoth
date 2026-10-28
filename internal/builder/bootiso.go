@@ -825,7 +825,14 @@ func extractWindowsTree(ctx context.Context, iso, dst string) error {
 	if err != nil {
 		return fmt.Errorf("extract windows iso (7z -tUDF): %w: %s", err, tail(out, 400))
 	}
-	if err := exec.CommandContext(ctx, "chmod", "-R", "u+rwX", dst).Run(); err != nil {
+	// u+rwX for the builder; go+rX for the SMB deployment share: the
+	// deployment's read-only [media] export serves this tree as the
+	// authenticated SMB user, and `7z x -tUDF` preserves the media's NT
+	// permission bits — updated-snapshot media extracts sources/ as
+	// drwx------ (owner-only), which the SMB read turns into ACCESS_DENIED
+	// at setup.exe (2288H 2026-10-28: WinPE dropped to shell with
+	// "拒绝访问" while server-side auth succeeded).
+	if err := exec.CommandContext(ctx, "chmod", "-R", "u+rwX,go+rX", dst).Run(); err != nil {
 		if ferr := ensureRemovable(dst); ferr != nil {
 			return fmt.Errorf("grant write over extracted tree: %w", ferr)
 		}

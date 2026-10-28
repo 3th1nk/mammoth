@@ -110,16 +110,27 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// (an unsigned public mirror would pass silently). The casper carrier
 	// stages no pool today, so this is a no-op there — cheap symmetry that
 	// stays correct if the pool ever reaches a casper-carried target.
-	late = append(late, "rm -f /target/etc/apt/apt.conf.d/99mammoth-offline")
+	// The apt tolerance cleanup rides curtin in-target like everything else:
+	// subiquity runs late-commands inside a mount namespace where the target
+	// root IS / — a literal /target path (the d-i habit) writes into the
+	// installer environment and never reaches the disk (2026-10-28, 2288H:
+	// the netplan block below silently no-oped on exactly this; the on-disk
+	// /etc/netplan came up empty while every in-target command worked).
+	late = append(late, "curtin in-target -- rm -f /etc/apt/apt.conf.d/99mammoth-offline")
 	// The one-time password, crypt-hashed: subiquity stores identity.password
 	// VERBATIM in /etc/shadow (a plain string there matches no login), and
 	// chpasswd -e consumes the same hash for root (both users unreachable
 	// after a green install, 2288H — rendered plain text was the cause).
+	// The hash gets its own inner shQuote: the late-command text is itself a
+	// sh -c script, so a bare $6$salt$hash would be variable-expanded by the
+	// inner shell — the on-disk shadow ended up with the hash TAIL (70 chars,
+	// "$6$"+salt eaten as expansions) and no root password login ever worked
+	// (2288H 2026-10-28: mammoth login fine via identity, root broken).
 	rootpwCrypt := ""
 	if in.RootPassword != "" {
 		salt := randomSalt()
 		rootpwCrypt = cryptSHA512(in.RootPassword, salt)
-		late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("echo root:"+rootpwCrypt+" | chpasswd -e")))
+		late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("echo root:"+quoteSh(rootpwCrypt)+" | chpasswd -e")))
 	}
 	late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("mkdir -p /etc/ssh/sshd_config.d && echo 'PermitRootLogin yes' > /etc/ssh/sshd_config.d/60-mammoth.conf")))
 	// The target's own cloud-init generates the host keys on first boot and
@@ -159,12 +170,6 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	for _, k := range in.SSHPublicKeys {
 		late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("mkdir -p /root/.ssh && echo "+quoteSh(k)+" >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys")))
 	}
-	for _, s := range in.Scripts {
-		if s.Stage != "post_install" {
-			continue
-		}
-		late = append(late, scriptLine(s))
-	}
 	// PXE real-hardware lesson (2026-09-19, the 22.04-crypt pool-armed
 	// round): the target's netplan is whatever subiquity/curtin generates
 	// from the INSTALLER environment — in pool-armed installs that
@@ -176,17 +181,37 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// contract. Static specs only: a dhcp-only spec declares no address to
 	// defend (the pool-reservation path owns that case), and virtual-media
 	// installs have shown no dilution (no ip= environment to leak).
+	// Ordered BEFORE the user scripts so a post_install probe reads the
+	// written files back at the same installer stage (2026-10-28 round).
 	if in.Netboot != nil {
 		if _, ok := firstStaticNetwork(in.Network); ok {
-			netplanYAML, merr := yaml.Marshal(network)
-			if merr != nil {
-				return nil, render.BootParams{}, fmt.Errorf("%s: target netplan: %w", d.distro, merr)
+			// curtin in-target + base64 (the package_source form): the
+			// late-command environment mounts the target root at / in its
+			// mount namespace, so heredoc writes to literal /target paths
+			// never land on disk (2026-10-28, 2288H). base64 keeps the YAML
+			// off the late-command quoting path entirely. The file gets the
+			// top-level `network:` wrapper the autoinstall `network` section
+			// deliberately lacks — subiquity consumes network-config v2
+			// bare, but a netplan FILE under /etc/netplan needs the wrapper
+			// (same-day read-back: bare "ethernets:" was rejected with
+			// `unknown key 'ethernets'`, netplan generate died, and the
+			// poisoned render took cloud-init's DHCP fallback down with it —
+			// the system came up with NO network at all).
+			wrapped, werr := yaml.Marshal(map[string]any{"network": network})
+			if werr != nil {
+				return nil, render.BootParams{}, fmt.Errorf("%s: target netplan: %w", d.distro, werr)
 			}
 			late = append(late,
-				"rm -f /target/etc/netplan/00-installer-config.yaml /target/etc/netplan/50-cloud-init.yaml",
-				"mkdir -p /target/etc/netplan && cat > /target/etc/netplan/99-mammoth.yaml <<'MAMMOTH_NETPLAN'\n"+
-					string(netplanYAML)+"MAMMOTH_NETPLAN\nchmod 600 /target/etc/netplan/99-mammoth.yaml")
+				"curtin in-target -- sh -c "+quoteSh("rm -f /etc/netplan/00-installer-config.yaml /etc/netplan/50-cloud-init.yaml"),
+				"curtin in-target -- sh -c "+quoteSh("mkdir -p /etc/netplan && echo "+
+					base64.StdEncoding.EncodeToString(wrapped)+" | base64 -d > /etc/netplan/99-mammoth.yaml && chmod 600 /etc/netplan/99-mammoth.yaml"))
 		}
+	}
+	for _, s := range in.Scripts {
+		if s.Stage != "post_install" {
+			continue
+		}
+		late = append(late, scriptLine(s))
 	}
 	late = append(late, fmt.Sprintf(`python3 -c "import json,urllib.request;z=urllib.request.Request('%s',data=json.dumps({'status':'ok','detail':'autoinstall finished'}).encode(),headers={'Content-Type':'application/json'});urllib.request.urlopen(z,timeout=10)"`, in.CompleteURL))
 
@@ -243,8 +268,10 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			// Write the file directly: hostnamectl needs a running systemd,
 			// which the curtin chroot does not have (real-hardware lesson —
 			// the command silently no-oped and the host came up as
-			// localhost.localdomain).
-			fmt.Sprintf("echo %s > /target/etc/hostname", in.Hostname),
+			// localhost.localdomain). The path rides curtin in-target —
+			// literal /target paths are inert in the late-command mount
+			// namespace (see the netplan block above).
+			fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("echo "+quoteSh(in.Hostname)+" > /etc/hostname")),
 		}, late...),
 		// Without this subiquity stalls after curtin instead of rebooting
 		// into the freshly installed system (real-hardware lesson).

@@ -1,7 +1,9 @@
 package autoinstall
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -151,15 +153,18 @@ func TestRenderAutoinstallWipeAndBond(t *testing.T) {
 	}
 	// The root password travels as a $6$ crypt (chpasswd -e): subiquity
 	// stores identity.password verbatim, so a plain string there would be
-	// an untypeable password.
+	// an untypeable password. The hash carries its OWN inner shQuote: the
+	// late-command text is itself a sh -c script and a bare $6$salt$hash
+	// would be variable-expanded by the inner shell (2288H 2026-10-28 —
+	// the on-disk shadow kept only the 70-char hash tail).
 	if !strings.Contains(late, `chpasswd -e`) {
 		t.Errorf("root password provisioning (crypt) missing:\n%s", late)
 	}
 	if strings.Contains(late, "uRoot-pw") {
 		t.Errorf("PLAIN root password leaked into the seed:\n%s", late)
 	}
-	if !strings.Contains(late, "$6$") {
-		t.Errorf("no crypt hash in late-commands:\n%s", late)
+	if !strings.Contains(late, `root:'"'"'$6$`) {
+		t.Errorf("crypt hash without inner quote — the inner shell would eat $6$salt:\n%s", late)
 	}
 	if !strings.Contains(late, "PermitRootLogin yes") {
 		t.Errorf("PermitRootLogin provisioning missing")
@@ -176,7 +181,9 @@ func TestRenderAutoinstallWipeAndBond(t *testing.T) {
 	// Symmetric with the debian post-install: a provisioned system must
 	// never keep the pool's offline-apt tolerance (defense in depth — the
 	// casper carrier stages no pool today, so this is a no-op there).
-	if !strings.Contains(late, "rm -f /target/etc/apt/apt.conf.d/99mammoth-offline") {
+	// The cleanup rides curtin in-target: literal /target paths are inert
+	// in the late-command mount namespace.
+	if !strings.Contains(late, "curtin in-target -- rm -f /etc/apt/apt.conf.d/99mammoth-offline") {
 		t.Errorf("offline-apt tolerance cleanup missing:\n%s", late)
 	}
 
@@ -553,18 +560,37 @@ func TestRenderAutoinstallPXETargetNetplan(t *testing.T) {
 	_, ud := fetchUser(t, answers)
 	auto := ud["autoinstall"].(map[string]any)
 	late := strings.Join(toStrSlice(auto["late-commands"]), "\n")
+	// The target netplan rides curtin in-target + base64: literal /target
+	// paths are inert in the late-command mount namespace (2026-10-28,
+	// 2288H — the heredoc form silently no-oped, cloud-init fell back to
+	// DHCP). Content is asserted on the DECODED payload.
 	for _, want := range []string{
-		"rm -f /target/etc/netplan/00-installer-config.yaml /target/etc/netplan/50-cloud-init.yaml",
-		"cat > /target/etc/netplan/99-mammoth.yaml <<'MAMMOTH_NETPLAN'",
-		"addresses:",
-		"172.16.1.21/24",
-		"gateway4: 172.16.1.1",
-		"macaddress: aa:bb:cc:dd:ee:09",
-		"MAMMOTH_NETPLAN\nchmod 600 /target/etc/netplan/99-mammoth.yaml",
+		"curtin in-target -- sh -c 'rm -f /etc/netplan/00-installer-config.yaml /etc/netplan/50-cloud-init.yaml'",
+		"base64 -d > /etc/netplan/99-mammoth.yaml && chmod 600 /etc/netplan/99-mammoth.yaml",
 	} {
 		if !strings.Contains(late, want) {
 			t.Errorf("target netplan enforcement missing %q:\n%s", want, late)
 		}
+	}
+	re := regexp.MustCompile(`echo ([A-Za-z0-9+/=]+) \| base64 -d > /etc/netplan/99-mammoth\.yaml`)
+	m := re.FindStringSubmatch(late)
+	if m == nil {
+		t.Fatalf("base64 netplan payload not found in late-commands:\n%s", late)
+	}
+	decoded, derr := base64.StdEncoding.DecodeString(m[1])
+	if derr != nil {
+		t.Fatalf("netplan payload undecodable: %v", derr)
+	}
+	for _, want := range []string{"network:", "172.16.1.21/24", "gateway4: 172.16.1.1", "macaddress: aa:bb:cc:dd:ee:09", "version: 2"} {
+		if !strings.Contains(string(decoded), want) {
+			t.Errorf("decoded target netplan missing %q:\n%s", want, decoded)
+		}
+	}
+	// The decoded file must START with the top-level network: wrapper (bare
+	// "ethernets:" is `unknown key` and poisons the whole netplan render —
+	// 2288H 2026-10-28), while the autoinstall network section stays bare.
+	if !strings.HasPrefix(strings.TrimSpace(string(decoded)), "network:") {
+		t.Errorf("netplan file content lacks the network: wrapper:\n%s", decoded)
 	}
 	if !strings.Contains(boot.NetbootKernelArgs, "ip=172.16.1.21::172.16.1.1:255.255.255.0:::off") {
 		t.Errorf("static ip= argument wrong: %q", boot.NetbootKernelArgs)

@@ -102,17 +102,22 @@ func WindowsImageIndex(installWimPath, imageName string) (int, error) {
 		return 0, fmt.Errorf("wimlib-imagex info: %w: %s", err, tail(info, 400))
 	}
 	idx := 0
+	var catalog []string // "N: <name>" — echoed verbatim when nothing matches
 	for _, line := range strings.Split(string(info), "\n") {
 		t := strings.TrimSpace(line)
 		if strings.HasPrefix(t, "Index:") {
 			n, _ := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(t, "Index:")))
 			idx = n
-		} else if strings.HasPrefix(t, "Name:") && idx > 0 &&
-			strings.Contains(strings.ToUpper(t), strings.ToUpper(imageName)) {
-			return idx, nil
+		} else if strings.HasPrefix(t, "Name:") && idx > 0 {
+			name := strings.TrimSpace(strings.TrimPrefix(t, "Name:"))
+			catalog = append(catalog, fmt.Sprintf("%d: %s", idx, name))
+			if strings.Contains(strings.ToUpper(t), strings.ToUpper(imageName)) {
+				return idx, nil
+			}
 		}
 	}
-	return 0, fmt.Errorf("windows: %q image not found in install.wim (SKU contract mismatch)", imageName)
+	return 0, fmt.Errorf("windows: %q image not found in install.wim (media images: %s — set image.windows_image_name to the matching entry, docs/compat/distros.md §windows 镜像契约)",
+		imageName, strings.Join(catalog, " | "))
 }
 
 // WindowsSpecializeStrip extracts the sysprep Specialize.xml action file

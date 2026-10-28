@@ -550,12 +550,13 @@ func AptSuite(distro string) string {
 // storage selectors are concrete devices, the hostname is expanded, and the
 // image source is dereferenced.
 type InstallInputs struct {
-	TaskToken     string
-	MachineID     string
-	Hostname      string
-	ImageSource   string // installer image URL (distro ISO)
-	RootPassword  string // per-task random when spec asked for generate
-	SSHPublicKeys []string
+	TaskToken       string
+	MachineID       string
+	Hostname        string
+	ImageSource     string // installer image URL (distro ISO)
+	WindowsImageName string // windows: explicit /IMAGE/NAME override (empty = driver default)
+	RootPassword    string // per-task random when spec asked for generate
+	SSHPublicKeys   []string
 
 	// Capabilities names the access capabilities to enable on the
 	// installed system (windows: access.capabilities — "rdp", "winrm",

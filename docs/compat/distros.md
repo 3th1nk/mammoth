@@ -281,13 +281,50 @@ mini.iso)提供驱动支持。
   DHCP 在 qemu 进程内,宿主收不到广播)——harness 用 Linux bridge +
   dnsmasq 作真 DHCP(只分地址,不配 dhcp-boot),见 scripts/pxe-dev/README。
 
-## Windows(v1:虚拟介质 + UEFI-only)
+## Windows(v1.x:wimboot-over-PXE 主线 + 虚拟介质,UEFI-only)
 
 > 2026-09-19 启动。选型依据:Windows 官方单一完整 ISO(Standard/Datacenter ×
 > Core/Desktop 同盘,装时按 /IMAGE/NAME 元数据选 SKU),无 Linux 式轻量 netboot;
-> 推荐裸金属默认 **Standard Core**。2019 与 2022 镜像均已在 248
-> (`/data/os_iso/{windows2019,windows2022}/`,2022 于 2026-09-20 到位);
-> 当前仅注册 `windows2019`,2022 为构造变体待注册验证(媒体布局同族)。
+> 推荐裸金属默认 **Standard Core**。2019 真机闭环(2026-09-21,wimboot
+> PXE 通路);**已注册 windows2016/2019/2022/2025 四代构造变体**
+> (2026-10-28,unattend 形态版本稳定;2019 之外的首轮装机按镜像契约节
+> 核对差异)。
+
+### 镜像契约(2026-10-28 明示;换镜像先读这节)
+
+- **SKU 契约**:unattend 按 `/IMAGE/NAME` 选镜像,驱动默认 =
+  `Windows Server <year> SERVERSTANDARDCORE`(year 由 distro 名参数化:
+  windows2016/2019/2022/2025 均已注册;**ServerStandardCore = 无桌面的
+  Server Core,裸金属默认;Datacenter/带桌面形态在同一 ISO 里,是别的
+  /IMAGE/NAME,不是别的媒体**)。
+- **各代际 /IMAGE/NAME 实表**(大小写即媒体原样,匹配大小写不敏感、
+  子串语义,镜像顺序跨媒体不稳定——按名匹配、不按 index):
+  | 代际 | install.wim 镜像名形态 |
+  |---|---|
+  | 2016 | `Windows Server 2016 SERVERSTANDARDCORE` / `…SERVERSTANDARD` / `…SERVERDATACENTERCORE` / `…SERVERDATACENTER` |
+  | 2019 | 同形态(零售与 **Eval 完全一致**,17763 Eval ISO 真机实测 2026-10-28) |
+  | 2022 | 同形态 |
+  | 2025 | 同形态(build 26100 起) |
+- **非标准媒体**(自建镜像/云导出/Essentials 独立 ISO):/IMAGE/NAME 形态
+  不同,用 **`image.windows_image_name`** 显式覆盖(InstallSpec.image,
+  大小写不敏感子串匹配;不写 = 驱动默认)。匹配失败时错误信息回显媒体
+  实际镜像清单,照抄一个到覆盖字段即可。
+- **除镜像名外的真实差异**(换镜像时的核对单):
+  1. **激活语义**:Eval 介质内置 Eval 密钥(180 天,装机无感);零售
+     Volume 走 ei.cfg 空密钥(KMS client 形态,激活属交付层)。
+     密钥页两种媒体都跳过(2026-09-21/10-28 真机实证)。
+  2. **语言**:装机期 `sources/lang.ini` 自动探测,映射表现有
+     **zh-cn / en-us** 两行(`mediaLocaleTable`);其他语言的介质会回落
+     zh-CN 且 unattend 值媒体可能不携带(setup 语言页有弹出风险)——
+     新语言介质需扩表(驱动 windows.go,一行一条)。
+  3. **代际行为**(接入新代际的真机核对点):WinPE 自带 curl 从 1809 起
+     (2016 的 WinPE **无 curl**,startnet 诊断回传腿会静默失败——诊断
+     段仍落 Z:\diag,经 SMB 可捞);防火墙默认拦入站 ICMP/ping(装后
+     "ping 不通"是观测假象不是故障);boot.wim 的 Boot Index 形态
+     (wimBootIndex 按 `Boot Index:` 取,缺失回退 2,已宽容)。
+  4. **渠道**:Eval / 零售 / MSDN 的 ISO 同形可用;**云导出形态
+     (Azure Marketplace VHD 等)不是 El Torito ISO,wimboot 载体不适用**,
+     若 /IMAGE/NAME 特殊只能配 `image.windows_image_name` 走定制介质。
 
 **形态与机制**:
 

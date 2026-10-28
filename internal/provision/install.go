@@ -110,9 +110,10 @@ func installMediaProduced(stage string) bool {
 
 type installSpecView struct {
 	Image struct {
-		Source   string `json:"source"`
-		Checksum string `json:"checksum"`
-		Distro   string `json:"distro"`
+		Source           string `json:"source"`
+		Checksum         string `json:"checksum"`
+		Distro           string `json:"distro"`
+		WindowsImageName string `json:"windows_image_name"`
 	} `json:"image"`
 	Boot struct {
 		Strategy  string `json:"strategy"`
@@ -820,6 +821,10 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		MachineID:     m.ID,
 		Hostname:      ictx.Hostname,
 		ImageSource:   spec.Image.Source,
+		// Windows /IMAGE/NAME explicit override (docs/compat/distros.md §windows
+		// 镜像契约): non-standard media (custom/cloud-exported) carries image
+		// names the driver default cannot match; empty = driver default.
+		WindowsImageName: spec.Image.WindowsImageName,
 		RootPassword:  rootPassword,
 		SSHPublicKeys: spec.Access.SSHKeys,
 		Capabilities:  spec.Access.Capabilities,
@@ -907,12 +912,14 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 					"prepared windows tree build failed: %s", terr.Error())
 			}
-			namer, nok := driver0.(interface{ WindowsOSImageName() string })
+			namer, nok := driver0.(interface {
+				WindowsOSImageNameFor(explicit string) string
+			})
 			if !nok {
 				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,
 					"distro %s does not declare its /IMAGE/NAME for the apply path", spec.Image.Distro)
 			}
-			idx, ierr := builder.WindowsImageIndex(filepath.Join(tree, "sources", "install.wim"), namer.WindowsOSImageName())
+			idx, ierr := builder.WindowsImageIndex(filepath.Join(tree, "sources", "install.wim"), namer.WindowsOSImageNameFor(spec.Image.WindowsImageName))
 			if ierr != nil {
 				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false, "%s", ierr.Error())
 			}

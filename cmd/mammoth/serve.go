@@ -207,9 +207,15 @@ func serve(args []string) error {
 		autoinstall.New("ubuntu24"),
 		preseed.New("debian12"),
 		preseed.New("debian13"),
-		// Windows Server unattend (docs/compat/distros.md §windows): v1 is
-		// virtual-media + UEFI-only — SetupComplete carries the callback.
+		// Windows Server unattend (docs/compat/distros.md §windows): the
+		// unattend shape is version-stable — one constructor per generation
+		// (the /IMAGE/NAME year token is distro-parameterized). 2019 is the
+		// real-hardware-validated row; 2016/2022/2025 share the chain and
+		// await their first bare-metal round.
+		windows.New("windows2016"),
 		windows.New("windows2019"),
+		windows.New("windows2022"),
+		windows.New("windows2025"),
 		// The agent install path pilot (docs/12-agent-initramfs.md): no
 		// distro installer — the mammoth agent initramfs consumes the
 		// declarative spec directly and installs from the package pool.

@@ -625,3 +625,51 @@ func TestStartnetFoldsDoubledUNC(t *testing.T) {
 		t.Errorf("UNC still carries doubled separator (NT_STATUS_BAD_NETWORK_NAME on tree connect):\n%s", cmd)
 	}
 }
+
+// The explicit /IMAGE/NAME override (image.windows_image_name): non-standard
+// media (custom-built, cloud-exported) carries image names the driver
+// default cannot match — the override must reach the unattend's
+// SelectImageByName value, and the resolver method must honor it too (the
+// agent apply path resolves the install.wim index through it).
+func TestWindowsImageNameOverride(t *testing.T) {
+	d := New("windows2019")
+
+	// Resolver: explicit wins (trimmed), empty falls to the default form.
+	if got := d.WindowsOSImageNameFor("  Windows Server 2019 Standard Evaluation  "); got != "Windows Server 2019 Standard Evaluation" {
+		t.Errorf("explicit override not honored: %q", got)
+	}
+	if got := d.WindowsOSImageNameFor("   "); got != "Windows Server 2019 SERVERSTANDARDCORE" {
+		t.Errorf("blank override must fall to the default: %q", got)
+	}
+
+	// Render: the override lands in the unattend's image selection.
+	in := baseInputs()
+	in.WindowsImageName = "Windows Server 2019 Standard Evaluation"
+	answers, _, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	var unattend string
+	for _, a := range answers {
+		if a.Name == "autounattend.xml" {
+			unattend = a.Content
+		}
+	}
+	if !strings.Contains(unattend, "<Value>Windows Server 2019 Standard Evaluation</Value>") {
+		t.Errorf("override not in unattend image selection")
+	}
+	if strings.Contains(unattend, "SERVERSTANDARDCORE") {
+		t.Errorf("default SKU leaked alongside the override")
+	}
+
+	// Year parameterization across the registered generations.
+	for distro, want := range map[string]string{
+		"windows2016": "Windows Server 2016 SERVERSTANDARDCORE",
+		"windows2022": "Windows Server 2022 SERVERSTANDARDCORE",
+		"windows2025": "Windows Server 2025 SERVERSTANDARDCORE",
+	} {
+		if got := New(distro).WindowsOSImageName(); got != want {
+			t.Errorf("%s default image name = %q, want %q", distro, got, want)
+		}
+	}
+}

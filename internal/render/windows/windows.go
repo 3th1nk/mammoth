@@ -93,11 +93,21 @@ func (d *Driver) NetbootCarrierFor(in render.InstallInputs) render.NetbootCarrie
 	return render.NetbootCarrierWimboot
 }
 
-// WindowsOSImageName reports the /IMAGE/NAME this driver installs —
-// provision resolves the install.wim image index server-side for the agent
-// apply-image plan (the agent gets a deterministic index, no SKU probing
-// on the machine).
+// WindowsOSImageName reports the /IMAGE/NAME this driver installs by
+// default — provision resolves the install.wim image index server-side for
+// the agent apply-image plan (the agent gets a deterministic index, no SKU
+// probing on the machine). The per-task explicit override rides
+// WindowsOSImageNameFor.
 func (d *Driver) WindowsOSImageName() string { return d.osImageName() }
+
+// WindowsOSImageNameFor resolves the /IMAGE/NAME for one task: the spec's
+// explicit image.windows_image_name wins, else the driver default.
+func (d *Driver) WindowsOSImageNameFor(explicit string) string {
+	if name := strings.TrimSpace(explicit); name != "" {
+		return name
+	}
+	return d.osImageName()
+}
 
 // FirmwareSupport: the rendered DiskConfiguration is UEFI-shaped
 // (ESP + MSR + GPT) — a Legacy BIOS machine would fail WillShowUI=OnError
@@ -144,10 +154,26 @@ func mediaLocaleFor(lang string) mediaLocale {
 // osImageName is the /IMAGE/NAME inside install.wim the unattend selects —
 // Standard Core, the bare-metal default (docs/compat/distros.md §windows:
 // one media carries Standard/Datacenter × Core/Desktop; edition choice is
-// metadata, not a different ISO).
+// metadata, not a different ISO). The year token is distro-parameterized
+// (windows2019 → 2019 … windows2025 → 2025): the edition tokens
+// (SERVERSTANDARDCORE / SERVERSTANDARD / SERVERDATACENTER*…) are stable
+// across 2016/2019/2022/2025 retail AND evaluation media (2288H 2026-10-28:
+// the 17763 Eval ISO verified identical), so one form covers the line.
 func (d *Driver) osImageName() string {
 	year := strings.TrimPrefix(d.Distro(), "windows")
 	return "Windows Server " + year + " SERVERSTANDARDCORE"
+}
+
+// imageNameFor resolves the per-task /IMAGE/NAME: the spec's explicit
+// override (image.windows_image_name — non-standard media whose names carry
+// a different form: custom-built, cloud-exported, Essentials) wins, else
+// the driver default. Matched case-insensitively by substring downstream
+// (builder.WindowsImageIndex), so the exact display form is forgiving.
+func (d *Driver) imageNameFor(in render.InstallInputs) string {
+	if name := strings.TrimSpace(in.WindowsImageName); name != "" {
+		return name
+	}
+	return d.osImageName()
 }
 
 // SetupCompleteSeedName is the ISO-root path the builder bakes the
@@ -274,7 +300,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		return nil, render.BootParams{}, err
 	}
 
-	unattend := unattendXML(d.osImageName(), hostname, in.RootPassword, mediaLocaleFor(in.MediaLanguage), plan, preSyncCommands(len(preScripts)))
+	unattend := unattendXML(d.imageNameFor(in), hostname, in.RootPassword, mediaLocaleFor(in.MediaLanguage), plan, preSyncCommands(len(preScripts)))
 	task, terr := taskJSON(in.CompleteURL, in.Network, in.Capabilities, postScripts)
 	if terr != nil {
 		return nil, render.BootParams{}, terr

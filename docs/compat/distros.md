@@ -303,8 +303,15 @@ mini.iso)提供驱动支持。
   |---|---|
   | 2016 | `Windows Server 2016 SERVERSTANDARDCORE` / `…SERVERSTANDARD` / `…SERVERDATACENTERCORE` / `…SERVERDATACENTER` |
   | 2019 | 同形态(零售与 **Eval 完全一致**,17763 Eval ISO 真机实测 2026-10-28) |
-  | 2022 | 同形态 |
-  | 2025 | 同形态(build 26100 起) |
+  | 2022 | 同形态(**实查确认 2026-10-28**:20348.1787 updated Oct 2026 零售 zh-cn,Index 1 = SERVERSTANDARDCORE) |
+  | 2025 | 同形态(**实查确认 2026-10-28**:26100.1742 updated Oct 2026 OEM zh-cn,Index 1 = SERVERSTANDARDCORE;媒体根含 `provenance/` 目录为 OEMRET 渠道特征) |
+
+  > **结构校验注意**:`updated Oct 2026` 快照媒体的 **ISO9660 层是 3 文件桩
+  > (El Torito 引导),主文件系统是 UDF**——p7zip 16.02(CentOS 7 系)
+  > 只能看到 3 files + "data after the end of archive" 的 warning,会误判
+  > 为损坏;正确验证 = `mount -o loop,ro -t udf` 挂载后直接读
+  > `sources/install.wim`(wimlib info)。2022/2025 两份 updated 媒体均按
+  > 此法实查通过(2026-10-28)。
 - **非标准媒体**(自建镜像/云导出/Essentials 独立 ISO):/IMAGE/NAME 形态
   不同,用 **`image.windows_image_name`** 显式覆盖(InstallSpec.image,
   大小写不敏感子串匹配;不写 = 驱动默认)。匹配失败时错误信息回显媒体

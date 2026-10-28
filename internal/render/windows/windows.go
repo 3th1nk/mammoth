@@ -1333,6 +1333,7 @@ func pantherUnattendXML(hostname, password string, ml mediaLocale) string {
 // Every dynamic value is character-validated — cmd has no safe quoting for
 // metacharacters, so the config contract is a restricted charset instead.
 func startnetCmd(in render.NetbootInputs, answerBase string) (string, error) {
+	in.InstallSMBUNC = normalizeUNC(in.InstallSMBUNC)
 	if err := validateShareToken(in.InstallSMBUNC, "share UNC", true); err != nil {
 		return "", err
 	}
@@ -1465,6 +1466,19 @@ func validateShareToken(v, what string, isUNC bool) error {
 		return fmt.Errorf("windows: install share UNC must start with \\\\ (got %q)", v)
 	}
 	return nil
+}
+
+// normalizeUNC folds doubled interior backslashes out of the UNC: deployment
+// env layers (systemd EnvironmentFile unescapes \\ → \ per pair) routinely
+// leave one extra level, and SMB does NOT fold interior doubled separators —
+// `\\host\\share` fails tree connect with NT_STATUS_BAD_NETWORK_NAME even
+// though the leading `\\` validates (2288H 2026-10-28 round). The leading
+// pair is preserved; everything after gets collapsed to single separators.
+func normalizeUNC(v string) string {
+	if !strings.HasPrefix(v, `\\`) {
+		return v
+	}
+	return `\\` + strings.ReplaceAll(v[2:], `\\`, `\`)
 }
 
 // winpeshlIni pins the WinPE startup to our startnet: without it the Setup

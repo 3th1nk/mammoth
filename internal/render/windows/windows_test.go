@@ -606,3 +606,22 @@ func TestRenderWindowsUserScripts(t *testing.T) {
 		t.Errorf("ps1 callback must use the verdict variables, not a hardcoded ok body")
 	}
 }
+
+func TestStartnetFoldsDoubledUNC(t *testing.T) {
+	in := render.NetbootInputs{
+		InstallSMBUNC:       `\\host\\media`,
+		InstallSMBUser:      "u",
+		InstallSMBPassword:  "p",
+		InstallSMBImagePath: `pool-store\x\win\tree`,
+	}
+	cmd, err := startnetCmd(in, "http://m/render/tok")
+	if err != nil {
+		t.Fatalf("startnet: %v", err)
+	}
+	if !strings.Contains(cmd, `net use Z: \\host\media "p" /user:u`) {
+		t.Errorf("interior doubled backslash not folded:\n%s", cmd)
+	}
+	if strings.Contains(cmd, `host\\media`) {
+		t.Errorf("UNC still carries doubled separator (NT_STATUS_BAD_NETWORK_NAME on tree connect):\n%s", cmd)
+	}
+}

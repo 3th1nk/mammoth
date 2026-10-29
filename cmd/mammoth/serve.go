@@ -252,6 +252,11 @@ func serve(args []string) error {
 	// dhcpPool survives the netboot facet scope: the runner's verify_ready
 	// resolves DHCP-carrier machine addresses through it (nil = disabled).
 	var dhcpPool *netboot.DHCPPool
+	// leaseSnoop is the proxyDHCP counterpart: with no pool of our own it
+	// learns the site-DHCP address↔MAC bindings from the client traffic, so
+	// the fixed-path grub.cfg render (and the installer-log attribution)
+	// still resolve the machine (nil = pool mode, macFor covers it).
+	var leaseSnoop *netboot.LeaseSnoop
 	if cfg.PXEEnabled && cfg.Mode.RunsNetboot() {
 		// Reclaim shared pool trees no install has touched past the TTL
 		// (startup-time GC — a crashed runner never owns a shared tree, so
@@ -267,6 +272,8 @@ func serve(args []string) error {
 			if err != nil {
 				return fmt.Errorf("netboot: MAMMOTH_PXE_DHCP_POOL: %w", err)
 			}
+		} else if cfg.PXEMode != "external" {
+			leaseSnoop = netboot.NewLeaseSnoop()
 		}
 		// MAC → entry lookups for the script endpoint and the TFTP grub.cfg
 		// rendering: store answer with a small cache (firmware re-asks several
@@ -311,6 +318,7 @@ func serve(args []string) error {
 			NBPs:         pxe.Files,
 			Resolver:     nbResolver,
 			DHCP:         dhcpPool,
+			Snoop:        leaseSnoop,
 			IPResolver:   syslogIPs,
 			Log:          logger,
 			// macOS/vmnet verification setups: limited broadcast leaves via

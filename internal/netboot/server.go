@@ -63,6 +63,14 @@ type Options struct {
 	// an IP lease before it will fetch anything. nil keeps the pure proxy
 	// model (the site DHCP owns addresses). See DHCPPool.
 	DHCP *DHCPPool
+	// Snoop, when set (the proxyDHCP shape — no pool of our own), learns
+	// the site-DHCP address↔MAC bindings from the client traffic itself.
+	// The fixed-path /grub/grub.cfg render resolves the client through our
+	// leases when we are the DHCP, and through the snoop when we are not:
+	// without it, proxyDHCP + UEFI + Linux stranded at the grub> prompt
+	// because the fixed path simply had nothing to resolve by. See
+	// LeaseSnoop.
+	Snoop *LeaseSnoop
 	// SyslogPort is the installer-log sink port (514): d-i forwards its
 	// ramfs syslog here via the syslog= kernel argument, and lines that
 	// resolve to an armed netboot entry are logged with task_id so the
@@ -105,6 +113,36 @@ func (o Options) broadcastFor() net.IP {
 		return o.BroadcastAddr
 	}
 	return net.IPv4bcast
+}
+
+// grubConfigFor answers the dynamic TFTP renders: the per-MAC grub.cfg and
+// the fixed-path fallback /grub/grub.cfg, resolved through the lease-reverse
+// chain (pool mode) or the LeaseSnoop bindings (proxyDHCP mode). Returns nil
+// for every other name — the static NBP set serves those. Extracted from the
+// Start closure for tests.
+func grubConfigFor(opts Options, ctx context.Context, name string, remoteIP net.IP) []byte {
+	if opts.Resolver == nil {
+		return nil
+	}
+	mac := ""
+	if m, ok := grubConfigMAC(name); ok {
+		mac = m
+	} else if name == "grub/grub.cfg" {
+		switch {
+		case opts.DHCP != nil:
+			mac = opts.DHCP.macFor(remoteIP)
+		case opts.Snoop != nil:
+			mac = opts.Snoop.macFor(remoteIP)
+		}
+	}
+	if mac == "" {
+		return nil
+	}
+	e, err := opts.Resolver.Entry(ctx, mac)
+	if err != nil || e == nil {
+		return []byte(NoEntryGRUB(mac))
+	}
+	return []byte(RenderGRUB(e, opts.BaseURL))
 }
 
 // Server is one running netboot service (proxyDHCP + TFTP).
@@ -241,28 +279,11 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 	// network stack is fully up. Debian grubnet's prefix is (tftp)/grub/ and —
 	// under proxyDHCP, where net_default_server stays empty — it falls straight
 	// to the fixed path /grub/grub.cfg rather than trying grub.cfg-01-<mac>.
-	// The client is therefore resolved by its lease IP (reverse of the DHCP
-	// pool's MAC→IP assignment). Everything else stays static.
+	// The client is resolved through our own leases when mammoth is the DHCP,
+	// else through the bindings LeaseSnoop watched the site DHCP hand out.
+	// Everything else stays static.
 	render := func(name string, remoteIP net.IP) []byte {
-		if opts.Resolver == nil {
-			return nil
-		}
-		mac := ""
-		if m, ok := grubConfigMAC(name); ok {
-			mac = m
-		} else if name == "grub/grub.cfg" {
-			if opts.DHCP != nil {
-				mac = opts.DHCP.macFor(remoteIP)
-			}
-		}
-		if mac == "" {
-			return nil
-		}
-		e, err := opts.Resolver.Entry(ctx, mac)
-		if err != nil || e == nil {
-			return []byte(NoEntryGRUB(mac))
-		}
-		return []byte(RenderGRUB(e, opts.BaseURL))
+		return grubConfigFor(opts, ctx, name, remoteIP)
 	}
 	go func() {
 		defer close(tftpDone)
@@ -340,11 +361,16 @@ func (s *Server) serveSyslog(ctx context.Context, conn *net.UDPConn, done chan<-
 		}
 		args := []any{"syslog_src", addr.IP.String()}
 		taskID := ""
-		if s.opts.DHCP != nil && s.opts.Resolver != nil {
-			if mac := s.opts.DHCP.macFor(addr.IP); mac != "" {
-				if e, terr := s.opts.Resolver.Entry(ctx, mac); terr == nil && e != nil && e.TaskID != "" {
-					taskID = e.TaskID
-				}
+		mac := ""
+		switch {
+		case s.opts.DHCP != nil:
+			mac = s.opts.DHCP.macFor(addr.IP)
+		case s.opts.Snoop != nil:
+			mac = s.opts.Snoop.macFor(addr.IP)
+		}
+		if mac != "" && s.opts.Resolver != nil {
+			if e, terr := s.opts.Resolver.Entry(ctx, mac); terr == nil && e != nil && e.TaskID != "" {
+				taskID = e.TaskID
 			}
 		}
 		// Lease chain missed (vMedia: no pool at all; site-DHCP proxy: the

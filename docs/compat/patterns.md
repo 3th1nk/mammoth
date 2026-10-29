@@ -127,7 +127,7 @@
      静态声明**钉死(渲染翻译为 ip= 内核参数 + target netplan),引导期
      IP 由 site 供给——mammoth 永不做地址权威;
   2. 无 site DHCP:池模式 + **预约探测**(ping 触发 ARP 解析后查邻居表,
-     ICMP 黑洞也能识别)+ **租约白名单**(只应答已武装装机任务的 MAC,
+     ICMP 黑洞也能识别)+ **租约白名单**(只应答已登记装机任务的 MAC,
      外来客户端零租约);探测结果记幻影租约,同址不再复用;
   3. 池段选择必须先探测:ping+邻居表双查,"ping 不通"≠空闲。
 - **已落地**:internal/netboot/allocator.go(ReserveFree)、

@@ -160,7 +160,7 @@ flowchart TD
 的故障形态)。
 
 两种寻址形态覆盖所有机房。**无站点 DHCP** → POOL 模式:引擎 builtin 的
-DHCP 只对有武装任务的机器从声明池发地址。**有站点 DHCP** → PROXY 模式:
+DHCP 只对已登记装机任务的机器从声明池发地址。**有站点 DHCP** → PROXY 模式:
 站点继续分配地址,`pxe-proxy`(或外置 dnsmasq)只在代理层的 L2 上补
 PXE 引导选项。跨 VLAN 机房部署 DHCP relay(ip helper),TFTP/HTTP 路由
 到引擎——详见 [docs/operations.md](docs/operations.md) §4.5.0。

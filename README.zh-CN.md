@@ -151,20 +151,36 @@ flowchart TD
     a1 -->|"applied → 重武装 PXE"| a2 --> fbt
 ```
 
-### PXE 寻址:DHCP 决策框架
+### 跨网段部署 —— 一个引擎,多个网段代理
 
-装机二层决定模式 —— **每部署声明一次,绝不在单次安装时猜测**
-(双 DHCP 抢答在代码层无法根治):
+生产机房是跨网段的:引擎在管理网,每个装机网段都需要自己网线上的 PXE
+第一跳。`mammoth pxe-proxy` 就是这个第一跳的单二进制实现——proxyDHCP
+应答、TFTP 引导链、PXE sightings 回传引擎——配置只有引擎地址一项。它
+替代了逐网段手工调教的 dnsmasq(配置漂移与 kit 手工同步正是它要消灭
+的故障形态)。
 
 ```mermaid
 flowchart TD
-    q{"装机网段是否已有<br/>site DHCP 服务?"}
-    q -- "没有" --> pool["**POOL 模式**<br/>配置 MAMMOTH_PXE_DHCP_POOL,<br/>mammoth 拥有该网段:<br/>· 为 PXE ROM 与安装器<br/>  应答 DHCP<br/>· arm 时预约地址:ping +<br/>  邻居表探测跳过被占<br/>  静态地址<br/>· 租约只发给已武装装机<br/>  任务的 MAC<br/>· 引导与目标系统使用<br/>  预约地址(ip= 参数)"]
-    q -- "有" --> proxy["**PROXY 模式**<br/>不配置池,site DHCP<br/>拥有地址:<br/>· site DHCP 应答引导期 IP<br/>· mammoth 只附加 PXE<br/>  引导选项(67/4011)<br/>· 在 spec 里声明装机地址:<br/>  静态 ip= 参数 + netplan<br/>· verify 探测该声明地址"]
-    pool --> vlan["**跨 VLAN**<br/>机器网段的 DHCP relay<br/>(ip helper)把广播转发给<br/>mammoth;应答按 giaddr<br/>回程(RFC 2131)。TFTP/HTTP<br/>是单播 —— NextServer 与<br/>介质/API 地址须从机器<br/>网段可达"]
-    proxy --> vlan
+    eng["mammoth 引擎<br/>(管理网)"]
+    subgraph V1["装机网段 1"]
+        a1["pxe-proxy<br/>proxyDHCP + TFTP<br/>(sightings 回传引擎)"]
+        m1["裸金属机器"]
+    end
+    subgraph VN["装机网段 N"]
+        aN["pxe-proxy"]
+        mN["裸金属机器"]
+    end
+    eng -->|kit 同步 + 观测回传| a1
+    eng --> aN
+    a1 --> m1
+    aN --> mN
 ```
 
+部署 = 一个二进制 + 每网段代理一行
+(`mammoth pxe-proxy --base-url …`);kit 自动同步,sightings 进引擎的
+pending_machines 台账。防火墙:代理放行 UDP 67/69/4011,装机网段须可
+达引擎 TCP 8080。完整实施手册——含 Secure Boot 与装机段占址注意事项
+——见 [docs/operations.md](docs/operations.md) §4.5.0。
 ### 发行版适配矩阵 —— 什么载体用什么镜像
 
 | 发行版 | 方言 | virtual_media 镜像 | PXE 镜像 | PXE 安装源 | 真机 |

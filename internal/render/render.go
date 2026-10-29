@@ -257,10 +257,9 @@ type ResolvedPartition struct {
 
 // SyslogHost derives the installer remote-syslog target from the answer
 // base URL — bare hostname, no port (preseed netbootKernelArgs precedent:
-// an IP literal is the common shape and needs no resolver; the argument
-// carries no port, so a non-514 sink port must be configured on both
-// sides). Empty when the base URL is absent or hostless: callers omit the
-// syslog argument rather than render a broken one.
+// an IP literal is the common shape and needs no resolver). Empty when the
+// base URL is absent or hostless: callers omit the syslog argument rather
+// than render a broken one.
 func SyslogHost(answerBaseURL string) string {
 	if answerBaseURL == "" {
 		return ""
@@ -270,6 +269,18 @@ func SyslogHost(answerBaseURL string) string {
 		return ""
 	}
 	return u.Hostname()
+}
+
+// SyslogTarget renders the syslog argument value for one host: host:port
+// when the sink moved off 514 (UDP 514 is contested on multi-tenant hosts —
+// an ops collector grabs it first and the installer's logs silently feed
+// the wrong daemon, geesunn 2026-10-29), bare host on the default. busybox
+// syslogd -R (casper), anaconda inst.syslog and d-i all accept host:port.
+func SyslogTarget(host string, port int) string {
+	if port == 0 || port == 514 {
+		return host
+	}
+	return fmt.Sprintf("%s:%d", host, port)
 }
 
 // NormalizeESP auto-applies the esp flag to /boot/efi partitions that do
@@ -552,13 +563,13 @@ func AptSuite(distro string) string {
 // storage selectors are concrete devices, the hostname is expanded, and the
 // image source is dereferenced.
 type InstallInputs struct {
-	TaskToken       string
-	MachineID       string
-	Hostname        string
-	ImageSource     string // installer image URL (distro ISO)
+	TaskToken        string
+	MachineID        string
+	Hostname         string
+	ImageSource      string // installer image URL (distro ISO)
 	WindowsImageName string // windows: explicit /IMAGE/NAME override (empty = driver default)
-	RootPassword    string // per-task random when spec asked for generate
-	SSHPublicKeys   []string
+	RootPassword     string // per-task random when spec asked for generate
+	SSHPublicKeys    []string
 
 	// Capabilities names the access capabilities to enable on the
 	// installed system (windows: access.capabilities — "rdp", "winrm",
@@ -588,6 +599,12 @@ type InstallInputs struct {
 	// answer file names on it (rocky9: /ks.cfg; ubuntu22: /user-data).
 	AnswerBaseURL string
 	CompleteURL   string // %post callback
+
+	// SyslogPort is the installer-log sink's UDP port (the netboot service's
+	// MAMMOTH_PXE_SYSLOG_PORT). Drivers render it into syslog=/inst.syslog=
+	// as host:port when off 514 — on a contested 514 a bare-host argument
+	// silently feeds some other collector and the task logs stay empty.
+	SyslogPort int
 
 	// Raid carries declarative RAID volumes (docs/09-roadmap.md M6):
 	// software → kickstart raid lines; hardware → bound device discovered

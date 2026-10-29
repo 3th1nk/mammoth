@@ -1,6 +1,7 @@
 # Build artifacts
 /bin/
 /dist/
+/mammoth
 *.exe
 
 # Test & coverage

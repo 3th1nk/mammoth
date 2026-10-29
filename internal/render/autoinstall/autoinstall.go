@@ -729,17 +729,20 @@ func netplanConfig(entries []render.NetworkEntry) (map[string]any, error) {
 		if len(e.Addresses) > 0 {
 			m["addresses"] = e.Addresses
 		}
-		var gw string
 		var routes []map[string]any
 		for _, r := range e.Routes {
 			if r.To == "default" {
-				gw = r.Via
+				// Default gateway rides the routes list, not the deprecated
+				// gateway4 key: netplan has warned on gateway4 since 0.105
+				// and newer releases (26.04's netplan) reject it outright —
+				// a rejected netplan file poisons the whole render and takes
+				// the interface down (2288H 2026-10-29, the windows tree
+				// plumbing's same-day lesson generalized: never emit a
+				// config key the newest netplan refuses).
+				routes = append(routes, map[string]any{"to": "default", "via": r.Via})
 				continue
 			}
 			routes = append(routes, map[string]any{"to": r.To, "via": r.Via})
-		}
-		if gw != "" {
-			m["gateway4"] = gw
 		}
 		if len(routes) > 0 {
 			m["routes"] = routes

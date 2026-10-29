@@ -537,6 +537,8 @@ func AptSuite(distro string) string {
 		return "jammy"
 	case "ubuntu24":
 		return "noble"
+	case "ubuntu26":
+		return "resolute"
 	case "debian12":
 		return "bookworm"
 	case "debian13":

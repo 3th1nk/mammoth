@@ -205,6 +205,7 @@ func serve(args []string) error {
 		kickstart.New("uniontechos"),
 		autoinstall.New("ubuntu22"),
 		autoinstall.New("ubuntu24"),
+		autoinstall.New("ubuntu26"),
 		preseed.New("debian12"),
 		preseed.New("debian13"),
 		// Windows Server unattend (docs/compat/distros.md §windows): the

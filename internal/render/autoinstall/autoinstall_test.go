@@ -119,8 +119,8 @@ func TestRenderAutoinstallWipeAndBond(t *testing.T) {
 			t.Errorf("slave %v matches wrong mac %v", id, mac)
 		}
 	}
-	if bond0["gateway4"] != "172.16.1.1" {
-		t.Errorf("bond gateway wrong: %v", bond0["gateway4"])
+	if rt, ok := bond0["routes"].([]any); !ok || len(rt) == 0 {
+		t.Errorf("bond default route missing (gateway4 era is gone — routes form only)")
 	}
 
 	// curtin storage: disk→partition→format→mount for the wiped disk
@@ -581,7 +581,7 @@ func TestRenderAutoinstallPXETargetNetplan(t *testing.T) {
 	if derr != nil {
 		t.Fatalf("netplan payload undecodable: %v", derr)
 	}
-	for _, want := range []string{"network:", "172.16.1.21/24", "gateway4: 172.16.1.1", "macaddress: aa:bb:cc:dd:ee:09", "version: 2"} {
+	for _, want := range []string{"network:", "172.16.1.21/24", "macaddress: aa:bb:cc:dd:ee:09", "version: 2", "to: default", "via: 172.16.1.1"} {
 		if !strings.Contains(string(decoded), want) {
 			t.Errorf("decoded target netplan missing %q:\n%s", want, decoded)
 		}

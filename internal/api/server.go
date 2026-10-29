@@ -183,6 +183,13 @@ func New(d Deps, apiToken string) *gin.Engine {
 	router.GET("/netboot/external-kit.tar", func(c *gin.Context) {
 		srv.serveExternalKit(c)
 	})
+	// PXE sightings reported by pxe-proxy instances on the provisioning
+	// VLANs: the external deployment's observation feed into
+	// pending_machines (mirrors the builtin mode's OnObserve hook). Public
+	// like the other /netboot machine-face routes.
+	router.POST("/netboot/observe", func(c *gin.Context) {
+		srv.ObservePXEClient(c)
+	})
 	// The same single-param limitation hits the answer scripts on the netboot
 	// carrier: hooks are named run/mammoth/*.sh (multi-segment) and the
 	// generated /render/{token}/{file} route can't match them — the installer's

@@ -310,3 +310,36 @@ func kitFingerprint(root string) (string, error) {
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
+
+// ObservePXEClient records a PXE sighting reported by a provisioning-VLAN
+// agent (pxe-proxy): the agent sees every PXE DISCOVER on its L2, while the
+// engine in external mode is blind to the wire — this endpoint is the
+// external deployment's observation feed into pending_machines (mirrors the
+// builtin mode's OnObserve hook). Public like the other /netboot
+// machine-face routes.
+func (s *Server) ObservePXEClient(c *gin.Context) {
+	if s.Pending == nil {
+		c.Status(http.StatusNoContent)
+		return
+	}
+	var body struct{ Mac, Firmware string }
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	mac := netboot.NormalizeMAC(body.Mac)
+	if mac == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "mac is not a hardware address"})
+		return
+	}
+	if _, err := s.Pending.TouchByMAC(c.Request.Context(), mac, body.Firmware); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	s.Events.Append(c.Request.Context(), "pending", mac, "pending.sighted", map[string]any{
+		"firmware": body.Firmware, "source": "pxe-proxy",
+	})
+	obs.FromContext(c.Request.Context()).InfoContext(c.Request.Context(),
+		"pxe-proxy sighting recorded", "mac", mac, "firmware", body.Firmware)
+	c.Status(http.StatusNoContent)
+}

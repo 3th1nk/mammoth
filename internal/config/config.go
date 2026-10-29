@@ -122,7 +122,7 @@ type Config struct {
 
 	VerifyReadyWait time.Duration // verify_ready poll budget for the new system after the completion report
 
-	NFSExportEnabled   bool   // built-in read-only NFSv3 export of MediaDir (default true)
+	NFSExportEnabled   bool   // built-in read-only NFSv3 export of MediaDir (default false — kernel nfsd is the supported media export, ops.md §4.7)
 	NFSExportPort      int    // port for the built-in export (default 2049)
 	MediaRelayAddr     string // media relay SSH endpoint (host[:port]); empty = no relay
 	MediaRelayUser     string
@@ -256,7 +256,11 @@ func FromEnv() (Config, error) {
 		ProbePrefix:           24,
 		ProbeWait:             10 * time.Minute,
 		MediaDir:              "data/media",
-		NFSExportEnabled:      true,
+		// Default off: the BMC-compatible media export is a kernel nfsd
+		// (huawei.md §6 verdict), which is a deployment-layer service, not an
+		// in-process one — see docs/operations.md §4.7. The built-in export
+		// stays available for unprivileged evaluation via MAMMOTH_NFS_EXPORT=true.
+		NFSExportEnabled:      false,
 		NFSExportPort:         2049,
 		BootSettleDelay:       0,
 		VerifyReadyWait:       10 * time.Minute,

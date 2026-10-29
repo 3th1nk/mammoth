@@ -1,23 +1,27 @@
 // Package nfsx embeds a read-only NFSv3 export of the media directory into
-// mammoth (the built-in media service). Out of the box the BMC mounts
-// nfs://<mammoth-host>/<export> directly from the process that builds the
-// media — no external NFS server, no relay, no upload path.
+// mammoth. Opt-in (MAMMOTH_NFS_EXPORT=true): the supported media export is a
+// deployment-layer kernel nfsd — docs/operations.md §4.7 — nfsx remains for
+// unprivileged evaluation and clients that mount the EXPORT ROOT.
 //
-// The implementation is the user-space go-nfs server: this is a deliberate
-// trade — kernel nfsd outperforms it and is the reference for BMC
-// compatibility, but requires kernel modules and privileged setup. The
-// built-in export targets evaluation and small/mid fleets; large-scale
-// deployments should point MAMMOTH_MEDIA_BASE_URI at an external NFS
-// service (MAMMOTH_NFS_EXPORT=false) — docs/09-roadmap.md M6.
+// The implementation is the user-space go-nfs server: pure TCP, NFSv3 +
+// mount protocol multiplexed on one port, AUTH_NULL only, and every mount
+// path answered with the export root (path resolution is left to the
+// caller); rpcbind lookups are served by the in-package minimal portmapper
+// (portmapper.go — UDP+TCP on 111, GETPORT answers 2049 for both nfs and
+// mountd).
 //
-// KNOWN LIMITS (verify before relying at scale):
-//   - go-nfs implements NFSv3 + the mount protocol multiplexed on one
-//     port; it does NOT provide a portmapper (rpcbind on 111). Clients
-//     that look up the mount port via rpcbind need verification — the
-//     iBMC 6.41 client was observed querying rpcbind during its mount
-//     dance; the real-hardware check is pending.
-//   - Writes through NFS land in an in-memory overlay (memphis) and never
-//     touch the export directory on disk.
+// CONSUMER MATRIX (why this is not the default):
+//   - BMC virtual media: Huawei iBMC 6.41 completes GETPORT and NULL-pings
+//     2049 OK, then closes without MNT — Connect fails against nfsx while
+//     the same URI mounts from a kernel nfsd (real hardware, huawei.md §6).
+//   - casper nfsroot (ubuntu22 PXE) and anaconda NFS sources mount SUBPATHS
+//     of the export; the root-answering MNT resolves those lookups against
+//     the wrong tree, so a path-resolving server (kernel nfsd) is required.
+//   - Clients that mount the export root and iterate it work: manual
+//     inspection, and fake-BMC evaluation where nothing actually mounts.
+//
+// Writes through NFS land in an in-memory overlay (memphis) and never touch
+// the export directory on disk.
 package nfsx
 
 import (

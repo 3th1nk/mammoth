@@ -1,5 +1,14 @@
 # Topology 1: all-in-one — single mammoth (all facets) + PostgreSQL.
 # Evaluation / small-scale deployments.
+#
+# Media export: the BMC-compatible NFS server is a KERNEL nfsd (real-hardware
+# verdict, docs/compat/huawei.md §6) — either the host's own nfs-server
+# (docs/operations.md §4.7 checklist) or the `nfsd` sidecar below, which
+# manages the host kernel nfsd from a privileged container. Enable it with
+#   docker compose --profile nfs up -d
+# The engine's in-process NFS export (nfsx) is opt-in for unprivileged
+# evaluation only — BMCs and subpath-mounting installers need a
+# path-resolving server (MAMMOTH_NFS_EXPORT=true + port mappings).
 name: mammoth
 services:
   postgres:
@@ -31,10 +40,19 @@ services:
       MAMMOTH_API_TOKEN: ${MAMMOTH_API_TOKEN:?set MAMMOTH_API_TOKEN}
       MAMMOTH_MASTER_KEY: ${MAMMOTH_MASTER_KEY:?set MAMMOTH_MASTER_KEY (base64 32B)}
       MAMMOTH_LOG_FORMAT: json
-      # The built-in NFS export (default on) serves the media dir from this
-      # process — no external NFS service needed for the common deployment.
+      # Media dir on a host bind mount: assembled boot ISOs survive container
+      # recreation AND the same host dir is what the kernel nfsd exports (the
+      # `nfsd` sidecar binds it at /export/media; with a host nfs-server
+      # instead, point the base URI at your real /etc/exports path — §4.7).
+      # The engine runs as uid 65532 (distroless nonroot): the host dir must
+      # be writable by it (e.g. `mkdir -p data/media && sudo chown 65532 data/media`).
       MAMMOTH_MEDIA_DIR: /media
-      MAMMOTH_MEDIA_BASE_URI: nfs://${MAMMOTH_HOST_IP:?set MAMMOTH_HOST_IP (BMC-reachable address)}/media
+      MAMMOTH_MEDIA_BASE_URI: nfs://${MAMMOTH_HOST_IP:?set MAMMOTH_HOST_IP (BMC-reachable address)}/export/media
+      MAMMOTH_NFS_EXPORT: "false"
+      # Huawei iBMC mounts take ~12-15s (ISO9660 metadata validation) and
+      # VmmControl Connect fails probabilistically (the driver retries ≤3x) —
+      # raise before first use with Huawei machines (§4.7). Default 30s.
+      # MAMMOTH_BMC_TIMEOUT: 90s
       MAMMOTH_BMC_TLS_INSECURE: ${MAMMOTH_BMC_TLS_INSECURE:-false}
       # PXE network boot (optional, docs/operations.md §4.5): needs the
       # container ON the provisioning L2 (host or macvlan networking — the
@@ -44,8 +62,31 @@ services:
       MAMMOTH_PXE_NEXT_SERVER: ${MAMMOTH_PXE_NEXT_SERVER:-}
     ports:
       - "8080:8080"
-      - "2049:2049" # built-in NFS media export (BMC mounts nfs://$MAMMOTH_HOST_IP/media)
-      - "111:111/tcp" # portmapper (TCP; BMC UDP lookup falls back to TCP) — BMC mount clients resolve nfs/mountd ports here
+    volumes:
+      - ./data/media:/media
+
+  # Kernel nfsd managing the HOST kernel's NFS server (privileged container;
+  # the nfsd threads and their sockets are kernel-global). Off by default —
+  # enable with `docker compose --profile nfs up -d`. Requires a Linux host
+  # whose kernel has nfsd support (Docker Desktop VMs don't — use a host
+  # nfs-server per §4.7 there) and free host ports 111/2049/20048.
+  nfsd:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.nfsd
+    profiles: ["nfs"]
+    privileged: true
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      MAMMOTH_NFS_EXPORT_DIR: /export/media
+      MAMMOTH_NFS_EXPORT_OPTIONS: "*(ro,insecure,no_root_squash,no_subtree_check)"
+      MAMMOTH_NFS_MOUNTD_PORT: "20048"
+    volumes:
+      - ./data/media:/export/media
+      # nfsd is a loadable module on most distros — expose the host's modules
+      # for the best-effort modprobe (no-op when nfsd is built-in/loaded).
+      - /lib/modules:/lib/modules:ro
 
 volumes:
   pgdata:

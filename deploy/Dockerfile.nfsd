@@ -1,0 +1,9 @@
+# mammoth-nfsd — kernel nfsd manager sidecar (compose.all-in-one.yml,
+# profile "nfs"). nfsd threads and their sockets are kernel-global: this
+# container runs only the management userland (rpcbind, exportfs, rpc.nfsd,
+# rpc.mountd) against the host kernel, so it must run privileged and
+# host-networked. Same alpine:3.20 base pin as Dockerfile.builder.
+FROM alpine:3.20
+RUN apk add --no-cache nfs-utils rpcbind
+COPY deploy/nfsd/entrypoint.sh /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

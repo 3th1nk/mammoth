@@ -163,7 +163,9 @@ iPXE 脚本),默认关闭。启用清单:
      flavour,网络上不可用),安装源为 ISO 解包后的 HTTP 池(preseed
      mirror 指向池)——离线语义保持;
    - **ubuntu22**:载体与源均自动(casper 从 ISO 提取 + NFS squashfs 树,
-     复用 nfsx 导出),无需额外配置;PXE 阶段仅 DHCP 网络;
+     复用 MediaBaseURI 的 NFS 导出),PXE 阶段仅 DHCP 网络;casper nfsroot
+     挂载导出的**子路径**,需要路径解析型服务端(内核 nfsd,§4.7)——nfsx
+     的根应答 MNT 语义承载不了;
    - 两条通路的 qemu 验证与真机回归待跑(见 roadmap M7 余项)。
    - **共享池树(内容寻址)**:安装源按镜像内容哈希共享
      (`MediaDir/pool-store/<sha256>/iso`),多任务复用一份解包(每棵
@@ -390,6 +392,74 @@ docker compose -f deploy/compose.all-in-one.yml -f deploy/compose.tls.yml up -d
   API 仅经 Caddy 的 443 可达;
 - 机器面 `/render/*`、`/netboot/*` 与 BMC 的 NFS 挂载不走 HTTPS(装机
   内核/anaconda 不校验 TLS),仍按 06-install-pipeline 的链路访问。
+
+## 4.7 介质仓库 NFS:内核 nfsd 定案与内置导出的边界
+
+virtual_media 引导链的最后一步是 BMC 挂载 `MAMMOTH_MEDIA_BASE_URI` 指向的
+ISO——**NFS 客户端是 BMC,不是引擎**,可达性与服务端选型都按
+"BMC 管理网 → 介质服务"评估(华为 VmmControl 仅收 NFS/CIFS URI,http 直链
+被 `FileTransferProtocolMismatch` 拒绝,见 huawei.md §6)。
+
+**受支持形态是内核 nfsd**(实测定案,2026-10-27):同一 iBMC 6.41 对同一
+ISO URI,内核 nfsd(TCP+UDP,标准 rpcbind/mountd)挂载成功;引擎内嵌 nfsx
+下 GETPORT 正常、NULL ping 后即关闭,无 MNT/LOOKUP——VmmControl 以 Connect
+task exception 收场(抓包画像见 huawei.md §6)。部署形态二选一:
+
+- **宿主机 nfs-server(定案,实机验证过的形态)**:部署清单见下;
+- **all-in-one 的 `nfsd` sidecar**:`docker compose --profile nfs up -d`
+  启用。privileged + host 网络的容器只负责管理**宿主机内核**的 nfsd 单例
+  (nfsd 线程与套接字是内核全局的),导出路径 `/export/media` 与 compose 里
+  的介质 bind mount 对齐;要求 Linux 宿主机(nfsd 为内核模块时挂
+  `/lib/modules` 供 modprobe)且宿主机 111/2049/20048 空闲。Docker
+  Desktop 的 VM 没有 nfsd 内核支持,entrypoint 会给出明确报错并指向本节。
+
+**内置导出 nfsx 默认关闭**(`MAMMOTH_NFS_EXPORT=true` 显式开启),降级为
+免特权评估用途。进程内只读 NFSv3(go-nfs):NFS(100003) 与 mountd(100005)
+多路复用在 2049 单端口、仅 TCP;111 上是自研最小 portmapper(UDP+TCP 都
+答,GETPORT 对 nfs/mountd 一律回答 2049),认证只通告 AUTH_NULL;对**任意
+mount 路径**都应答介质根(`nfs://<host>/media/boot/x.iso` 的 /media 前缀
+被吞掉),写入落内存 overlay。消费方矩阵(为什么不能做默认):
+
+- BMC 虚拟介质:华为 iBMC 6.41 实锤不兼容(上文);
+- casper nfsroot(ubuntu22 PXE)与 anaconda 的 NFS 安装源挂载的是导出的
+  **子路径**,根应答 MNT 让这些查找解析到错误的树——需要路径解析型服务端
+  (内核 nfsd);
+- 挂载导出根再遍历的客户端可用(人工检查、fake-BMC 评估这类不真正挂载的
+  场景)。
+
+内核 nfsd 部署清单(宿主机形态,容器化部署实机验证过):
+
+1. 宿主机导出介质目录(`MAMMOTH_MEDIA_DIR` 对应的宿主机真实路径):
+
+       /data/mammoth/media *(ro,insecure,no_root_squash,no_subtree_check)
+
+   建议把 mountd 钉在固定端口(RHEL/CentOS 系 `/etc/sysconfig/nfs` 配
+   `RPCMOUNTDOPTS="--port 20048"`),防火墙放行 111/2049/20048 的 TCP+UDP;
+   跨网段只要路由可达(实测定案:同一 L2 与跨网段均验证通过)。
+2. 引擎侧三个变化:`MAMMOTH_NFS_EXPORT=false`;
+   `MAMMOTH_MEDIA_BASE_URI=nfs://<host>/<真实导出路径>`——**URI 路径必须
+   精确对应 /etc/exports 的导出布局**(BMC 收到
+   `nfs://<base>/boot/boot-<token>.iso`;nfsx 的"任意路径都应答介质根"
+   在内核 nfsd 下不成立,基址不改 BMC 会去挂一个不存在的导出;且与引擎
+   HTTP 根目录是两个命名空间,别混);容器把同一宿主机目录 bind mount 到
+   `MAMMOTH_MEDIA_DIR`,引擎落盘的 ISO 即落在 NFS 导出内。compose 同时
+   移除 2049/111 端口映射——别让 docker-proxy 占住宿主机 rpcbind/nfsd
+   的端口,nfsd 起不来。
+3. 超时预算:华为 VmmControl 成功挂载 ~12-15s(BMC 校验 ISO9660 元数据),
+   且 Connect 概率性失败(一次 Exception 紧接着重试即成功;驱动侧已内置
+   ≤3 次重试)——`MAMMOTH_BMC_TIMEOUT` 建议 ≥60s(默认 30s 不够,超时
+   日志形如 `operation=mount_media err="context deadline exceeded"`,
+   `elapsed_ms` 打满超时预算即此症)。
+4. 验证顺序:在 **BMC 同网段**的机器上 `showmount -e <host>` + NFSv3
+   实挂(`mount -t nfs <host>:/data/mammoth/media /mnt`)——宿主机本机
+   `showmount localhost` 通不代表 BMC 通,网络问题必须从 BMC 视角排查;
+   改完配置后**重提装机任务**,勿对失败任务做 stage retry(介质地址
+   存在任务快照里,boot 阶段重试沿用的还是旧 URI)。
+
+排查 mount_media 失败先分类:`context deadline exceeded` = BMC 一直没
+挂上(走上面清单查网络/服务端/超时预算);iBMC task exception = BMC 侧
+明确拒绝(读 Redfish Task 的 Messages,对照 huawei.md §6 的抓包画像
+tcpdump 看 portmapper/NFS 握手走到哪一步)。
 
 ## 5. 升级
 

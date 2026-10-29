@@ -100,7 +100,7 @@
   go:embed 内置,PROVENANCE 全程可溯,Debian ipxe 2.0.0+dfsg-5);
 - ✅ 机器面 `/netboot/script?mac=`(按 MAC 渲染 iPXE 脚本;无条目回 `exit`
   脚本回固件引导序)+ `/netboot/files/{token}/{file}`(引导树,allowlist);
-- ✅ RHEL 系安装走 PXE(`inst.repo=nfs:` 复用 nfsx 导出,零新增安装源工作);
+- ✅ RHEL 系安装走 PXE(`inst.repo=nfs:` 复用 MediaBaseURI 的 NFS 导出,零新增安装源工作);
   ubuntu/debian 当时提交即拒(PXESupport none 门禁),PXE 化后放开为 full
   (见下);
 - ✅ 可选 DHCP 池(`MAMMOTH_PXE_DHCP_POOL`):无站点 DHCP 的机房,UEFI PXE ROM

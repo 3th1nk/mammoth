@@ -1,7 +1,10 @@
 package api
 
 import (
+	"archive/tar"
 	"context"
+	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -202,4 +205,66 @@ func (s *Server) fetchPoolStoreFile(c *gin.Context, sha, rest string) error {
 		"pool store file served", "sha256", sha, "file", rel)
 	c.DataFromReader(http.StatusOK, st.Size(), "application/octet-stream", f, nil)
 	return nil
+}
+
+// serveExternalKit streams the exported external PXE kit
+// (MediaDir/netboot/external-tftp) as a tar archive: pxe-proxy instances on
+// the provisioning VLANs sync their TFTP root from here, so a kit refresh on
+// the engine reaches every VLAN agent without a manual copy. Public like the
+// other /netboot machine-face routes (the kit holds public NBP binaries and
+// a trampoline whose engine URL is the deployment's own, docs/operations.md
+// §pxe-external). 404 when the engine never exported a kit (PXEMode !=
+// external and no directory on disk).
+func (s *Server) serveExternalKit(c *gin.Context) {
+	root := filepath.Join(s.MediaDir, "netboot", "external-tftp")
+	st, err := os.Stat(root)
+	if err != nil || !st.IsDir() {
+		writeError(c, verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
+			"no external kit exported — set MAMMOTH_PXE_MODE=external so the engine materializes MediaDir/netboot/external-tftp"))
+		return
+	}
+	obs.FromContext(c.Request.Context()).InfoContext(c.Request.Context(),
+		"external kit served", "dir", root)
+	c.Header("Content-Type", "application/x-tar")
+	c.Status(http.StatusOK)
+	tw := tar.NewWriter(c.Writer)
+	defer tw.Close()
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		rel, rerr := filepath.Rel(root, path)
+		if rerr != nil {
+			return rerr
+		}
+		if rel == "." {
+			return nil
+		}
+		info, ierr := d.Info()
+		if ierr != nil {
+			return ierr
+		}
+		hdr, herr := tar.FileInfoHeader(info, "")
+		if herr != nil {
+			return herr
+		}
+		hdr.Name = filepath.ToSlash(rel)
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		f, oerr := os.Open(path)
+		if oerr != nil {
+			return oerr
+		}
+		defer f.Close()
+		_, err = io.Copy(tw, f)
+		return err
+	})
+	if err != nil {
+		obs.FromContext(c.Request.Context()).ErrorContext(c.Request.Context(),
+			"external kit tar failed mid-stream", "err", err.Error())
+	}
 }

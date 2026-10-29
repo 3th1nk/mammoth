@@ -175,6 +175,14 @@ func New(d Deps, apiToken string) *gin.Engine {
 			writeError(c, err)
 		}
 	})
+	// The external kit as a single download: pxe-proxy instances on the
+	// provisioning VLANs sync their TFTP root from here (same public
+	// machine-face credentialing as the other /netboot routes). Streamed
+	// tar of the exported kit directory; 404 when the engine never
+	// exported one (PXEMode != external and no kit directory on disk).
+	router.GET("/netboot/external-kit.tar", func(c *gin.Context) {
+		srv.serveExternalKit(c)
+	})
 	// The same single-param limitation hits the answer scripts on the netboot
 	// carrier: hooks are named run/mammoth/*.sh (multi-segment) and the
 	// generated /render/{token}/{file} route can't match them — the installer's

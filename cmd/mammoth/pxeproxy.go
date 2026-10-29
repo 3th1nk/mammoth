@@ -1,10 +1,15 @@
 package main
 
 import (
+	"archive/tar"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -36,7 +41,9 @@ replaces a hand-tuned dnsmasq; the kit is exported by the engine
 	pf := cmd.Flags()
 	pf.StringVar(&o.NextServer, "next-server", "", "this host's IP on the provisioning segment (siaddr/TFTP-server offered to PXE clients)")
 	pf.StringVar(&o.BaseURL, "base-url", "", "mammoth engine machine-face base URL (e.g. http://172.16.20.250:8091)")
-	pf.StringVar(&o.TFTPRoot, "tftp-root", "/srv/mammoth-external-tftp", "directory holding the exported external kit (NBP binaries + boot.ipxe)")
+	pf.StringVar(&o.TFTPRoot, "tftp-root", "/srv/mammoth-external-tftp", "directory holding the exported external kit (auto-synced from the engine)")
+	pf.DurationVar(&o.SyncInterval, "sync-interval", 5*60*time.Second, "kit re-sync period; 0 = sync once at startup")
+	pf.StringVar(&o.KitToken, "kit-token", "", "bearer token for the engine kit endpoint (empty = anonymous; /netboot routes are public by default)")
 	pf.IntVar(&o.DHCPPort, "dhcp-port", 67, "proxyDHCP listen port (coexists with the site DHCP across the L2)")
 	pf.IntVar(&o.ProxyPort, "proxy-port", 4011, "PXE boot-server discovery port")
 	pf.IntVar(&o.TFTPPort, "tftp-port", 69, "TFTP port")
@@ -47,26 +54,117 @@ replaces a hand-tuned dnsmasq; the kit is exported by the engine
 }
 
 type pxeProxyOptions struct {
-	NextServer string
-	BaseURL    string
-	TFTPRoot   string
-	DHCPPort   int
-	ProxyPort  int
-	TFTPPort   int
-	SyslogPort int
+	NextServer   string
+	BaseURL      string
+	TFTPRoot     string
+	DHCPPort     int
+	ProxyPort    int
+	TFTPPort     int
+	SyslogPort   int
+	SyncInterval time.Duration
+	KitToken     string
 }
 
-// runPxeProxy validates the flags and serves until the context is cancelled.
+// runPxeProxy validates the flags, syncs the kit, and serves until the
+// context is cancelled.
 func runPxeProxy(o pxeProxyOptions) error {
 	opts, err := o.netbootOptions()
 	if err != nil {
 		return err
+	}
+	// Kit sync before the first bind: a stale or missing TFTP root strands
+	// machines at the PXE prompt exactly like a failed bind would.
+	if err := syncKit(o); err != nil {
+		return fmt.Errorf("pxe-proxy: initial kit sync: %w", err)
+	}
+	if o.SyncInterval > 0 {
+		go func() {
+			t := time.NewTicker(o.SyncInterval)
+			defer t.Stop()
+			for range t.C {
+				if err := syncKit(o); err != nil {
+					fmt.Fprintf(os.Stderr, "pxe-proxy: kit re-sync: %v\n", err)
+				}
+			}
+		}()
 	}
 	srv, err := netboot.Start(mustContext(), opts)
 	if err != nil {
 		return err
 	}
 	return srv.Wait()
+}
+
+// syncKit pulls the engine's exported external kit
+// (<base-url>/netboot/external-kit.tar) and atomically replaces the TFTP
+// root: download to a temp directory, then swap. A failed sync keeps the
+// previous root intact — a broken download must not strand machines at the
+// PXE prompt.
+func syncKit(o pxeProxyOptions) error {
+	url := strings.TrimSuffix(o.BaseURL, "/") + "/netboot/external-kit.tar"
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	if o.KitToken != "" {
+		req.Header.Set("Authorization", "Bearer "+o.KitToken)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("kit fetch: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("kit fetch: HTTP %d", resp.StatusCode)
+	}
+	tmp, err := os.MkdirTemp(filepath.Dir(o.TFTPRoot), "kit-sync-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	tr := tar.NewReader(resp.Body)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("kit tar: %w", err)
+		}
+		name := filepath.Clean(filepath.Join("/", hdr.Name))
+		if strings.HasPrefix(name, "..") {
+			continue
+		}
+		target := filepath.Join(tmp, name)
+		if hdr.Typeflag == tar.TypeDir {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode&0o777))
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(f, tr); err != nil {
+			f.Close()
+			return err
+		}
+		f.Close()
+	}
+	// Atomic-ish swap: move the new tree into place. The TFTP server reads
+	// through its own root handle, so the rename window is a dropped request
+	// at worst — the next client retry re-opens the new root.
+	if err := os.RemoveAll(o.TFTPRoot); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, o.TFTPRoot); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (o pxeProxyOptions) netbootOptions() (netboot.Options, error) {

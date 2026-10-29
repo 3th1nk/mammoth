@@ -29,7 +29,11 @@ type Options struct {
 	// TFTPPort is the NBP transfer port (69).
 	TFTPPort int
 	// NextServer is mammoth's IPv4 address on the provisioning L2 — the
-	// siaddr/TFTP-server address offered to PXE clients.
+	// siaddr/TFTP-server address offered to PXE clients. Optional: when
+	// unset, the address is auto-learned from the interface the first PXE
+	// request arrives on (multi-homed hosts get the arrival interface's
+	// address, which IS the provisioning L2 by construction). An explicit
+	// value always wins over the learned one.
 	NextServer net.IP
 	// BaseURL is the machine-face base URL (no trailing slash); iPXE
 	// clients are pointed at <BaseURL>/netboot/script.
@@ -110,6 +114,13 @@ type Server struct {
 	nbpOK   map[string]bool
 	done    chan error
 	closers []ioCloser
+	// learned is the next-server discovered from the interface the first
+	// PXE request arrived on (auto mode: Options.NextServer unset). The
+	// arrival interface IS the provisioning L2 by construction, so its
+	// address is the correct siaddr/TFTP-server to offer — multi-homed
+	// hosts and containers get the right answer without configuration.
+	mu      sync.Mutex
+	learned net.IP
 }
 
 type ioCloser interface{ Close() error }
@@ -395,9 +406,53 @@ func (s *Server) serveUDP(ctx context.Context, conn *net.UDPConn, port int) {
 		if cm != nil {
 			ifindex = cm.IfIndex
 		}
+		s.learnNextServer(ifindex)
 		s.logf("dhcp: request from %s (ifindex %d) -> reply to %s", addr, ifindex, to)
 		if _, err := pc.WriteTo(reply, &ipv4.ControlMessage{IfIndex: ifindex}, to); err != nil {
 			s.logf("dhcp: reply to %s: %v", to, err)
+		}
+	}
+}
+
+// nextServer resolves the siaddr/TFTP-server to offer: an explicit
+// Options.NextServer always wins; in auto mode (unset) the address learned
+// from the first request's arrival interface is used. nil = nothing learned
+// yet — the caller stays silent until the first request teaches it.
+func (s *Server) nextServer() net.IP {
+	if s.opts.NextServer != nil {
+		return s.opts.NextServer
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.learned
+}
+
+// learnNextServer records the IPv4 address of the interface a request
+// arrived on (auto next-server mode). Called inline on the DHCP read path
+// — interface lookup is a table walk, never blocking.
+func (s *Server) learnNextServer(ifindex int) {
+	if s.opts.NextServer != nil {
+		return
+	}
+	iface, err := net.InterfaceByIndex(ifindex)
+	if err != nil {
+		return
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return
+	}
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok {
+			if ip4 := ipn.IP.To4(); ip4 != nil {
+				s.mu.Lock()
+				if s.learned == nil {
+					s.learned = ip4
+					s.logf("dhcp: next-server auto-learned from arrival interface %s: %s", iface.Name, ip4)
+				}
+				s.mu.Unlock()
+			}
+			return
 		}
 	}
 }

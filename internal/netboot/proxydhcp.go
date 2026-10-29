@@ -129,7 +129,12 @@ func (s *Server) reply(p *packet) []byte {
 	if p.messageType() == msgRequest {
 		msgType = msgAck
 	}
-	next := s.opts.NextServer.To4()
+	next := s.nextServer().To4()
+	if next == nil {
+		// Auto mode and nothing learned yet: stay silent — the next request
+		// will teach the learned address and get a full reply.
+		return nil
+	}
 
 	// siaddr (the BOOTP field) carries the next-server IP for ROMs that
 	// read only the field and never the options.
@@ -226,7 +231,7 @@ func (s *Server) reply(p *packet) []byte {
 	// Plain PXE ROMs want a bare file name plus the TFTP server address;
 	// option 66 is a string by spec, siaddr carries the same IP numerically.
 	return p.bytes(msgType, name, append(opts,
-		option{optTFTPServer, []byte(s.opts.NextServer.String())},
+		option{optTFTPServer, []byte(next.String())},
 	)...)
 }
 

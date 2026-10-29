@@ -102,6 +102,8 @@ func runPxeProxy(o pxeProxyOptions) error {
 // PXE prompt.
 func syncKit(o pxeProxyOptions) error {
 	url := strings.TrimSuffix(o.BaseURL, "/") + "/netboot/external-kit.tar"
+	etagFile := o.TFTPRoot + ".etag"
+	known, _ := os.ReadFile(etagFile)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -109,12 +111,19 @@ func syncKit(o pxeProxyOptions) error {
 	if o.KitToken != "" {
 		req.Header.Set("Authorization", "Bearer "+o.KitToken)
 	}
+	if len(known) > 0 {
+		req.Header.Set("If-None-Match", strings.TrimSpace(string(known)))
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("kit fetch: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	switch resp.StatusCode {
+	case http.StatusNotModified:
+		return nil // unchanged since the last sync — nothing to do
+	case http.StatusOK:
+	default:
 		return fmt.Errorf("kit fetch: HTTP %d", resp.StatusCode)
 	}
 	tmp, err := os.MkdirTemp(filepath.Dir(o.TFTPRoot), "kit-sync-")
@@ -163,6 +172,9 @@ func syncKit(o pxeProxyOptions) error {
 	}
 	if err := os.Rename(tmp, o.TFTPRoot); err != nil {
 		return err
+	}
+	if etag := resp.Header.Get("ETag"); etag != "" {
+		_ = os.WriteFile(etagFile, []byte(strings.TrimSpace(etag)), 0o644)
 	}
 	return nil
 }

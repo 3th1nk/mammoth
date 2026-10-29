@@ -3,6 +3,9 @@ package api
 import (
 	"archive/tar"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -223,8 +226,20 @@ func (s *Server) serveExternalKit(c *gin.Context) {
 			"no external kit exported — set MAMMOTH_PXE_MODE=external so the engine materializes MediaDir/netboot/external-tftp"))
 		return
 	}
+	// The fingerprint (names+sizes+mtimes of the tree) doubles as the ETag:
+	// content changes always move mtime, so a stat-based hash is a faithful
+	// freshness signal without reading 8MB of bytes per probe.
+	etag, ferr := kitFingerprint(root)
+	if ferr != nil {
+		etag = ""
+	}
+	if c.GetHeader("If-None-Match") != "" && c.GetHeader("If-None-Match") == etag {
+		c.Status(http.StatusNotModified)
+		return
+	}
+	c.Header("ETag", etag)
 	obs.FromContext(c.Request.Context()).InfoContext(c.Request.Context(),
-		"external kit served", "dir", root)
+		"external kit served", "dir", root, "etag", etag)
 	c.Header("Content-Type", "application/x-tar")
 	c.Status(http.StatusOK)
 	tw := tar.NewWriter(c.Writer)
@@ -267,4 +282,31 @@ func (s *Server) serveExternalKit(c *gin.Context) {
 		obs.FromContext(c.Request.Context()).ErrorContext(c.Request.Context(),
 			"external kit tar failed mid-stream", "err", err.Error())
 	}
+}
+
+// kitFingerprint hashes the kit tree's stat lines (relative name, size,
+// mtime-nanos): a faithful freshness signal — any content change moves an
+// mtime — without reading the tree's bytes. The walk is over a handful of
+// NBP files, so this is microseconds.
+func kitFingerprint(root string) (string, error) {
+	h := sha256.New()
+	werr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, rerr := filepath.Rel(root, path)
+		if rerr != nil {
+			return rerr
+		}
+		info, ierr := d.Info()
+		if ierr != nil {
+			return ierr
+		}
+		fmt.Fprintf(h, "%s|%d|%d\n", rel, info.Size(), info.ModTime().UnixNano())
+		return nil
+	})
+	if werr != nil {
+		return "", werr
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

@@ -80,3 +80,40 @@ func TestFetchToFile(t *testing.T) {
 		}
 	})
 }
+
+// TestFetchToFilePreStagedCache pins the upfront dedupe: bytes the cache
+// already holds under their digest name resolve without touching the
+// source at all (pre-staged media, re-registrations).
+func TestFetchToFilePreStagedCache(t *testing.T) {
+	dir := t.TempDir()
+	cached := "pre-staged ISO bytes"
+	digest := sha256hex(cached)
+	final := filepath.Join(dir, digest+".iso")
+	if err := os.WriteFile(final, []byte(cached), 0o644); err != nil {
+		t.Fatalf("pre-stage: %v", err)
+	}
+
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		_, _ = w.Write([]byte("must not be fetched"))
+	}))
+	defer srv.Close()
+
+	path, size, err := FetchToFile(context.Background(), srv.Client(), srv.URL+"/ubuntu.iso", digest, dir)
+	if err != nil {
+		t.Fatalf("FetchToFile: %v", err)
+	}
+	if hits != 0 {
+		t.Fatalf("source must not be requested when the digest is already cached, got %d hits", hits)
+	}
+	if path != final {
+		t.Fatalf("path: want %s, got %s", final, path)
+	}
+	if size != int64(len(cached)) {
+		t.Fatalf("size: want %d, got %d", len(cached), size)
+	}
+	if raw, rerr := os.ReadFile(final); rerr != nil || string(raw) != cached {
+		t.Fatalf("cached bytes disturbed: %v", rerr)
+	}
+}

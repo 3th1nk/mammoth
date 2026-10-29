@@ -166,9 +166,9 @@ func (f *Fetcher) logger() *slog.Logger {
 // the digest gate before anything under Dir is touched: the body lands in a
 // temp file, the running sha256 is compared against wantSHA256, and only a
 // matching download is renamed into <sha256>.iso. A digest already present
-// (registered twice, downloaded concurrently) wins and the temp copy is
-// dropped — the file's name IS its checksum, so an existing entry is by
-// construction the same bytes.
+// under Dir skips the download entirely — the file's name IS its checksum,
+// so an existing entry is by construction the same bytes (pre-staged media,
+// a re-registration, or a concurrent same-digest fetch that landed first).
 func FetchToFile(ctx context.Context, client *http.Client, sourceURL, wantSHA256, dir string) (string, int64, error) {
 	digest, err := hex.DecodeString(wantSHA256)
 	if err != nil || len(digest) != sha256.Size {
@@ -176,6 +176,13 @@ func FetchToFile(ctx context.Context, client *http.Client, sourceURL, wantSHA256
 	}
 	if !strings.HasPrefix(sourceURL, "http://") && !strings.HasPrefix(sourceURL, "https://") {
 		return "", 0, fmt.Errorf("images: source_url %q must be http(s) — local files belong in spec.source, not the library", sourceURL)
+	}
+
+	// Digest dedupe up front: an existing <sha256>.iso is the same bytes by
+	// construction — do not re-pull gigabytes from the source for them.
+	final := filepath.Join(dir, wantSHA256+".iso")
+	if st, err := os.Stat(final); err == nil && st.Mode().IsRegular() {
+		return final, st.Size(), nil
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
@@ -220,9 +227,10 @@ func FetchToFile(ctx context.Context, client *http.Client, sourceURL, wantSHA256
 			sourceURL, wantSHA256, got)
 	}
 
-	final := filepath.Join(dir, wantSHA256+".iso")
+	// A concurrent same-digest fetch may have landed while we downloaded —
+	// keep one copy of the bytes.
 	if _, err := os.Stat(final); err == nil {
-		_ = os.Remove(tmpName) // same digest already cached — keep one copy
+		_ = os.Remove(tmpName)
 		return final, size, nil
 	}
 	if err := os.Rename(tmpName, final); err != nil {

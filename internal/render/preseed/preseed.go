@@ -80,12 +80,12 @@ const kernelArgsBase = "auto=true priority=critical file=/cdrom/preseed.cfg " +
 
 // offlineKernelArgs is the vMedia carrier's command line: the preseed rides
 // the CD, and syslog= forwards the installer's ramfs log to mammoth's sink
-// (UDP 514 on the machine-face host) — the same channel the netboot carrier
-// has always had (netbootKernelArgs below).
-func offlineKernelArgs(answerBaseURL string) string {
+// (UDP 514 on the machine-face host, host:port when the sink moved — the
+// same channel the netboot carrier has always had, netbootKernelArgs below).
+func offlineKernelArgs(answerBaseURL string, syslogPort int) string {
 	args := kernelArgsBase
 	if host := render.SyslogHost(answerBaseURL); host != "" {
-		args += " syslog=" + host
+		args += " syslog=" + render.SyslogTarget(host, syslogPort)
 	}
 	return args
 }
@@ -94,19 +94,14 @@ func offlineKernelArgs(answerBaseURL string) string {
 // the netboot initrd has no CD to mount. The early-question kernel arguments
 // are identical; the seed body differs only in its install-source section.
 // syslog= forwards the installer's ramfs log to mammoth's sink (UDP 514 on
-// the machine-face host): the ramfs dies with the installer, and without the
-// forward a post-mortem has nothing (related-work §2). The host is taken
-// verbatim from the answer base URL — an IP literal is the common shape and
-// needs no resolver; a nonstandard sink port must be configured on both
-// sides (the argument carries no port).
-func netbootKernelArgs(answerBaseURL, seedName string, netEntries []render.NetworkEntry, hostname string) string {
-	syslogHost := ""
-	if u, err := url.Parse(answerBaseURL); err == nil {
-		syslogHost = u.Hostname()
-	}
+// the machine-face host, host:port when the sink moved): the ramfs dies with
+// the installer, and without the forward a post-mortem has nothing
+// (related-work §2). The host is taken verbatim from the answer base URL —
+// an IP literal is the common shape and needs no resolver.
+func netbootKernelArgs(answerBaseURL, seedName string, netEntries []render.NetworkEntry, hostname string, syslogPort int) string {
 	syslog := ""
-	if syslogHost != "" {
-		syslog = "syslog=" + syslogHost + " "
+	if host := render.SyslogHost(answerBaseURL); host != "" {
+		syslog = "syslog=" + render.SyslogTarget(host, syslogPort) + " "
 	}
 	return "auto=true priority=critical preseed/url=" +
 		strings.TrimSuffix(answerBaseURL, "/") + "/" + seedName + " " +
@@ -145,7 +140,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 
 	// Two seed carriers, one body: the netboot variant differs only in its
 	// install-source section (HTTP pool mirror instead of the CD mount).
-	vmediaArgs := offlineKernelArgs(in.AnswerBaseURL)
+	vmediaArgs := offlineKernelArgs(in.AnswerBaseURL, in.SyslogPort)
 	seedName, bootArgs := "preseed.cfg", vmediaArgs
 	// The archive codename the pool sources carry (d-i mirror/suite and the
 	// post-install signed-by rewrite use the same value).
@@ -155,7 +150,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			return nil, render.BootParams{}, fmt.Errorf("%s: %w", d.distro, err)
 		}
 		seedName = "preseed-netboot.cfg"
-		bootArgs = netbootKernelArgs(in.AnswerBaseURL, seedName, in.Network, in.Hostname)
+		bootArgs = netbootKernelArgs(in.AnswerBaseURL, seedName, in.Network, in.Hostname, in.SyslogPort)
 	}
 
 	answers := []render.AnswerFile{

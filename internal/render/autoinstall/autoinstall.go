@@ -320,7 +320,8 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// the documented offline-ISO form (casper mounts the boot medium at
 	// /cdrom — cloud-init reads the seed from there, no networking).
 	// syslog= forwards casper/subiquity logs to mammoth's sink (UDP 514 on
-	// the machine-face host) on BOTH carriers — the vMedia shape needs it
+	// the machine-face host, or the deployment's sink port — rendered as
+	// host:port when off 514) on BOTH carriers — the vMedia shape needs it
 	// just as much (the offline seed proves nothing about log visibility).
 	boot := render.BootParams{
 		AnswerURL:           primaryURL,
@@ -328,7 +329,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		InstallerAutoReboot: true, // shutdown: reboot
 	}
 	if host := render.SyslogHost(in.AnswerBaseURL); host != "" {
-		boot.KernelArgs += " syslog=" + host
+		boot.KernelArgs += " syslog=" + render.SyslogTarget(host, in.SyslogPort)
 	}
 	// PXE: casper mounts the pool tree at /cdrom and moves that mount into
 	// the live root, so the tree-root seed files ARE visible — but the seed
@@ -379,7 +380,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			"autoinstall ds=nocloud-net;s=%s %s console=tty0 console=ttyS0,115200n8 boot=casper netboot=nfs nfsroot=%s nfsopts=tcp,v3",
 			seedBase, ipArg, in.Netboot.NFSRootURL)
 		if host := render.SyslogHost(in.AnswerBaseURL); host != "" {
-			boot.NetbootKernelArgs += " syslog=" + host
+			boot.NetbootKernelArgs += " syslog=" + render.SyslogTarget(host, in.SyslogPort)
 		}
 		// BOOTIF pins the NIC casper's configure_networking configures: udev
 		// renames interfaces mid-initramfs (2288H: enp1s0 → eno1 between

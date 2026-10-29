@@ -148,3 +148,22 @@ func TestBondExpectations(t *testing.T) {
 		t.Errorf("second bond wrong: %+v", checks[1])
 	}
 }
+
+// TestSyslogTarget pins the sink-port rendering: the default (0/514) keeps
+// the bare-host argument byte-for-byte, a moved sink renders host:port —
+// busybox syslogd -R (casper), anaconda inst.syslog and d-i all accept it.
+func TestSyslogTarget(t *testing.T) {
+	cases := []struct {
+		port int
+		want string
+	}{
+		{0, "192.168.1.107"},
+		{514, "192.168.1.107"},
+		{5514, "192.168.1.107:5514"},
+	}
+	for _, c := range cases {
+		if got := SyslogTarget("192.168.1.107", c.port); got != c.want {
+			t.Errorf("SyslogTarget(host, %d) = %q, want %q", c.port, got, c.want)
+		}
+	}
+}

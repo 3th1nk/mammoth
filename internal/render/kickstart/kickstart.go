@@ -994,12 +994,12 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		kernelArgs = early + " " + kernelArgs
 	}
 	// inst.syslog forwards the installer's ramfs log to mammoth's sink
-	// (UDP 514 on the machine-face host) — the install_os stage's log
-	// density comes from this once the sink attributes the sender. Both
-	// carriers share KernelArgs here, so vMedia installs gain the channel
-	// with zero extra work.
+	// (UDP 514 on the machine-face host, host:port when the deployment moved
+	// the sink) — the install_os stage's log density comes from this once
+	// the sink attributes the sender. Both carriers share KernelArgs here,
+	// so vMedia installs gain the channel with zero extra work.
 	if host := render.SyslogHost(in.AnswerBaseURL); host != "" {
-		kernelArgs += " inst.syslog=" + host
+		kernelArgs += " inst.syslog=" + render.SyslogTarget(host, in.SyslogPort)
 	}
 	boot := render.BootParams{
 		AnswerURL:           primaryURL,

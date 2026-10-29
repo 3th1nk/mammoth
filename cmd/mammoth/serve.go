@@ -515,6 +515,7 @@ func serve(args []string) error {
 			MediaBaseURI:              cfg.MediaBaseURI,
 			WindowsInstallSMBUNC:      cfg.WindowsInstallSMBUNC,
 			UbuntuAptMirror:           cfg.UbuntuAptMirror,
+			SyslogPort:                cfg.PXESyslogPort,
 			WindowsInstallSMBUser:     cfg.WindowsInstallSMBUser,
 			WindowsInstallSMBPassword: cfg.WindowsInstallSMBPassword,
 			BootSettleDelay:           cfg.BootSettleDelay,

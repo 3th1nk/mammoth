@@ -816,24 +816,25 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	}
 
 	in := render.InstallInputs{
-		TaskToken:     ictx.Token,
-		DriftCheck:    job.Policy.VerifyLayout == nil || *job.Policy.VerifyLayout,
-		MachineID:     m.ID,
-		Hostname:      ictx.Hostname,
-		ImageSource:   spec.Image.Source,
+		TaskToken:   ictx.Token,
+		DriftCheck:  job.Policy.VerifyLayout == nil || *job.Policy.VerifyLayout,
+		MachineID:   m.ID,
+		Hostname:    ictx.Hostname,
+		ImageSource: spec.Image.Source,
 		// Windows /IMAGE/NAME explicit override (docs/compat/distros.md §windows
 		// 镜像契约): non-standard media (custom/cloud-exported) carries image
 		// names the driver default cannot match; empty = driver default.
 		WindowsImageName: spec.Image.WindowsImageName,
-		RootPassword:  rootPassword,
-		SSHPublicKeys: spec.Access.SSHKeys,
-		Capabilities:  spec.Access.Capabilities,
-		BootDrive:     bootDrive,
-		Disks:         ictx.Resolved.Disks,
-		Network:       networkEntries(spec.Network),
-		AnswerBaseURL: fmt.Sprintf("%s/render/%s", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
-		CompleteURL:   fmt.Sprintf("%s/render/%s/complete", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
-		Scripts:       scriptsFrom(spec.Scripts),
+		RootPassword:     rootPassword,
+		SSHPublicKeys:    spec.Access.SSHKeys,
+		Capabilities:     spec.Access.Capabilities,
+		BootDrive:        bootDrive,
+		Disks:            ictx.Resolved.Disks,
+		Network:          networkEntries(spec.Network),
+		AnswerBaseURL:    fmt.Sprintf("%s/render/%s", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
+		CompleteURL:      fmt.Sprintf("%s/render/%s/complete", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
+		SyslogPort:       e.SyslogPort,
+		Scripts:          scriptsFrom(spec.Scripts),
 	}
 	for _, r := range spec.PackageSource.Repos {
 		in.PackageSource = append(in.PackageSource, render.RepoSpec{

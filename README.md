@@ -122,9 +122,9 @@ flowchart TD
     end
     subgraph DIA["4 · Installer dialects"]
         ks["kickstart<br/>rocky · centos · kylin · UOS"]
-        ai["autoinstall<br/>ubuntu 22.04 / 24.04"]
+        ai["autoinstall<br/>ubuntu 22.04 / 24.04 / 26.04"]
         ps["preseed<br/>debian 12 / 13"]
-        wu["unattend<br/>windows 2019 (UEFI-only)<br/>boots differently ⤓ windows pathways"]
+        wu["unattend<br/>windows 2019 / 2022 / 2025 (UEFI)<br/>boots differently ⤓ windows pathways"]
     end
     ver["5 · verify: completion report +<br/>in-band SSH probe (installer-aware)<br/>+ post-install layout snapshot"]
     reg --> rf
@@ -152,7 +152,7 @@ the same wimboot carrier so `bcdboot` — not Linux — writes the BCD).
 
 ```mermaid
 flowchart TD
-    subgraph WS["windows 2019 · boot.installer"]
+    subgraph WS["windows 2019 / 2022 / 2025 · boot.installer"]
         st["**setup** (default)<br/>PXE: plain iPXE → wimboot<br/>(bootmgfw · BCD · boot.sdi · boot.wim)<br/>install source: deployment SMB export<br/>vMedia: rebuilt ISO + autounattend"]
         a1["**agent · boot one**<br/>alpine agent → wimlib applies<br/>install.wim onto NTFS + in-wim<br/>injection · ESP left empty"]
         a2["**agent · boot two**<br/>re-armed wimboot WinPE →<br/>bcdboot writes the BCD natively"]
@@ -184,9 +184,9 @@ flowchart TD
 | centos 7 | kickstart | minimal ISO | same ISO | same | ✅ vMedia |
 | kylin V10 / V11 | kickstart | DVD ISO | same ISO | same | ✅ V11 closed-loop · V10 limited (static-net NM) |
 | UOS | kickstart | DVD ISO | same ISO | NFS ISO | ✅ both |
-| ubuntu 22.04 / 24.04 | autoinstall | **live-server** ISO (casper, repacked) | **live-server** ISO (squashfs over NFS) | unpacked ISO tree over NFS | ✅ both |
+| ubuntu 22.04 / 24.04 / 26.04 | autoinstall | **live-server** ISO (casper, repacked) | **live-server** ISO (squashfs over NFS) | unpacked ISO tree over NFS | ✅ both |
 | debian 12 / 13 | preseed | **netinst** ISO (repacked) | **netinst** ISO (signed HTTP pool) **+ official netboot.tar.gz** + staged udebs | HTTP pool (checksum-complete, by-hash backfilled) | ✅ both |
-| windows 2019 | unattend | official media repacked (root autounattend + SetupComplete wimlib injection, UDF bridge) | setup: wimboot-over-PXE (SMB install source) · agent: two-stage apply (HTTP win tree, no SMB) | — | ✅ real: six-stage green (setup + agent apply) |
+| windows 2019 / 2022 / 2025 | unattend | official media repacked (root autounattend + SetupComplete wimlib injection, UDF bridge) | setup: wimboot-over-PXE (SMB install source) · agent: two-stage apply (HTTP win tree, no SMB) | — | ✅ real: six-stage green — 2019 (setup + agent apply) · 2022/2025 (setup, updated Oct 2026 media) |
 
 Rule of thumb: **netinst / minimal** = small installer with its own package
 pool (PXE-friendly); **DVD** = fully offline pool; **live-server** = ubuntu's
@@ -200,9 +200,9 @@ ISO content as a package source.
 | Family | Baseline image (latest point release) | Carrier coverage |
 |---|---|---|
 | RHEL-like | Rocky 9.x minimal ISO | virtual_media ✅ · PXE ✅ |
-| Ubuntu-like | Ubuntu 22.04.5 & 24.04.x live-server ISO | virtual_media ✅ · PXE ✅ |
+| Ubuntu-like | Ubuntu 22.04.5 & 24.04.x & 26.04.1 live-server ISO | virtual_media ✅ · PXE ✅ |
 | Debian-like | Debian 12 / 13 netinst ISO | virtual_media ✅ · PXE ✅ |
-| Windows-like | Windows Server 2019 (zh-CN MSDN) | PXE (wimboot + SMB source) ✅ real, six stages green · virtual_media 🔧 (blocked by iBMC 6.41 firmware, UEFI-only, Standard Core) |
+| Windows-like | Windows Server 2019 / 2022 / 2025 (zh-CN, updated Oct 2026 snapshots verified) | PXE (wimboot + SMB source) ✅ real, six stages green — 2019/2022/2025 · virtual_media 🔧 (blocked by iBMC 6.41 firmware, UEFI-only, Standard Core) |
 | Extension | Rocky 10 (UEFI-only) · CentOS 7 (legacy) · Kylin V10/V11 · UOS | per-demand |
 
 Every regression run: six-stage pipeline green → unattended first boot →

@@ -12,9 +12,13 @@
 | **银河麒麟 V11**(Server V11 2503) | `kylinv11` | Anaconda(现代代际) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,机制同源) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H;中文 NFS 路径全链路验证) |
 | **银河麒麟 V10**(Server V10 SP3 2403) | `kylinv10` | Anaconda(RHEL8 代际 + NM 1.18) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`) | MAC(渲染层带 NM 修复段) | ⚠️ 受限:静态网络自动化卡死在 NM(见注记);**中文 NFS 路径经 anaconda 层已验证可用** |
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
+| Ubuntu Server 24.04 | `ubuntu24` | Subiquity | autoinstall(nocloud seed) | 同 ubuntu22 | 同 ubuntu22 | ✅ v0.3(真机复验 2026-10-29:routes 形态 netplan 落盘+全套凭据) |
+| Ubuntu Server 26.04 | `ubuntu26` | Subiquity | autoinstall(nocloud seed) | 同 ubuntu22 | 同 ubuntu22;**netplan 弃 gateway4 用 routes 形态**(26.04 的 netplan 拒绝 gateway4) | ✅ 真机闭环 2026-10-29(静态+DHCP 双形态;接口名 eno1np0 为 26.04 新 scheme) |
 | Debian 12 | `debian12` | debian-installer | preseed(`file=/cdrom/preseed.cfg`) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | 无(netcfg 不按 MAC 选口,单接口) | ✅ 真机跑通 |
 | 统信服务器 V20(UOS) | `uniontechos` | **anaconda 定制**(RHEL 系安装树:AppStream/BaseOS/isolinux,非 d-i) | kickstart(同 `rocky9` 方言) | **full**(真机复核 2026-09-19) | MAC → 接口名在 %pre 安装期解析 | **full(真机闭环 2026-09-19:虚拟介质 + PXE 双通路零人工)**;⚠️ **方言约束:仅图形前端可用**——text 模式(text 指令/inst.text)下 UOS anaconda 自动分区建出 FAT16 而非 swap 且 Finish 组崩溃,驱动已强制 graphical(见下方根因节) |
 | **Windows Server 2019** | `windows2019` | Windows Setup(bootmgr,`/sources/install.wim`) | **unattend**(autounattend.xml 灌 boot.wim 根,startnet 显式启动时经 ramdisk 隐式发现) | **full**(wimboot 载体;前置=部署层 SMB 导出 `MAMMOTH_WINDOWS_INSTALL_SMB_UNC`,未配置提交即拒) | MAC → SetupComplete.cmd 按 Get-NetAdapter MAC 绑定(装后 SYSTEM 首登录前落地) | ✅ **真机全自动闭环(2026-09-21,2288H 十轮迭代:六阶段全绿,完成回调全自动到达,静态网 .215 按 spec 落网)**;**agent apply-image 通路亦真机闭环(2026-09-22,两段式方案 A:六阶段全绿,详见下方 agent apply-image 落地节)**;虚拟介质通路仍被 iBMC 6.41 固件缺陷封死(见下方 windows 节) |
+| **Windows Server 2022** | `windows2022` | 同 windows2019(媒体形态版本稳定) | 同 windows2019 | 同 windows2019 | 同 windows2019 | ✅ **真机全自动闭环(2026-10-29,updated Oct 2026 零售 zh-cn:六阶段全绿,回调到达,静态网 .217 按 spec 落网;经 genisoimage -udf 重打包 + 树权限 go+rX + normalizeUNC 四层修复,详见下方 windows 节)** |
+| **Windows Server 2025** | `windows2025` | 同 windows2019(26100 系) | 同 windows2019 | 同 windows2019 | 同 windows2019 | ✅ **真机全自动闭环(2026-10-29,updated Oct 2026 OEM zh-cn:六阶段全绿,回调到达,静态网 .218 按 spec 落网,setup 仅 ~13 分钟;OOBE 新增诊断数据页已由 ProtectYourPC=3 跳过)** |
 
 ## 保留分区支持语义(SupportLevel)
 

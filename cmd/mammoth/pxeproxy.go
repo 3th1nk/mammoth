@@ -2,6 +2,8 @@ package main
 
 import (
 	"archive/tar"
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -9,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -44,6 +47,7 @@ replaces a hand-tuned dnsmasq; the kit is exported by the engine
 	pf.StringVar(&o.TFTPRoot, "tftp-root", "/var/lib/mammoth/tftp", "directory holding the exported external kit (auto-synced from the engine; created on first sync)")
 	pf.DurationVar(&o.SyncInterval, "sync-interval", 5*60*time.Second, "kit re-sync period; 0 = sync once at startup")
 	pf.StringVar(&o.KitToken, "kit-token", "", "bearer token for the engine kit endpoint (empty = anonymous; /netboot routes are public by default)")
+	pf.StringVar(&o.Segment, "segment", "", "provisioning segment label reported with sightings (informational)")
 	pf.IntVar(&o.DHCPPort, "dhcp-port", 67, "proxyDHCP listen port (coexists with the site DHCP across the L2)")
 	pf.IntVar(&o.ProxyPort, "proxy-port", 4011, "PXE boot-server discovery port")
 	pf.IntVar(&o.TFTPPort, "tftp-port", 69, "TFTP port")
@@ -63,6 +67,7 @@ type pxeProxyOptions struct {
 	SyslogPort   int
 	SyncInterval time.Duration
 	KitToken     string
+	Segment      string
 }
 
 // runPxeProxy validates the flags, syncs the kit, and serves until the
@@ -196,6 +201,12 @@ func (o pxeProxyOptions) netbootOptions() (netboot.Options, error) {
 	if err != nil || !st.IsDir() {
 		return netboot.Options{}, fmt.Errorf("pxe-proxy: --tftp-root %q is not a directory (export the engine kit: MediaDir/netboot/external-tftp)", root)
 	}
+	// Sightings feed: every PXE DISCOVER the agent answers is reported to
+	// the engine's observation endpoint (external deployments are blind to
+	// the wire — the agent is the only eye). Async fire-and-forget with a
+	// per-client dedupe window: PXE ROMs retry DISCOVERs aggressively and
+	// the endpoint is a courtesy feed, not a log.
+	obs := &sightingFeed{base: base, token: o.KitToken, segment: o.Segment, seen: map[string]time.Time{}}
 	return netboot.Options{
 		DHCPPort:   o.DHCPPort,
 		ProxyPort:  o.ProxyPort,
@@ -204,5 +215,49 @@ func (o pxeProxyOptions) netbootOptions() (netboot.Options, error) {
 		NextServer: ns,
 		BaseURL:    base,
 		NBPs:       os.DirFS(root),
+		OnObserve: func(mac string, arch netboot.Arch) {
+			obs.report(mac, string(arch))
+		},
 	}, nil
+}
+
+// sightingFeed reports PXE sightings to the engine's observation endpoint,
+// deduplicated per client+arch within a window (PXE ROMs retry DISCOVERs
+// aggressively; the engine's TouchByMAC is an upsert — the dedupe keeps the
+// wire and the DB write at one sighting per client per window).
+type sightingFeed struct {
+	base    string
+	token   string
+	segment string
+	mu      sync.Mutex
+	seen    map[string]time.Time
+}
+
+const sightingWindow = 10 * time.Minute
+
+func (f *sightingFeed) report(mac, arch string) {
+	f.mu.Lock()
+	key := mac + "/" + arch
+	if t, ok := f.seen[key]; ok && time.Since(t) < sightingWindow {
+		f.mu.Unlock()
+		return
+	}
+	f.seen[key] = time.Now()
+	f.mu.Unlock()
+	go func() {
+		body, _ := json.Marshal(map[string]string{"mac": mac, "firmware": arch, "segment": f.segment})
+		req, err := http.NewRequest(http.MethodPost, f.base+"/netboot/observe", bytes.NewReader(body))
+		if err != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if f.token != "" {
+			req.Header.Set("Authorization", "Bearer "+f.token)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return
+		}
+		resp.Body.Close()
+	}()
 }

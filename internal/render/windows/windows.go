@@ -1323,6 +1323,7 @@ func postSetupPassesXML(hostname, password string, ml mediaLocale) string {
         <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
         <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
         <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <ProtectYourPC>3</ProtectYourPC>
       </OOBE>
       <UserAccounts>
         <AdministratorPassword>

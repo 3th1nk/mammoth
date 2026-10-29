@@ -64,6 +64,7 @@ func TestRenderWindowsUEFIUnattend(t *testing.T) {
 		`<Type>MSR</Type>`, `<Size>16</Size>`,
 		`<Type>Primary</Type>`, `<Extend>true</Extend>`,
 		`<Format>FAT32</Format>`, `<Format>NTFS</Format>`,
+		`<ProtectYourPC>3</ProtectYourPC>`,
 		`<PartitionID>3</PartitionID>`,
 		`<DiskID>0</DiskID>`, `<WillWipeDisk>true</WillWipeDisk>`,
 		`<ComputerName>node-w1</ComputerName>`,

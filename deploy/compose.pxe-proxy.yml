@@ -1,0 +1,31 @@
+# mammoth pxe-proxy — one instance per provisioning VLAN
+# (docs/operations.md §pxe-proxy for the full runbook: addressing, firewall,
+# Secure Boot notes).
+#
+# Runs on the edge host of the machine segment; host networking is required
+# (proxyDHCP :67/:4011, TFTP :69 and the optional :514 sink would be
+# isolated by a bridge network).
+#
+#   MAMMOTH_PXEPROXY_BASE_URL=http://<engine>:8080 \
+#     docker compose -f compose.pxe-proxy.yml up -d
+#
+# The image builds from the repo Dockerfile (distroless, static binary) and
+# runs `mammoth pxe-proxy`; the synced kit lives on a mounted volume so it
+# survives recreation.
+services:
+  pxe-proxy:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["pxe-proxy"]
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      MAMMOTH_PXEPROXY_BASE_URL: ${MAMMOTH_PXEPROXY_BASE_URL:?set the engine base URL}
+      MAMMOTH_PXEPROXY_NEXT_SERVER: ${MAMMOTH_PXEPROXY_NEXT_SERVER:-}
+      MAMMOTH_PXEPROXY_KIT_TOKEN: ${MAMMOTH_PXEPROXY_KIT_TOKEN:-}
+      MAMMOTH_PXEPROXY_SEGMENT: ${MAMMOTH_PXEPROXY_SEGMENT:-vlan-1}
+      MAMMOTH_PXEPROXY_TFTP_ROOT: ${MAMMOTH_PXEPROXY_TFTP_ROOT:-/var/lib/mammoth/tftp}
+      MAMMOTH_PXEPROXY_SYNC_INTERVAL: ${MAMMOTH_PXEPROXY_SYNC_INTERVAL:-5m}
+    volumes:
+      - ${MAMMOTH_PXEPROXY_TFTP_ROOT:-/var/lib/mammoth/tftp}:${MAMMOTH_PXEPROXY_TFTP_ROOT:-/var/lib/mammoth/tftp}

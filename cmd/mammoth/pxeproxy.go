@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -26,6 +27,23 @@ import (
 // per-MAC script over HTTP) — one binary per provisioning VLAN replaces a
 // hand-tuned dnsmasq for cross-subnet deployments.
 func pxeProxyCobraCommand() *cobra.Command {
+	// Container-friendly: every flag has an env override
+	// (MAMMOTH_PXEPROXY_*), so compose files pass configuration without
+	// editing the command line.
+	envOr := func(key, def string) string {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
+		return def
+	}
+	envInt := func(key string, def int) int {
+		if v := os.Getenv(key); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				return n
+			}
+		}
+		return def
+	}
 	var o pxeProxyOptions
 	cmd := &cobra.Command{
 		Use:   "pxe-proxy",
@@ -42,16 +60,22 @@ replaces a hand-tuned dnsmasq; the kit is exported by the engine
 		},
 	}
 	pf := cmd.Flags()
-	pf.StringVar(&o.NextServer, "next-server", "", "this host's IP on the provisioning segment (siaddr/TFTP-server offered to PXE clients)")
-	pf.StringVar(&o.BaseURL, "base-url", "", "mammoth engine machine-face base URL (e.g. http://172.16.20.250:8091)")
-	pf.StringVar(&o.TFTPRoot, "tftp-root", "/var/lib/mammoth/tftp", "directory holding the exported external kit (auto-synced from the engine; created on first sync)")
-	pf.DurationVar(&o.SyncInterval, "sync-interval", 5*60*time.Second, "kit re-sync period; 0 = sync once at startup")
-	pf.StringVar(&o.KitToken, "kit-token", "", "bearer token for the engine kit endpoint (empty = anonymous; /netboot routes are public by default)")
-	pf.StringVar(&o.Segment, "segment", "", "provisioning segment label reported with sightings (informational)")
-	pf.IntVar(&o.DHCPPort, "dhcp-port", 67, "proxyDHCP listen port (coexists with the site DHCP across the L2)")
-	pf.IntVar(&o.ProxyPort, "proxy-port", 4011, "PXE boot-server discovery port")
-	pf.IntVar(&o.TFTPPort, "tftp-port", 69, "TFTP port")
-	pf.IntVar(&o.SyslogPort, "syslog-port", 514, "installer-log sink port (bind failure degrades to a warning)")
+	pf.StringVar(&o.NextServer, "next-server", envOr("MAMMOTH_PXEPROXY_NEXT_SERVER", ""), "this host's IP on the provisioning segment (siaddr/TFTP-server offered to PXE clients)")
+	pf.StringVar(&o.BaseURL, "base-url", envOr("MAMMOTH_PXEPROXY_BASE_URL", ""), "mammoth engine machine-face base URL (e.g. http://172.16.20.250:8091)")
+	pf.StringVar(&o.TFTPRoot, "tftp-root", envOr("MAMMOTH_PXEPROXY_TFTP_ROOT", "/var/lib/mammoth/tftp"), "directory holding the exported external kit (auto-synced from the engine; created on first sync)")
+	syncDef := envOr("MAMMOTH_PXEPROXY_SYNC_INTERVAL", "5m")
+	syncDur, syncErr := time.ParseDuration(syncDef)
+	if syncErr != nil {
+		cmd.Printf("pxe-proxy: bad MAMMOTH_PXEPROXY_SYNC_INTERVAL %q (%v) — using default 5m\n", syncDef, syncErr)
+		syncDur = 5 * 60 * time.Second
+	}
+	pf.DurationVar(&o.SyncInterval, "sync-interval", syncDur, "kit re-sync period; 0 = sync once at startup")
+	pf.StringVar(&o.KitToken, "kit-token", envOr("MAMMOTH_PXEPROXY_KIT_TOKEN", ""), "bearer token for the engine kit endpoint (empty = anonymous; /netboot routes are public by default)")
+	pf.StringVar(&o.Segment, "segment", envOr("MAMMOTH_PXEPROXY_SEGMENT", ""), "provisioning segment label reported with sightings (informational)")
+	pf.IntVar(&o.DHCPPort, "dhcp-port", envInt("MAMMOTH_PXEPROXY_DHCP_PORT", 67), "proxyDHCP listen port (coexists with the site DHCP across the L2)")
+	pf.IntVar(&o.ProxyPort, "proxy-port", envInt("MAMMOTH_PXEPROXY_PROXY_PORT", 4011), "PXE boot-server discovery port")
+	pf.IntVar(&o.TFTPPort, "tftp-port", envInt("MAMMOTH_PXEPROXY_TFTP_PORT", 69), "TFTP port")
+	pf.IntVar(&o.SyslogPort, "syslog-port", envInt("MAMMOTH_PXEPROXY_SYSLOG_PORT", 514), "installer-log sink port (bind failure degrades to a warning)")
 	_ = cmd.MarkFlagRequired("next-server")
 	_ = cmd.MarkFlagRequired("base-url")
 	return cmd
@@ -172,15 +196,21 @@ func syncKit(o pxeProxyOptions) error {
 		}
 		f.Close()
 	}
-	// Atomic-ish swap: move the new tree into place. The TFTP server reads
-	// through its own root handle, so the rename window is a dropped request
-	// at worst — the next client retry re-opens the new root.
-	if err := os.RemoveAll(o.TFTPRoot); err != nil {
+	// Two-step swap: the old root moves aside before the new one lands —
+	// the window where TFTP sees no root shrinks from "across the whole
+	// RemoveAll" to "between two renames" (microseconds), and any request
+	// in that window is a client retry, never a stranded boot.
+	previous := filepath.Join(filepath.Dir(tmp), "kit-previous")
+	_ = os.RemoveAll(previous)
+	if err := os.Rename(o.TFTPRoot, previous); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	if err := os.Rename(tmp, o.TFTPRoot); err != nil {
+		// Put the old root back — a failed swap must not strand machines.
+		_ = os.Rename(previous, o.TFTPRoot)
 		return err
 	}
+	_ = os.RemoveAll(previous)
 	if etag := resp.Header.Get("ETag"); etag != "" {
 		_ = os.WriteFile(etagFile, []byte(strings.TrimSpace(etag)), 0o644)
 	}

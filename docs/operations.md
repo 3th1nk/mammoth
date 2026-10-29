@@ -257,6 +257,34 @@ DHCP,option 93 固件观测不工作(观测档案不更新);多 NIC 主机上 iP
 qemu 同型验证(网桥 + dnsmasq + UEFI guest 经此链完成 alpine agent 全装)
 见 `scripts/pxe-dev/external-e2e.sh`。
 
+### pxe-proxy — Go 原生网段代理(dnsmasq 的替代形态,2026-10-29)
+
+跨网段生产部署的标准形态是 **一个 mammoth(承载网)+ 每个装机 VLAN 一个
+pxe-proxy(单二进制)**:proxyDHCP 应答(67/4011)+ TFTP(69,服务引擎
+导出的 external kit)+ PXE sightings 回传(POST /netboot/observe →
+pending_machines 台账,external 模式的观测盲区由 agent 补上)。
+
+```sh
+# kit 由引擎导出(MediaDir/netboot/external-tftp),拷到网段主机后:
+MAMMOTH_PXEPROXY_BASE_URL=http://<engine>:8080 mammoth pxe-proxy --tftp-root /var/lib/mammoth/tftp
+```
+
+- `--next-server` 可选:未指定时从首个 PXE 请求的到达接口自动学习本机
+  IPv4(IP_PKTINFO),多网卡/容器免配置;显式指定优先。
+- kit 自动同步:启动 + 每 5 分钟(`--sync-interval`),stat 指纹 ETag +
+  `If-None-Match` 协商——内容未变 304 零下载;变更则下载解包原子替换
+  TFTP root,失败保留旧 root(坏下载不得卡机器在 PXE 提示)。
+- 观测回传:proxyDHCP 应答时把 sightings(MAC/固件)POST 到
+  `/netboot/observe` → pending_machines 台账;10 分钟同客户端去重窗。
+- compose:`deploy/compose.pxe-proxy.yml`(host 网络,tftp-root 卷挂载);
+  env 模板:`deploy/pxe-proxy.env.example`。
+- 逐项说明:防火墙放行 67/69/4011(UDP)与 8091(TCP);**Secure Boot
+  需关闭**(iPXE 未签名);装机段地址避开占址设备(先 ARP/ping 探测)。
+
+外置 dnsmasq 形态仍受支持(示例配置在 kit 的 dnsmasq.conf.example),
+pxe-proxy 是它的免配置替代。qemu 同型验证(网桥 + dnsmasq + UEFI guest 经此链完成 alpine agent 全装)
+见 `scripts/pxe-dev/external-e2e.sh`。
+
 **Windows 机器(wimboot 载体)的额外一步**:按 MAC 把目标机钉到未签名
 iPXE——wimboot 只认 iPXE 宿主,且要求目标机 **Secure Boot 关闭**(边界与
 机制见 docs/compat/distros.md §windows;builtin 模式下 proxyDHCP 对

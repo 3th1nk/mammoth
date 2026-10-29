@@ -137,7 +137,7 @@ flowchart TD
 
 windows 的两条通路都不走常规内核 PXE 形态:setup 搭 **wimboot**
 (HTTP 喂 bootmgfw/BCD/boot.sdi/boot.wim——plain iPXE,无 shim/grub),
-agent 通路是**两次引导**(第二段重新武装同一个 wimboot 载体,让
+agent 通路是**两次引导**(第二段重新触发同一个 wimboot 载体的引导,让
 `bcdboot`——而不是 Linux——写出 BCD)。
 
 ```mermaid
@@ -145,10 +145,10 @@ flowchart TD
     subgraph WS["windows 2019 / 2022 / 2025 · boot.installer"]
         st["**setup**(默认)<br/>PXE:plain iPXE → wimboot<br/>(bootmgfw · BCD · boot.sdi · boot.wim)<br/>安装源:部署层 SMB 导出<br/>vMedia:重打包 ISO + autounattend"]
         a1["**agent · 第一段**<br/>alpine agent → wimlib 直写<br/>install.wim 到 NTFS + in-wim<br/>注入 · ESP 留空"]
-        a2["**agent · 第二段**<br/>重武装 wimboot WinPE →<br/>bcdboot 原生写出 BCD"]
+        a2["**agent · 第二段**<br/>二次引导 wimboot WinPE →<br/>bcdboot 原生写出 BCD"]
     end
     st --> fbt["first boot:<br/>specialize/OOBE → 完成回调"]
-    a1 -->|"applied → 重武装 PXE"| a2 --> fbt
+    a1 -->|"applied → 二次引导 PXE"| a2 --> fbt
 ```
 
 ### 跨网段部署 —— 一个引擎,多个网段代理

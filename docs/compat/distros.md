@@ -656,7 +656,7 @@ size_bytes、task.json 两段名 401、ntfs3 挂死→in-wim 注入)+ 完成回�
 两相化(agent=applied,Windows first boot=ok 才终态,修复假绿)。手工
 BCD 路线的 specialize 卡点由两段式(方案 A)接棒。
 **方案 A 真机闭环(2026-09-22,job_57ef0347654e,六阶段全绿)**:agent 段
-(12:18-12:24)→ applied → 二段武装(断电→wimboot bcdboot 树→PXE once,
+(12:18-12:24)→ applied → 二段引导(断电→wimboot bcdboot 树→PXE once,
 12:28)→ bcdboot 段(plain iPXE→WinPE→**BCDBOOT OK:bcdboot 生成 +
 bcdedit 枚举成功,NT BcdOpenStore 门禁通过——0xC0000098 死点终结**,
 12:32)→ 释放 PXE+cycle → first boot(specialize 无错误框)→ 12:39 回调

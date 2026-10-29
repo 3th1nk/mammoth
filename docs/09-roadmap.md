@@ -127,7 +127,7 @@
   网络翻译 ip= 等,零人工重装 + 重启自举双验证)——实录见
   compat/distros.md 与 compat/huawei.md;
 - ✅ 寻址策略三层定案(2026-09-17):**spec 静态声明 > 池预约 > DHCP**;
-  池模式三件套——租约白名单(只应答已武装装机任务的 MAC)、白名单
+  池模式三件套——租约白名单(只应答已登记装机任务的 MAC)、白名单
   nil-entry 门、ReserveFree 预约探测(ping+邻居表,ICMP 黑洞型静默占址
   也能识别);完成回调以 RemoteIP(非 XFF,防伪造)回写 machine.ssh_address;
 - ✅ 装机通路工程收尾(2026-09-17):netboot 内置安装器日志 syslog sink

@@ -4,7 +4,7 @@
 >
 > **六阶段全绿(job_57ef0347654e / tsk_705652016c55,2288H 真机)**:
 > agent 段(PXE→alpine agent→拉 4195MiB wim→wimlib 直写→in-wim 注入,
-> 12:18-12:24)→ applied → 二段武装(断电→同 token 重建 wimboot bcdboot
+> 12:18-12:24)→ applied → 二段引导(断电→同 token 重建 wimboot bcdboot
 > 树→条目翻转→PXE once 上电,12:28)→ bcdboot 段(plain iPXE→wimboot
 > WinPE→bcdboot 生成 BCD→**bcdedit 枚举成功(NT BcdOpenStore 门禁通过,
 > 0xC0000098 死点终结)**,12:32)→ 释放 PXE+power cycle → first boot

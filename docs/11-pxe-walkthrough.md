@@ -145,7 +145,7 @@ DHCP 不可共存(UDP 67 排他,见 operations.md §4.5 第 1 条)。
 
 | 客户端报错 | 死点 | 典型原因 |
 |-----------|------|---------|
-| PXE-E53(No boot filename) | 收到 DHCP 但无 bootfile | proxy 模式无引导项(未武装/非白名单 MAC);外部模式站点 DHCP 缺 66/67 |
+| PXE-E53(No boot filename) | 收到 DHCP 但无 bootfile | proxy 模式无引导项(未登记/非白名单 MAC);外部模式站点 DHCP 缺 66/67 |
 | PXE-E55(ProxyDHCP no reply on 4011) | 4011 无人应答 | proxyDHCP 未起/被防火墙挡;mammoth 未启用 PXE |
 | PXE-E32(TFTP open timeout) | TFTP 首包拿不到 | next-server 不可达、TFTP 根目录缺文件、站点 DHCP option 43 编码错误把 NBP 路径弄丢(见下) |
 | PXE-E99 / 卡图形 logo | NBP 拉完但跑不起来 | Secure Boot 拒签(应走 shim 链)、架构不匹配(arm64 机器发了 x64 NBP——option 93 观测可查) |

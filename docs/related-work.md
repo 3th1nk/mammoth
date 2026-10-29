@@ -95,7 +95,7 @@ TFTP + HTTP 脚本,硬件记录按 MAC 匹配):
   内核参数,安装器日志是 ramfs、重启即逝(2026-09-17 update-grub 尸检
   差点失据)。mammoth netboot 栈加 514/udp sink + 渲染时带参数,低成本
   高回报。**✅ 已落地(2026-09-17)**:netboot 服务内置 514/udp sink
-  (`MAMMOTH_PXE_SYSLOG_PORT`),租约反查命中已武装任务的行带 `task_id`
+  (`MAMMOTH_PXE_SYSLOG_PORT`),租约反查命中已登记装机任务的行带 `task_id`
   落 task_logs,debian netboot 内核参数自动带 `syslog=<机器面 host>`;
   端口被占仅告警降级(诊断非命脉)。
 - **IP 认证的脚本 URL**(`/MAC/auto.ipxe`)vs mammoth 的 token 化池 URL:

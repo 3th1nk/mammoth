@@ -173,7 +173,7 @@ flowchart TD
         m1["裸金属机器"]
     end
     subgraph VN["装机网段 N"]
-        aN["pxe-proxy"]
+        aN["pxe-proxy<br/>proxyDHCP + TFTP<br/>(sightings 回传引擎)"]
         mN["裸金属机器"]
     end
     eng -->|kit 同步 + 观测回传| a1

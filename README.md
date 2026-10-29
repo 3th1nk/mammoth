@@ -195,7 +195,7 @@ Every regression run: six-stage pipeline green → unattended first boot →
 SSH probe with the provisioned key. See
 [docs/runbooks/test-baselines.md](docs/runbooks/test-baselines.md).
 
-### Cross-subnet deployments — one engine, many VLAN agents
+### Cross-subnet deployments — one engine, many VLAN proxies
 
 Production rooms are cross-subnet: the engine lives in the management
 network, and every provisioning VLAN needs a PXE first hop on its own wire.
@@ -221,7 +221,7 @@ flowchart TD
         m1["bare-metal machines"]
     end
     subgraph V2["provisioning VLAN N"]
-        aN["pxe-proxy"]
+        aN["pxe-proxy<br/>proxyDHCP + TFTP<br/>(sightings → engine)"]
         mN["bare-metal machines"]
     end
     eng -->|kit sync + observe POST| a1
@@ -230,7 +230,7 @@ flowchart TD
     aN --> mN
 ```
 
-Setup is one binary plus one line per VLAN agent
+Setup is one binary plus one line per VLAN proxy
 (`mammoth pxe-proxy --base-url …`); the kit syncs itself and sightings feed
 the engine's pending_machines ledger. Firewall: UDP 67/69/4011 open on the
 agent, TCP <engine>:8080 reachable from the VLAN. Full runbook — including

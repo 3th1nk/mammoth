@@ -330,22 +330,22 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if host := render.SyslogHost(in.AnswerBaseURL); host != "" {
 		boot.KernelArgs += " syslog=" + host
 	}
-		// PXE: casper mounts the pool tree at /cdrom and moves that mount into
-		// the live root, so the tree-root seed files ARE visible — but the seed
-		// cannot ride a file:///cdrom/ seedfrom here: cloud-init 24.2's
-		// DataSourceNoCloudNet accepts only http(s)/ftp seedfrom
-		// (supported_seed_starts — "Seed from file://... not supported"), and
-		// the local ds=nocloud form proved equally inert on real hardware
-		// (2288H: five INSTALL_TIMEOUT cycles across both markers with the
-		// seed verified present at the tree root). The engine's HTTP answer
-		// endpoint is the one channel the boot itself proves reachable — the
-		// machine mounts its live root from this very host over NFS — so the
-		// seed rides the answer URL (the canonical subiquity PXE recipe).
-		// Topologies where the NFS media host and the engine differ AND the
-		// machine cannot reach the engine over HTTP have no seed channel at
-		// all: subiquity falls back to the interactive picker rather than
-		// installing blind, which the INSTALL_TIMEOUT surfaces.
-		if in.Netboot != nil {
+	// PXE: casper mounts the pool tree at /cdrom and moves that mount into
+	// the live root, so the tree-root seed files ARE visible — but the seed
+	// cannot ride a file:///cdrom/ seedfrom here: cloud-init 24.2's
+	// DataSourceNoCloudNet accepts only http(s)/ftp seedfrom
+	// (supported_seed_starts — "Seed from file://... not supported"), and
+	// the local ds=nocloud form proved equally inert on real hardware
+	// (2288H: five INSTALL_TIMEOUT cycles across both markers with the
+	// seed verified present at the tree root). The engine's HTTP answer
+	// endpoint is the one channel the boot itself proves reachable — the
+	// machine mounts its live root from this very host over NFS — so the
+	// seed rides the answer URL (the canonical subiquity PXE recipe).
+	// Topologies where the NFS media host and the engine differ AND the
+	// machine cannot reach the engine over HTTP have no seed channel at
+	// all: subiquity falls back to the interactive picker rather than
+	// installing blind, which the INSTALL_TIMEOUT surfaces.
+	if in.Netboot != nil {
 		if in.Netboot.NFSRootURL == "" {
 			return nil, render.BootParams{}, fmt.Errorf("%s: PXE installs need an NFS media base for the casper live root (set MAMMOTH_MEDIA_BASE_URI=nfs://<host>/<export> on the runner)", d.distro)
 		}
@@ -364,15 +364,19 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 				in.Netboot.StaticIP, in.Netboot.StaticRouter, in.Netboot.StaticMask)
 		}
 		// The seedfrom URL must carry the trailing slash: cloud-init
-		// urlappend joins user-data/meta-data onto it verbatim. console=ttyS0
-		// mirrors the boot onto the BMC serial line: SOL (ipmitool sol
-		// activate) then carries the whole install — kernel, cloud-init
-		// datasource decisions, subiquity — to the engine operator even when
-		// no human can sit at the VGA console (five interactive-fallback
-		// rounds on the 2288H went undiagnosed without this).
+		// urlappend joins user-data/meta-data onto it verbatim. console=tty0
+		// mirrors kernel output onto the VGA console (a KVM lab watching the
+		// graphical console otherwise stares at the last firmware line while
+		// the kernel panics or drops to initramfs on serial, 2026-10-29
+		// lab finding); console=ttyS0 LAST keeps serial as /dev/console:
+		// SOL (ipmitool sol activate) still carries the whole install —
+		// kernel, cloud-init datasource decisions, subiquity — to the engine
+		// operator even when no human sits at the VGA console (five
+		// interactive-fallback rounds on the 2288H went undiagnosed without
+		// this). Same shape as the agent/probe carriers.
 		seedBase := strings.TrimSuffix(in.AnswerBaseURL, "/") + "/"
 		boot.NetbootKernelArgs = fmt.Sprintf(
-			"autoinstall ds=nocloud-net;s=%s %s console=ttyS0,115200n8 boot=casper netboot=nfs nfsroot=%s nfsopts=tcp,v3",
+			"autoinstall ds=nocloud-net;s=%s %s console=tty0 console=ttyS0,115200n8 boot=casper netboot=nfs nfsroot=%s nfsopts=tcp,v3",
 			seedBase, ipArg, in.Netboot.NFSRootURL)
 		if host := render.SyslogHost(in.AnswerBaseURL); host != "" {
 			boot.NetbootKernelArgs += " syslog=" + host

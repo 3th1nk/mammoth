@@ -22,7 +22,7 @@ import (
 )
 
 func main() {
-	root := cli.NewRootCommand(serveCobraCommand())
+	root := cli.NewRootCommand(serveCobraCommand(), pxeProxyCobraCommand())
 	root.Version = version.Version
 	if err := root.Execute(); err != nil {
 		os.Exit(1)

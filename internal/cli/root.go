@@ -17,7 +17,7 @@ import (
 // NewRootCommand assembles the operator CLI; serve (the server facet,
 // wired by package main) is passed in. Configuration: --api and --token
 // flags default from MAMMOTH_API_URL / MAMMOTH_API_TOKEN.
-func NewRootCommand(serve *cobra.Command) *cobra.Command {
+func NewRootCommand(serve *cobra.Command, extras ...*cobra.Command) *cobra.Command {
 	var apiURL, token string
 
 	root := &cobra.Command{
@@ -38,6 +38,9 @@ API access: --api / --token flags or MAMMOTH_API_URL / MAMMOTH_API_TOKEN.`,
 
 	root.AddCommand(serve, versionCmd(), tokenCmd())
 	root.AddCommand(sandboxCmd())
+	for _, extra := range extras {
+		root.AddCommand(extra)
+	}
 	root.AddCommand(mcpCmd(newClient))
 	root.AddCommand(credentialsCmd(newClient))
 	root.AddCommand(machinesCmd(newClient))

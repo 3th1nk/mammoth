@@ -242,10 +242,13 @@ func grubHTTPHost(baseURL string) string {
 
 // grubConfigMAC parses the per-MAC GRUB config filename grubnet requests —
 // "grub.cfg-01-<mac>" with the mac in lowercase colon form — and returns the
-// normalized mac. grubnet falls back to "grub.cfg-<hex-ip>" then "grub.cfg"
+// normalized mac. The name arrives under grubnet's (tftp)/grub/ prefix
+// ("grub/grub.cfg-01-<mac>"); strip it or the per-MAC branch can never match
+// a wire request. grubnet falls back to "grub.cfg-<hex-ip>" then "grub.cfg"
 // when the per-MAC file is absent; those fallbacks are static and never hit
 // this path.
 func grubConfigMAC(name string) (string, bool) {
+	name = strings.TrimPrefix(name, "grub/")
 	const prefix = "grub.cfg-01-"
 	if !strings.HasPrefix(name, prefix) {
 		return "", false

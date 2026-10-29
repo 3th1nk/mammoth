@@ -57,6 +57,19 @@ func (s *Server) handle(req []byte, port int, src *net.UDPAddr) ([]byte, *net.UD
 	if p.op != opRequest {
 		return nil, nil
 	}
+	// Watch the wire for site-DHCP address bindings before any silence
+	// decision: every client request names the address it holds or wants
+	// (option 50 / ciaddr / its source) next to the chaddr — including the
+	// REQUEST that selected the site DHCP and is not ours to answer. The
+	// grub.cfg render under proxyDHCP has no lease-reverse chain of its
+	// own; this is what stands in for it (see LeaseSnoop).
+	if s.opts.Snoop != nil {
+		if mac := p.mac(); mac != "" {
+			if ip := boundIP(p, src); ip != nil {
+				s.opts.Snoop.Observe(mac, ip)
+			}
+		}
+	}
 	// Proxy mode answers PXE clients only. Pool mode is the address
 	// authority for the whole L2 (docs/operations.md §4.5): the installer
 	// kernel's own DHCP (dracut ip=dhcp) carries no option 60 and must be

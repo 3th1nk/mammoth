@@ -22,13 +22,15 @@ const (
 	htypeEthernet = 1
 	hlenEthernet  = 6
 
-	optPad            = 0
-	optEnd            = 255
-	optSubnetMask     = 1
-	optRouter         = 3
-	optMessageType    = 53 // DHCP message type
-	optServerID       = 54
-	optLeaseTime      = 51
+	optPad         = 0
+	optEnd         = 255
+	optSubnetMask  = 1
+	optRouter      = 3
+	optMessageType = 53 // DHCP message type
+	optServerID    = 54
+	optLeaseTime   = 51
+	optRequestedIP = 50 // requested address (RFC 2131 §9.1.1)
+
 	optRenewalTime    = 58 // T1 (RFC 2132)
 	optRebindingTime  = 59 // T2
 	optClientID       = 61

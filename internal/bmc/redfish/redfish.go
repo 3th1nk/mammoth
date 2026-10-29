@@ -616,3 +616,49 @@ func makeHTTPClient(timeout time.Duration, insecure bool) *http.Client {
 	}
 	return &http.Client{Timeout: timeout, Transport: transport}
 }
+
+// ctxGet wraps the gofish client's GET with the caller's deadline, for the
+// multi-request walks (health, SEL). gofish clients pin context.Background()
+// (see connect — cached sessions outlive any single caller), so the registry
+// deadline cannot cancel an in-flight GET and a walk of hundreds of small
+// requests (SEL: 500+) would run minutes past its budget, one per-exchange
+// Timeout GET at a time, while callers spin. Race every request against the
+// ctx instead; an abandoned response drains on its own, bounded by the HTTP
+// client's per-exchange Timeout.
+func ctxGet(ctx context.Context, op string, c *gofish.APIClient) func(string) ([]byte, error) {
+	return func(url string) ([]byte, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, bmc.Classify(op, err)
+		}
+		type fetched struct {
+			raw    []byte
+			status int
+			msg    string
+			err    error
+		}
+		done := make(chan fetched, 1)
+		go func() {
+			resp, err := c.Get(url)
+			if err != nil {
+				done <- fetched{err: err}
+				return
+			}
+			defer resp.Body.Close()
+			raw, err := io.ReadAll(resp.Body)
+			done <- fetched{raw: raw, status: resp.StatusCode, msg: resp.Status, err: err}
+		}()
+		select {
+		case f := <-done:
+			if f.err != nil {
+				return nil, f.err
+			}
+			if f.status != http.StatusOK {
+				return nil, &bmc.Error{Kind: bmc.KindUnreachable, Op: op,
+					Detail: url + ": status " + f.msg}
+			}
+			return f.raw, nil
+		case <-ctx.Done():
+			return nil, bmc.Classify(op, ctx.Err())
+		}
+	}
+}

@@ -3,8 +3,6 @@ package redfish
 import (
 	"context"
 	"encoding/json"
-	"io"
-	"net/http"
 	"sort"
 	"strings"
 
@@ -20,24 +18,16 @@ func (d *Driver) Health(ctx context.Context, addr string, cred bmc.Credentials) 
 	if err != nil {
 		return bmc.HealthView{}, err
 	}
-
-	get := func(url string) ([]byte, error) {
-		resp, err := c.Get(url)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		raw, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, err
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, &bmc.Error{Kind: bmc.KindUnreachable, Op: "health",
-				Detail: url + ": status " + resp.Status}
-		}
-		return raw, nil
+	view, err := walkHealth(ctxGet(ctx, "health", c))
+	if err != nil {
+		return bmc.HealthView{}, err
 	}
-	return walkHealth(get)
+	// The walk degrades per-chassis failures to a partial sample; a deadline
+	// hit must not surface as a green "OK" built from a clipped read.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return bmc.HealthView{}, bmc.Classify("health", ctxErr)
+	}
+	return view, nil
 }
 
 // walkHealth follows Service root → Chassis collection → each chassis
@@ -227,24 +217,16 @@ func (d *Driver) SystemEventLog(ctx context.Context, addr string, cred bmc.Crede
 	if err != nil {
 		return nil, err
 	}
-
-	get := func(url string) ([]byte, error) {
-		resp, err := c.Get(url)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		raw, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, err
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, &bmc.Error{Kind: bmc.KindUnreachable, Op: "sel",
-				Detail: url + ": status " + resp.Status}
-		}
-		return raw, nil
+	entries, err := walkSEL(ctxGet(ctx, "sel", c))
+	if err != nil {
+		return nil, err
 	}
-	return walkSEL(get)
+	// Same discipline as Health: per-manager/per-entry failures degrade to a
+	// partial log; a deadline hit must not read as "controller has no events".
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, bmc.Classify("sel", ctxErr)
+	}
+	return entries, nil
 }
 
 // walkSEL follows Service root → Managers → each manager's LogServices →

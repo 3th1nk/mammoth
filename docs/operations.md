@@ -185,6 +185,23 @@ iPXE 脚本),默认关闭。启用清单:
    `netboot_enabled` 与任务事件的 `task.netboot_registered`,再抓 DHCP
    (DISCOVER 是否到达、OFFER 是否回出)。
 
+### 4.5.0 PXE 寻址:DHCP 决策框架
+
+装机 L2 的寻址形态决定了部署方式,按"站点是否已有 DHCP"二选一:
+
+- **POOL 模式(无站点 DHCP)**:引擎 builtin 模式自带完整 DHCP 服务器,
+  从声明池(如 .120-.129)只对有武装任务的 MAC 发租约——地址分配权威在
+  mammoth,陌生客户端不耗池。
+- **PROXY 模式(有站点 DHCP)**:站点 DHCP 继续分配地址;mammoth(或
+  网段代理 pxe-proxy / 外置 dnsmasq)只补 PXE 引导选项(67/4011),
+  真机在 spec 里声明静态地址(routes 形态 netplan)。
+- **跨 VLAN 装机**:站点交换机对装机 VLAN 配 DHCP relay(ip helper),
+  应答按 giaddr(RFC 2131)回程;TFTP/HTTP 是单播——NextServer 与
+  介质/API 的地址必须从装机 VLAN 可路由。
+
+决策树(POOL/PROXY/跨网段 relay 的完整形态)与外部 dnsmasq 部署见
+4.5.1;pxe-proxy(每装机 VLAN 一个 Go 原生网段代理)见 §pxe-proxy。
+
 ### 4.5.1 外部 DHCP+TFTP 逃生门(MAMMOTH_PXE_MODE=external)
 
 mammoth 不可能总当 PXE 服务:容器化部署拿不到特权 UDP、或站点网络归运维

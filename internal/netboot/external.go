@@ -150,7 +150,7 @@ dhcp-authoritative
 dhcp-range=192.168.77.50,192.168.77.150,255.255.255.0,12h
 dhcp-option=option:router,192.168.77.1
 enable-tftp
-tftp-root=/srv/mammoth-external-tftp
+tftp-root=/var/lib/mammoth/tftp
 
 # Client classes: iPXE announces option 175; UEFI x64 arrives with client
 # arch 7 (EFI BC) or 9 (EFI x86-64); UEFI aarch64 with arch 11.

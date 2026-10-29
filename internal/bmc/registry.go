@@ -82,16 +82,29 @@ func (r *Registry) Resolve(ctx context.Context, addr string, cred Credentials, p
 
 // Do runs fn against the driver selected for p, with auto-resolution,
 // per-address serialization, a default timeout, and metrics/logging.
+// Resolution — including the `auto` protocol probes, which hit the BMC too —
+// runs under the per-address lock, and the DefaultTimeout budget starts only
+// once the lock is held: queue wait cannot eat the op's time, and a caller
+// whose ctx expires while queued returns instead of parking uninterruptibly.
 func (r *Registry) Do(ctx context.Context, addr string, cred Credentials, p Protocol, op string, fn func(ctx context.Context, d Driver) (any, error)) (any, error) {
+	start := time.Now()
+	release, err := r.locks.acquireCtx(ctx, addr)
+	if err != nil {
+		return nil, &Error{Kind: KindUnreachable, Op: op, Detail: "abandoned while queued for the BMC", Err: err}
+	}
+	defer release()
+
 	d, err := r.Resolve(ctx, addr, cred, p)
 	if err != nil {
 		return nil, err
 	}
+	// Queue + resolution time is invisible to r.call's metrics — this debug
+	// line keeps "BMC slow" and "queued behind a long call" distinguishable.
+	obs.FromContext(ctx).DebugContext(ctx, "bmc op start",
+		obs.FieldBMCAddr, addr, obs.FieldOperation, op, "queue_ms", time.Since(start).Milliseconds())
+
 	callCtx, cancel := context.WithTimeout(ctx, r.DefaultTimeout)
 	defer cancel()
-
-	release := r.locks.acquire(addr)
-	defer release()
 	return r.call(callCtx, d, addr, cred, op, func(ctx context.Context) (any, error) {
 		return fn(ctx, d)
 	})
@@ -173,7 +186,13 @@ type addressLock struct {
 	refs int
 }
 
-func (k *keyedMutex) acquire(key string) func() {
+// acquireCtx waits for the per-key lock and returns its release closure,
+// aborting when ctx is done. On abort the grant may still land later — a Go
+// mutex cannot be un-waited — so a background goroutine takes the grant and
+// hands it straight back (the next waiter proceeds) and drops the refcount
+// then: decrementing at abort time could delete the map entry while the
+// grant is still in flight.
+func (k *keyedMutex) acquireCtx(ctx context.Context, key string) (func(), error) {
 	k.mu.Lock()
 	if k.locks == nil {
 		k.locks = map[string]*addressLock{}
@@ -186,17 +205,36 @@ func (k *keyedMutex) acquire(key string) func() {
 	l.refs++
 	k.mu.Unlock()
 
-	l.mu.Lock()
-	var once sync.Once
-	return func() {
-		once.Do(func() {
+	granted := make(chan struct{})
+	go func() {
+		l.mu.Lock()
+		close(granted)
+	}()
+
+	select {
+	case <-granted:
+		var once sync.Once
+		return func() {
+			once.Do(func() {
+				l.mu.Unlock()
+				k.unref(key, l)
+			})
+		}, nil
+	case <-ctx.Done():
+		go func() {
+			<-granted
 			l.mu.Unlock()
-			k.mu.Lock()
-			l.refs--
-			if l.refs == 0 {
-				delete(k.locks, key)
-			}
-			k.mu.Unlock()
-		})
+			k.unref(key, l)
+		}()
+		return nil, ctx.Err()
 	}
+}
+
+func (k *keyedMutex) unref(key string, l *addressLock) {
+	k.mu.Lock()
+	l.refs--
+	if l.refs == 0 {
+		delete(k.locks, key)
+	}
+	k.mu.Unlock()
 }

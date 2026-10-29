@@ -41,7 +41,7 @@ replaces a hand-tuned dnsmasq; the kit is exported by the engine
 	pf := cmd.Flags()
 	pf.StringVar(&o.NextServer, "next-server", "", "this host's IP on the provisioning segment (siaddr/TFTP-server offered to PXE clients)")
 	pf.StringVar(&o.BaseURL, "base-url", "", "mammoth engine machine-face base URL (e.g. http://172.16.20.250:8091)")
-	pf.StringVar(&o.TFTPRoot, "tftp-root", "/srv/mammoth-external-tftp", "directory holding the exported external kit (auto-synced from the engine)")
+	pf.StringVar(&o.TFTPRoot, "tftp-root", "/var/lib/mammoth/tftp", "directory holding the exported external kit (auto-synced from the engine; created on first sync)")
 	pf.DurationVar(&o.SyncInterval, "sync-interval", 5*60*time.Second, "kit re-sync period; 0 = sync once at startup")
 	pf.StringVar(&o.KitToken, "kit-token", "", "bearer token for the engine kit endpoint (empty = anonymous; /netboot routes are public by default)")
 	pf.IntVar(&o.DHCPPort, "dhcp-port", 67, "proxyDHCP listen port (coexists with the site DHCP across the L2)")
@@ -125,6 +125,9 @@ func syncKit(o pxeProxyOptions) error {
 	case http.StatusOK:
 	default:
 		return fmt.Errorf("kit fetch: HTTP %d", resp.StatusCode)
+	}
+	if err := os.MkdirAll(filepath.Dir(o.TFTPRoot), 0o755); err != nil {
+		return err
 	}
 	tmp, err := os.MkdirTemp(filepath.Dir(o.TFTPRoot), "kit-sync-")
 	if err != nil {

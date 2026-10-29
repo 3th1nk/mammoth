@@ -112,9 +112,9 @@ flowchart TD
     end
     subgraph DIA["4 · 安装器方言"]
         ks["kickstart<br/>rocky · centos · kylin · UOS"]
-        ai["autoinstall<br/>ubuntu 22.04 / 24.04"]
+        ai["autoinstall<br/>ubuntu 22.04 / 24.04 / 26.04"]
         ps["preseed<br/>debian 12 / 13"]
-        wu["unattend<br/>windows 2019(UEFI-only)<br/>引导形态不同 ⤓ windows 通路"]
+        wu["unattend<br/>windows 2019 / 2022 / 2025(UEFI)<br/>引导形态不同 ⤓ windows 通路"]
     end
     ver["5 · 校验:完成回调 + 带内 SSH<br/>探测(识别安装器)<br/>+ 装后布局快照"]
     reg --> rf
@@ -142,7 +142,7 @@ agent 通路是**两次引导**(第二段重新武装同一个 wimboot 载体,�
 
 ```mermaid
 flowchart TD
-    subgraph WS["windows 2019 · boot.installer"]
+    subgraph WS["windows 2019 / 2022 / 2025 · boot.installer"]
         st["**setup**(默认)<br/>PXE:plain iPXE → wimboot<br/>(bootmgfw · BCD · boot.sdi · boot.wim)<br/>安装源:部署层 SMB 导出<br/>vMedia:重打包 ISO + autounattend"]
         a1["**agent · 第一段**<br/>alpine agent → wimlib 直写<br/>install.wim 到 NTFS + in-wim<br/>注入 · ESP 留空"]
         a2["**agent · 第二段**<br/>重武装 wimboot WinPE →<br/>bcdboot 原生写出 BCD"]
@@ -174,9 +174,9 @@ flowchart TD
 | centos 7 | kickstart | minimal ISO | 同 ISO | 同上 | ✅ 虚拟介质 |
 | kylin V10 / V11 | kickstart | DVD ISO | 同 ISO | 同上 | ✅ V11 真机闭环 · V10 受限(静态网 NM) |
 | UOS | kickstart | DVD ISO | 同源 ISO | NFS ISO | ✅ 双通路 |
-| ubuntu 22.04 / 24.04 | autoinstall | **live-server** ISO(casper,重打包) | **live-server** ISO(squashfs 走 NFS) | 解包 ISO 树走 NFS | ✅ 双载体 |
+| ubuntu 22.04 / 24.04 / 26.04 | autoinstall | **live-server** ISO(casper,重打包) | **live-server** ISO(squashfs 走 NFS) | 解包 ISO 树走 NFS | ✅ 双载体 |
 | debian 12 / 13 | preseed | **netinst** ISO(重打包) | **netinst** ISO(签名 HTTP 池)**+ 官方 netboot.tar.gz** + 暂存 udebs | HTTP 池(校验和完整、by-hash 回填) | ✅ 双载体 |
-| windows 2019 | unattend | 官方原盘重打包(媒体根 autounattend + SetupComplete wimlib 注入,UDF bridge) | setup:wimboot-over-PXE(SMB 安装源)· agent:两段式直写(HTTP win 树,无 SMB) | — | ✅ 真机六阶段全绿(setup + agent apply 双通路) |
+| windows 2019 / 2022 / 2025 | unattend | 官方原盘重打包(媒体根 autounattend + SetupComplete wimlib 注入,UDF bridge) | setup:wimboot-over-PXE(SMB 安装源)· agent:两段式直写(HTTP win 树,无 SMB) | — | ✅ 真机六阶段全绿——2019(setup + agent apply 双通路)· 2022/2025(setup,updated Oct 2026 快照媒体) |
 
 经验法则:**netinst / minimal** = 小安装器自带软件池(PXE 友好);
 **DVD** = 完全离线池;**live-server** = ubuntu 的安装器载体(casper);
@@ -188,10 +188,10 @@ flowchart TD
 | 家族 | 基线镜像(最新点版本) | 载体覆盖 |
 |---|---|---|
 | RHEL 系 | Rocky 9.x minimal ISO | virtual_media ✅ · PXE ✅ |
-| Ubuntu 系 | Ubuntu 22.04.5 与 24.04.x live-server ISO | virtual_media ✅ · PXE ✅ |
+| Ubuntu 系 | Ubuntu 22.04.5 · 24.04.x · 26.04.1 live-server ISO | virtual_media ✅ · PXE ✅ |
 | Debian 系 | Debian 12 / 13 netinst ISO | virtual_media ✅ · PXE ✅ |
 | 扩展 | Rocky 10(UEFI-only)· CentOS 7(legacy)· Kylin V10/V11 · UOS | 按需 |
-| Windows 系 | Windows Server 2019(zh-CN MSDN) | PXE(wimboot + SMB 源)✅ 真机六阶段全绿 · virtual_media 🔧(被 iBMC 6.41 固件缺陷封死,UEFI-only,Standard Core) |
+| Windows 系 | Windows Server 2019 / 2022 / 2025(zh-CN,updated Oct 2026 快照已验证) | PXE(wimboot + SMB 源)✅ 真机六阶段全绿——2019/2022/2025 · virtual_media 🔧(被 iBMC 6.41 固件缺陷封死,UEFI-only,Standard Core) |
 
 每轮回归:六阶段流水线全绿 → 无人值守首启 → 装机钥匙 SSH 探测。详见
 [docs/runbooks/test-baselines.md](docs/runbooks/test-baselines.md)。

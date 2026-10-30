@@ -28,9 +28,6 @@ const (
 	guestMemMB = 2048
 	guestSMP   = 2
 	diskGB     = 8
-	// nfsExportPort: the in-server NFS media export. 2049 belongs to the
-	// system nfsd on most macs, so the sandbox moves off it.
-	nfsExportPort = 12049
 
 	prepareMedia = 10 * time.Minute // boot ISO rendered per task
 	installWait  = 25 * time.Minute // six stages, 3 guests on TCG

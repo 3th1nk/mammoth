@@ -50,12 +50,11 @@ func TestFromEnvFailsFastOnInvalidValues(t *testing.T) {
 	t.Setenv("MAMMOTH_DATABASE_URL", "postgres://x/db")
 	t.Setenv("MAMMOTH_PROBE_PREFIX", "abc")
 	t.Setenv("MAMMOTH_PROBE_WAIT", "soon")
-	t.Setenv("MAMMOTH_NFS_EXPORT", "maybe")
 	_, err := FromEnv()
 	if err == nil {
 		t.Fatal("want aggregated error for invalid values")
 	}
-	for _, want := range []string{"MAMMOTH_PROBE_PREFIX", "MAMMOTH_PROBE_WAIT", "MAMMOTH_NFS_EXPORT"} {
+	for _, want := range []string{"MAMMOTH_PROBE_PREFIX", "MAMMOTH_PROBE_WAIT"} {
 		if !contains(err.Error(), want) {
 			t.Errorf("error should mention %s: %v", want, err)
 		}

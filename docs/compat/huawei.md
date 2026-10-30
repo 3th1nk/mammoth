@@ -115,7 +115,9 @@ POST /redfish/v1/Managers/1/VirtualMedia/CD/Oem/Huawei/Actions/VirtualMedia.VmmC
   抓包显示 BMC 的 portmapper GETPORT 往返正常、2049 上仅 NULL ping(应答 OK)后即关闭,
   无 MNT/LOOKUP——VmmControl 以 Connect task exception 收场。**部署定案:华为 BMC 的
   vMedia 源用主机内核 nfsd(部署层 nfs-server),不用 nfsx**;跨网段挂载(路由可达)实测无碍。
-  nfsx 保留给非 BMC 消费者(casper NFS root 等 Linux 内核客户端,TCP 足够)。
+  **nfsx 已于 2026-10-30 从引擎移除**(`MAMMOTH_NFS_EXPORT` 配置项同删):消费方矩阵归零——
+  BMC 不兼容(本节实锤)、casper 子路径挂载需路径解析型服务端、fake 评估不真正挂载;
+  本节抓包记录保留作选型实证。
 
 驱动修复:`redfish.MountMedia/EjectMedia` 在标准动作未通告时回退到
 VmmControl(任务轮询至终态,失败分类为 BMC_PROTOCOL_ERROR 并携带 iBMC

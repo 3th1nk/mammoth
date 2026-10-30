@@ -261,7 +261,7 @@ mini.iso)提供驱动支持。
 
 | 发行版 | PXE 支持级 | 说明 |
 |--------|-----------|------|
-| rocky9 / centos7 / kylinv10 / kylinv11 | full | anaconda/dracut 内核对网络引导原生;`inst.repo=nfs:` 安装源复用 nfsx 导出,`inst.ks=` 走 HTTP,与 ISO 通路零差异 |
+| rocky9 / centos7 / kylinv10 / kylinv11 | full | anaconda/dracut 内核对网络引导原生;`inst.repo=nfs:` 安装源复用 MediaBaseURI 的 NFS 导出,`inst.ks=` 走 HTTP,与 ISO 通路零差异 |
 | uniontechos | full(**真机复核 2026-09-19**,2288H 零人工闭环,~6 min:NFS 线速 vs 虚拟光驱 35 min) | 同 kickstart 家族机制(shim 链 + per-MAC cfg + `inst.repo=nfs:`);装机期静态网内核参数(ifname 钉 MAC)与虚拟介质轮共用 |
 | rocky10(UEFI-only 媒体) | full | 引导文件同为 `images/pxeboot/*`,UEFI 侧无虞;BIOS 引导上游已移除(镜像 UEFI-only),不做 BIOS PXE。驱动声明 `FirmwareUEFIOnly`,派给观测为 BIOS 固件的机器在提交期即被 `SCHEMA_FIRMWARE_MISMATCH` 拒绝(不阻塞同批其他机器) |
 | ubuntu22/24 | full(**真机闭环 2026-09-17**,2288H:22.04 零人工重装 + 24.04 重装+重启自举+SSH 钥匙直通) | casper kernel/initrd 从 ISO 提取;**NFS squashfs 源**——ISO 解包至共享池树,casper `netboot=nfs nfsroot=` 挂载 live root,不做整 ISO 进内存(4GB 级 tmpfs 写满教训);nfsopts 强制 `tcp,v3`(klibc nfsmount 默认 UDP,现代 nfsd 无 v3/UDP);`BOOTIF=01-<mac>` 按 MAC 钉设备(udev 改名致 ipconfig 打空);内核参数分号转义(GRUB 把 `;` 当命令分隔符,`ds=nocloud-net;s=` 之后参数全丢);spec 静态网络翻译为 ip= 内核参数(site-DHCP 共存环境 mammoth 不做地址权威);**qemu 实测注记**:casper NFS 语法为 `boot=nfs nfsroot=host:/path`(冒号必需);macOS nfsd(UDP-only)不可作验证宿主,真机 Linux nfsd 无此限制 |

@@ -111,11 +111,11 @@ type Config struct {
 	// media repo — the SMB analog of the NFS media export). Empty = windows
 	// PXE submissions are rejected at the gate. User/Password are optional
 	// share credentials (guest exports need none).
-	WindowsInstallSMBUNC      string
+	WindowsInstallSMBUNC string
 	// UbuntuAptMirror is the apt mirror the ubuntu PXE installer env uses
 	// for package fetches (MAMMOTH_UBUNTU_APT_MIRROR; empty = the distro
 	// default mirror).
-	UbuntuAptMirror string
+	UbuntuAptMirror           string
 	WindowsInstallSMBUser     string
 	WindowsInstallSMBPassword string
 	BootSettleDelay           time.Duration
@@ -179,7 +179,12 @@ type Config struct {
 	// the installer environment dies with the ramfs, a post-mortem otherwise
 	// has nothing (related-work §2). A busy port degrades to a warning: the
 	// sink is a diagnostic, never a lifeline.
-	PXESyslogPort int
+	// InstallConsole selects which console subiquity's TUI/error surfaces
+	// attach to for PXE installs: "serial" (default, SOL-friendly — the
+	// installer faces the BMC serial line) or "vga" (lab/KVM debugging —
+	// the installer and its failure points face the graphical console).
+	InstallConsole string
+	PXESyslogPort  int
 	// PXEDHCPPool (optional) turns the responder into a full DHCP for PXE
 	// clients — for provisioning L2s WITHOUT a site DHCP, where a boot ROM
 	// otherwise never gets an IP lease. Two syntaxes: dash range
@@ -283,6 +288,7 @@ func FromEnv() (Config, error) {
 	applyString(&c.IPMIInterface, "MAMMOTH_IPMI_INTERFACE", &errs)
 	applyString(&c.ProbeAlpineISO, "MAMMOTH_PROBE_ALPINE_ISO", &errs)
 	applyString(&c.ProbeAlpineNetboot, "MAMMOTH_PROBE_ALPINE_NETBOOT", &errs)
+	applyString(&c.InstallConsole, "MAMMOTH_INSTALL_CONSOLE", &errs)
 	applyString(&c.PXEDINetboot, "MAMMOTH_PXE_DI_NETBOOT", &errs)
 	applyString(&c.WindowsApplyAlpineISO, "MAMMOTH_WINDOWS_APPLY_ALPINE_ISO", &errs)
 	applyString(&c.PXEDIUdebsDir, "MAMMOTH_PXE_DI_UDEBS_DIR", &errs)

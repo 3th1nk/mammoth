@@ -765,3 +765,40 @@ func TestLiveLogForwarderEarlyCommand(t *testing.T) {
 		t.Fatalf("forwarder must be a backgrounded stream (early-commands are synchronous):\n%s", first)
 	}
 }
+
+// TestInstallConsoleVgaOrder pins the vga console order: the kernel
+// arguments flip to tty0-last so the subiquity TUI/failures face the
+// graphical console (labs/KVM debugging).
+func TestInstallConsoleVgaOrder(t *testing.T) {
+	d := New("ubuntu22")
+	in := render.InstallInputs{
+		TaskToken:     "tokC",
+		MachineID:     "mch_c",
+		Hostname:      "node-c",
+		ImageSource:   "https://mirror.example/u.iso",
+		AnswerBaseURL: "https://m/render/tokC",
+		CompleteURL:   "https://m/render/tokC/complete",
+		BootDrive:     "sda",
+		Disks: []render.ResolvedDisk{
+			{Device: "sda", Wipe: true, Partitions: []render.ResolvedPartition{
+				{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+				{Mount: "/", FS: "xfs", Grow: true},
+			}},
+		},
+		Netboot: &render.NetbootInputs{
+			NFSRootURL: "192.168.1.107:/data/mammoth/media/pool-store/x/iso",
+		},
+		InstallConsole: "vga",
+	}
+	_, boot, err := d.RenderAnswers(in, render.MachineView{ID: "mch_c"})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	args := boot.NetbootKernelArgs
+	if !strings.Contains(args, "console=ttyS0,115200n8 console=tty0") {
+		t.Fatalf("vga order missing (tty0 must be last):\n%s", args)
+	}
+	if strings.Contains(args, "console=tty0 console=ttyS0") {
+		t.Fatalf("serial-primary order must not coexist:\n%s", args)
+	}
+}

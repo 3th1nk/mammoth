@@ -60,7 +60,11 @@ type Executor struct {
 	// SyslogPort is the UDP port the installer-log sink binds (the netboot
 	// service's MAMMOTH_PXE_SYSLOG_PORT; 0/514 = the default). Rendered into
 	// syslog=/inst.syslog= kernel arguments as host:port when off 514.
-	SyslogPort                int
+	SyslogPort int
+	// InstallConsole: "vga" flips the ubuntu installer console order so the
+	// subiquity TUI/failures face the graphical console (lab debugging);
+	// default "serial" keeps SOL as the operator surface.
+	InstallConsole            string
 	WindowsInstallSMBUser     string
 	WindowsInstallSMBPassword string
 	// MediaUploader, when configured, moves the assembled boot ISO into the

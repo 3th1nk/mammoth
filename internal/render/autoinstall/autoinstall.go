@@ -393,9 +393,17 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		// interactive-fallback rounds on the 2288H went undiagnosed without
 		// this). Same shape as the agent/probe carriers.
 		seedBase := strings.TrimSuffix(in.AnswerBaseURL, "/") + "/"
+		// Console order: serial primary (SOL operator surface) unless the
+		// deployment asked for the graphical console — labs/KVM debug the
+		// installer through the VGA (the stall/failure lines face the
+		// console the operator actually watches).
+		consoleArgs := "console=tty0 console=ttyS0,115200n8"
+		if in.InstallConsole == "vga" {
+			consoleArgs = "console=ttyS0,115200n8 console=tty0"
+		}
 		boot.NetbootKernelArgs = fmt.Sprintf(
-			"autoinstall ds=nocloud-net;s=%s %s console=tty0 console=ttyS0,115200n8 boot=casper netboot=nfs nfsroot=%s nfsopts=tcp,v3",
-			seedBase, ipArg, in.Netboot.NFSRootURL)
+			"autoinstall ds=nocloud-net;s=%s %s %s boot=casper netboot=nfs nfsroot=%s nfsopts=tcp,v3",
+			seedBase, ipArg, consoleArgs, in.Netboot.NFSRootURL)
 		if host := render.SyslogHost(in.AnswerBaseURL); host != "" {
 			boot.NetbootKernelArgs += " syslog=" + render.SyslogTarget(host, in.SyslogPort)
 		}

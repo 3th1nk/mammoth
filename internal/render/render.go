@@ -605,6 +605,10 @@ type InstallInputs struct {
 	// as host:port when off 514 — on a contested 514 a bare-host argument
 	// silently feeds some other collector and the task logs stay empty.
 	SyslogPort int
+	// InstallConsole selects the console order for the installer kernel
+	// arguments: "" /"serial" keeps SOL primary; "vga" flips it so the
+	// subiquity TUI and failures face the graphical console (labs/KVM).
+	InstallConsole string
 
 	// Raid carries declarative RAID volumes (docs/09-roadmap.md M6):
 	// software → kickstart raid lines; hardware → bound device discovered

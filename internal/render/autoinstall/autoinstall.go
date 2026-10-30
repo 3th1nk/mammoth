@@ -223,12 +223,15 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		}
 		late = append(late, scriptLine(s))
 	}
-	// Completion callback with a patient retry loop: late-commands run in
-	// the LIVE environment where networking may have come up late or not at
-	// all (vMedia offline rounds) — a single 10s attempt turned finished
-	// installs into subiquity "failures" (2026-10-30, ubuntu24
-	// vMedia). 30×10s ≈ 5 min of patience; the callback is idempotent.
-	late = append(late, fmt.Sprintf(`for i in $(seq 1 30); do python3 -c "import json,urllib.request;z=urllib.request.Request('%s',data=json.dumps({'status':'ok','detail':'autoinstall finished'}).encode(),headers={'Content-Type':'application/json'});urllib.request.urlopen(z,timeout=10)" && break; sleep 10; done`, in.CompleteURL))
+	// Completion callback with a small retry: the late-commands run in the
+	// LIVE environment where networking may come up late — a single 10s
+	// attempt turned finished installs into subiquity "failures" (2026-10-30,
+	// ubuntu24 vMedia). 3×10s covers late DHCP; a live env with NO network
+	// at all is unwinnable here regardless — the netplan fallback (zero
+	// declared NICs → explicit DHCP netplan) keeps the INSTALLED system
+	// online, and callback-less completion detection is engine-side
+	// follow-up. The callback is idempotent.
+	late = append(late, fmt.Sprintf(`for i in $(seq 1 3); do python3 -c "import json,urllib.request;z=urllib.request.Request('%s',data=json.dumps({'status':'ok','detail':'autoinstall finished'}).encode(),headers={'Content-Type':'application/json'});urllib.request.urlopen(z,timeout=10)" && break; sleep 10; done`, in.CompleteURL))
 
 	// pre_install scripts map to early-commands (installer environment).
 	var early []string

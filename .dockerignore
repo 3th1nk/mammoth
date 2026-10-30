@@ -1,4 +1,8 @@
-.git
+# .git deliberately SHIPS in the build context: the Dockerfile build stage
+# derives VERSION/COMMIT from `git describe` (see the RUN in Dockerfile /
+# Dockerfile.builder). It is never COPYed into a runtime image, only read by
+# the build stage — the cost is context transfer size (~42MB) on remote
+# daemons. Pass explicit --build-arg VERSION/COMMIT in CI to pin or avoid it.
 bin/
 dist/
 data/
@@ -6,6 +10,15 @@ data/
 *.log
 .env
 docs/
-deploy/
 scripts/
 .github/
+
+# deploy/: keep ONLY the sidecar build materials (the nfsd/samba Dockerfiles
+# and the entrypoints they COPY — compose builds them from this context).
+# Excluded via children-wildcard (not `deploy/`) so the ! negations work:
+# a file under an excluded directory cannot be re-included.
+deploy/*
+!deploy/Dockerfile.nfsd
+!deploy/Dockerfile.samba
+!deploy/nfsd
+!deploy/samba

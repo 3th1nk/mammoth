@@ -93,6 +93,16 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if err != nil {
 		return nil, render.BootParams{}, err
 	}
+	if network == nil {
+		// No declared network: render explicit DHCP on every inventory NIC
+		// (matched by MAC — name-agnostic across udev renames, optional so
+		// an unplugged port never stalls boot). Relying on subiquity's own
+		// no-section default loses the net entirely when the INSTALLER env
+		// had no working network (flaky site DHCP): subiquity then writes
+		// no netplan and the installed system comes up offline (both LOMs
+		// down, 2026-10-30 ubuntu24 vMedia round).
+		network = defaultDhcpNetplan(m)
+	}
 
 	// late-commands: ALL post-install side effects happen here, in the
 	// installer (real-hardware lesson: anything left to the target system's
@@ -956,4 +966,28 @@ func trustedLine(keyed bool) string {
 		return ""
 	}
 	return "Trusted: yes\n"
+}
+
+// defaultDhcpNetplan builds the no-declared-network fallback: DHCP4 on
+// every inventory NIC, matched by MAC. nil when the machine view carries
+// no hardware inventory (subiquity's own default then applies).
+func defaultDhcpNetplan(m render.MachineView) map[string]any {
+	if m.Hardware == nil || len(m.Hardware.NICs) == 0 {
+		return nil
+	}
+	ethernets := map[string]any{}
+	for i, n := range m.Hardware.NICs {
+		if n.MAC == "" {
+			continue
+		}
+		ethernets[fmt.Sprintf("nic%d", i)] = map[string]any{
+			"match":    map[string]any{"macaddress": strings.ToLower(n.MAC)},
+			"dhcp4":    true,
+			"optional": true,
+		}
+	}
+	if len(ethernets) == 0 {
+		return nil
+	}
+	return map[string]any{"version": 2, "ethernets": ethernets}
 }

@@ -802,3 +802,54 @@ func TestInstallConsoleVgaOrder(t *testing.T) {
 		t.Fatalf("serial-primary order must not coexist:\n%s", args)
 	}
 }
+
+// TestDefaultDhcpNetplan pins the no-declared-network fallback: explicit
+// DHCP4 on every inventory NIC matched by MAC (optional — an unplugged
+// port never stalls boot), so the installed system comes up online even
+// when the installer env itself had no working network.
+func TestDefaultDhcpNetplan(t *testing.T) {
+	d := New("ubuntu22")
+	in := render.InstallInputs{
+		TaskToken:     "tokN",
+		MachineID:     "mch_n",
+		Hostname:      "node-n",
+		ImageSource:   "https://mirror.example/u.iso",
+		AnswerBaseURL: "https://m/render/tokN",
+		CompleteURL:   "https://m/render/tokN/complete",
+		BootDrive:     "sda",
+		Disks: []render.ResolvedDisk{
+			{Device: "sda", Wipe: true, Partitions: []render.ResolvedPartition{
+				{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+				{Mount: "/", FS: "xfs", Grow: true},
+			}},
+		},
+	}
+	answers, _, err := d.RenderAnswers(in, render.MachineView{ID: "mch_n", Hardware: &bmc.HardwareView{
+		NICs: []bmc.NICView{
+			{Name: "eno1np0", MAC: "50:1D:93:D8:C6:97"},
+			{Name: "eno2np1", MAC: "50:1D:93:D8:C6:98"},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	_, ud := fetchUser(t, answers)
+	auto, _ := ud["autoinstall"].(map[string]any)
+	net, ok := auto["network"].(map[string]any)
+	if !ok {
+		t.Fatalf("network section missing for zero-declared-NIC spec")
+	}
+	eth, _ := net["ethernets"].(map[string]any)
+	if len(eth) != 2 {
+		t.Fatalf("want DHCP on both NICs, got %d", len(eth))
+	}
+	raw, _ := json.Marshal(net)
+	for _, mac := range []string{"50:1d:93:d8:c6:97", "50:1d:93:d8:c6:98"} {
+		if !strings.Contains(strings.ToLower(string(raw)), mac) {
+			t.Errorf("MAC %s missing from the rendered netplan: %s", mac, raw)
+		}
+	}
+	if !strings.Contains(string(raw), "\"dhcp4\":true") {
+		t.Errorf("dhcp4 missing: %s", raw)
+	}
+}

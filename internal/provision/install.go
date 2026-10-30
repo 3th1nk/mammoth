@@ -834,6 +834,7 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		AnswerBaseURL:    fmt.Sprintf("%s/render/%s", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
 		CompleteURL:      fmt.Sprintf("%s/render/%s/complete", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
 		SyslogPort:       e.SyslogPort,
+		InstallConsole:   e.InstallConsole,
 		Scripts:          scriptsFrom(spec.Scripts),
 	}
 	for _, r := range spec.PackageSource.Repos {

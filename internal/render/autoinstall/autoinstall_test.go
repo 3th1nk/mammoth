@@ -721,3 +721,47 @@ func TestNetplanBondParamTranslation(t *testing.T) {
 		t.Errorf("netplan-unmappable param must reject, got %v", err)
 	}
 }
+
+// TestLiveLogForwarderEarlyCommand pins the first early-command: subiquity
+// does not consume the syslog= kernel argument (d-i does) — without the
+// forwarder the installer phase is invisible in task logs. The sink port
+// renders in logger's -n/-P form (514 default needs no -P).
+func TestLiveLogForwarderEarlyCommand(t *testing.T) {
+	d := New("ubuntu22")
+	in := render.InstallInputs{
+		TaskToken:     "tokL",
+		MachineID:     "mch_l",
+		Hostname:      "node-l",
+		ImageSource:   "https://mirror.example/u.iso",
+		AnswerBaseURL: "https://m/render/tokL",
+		CompleteURL:   "https://m/render/tokL/complete",
+		SyslogPort:    5514,
+		BootDrive:     "sda",
+		Disks: []render.ResolvedDisk{
+			{Device: "sda", Wipe: true, Partitions: []render.ResolvedPartition{
+				{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+				{Mount: "/", FS: "xfs", Grow: true},
+			}},
+		},
+	}
+	answers, _, err := d.RenderAnswers(in, render.MachineView{ID: "mch_l", Hardware: &bmc.HardwareView{
+		Disks: []bmc.DiskView{{Name: "sda", SizeBytes: 480000000000}},
+	}})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	_, ud := fetchUser(t, answers)
+	auto, _ := ud["autoinstall"].(map[string]any)
+	early, _ := auto["early-commands"].([]any)
+	if len(early) == 0 {
+		t.Fatal("forwarder early-command missing")
+	}
+	first, _ := early[0].(string)
+	wantSub := "journalctl -b -f -o short | logger -d -n m -P 5514 -t mammoth-install"
+	if !strings.Contains(first, wantSub) {
+		t.Fatalf("forwarder command missing %q:\n%s", wantSub, first)
+	}
+	if !strings.HasPrefix(first, "nohup sh -c '") || !strings.HasSuffix(first, "' >/dev/null 2>&1 &") {
+		t.Fatalf("forwarder must be a backgrounded stream (early-commands are synchronous):\n%s", first)
+	}
+}

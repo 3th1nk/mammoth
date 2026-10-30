@@ -217,6 +217,23 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 
 	// pre_install scripts map to early-commands (installer environment).
 	var early []string
+	// Live-log forwarder, FIRST so the installer phase lands in the
+	// engine's task log: subiquity does not consume the syslog= kernel
+	// argument (d-i does) — without this the installer phase is invisible
+	// in task logs (2026-10-30, the round that motivated the
+	// syslog-port plumbing). journal → UDP BSD syslog via util-linux
+	// logger (present in the live env); backgrounded — early-commands run
+	// synchronously and a -f stream must not block the install. The
+	// initramfs phase (casper) logs to serial only and is not covered.
+	if host := render.SyslogHost(in.AnswerBaseURL); host != "" {
+		port := in.SyslogPort
+		if port == 0 {
+			port = 514
+		}
+		early = append(early, fmt.Sprintf(
+			"nohup sh -c 'journalctl -b -f -o short | logger -d -n %s -P %d -t mammoth-install' >/dev/null 2>&1 &",
+			host, port))
+	}
 	// Controller-named volumes whose kernel name mammoth cannot know (the
 	// snapshot itself carries the controller view): subiquity rewrites
 	// nothing, so an early command resolves the device ON THE MACHINE by

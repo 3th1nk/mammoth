@@ -14,10 +14,18 @@ COPY api/ api/
 COPY assets/ assets/
 COPY cmd/ cmd/
 COPY internal/ internal/
+# .git rides the context (.dockerignore keeps it) purely for version
+# detection below; it never reaches a runtime image.
+COPY .git .git
 ARG TARGETOS TARGETARCH
-ARG VERSION=0.1.0-dev
-ARG COMMIT=unknown
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+# VERSION/COMMIT: auto-detected from git (describe --tags --always --dirty)
+# when the context carries .git; explicit --build-arg overrides for CI and
+# tarball builds. Empty default = auto.
+ARG VERSION=""
+ARG COMMIT=""
+RUN VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo 0.1.0-dev)}" \
+ && COMMIT="${COMMIT:-$(git rev-parse HEAD 2>/dev/null || echo none)}" \
+ && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X github.com/3th1nk/mammoth/internal/version.Version=${VERSION} -X github.com/3th1nk/mammoth/internal/version.Commit=${COMMIT}" \
     -o /out/mammoth ./cmd/mammoth
 

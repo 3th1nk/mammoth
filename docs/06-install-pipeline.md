@@ -190,8 +190,9 @@ type OSDriver interface {
 }
 ```
 
-- 驱动注册制:注册表按 `spec.image.distro` 路由(现注册 rocky9、uniontechos、
-  ubuntu22、debian12);
+- 驱动注册制:注册表按 `spec.image.distro` 路由(注册面见
+  `cmd/mammoth/serve.go`,逐发行版清单以 compat/distros.md 矩阵为准,
+  本文不枚举——枚举即双重维护,必然漂移);
 - `KeepPartitionSupport()` 进入发行版支持矩阵(`GET /api/v1` 导出),**不支持分区级
   保留的发行版在提交时即拒绝 `keep: partitions`**,而不是装到一半失败;
 - 可选能力 `PXEDriver{PXESupport() SupportLevel}`:声明网络引导支持级
@@ -223,18 +224,15 @@ ubuntu 十八项连环修为证),声明文件只覆盖注册面、占比不足 5
 `MAMMOTH_COMPAT_DIR` 运行时覆盖不同,后者收集的是现场安全追加的行为
 事实,而发行版条目编码安装器驱动语义。
 
-### 发行版支持矩阵(实现态;运行时事实源 `GET /api/v1`)
+### 发行版支持矩阵
 
-| 发行版 | 安装器 | 应答文件 | 保留分区 | PXE | 状态 |
-|--------|--------|---------|---------|-----|------|
-| RHEL 系(Rocky/Alma) | Anaconda | kickstart | **full**(`%pre` + `--onpart/--noformat`) | full(`inst.repo=nfs:` 网络装机现成;rocky10 BIOS 待真机) | ✅ 真机闭环(Huawei 2288H V5) |
-| Ubuntu Server 22.04/24.04 | subiquity | autoinstall | partial(keep: disk) | full(casper NFS squashfs 源:ISO 解包共享池树,`netboot=nfs` 挂 live root,不做整 ISO 进内存;PXE 阶段仅 DHCP,静态网声明翻译为 ip= 内核参数) | ✅ 真机闭环(ISO + PXE/casper NFS,2026-09-17) |
-| Debian 12/13 | debian-installer | preseed | partial(keep: disk) | full(载体 = d-i netboot.tar.gz `MAMMOTH_PXE_DI_NETBOOT`;安装源 = ISO 解包 HTTP 池,池钥匙签名 + debootstrap 进 target,离线语义保持) | ✅ 真机闭环(ISO + PXE/d-i netboot,debian13,2026-09-17) |
-| 统信服务器 V20(UOS) | anaconda 定制 | kickstart(同 rocky9 方言) | full(同 rocky9) | full(同 rocky9) | **✅ 真机闭环**(2026-09-19,虚拟介质 + PXE;根因与修复见 distros.md) |
-| Windows Server 2019 | Setup(bootmgr) | unattend(autounattend.xml 媒体根自动发现 + SetupComplete wimlib 注入承载回调/网络) | **none**(WillWipeDisk 形态) | none(WinPE 链挂 v1.x) | 🔧 v1 代码面就绪(虚拟介质 + UEFI-only + Standard Core;qemu 引导与应答前半验证通过,2026-09-19;真机待验,见 compat/distros.md windows 节) |
-
-各方言能力差异(bond/vlan/软件 RAID/多安装盘/xfs 等)见
-[compat/distros.md](compat/distros.md) 实现注记与
+矩阵不在本文重复维护(2026-10-30 决策记录:此处的表曾与
+compat/distros.md、README 三处各写一份,已漂移出与真机事实相悖的行
+——Windows 的 PXE/保留分区两格仍停在 v1 面貌)。运行时事实源是
+`GET /api/v1` 的 `distros` 导出;人读版与逐发行版实现注记见
+[compat/distros.md](compat/distros.md);镜像与 PXE 载体形态见 README
+的 Distro adaptation matrix。各方言能力差异(bond/vlan/软件 RAID/
+多安装盘/xfs 等)见 [compat/distros.md](compat/distros.md) 实现注记与
 [04-install-spec.md](04-install-spec.md) §5。
 
 ## 7. 幂等与重试语义

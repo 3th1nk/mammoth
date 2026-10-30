@@ -23,8 +23,11 @@ x-shared-env: &env
   MAMMOTH_MEDIA_DIR: /media
   MAMMOTH_MEDIA_BASE_URI: nfs://${MAMMOTH_HOST_IP}/export/media
   MAMMOTH_WINDOWS_INSTALL_SMB_UNC: '\\${MAMMOTH_HOST_IP}\mammoth-media'
-  # ubuntu22(autoinstall)安装环境 apt 镜像:装机网段不可达默认
-  # archive.ubuntu.com 时,subiquity 的镜像检查subiquity 在其控制台(串口)报镜像不可达并等待人工干预,安装停摆。
+  # Apt mirror for the ubuntu (autoinstall) installer env (PXE carrier
+  # only): subiquity checks the mirror at install start; the distro
+  # default (archive.ubuntu.com) is unreachable from mirrorless/offline
+  # install segments and the check gates the install behind a dialog
+  # (real hardware: 2288H V5). China deployments: mirrors.aliyun.com/ubuntu/
   MAMMOTH_UBUNTU_APT_MIRROR: ${MAMMOTH_UBUNTU_APT_MIRROR:-}
   MAMMOTH_BMC_TLS_INSECURE: ${MAMMOTH_BMC_TLS_INSECURE:-false}
 

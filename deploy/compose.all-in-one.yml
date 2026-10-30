@@ -70,9 +70,11 @@ services:
       # installers don't need it (ops.md §4.5.2). Share name must match the
       # sidecar's MAMMOTH_SMB_SHARE_NAME below.
       MAMMOTH_WINDOWS_INSTALL_SMB_UNC: '\\${MAMMOTH_HOST_IP:?set MAMMOTH_HOST_IP}\mammoth-media'
-      # ubuntu22(autoinstall)安装环境 apt 镜像:subiquity 开装即检查镜像可达
-      # 性,默认 archive.ubuntu.com 在镜像/外网不可达的装机网段会把安装卡在
-      # 对话框后(实机 2288H V5)。国内部署建议 mirrors.aliyun.com/ubuntu/
+      # Apt mirror for the ubuntu (autoinstall) installer env (PXE carrier
+      # only): subiquity checks the mirror at install start; the distro
+      # default (archive.ubuntu.com) is unreachable from mirrorless/offline
+      # install segments and the check gates the install behind a dialog
+      # (real hardware: 2288H V5). China deployments: mirrors.aliyun.com/ubuntu/
       MAMMOTH_UBUNTU_APT_MIRROR: ${MAMMOTH_UBUNTU_APT_MIRROR:-}
       # PXE network boot (optional, docs/operations.md §4.5): needs the
       # container ON the provisioning L2 (host or macvlan networking — the

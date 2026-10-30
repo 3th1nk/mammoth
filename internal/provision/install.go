@@ -965,7 +965,6 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 			}
 			in.Netboot = &render.NetbootInputs{
 				InstallSMBUNC:      e.WindowsInstallSMBUNC,
-				AptMirror:          e.UbuntuAptMirror,
 				InstallSMBUser:     e.WindowsInstallSMBUser,
 				InstallSMBPassword: e.WindowsInstallSMBPassword,
 				// Windows separators, not filepath.Join — this string lands
@@ -993,6 +992,13 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 				// mirror directory and casper's http fallback both root there.
 				PoolURL:    fmt.Sprintf("%s/netboot/store/%s/iso", strings.TrimSuffix(e.ExternalURL, "/"), sha),
 				NFSRootURL: nfsRootFor(e.MediaBaseURI, filepath.Join(PoolStoreDirName, sha, "iso")),
+				// The installer-env apt mirror rides the autoinstall seed's
+				// apt/primary (subiquity's install-start mirror check gates
+				// the install behind a dialog when the distro default is
+				// unreachable); the d-i preseed points its mirror at this
+				// pool (PoolURL) instead, so only the autoinstall renderer
+				// consumes the field.
+				AptMirror: e.UbuntuAptMirror,
 			}
 		}
 		// Reserve the machine's pool address now: DHCP-carrier installs (the

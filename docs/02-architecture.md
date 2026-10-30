@@ -128,12 +128,12 @@ mammoth serve --mode=prober     # 盘查面
 
 | 镜像 | 内容 | 基础镜像 | 说明 |
 |------|------|---------|------|
-| `mammoth` | 主二进制,`--mode=all/api/runner/prober` 共用 | distroless(静态编译,无 shell) | 业务面无外部命令依赖,可最小化 |
-| `mammoth-builder` | 主二进制 `--mode=builder` + xorriso | alpine/debian-slim | 需要外部工具 xorriso(用户态装配,无特权要求) |
+| `mammoth` | 主二进制,`--mode=all/api/runner/prober` 共用 | distroless(静态编译,无 shell) | `api` 纯文件服务/控制面适用;`all`/`runner` 介质组装经外部命令(xorriso 等),须用 mammoth-builder 镜像(下方) |
+| `mammoth-builder` | 主二进制 + xorriso/wimlib/7z | alpine | 介质组装为纯用户态装配(`--mode=builder` 是预留面,拆分落地前 serve 拒启;当前 all/runner 以本镜像承载介质组装) |
 
 - 多架构:amd64 + arm64(goreleaser → 多架构 manifest);
 - 配置全部经环境变量与挂载配置文件注入,镜像无状态;
-- docker compose 示例(`deploy/`)覆盖:一体化(all-in-one + PG)、分面(1×api + N×runner + 1×builder)两种拓扑;
+- docker compose 示例(`deploy/`)覆盖:一体化(all-in-one + PG)、分面(1×api + N×runner)两种拓扑;NFS/SMB 介质服务以 compose profile(`nfs`/`samba`)按需启用;目录地图与跨机器(多节点)接线见 [deploy/README.md](../deploy/README.md);
 - 健康检查:`/healthz`(存活,无依赖检查)与 `/readyz`(就绪,DB/队列可达)。
 
 ### 5.4 安全基线

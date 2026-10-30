@@ -338,6 +338,13 @@ user/password 字符限 `[A-Za-z0-9._@-]`——cmd 批处理不可安全引用�
 未配置时 windows PXE 提交即 `SCHEMA_WINDOWS_SMB_SHARE_REQUIRED`;
 配置后能力位 `capabilities.windows_smb_share` 置真。
 
+all-in-one 附带可选 `samba` sidecar(`docker compose --profile samba up
+-d`,deploy/Dockerfile.samba):SMB 是单播 TCP——bridge 网络发布 445 即可,
+不像内核 nfsd 需要 host 网络;guest 只读导出 MediaDir,share 名与 mammoth
+的 `MAMMOTH_WINDOWS_INSTALL_SMB_UNC` 对齐(默认 `\\<host>\mammoth-media`)。
+`server min protocol = SMB2`(SMB1 关闭——WinPE 消费方是 Server 2019+),无
+NetBIOS(nmbd 不起),客户端按 IP 连接。
+
 **arm64 注记**:aarch64 的 DHCP→TFTP→蹦床链与 x64 同构(opt 93=11→
 shimaa64,与 MAAS/RFC 4578 一致),签名链(shimaa64→grubaa64 在 Secure
 Boot 下)已经 qemu AAVMF 验证(`scripts/pxe-dev/arm64-sb-chain.sh`)。

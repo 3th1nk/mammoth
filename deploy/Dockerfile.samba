@@ -1,0 +1,11 @@
+# mammoth-samba — guest read-only SMB2 sidecar for the Windows wimboot setup
+# path (compose.all-in-one.yml, profile "samba"). SMB is unicast TCP 445:
+# bridge networking + a published port suffice — no host networking, unlike
+# the nfsd sidecar (kernel nfsd is a host-kernel singleton). Same alpine:3.20
+# base pin as Dockerfile.builder/Dockerfile.nfsd. The tested minimal config
+# shape is docs/operations.md §4.5.2 (three Windows Server generations closed
+# end-to-end against plain smbd, docs/compat/distros.md §windows).
+FROM alpine:3.20
+RUN apk add --no-cache samba
+COPY deploy/samba/entrypoint.sh /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

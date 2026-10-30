@@ -1,8 +1,31 @@
-# Topology 2: faceted — 1×api(+reaper) + N×runner + 1×builder + PostgreSQL.
-# The facets share the single image's contract and configuration; only the
-# builder uses its own image because of xorriso/loop-mount dependencies
-# (docs/02-architecture.md §1, §5.3).
+# Topology 2: faceted — 1×api (control plane + machine-facing HTTP + PXE/netboot
+# owner) + N×runner (task executors, media assembly in-process) + PostgreSQL.
+# Runs as-is on one host; the cross-machine wiring is deployment-level, see
+# deploy/README.md §跨机器: identical MASTER_KEY on every node, MediaDir on a
+# shared kernel-nfsd export (machine-facing HTTP reads the LOCAL MediaDir —
+# every node binds the same dir), an LB over api replicas, and one PXE
+# responder per provisioning L2 (pxe-proxy for the rest — operations.md §4.5).
+#
+# NOTE: there is no `builder` service — --mode=builder is a reserved facet
+# (serve.go refuses it until the media-assembly split lands); today the runner
+# assembles media in-process, hence the builder toolchain image below.
 name: mammoth-faceted
+
+# Shared by api and runner. PXE/netboot keys are NOT here — they belong to
+# the api facet alone (see api below).
+x-shared-env: &env
+  MAMMOTH_DATABASE_URL: postgres://mammoth:mammoth@postgres:5432/mammoth?sslmode=disable
+  MAMMOTH_HTTP_ADDR: ":8080"
+  MAMMOTH_EXTERNAL_URL: http://${MAMMOTH_HOST_IP:?set MAMMOTH_HOST_IP (machine/BMC-reachable address; the LB VIP when fronted)}:8080
+  MAMMOTH_API_TOKEN: ${MAMMOTH_API_TOKEN:?set MAMMOTH_API_TOKEN}
+  MAMMOTH_MASTER_KEY: ${MAMMOTH_MASTER_KEY:?set MAMMOTH_MASTER_KEY (base64 32B) — identical on EVERY node}
+  MAMMOTH_LOG_FORMAT: json
+  MAMMOTH_MEDIA_DIR: /media
+  MAMMOTH_MEDIA_BASE_URI: nfs://${MAMMOTH_HOST_IP}/export/media
+  MAMMOTH_NFS_EXPORT: "false"
+  MAMMOTH_WINDOWS_INSTALL_SMB_UNC: '\\${MAMMOTH_HOST_IP}\mammoth-media'
+  MAMMOTH_BMC_TLS_INSECURE: ${MAMMOTH_BMC_TLS_INSECURE:-false}
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -21,47 +44,89 @@ services:
   api:
     build:
       context: ..
-      dockerfile: Dockerfile
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment: &env
-      MAMMOTH_DATABASE_URL: postgres://mammoth:mammoth@postgres:5432/mammoth?sslmode=disable
-      MAMMOTH_HTTP_ADDR: ":8080"
-      MAMMOTH_API_TOKEN: ${MAMMOTH_API_TOKEN:?set MAMMOTH_API_TOKEN}
-      MAMMOTH_MASTER_KEY: ${MAMMOTH_MASTER_KEY:?set MAMMOTH_MASTER_KEY (base64 32B)}
-      MAMMOTH_LOG_FORMAT: json
-    command: ["serve", "--mode=api"]
-    ports:
-      - "8080:8080"
-
-  runner:
-    build:
-      context: ..
+      # Distroless is fine here: the api serves files (from the shared media
+      # mount) but assembles nothing.
       dockerfile: Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       <<: *env
-      MAMMOTH_RUNNER_CONCURRENCY: "10"
-    command: ["serve", "--mode=runner"]
-    deploy:
-      replicas: 2
+      # PXE/netboot lives on the api facet (config.RunsNetboot = all|api):
+      # proxyDHCP 67 / TFTP 69 / discovery 4011 / installer syslog 5514.
+      # Off by default; enabling needs the container ON the provisioning L2
+      # (host or macvlan networking — bridge port mappings cannot carry DHCP
+      # broadcasts; ops.md §4.5) and only ONE responder per L2 — run
+      # compose.pxe-proxy.yml on the edge of every other VLAN instead.
+      MAMMOTH_PXE_ENABLED: ${MAMMOTH_PXE_ENABLED:-false}
+      MAMMOTH_PXE_NEXT_SERVER: ${MAMMOTH_PXE_NEXT_SERVER:-}
+      MAMMOTH_PXE_SYSLOG_PORT: "5514"
+    command: ["serve", "--mode=api"]
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data/media:/media
 
-  builder:
+  runner:
     build:
       context: ..
+      # Builder image (alpine + xorriso/wimlib/7z): the runner assembles
+      # media in-process (prepare_media → bootiso/wimlib), distroless would
+      # fail every vMedia/agent build.
       dockerfile: Dockerfile.builder
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       <<: *env
-    # Media assembly (M3) needs loop-mount capability; declared now so the
-    # privileged facet boundary is explicit.
-    command: ["serve", "--mode=builder"]
+      MAMMOTH_RUNNER_CONCURRENCY: "10"
+      # Huawei VmmControl mounts take ~12-15s with probabilistic Connect
+      # failures (driver retries ≤3x) — default 30s is too tight (§4.7).
+      MAMMOTH_BMC_TIMEOUT: ${MAMMOTH_BMC_TIMEOUT:-90s}
+    command: ["serve", "--mode=runner"]
+    deploy:
+      replicas: 2
+    volumes:
+      - ./data/media:/media
+
+  # Kernel nfsd managing the HOST kernel's NFS server (privileged container;
+  # the nfsd threads and their sockets are kernel-global). Off by default —
+  # enable with `docker compose --profile nfs up -d`. Requires a Linux host
+  # whose kernel has nfsd support and free host ports 111/2049/20048
+  # (operations.md §4.7; a host nfs-server works equally well).
+  nfsd:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.nfsd
+    profiles: ["nfs"]
     privileged: true
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      MAMMOTH_NFS_EXPORT_DIR: /export/media
+      MAMMOTH_NFS_EXPORT_OPTIONS: "*(ro,insecure,no_root_squash,no_subtree_check)"
+      MAMMOTH_NFS_MOUNTD_PORT: "20048"
+    volumes:
+      - ./data/media:/export/media
+      - /lib/modules:/lib/modules:ro
+
+  # Guest read-only SMB2 export of the media dir for the Windows wimboot
+  # setup path — the agent apply-image installer does NOT need it. Off by
+  # default — enable with `docker compose --profile samba up -d`; needs host
+  # port 445 free (unicast TCP, no host networking required).
+  samba:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.samba
+    profiles: ["samba"]
+    restart: unless-stopped
+    environment:
+      MAMMOTH_SMB_SHARE_NAME: mammoth-media
+      MAMMOTH_SMB_EXPORT_DIR: /export/media
+    ports:
+      - "445:445"
+    volumes:
+      - ./data/media:/export/media
 
 volumes:
   pgdata:

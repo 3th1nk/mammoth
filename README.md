@@ -368,12 +368,12 @@ client ──▶ api (control plane, stateless)      ──┐
 
 | Image | Base | Modes | Notes |
 |-------|------|-------|-------|
-| `mammoth` | distroless (static) | all / api / runner / prober | no external tools |
-| `mammoth-builder` | alpine + xorriso | builder | privileged |
+| `mammoth` | distroless (static) | api | file serving / control plane only |
+| `mammoth-builder` | alpine + xorriso/wimlib/7z | all / runner | media assembly shells out to these tools; `builder` is a reserved facet (serve refuses it until the split lands) |
 
 ```bash
 docker compose -f deploy/compose.all-in-one.yml up -d   # 1×all + PG
-docker compose -f deploy/compose.faceted.yml up -d      # 1×api + N×runner + 1×builder
+docker compose -f deploy/compose.faceted.yml up -d      # 1×api + N×runner (media assembly in-process)
 ```
 
 Restricted networks: `--build-arg RUNTIME_IMAGE=<mirror>/distroless/static-debian12:nonroot`

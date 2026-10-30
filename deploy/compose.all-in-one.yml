@@ -36,6 +36,10 @@ services:
     # The builder image's default CMD serves --mode=builder (its facet) —
     # the engine refuses it (M3). All-in-one needs every facet in-process.
     command: ["serve", "--mode=all"]
+    # PXE binds privileged UDP ports (67/69/4011) — the image runs as uid
+    # 1000, so the capability must be granted explicitly when PXE is on.
+    cap_add:
+      - NET_BIND_SERVICE
     environment:
       MAMMOTH_MODE: all
       MAMMOTH_DATABASE_URL: postgres://mammoth:mammoth@postgres:5432/mammoth?sslmode=disable
@@ -76,6 +80,11 @@ services:
       # CAP_NET_BIND_SERVICE for the privileged UDP ports. Off by default.
       MAMMOTH_PXE_ENABLED: ${MAMMOTH_PXE_ENABLED:-false}
       MAMMOTH_PXE_NEXT_SERVER: ${MAMMOTH_PXE_NEXT_SERVER:-}
+      # Pool mode (docs/operations.md §4.5): mammoth leases addresses ONLY
+      # to machines with an armed install task — coexists with a site DHCP
+      # (which stays the authority for everything else on the wire).
+      MAMMOTH_PXE_DHCP_POOL: ${MAMMOTH_PXE_DHCP_POOL:-}
+      MAMMOTH_PXE_DHCP_ROUTER: ${MAMMOTH_PXE_DHCP_ROUTER:-}
     ports:
       - "8080:8080"
     volumes:

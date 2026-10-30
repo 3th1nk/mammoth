@@ -1556,6 +1556,11 @@ func (e *Executor) ejectBootMediaBestEffort(ctx context.Context, task *store.Tas
 	}
 }
 
+// installerRebootHangGrace bounds how long verify_ready tolerates a machine
+// that took the completion report but never came back from the installer's
+// self-reboot (the NFS-root teardown hang) before the BMC breaks it.
+const installerRebootHangGrace = 5 * time.Minute
+
 // ── stage 5: verify_ready (docs/06-install-pipeline.md §4) ──────────────────
 func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store.Job) error {
 	// Context mutates between stages — the completion report lands via
@@ -1619,6 +1624,43 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 					cred := inbandssh.Credentials{
 						Username: secret.Username, Password: secret.Password,
 						PrivateKey: secret.PrivateKey,
+					}
+					// Installer-shutdown hang watchdog (PXE/NFS-root live
+					// envs): the installer's self-reboot can wedge in the
+					// teardown (the NFS-backed /cdrom unmount fails busy and
+					// the shutdown stalls — real-hardware 2288H/V5, every
+					// PXE round). The completion report is in, so the disk
+					// content is final: if the host is still unreachable
+					// after the grace window, break the hang with a BMC
+					// power cycle and let the normal wait proceed against
+					// the rebooted system.
+					watchCtx, cancelWatch := context.WithCancel(ctx)
+					defer cancelWatch()
+					if ictx.Boot.InstallerAutoReboot && bootStrategyName(ictx.BootStrategy) == strategyPXE {
+						go func() {
+							t := time.NewTimer(installerRebootHangGrace)
+							defer t.Stop()
+							select {
+							case <-watchCtx.Done():
+								return
+							case <-t.C:
+							}
+							conn, derr := net.DialTimeout("tcp", net.JoinHostPort(m.SSHAddress, "22"), 5*time.Second)
+							if derr == nil {
+								conn.Close()
+								return // reachable — not hung
+							}
+							var oe *net.OpError
+							if errors.As(derr, &oe) && !oe.Timeout() {
+								return // refused: something answers — not hung
+							}
+							obs.FromContext(watchCtx).WarnContext(watchCtx, "installer self-reboot appears hung (host unreachable) — BMC power cycle",
+								"machine", task.MachineID, "ssh_address", m.SSHAddress)
+							e.Events.Append(watchCtx, "task", task.ID, "task.verify_ready_hang_watchdog", map[string]any{
+								"ssh_address": m.SSHAddress,
+							})
+							e.rebootBestEffort(watchCtx, task)
+						}()
 					}
 					res, degraded, perr := e.waitForNewSystem(ctx, m.SSHAddress, cred)
 					if perr != nil {

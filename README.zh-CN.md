@@ -335,12 +335,12 @@ client ──▶ api (控制面, 无状态)                    ──┐
 
 | 镜像 | 基础镜像 | 模式 | 说明 |
 |------|---------|------|------|
-| `mammoth` | distroless(静态) | all / api / runner / prober | 无外部工具 |
-| `mammoth-builder` | alpine + xorriso | builder | 特权,用于介质构建 |
+| `mammoth` | distroless(静态) | api | 纯文件服务/控制面 |
+| `mammoth-builder` | alpine + xorriso/wimlib/7z | all / runner | 介质组装经外部命令;`builder` 为预留面(拆分落地前 serve 拒启) |
 
 ```bash
 docker compose -f deploy/compose.all-in-one.yml up -d   # 1×all + PG
-docker compose -f deploy/compose.faceted.yml up -d      # 1×api + N×runner + 1×builder
+docker compose -f deploy/compose.faceted.yml up -d      # 1×api + N×runner(builder 面为预留,介质组装在 runner 内)
 ```
 
 受限网络:`--build-arg RUNTIME_IMAGE=<mirror>/distroless/static-debian12:nonroot`

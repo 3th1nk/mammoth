@@ -61,7 +61,7 @@ replaces a hand-tuned dnsmasq; the kit is exported by the engine
 	}
 	pf := cmd.Flags()
 	pf.StringVar(&o.NextServer, "next-server", envOr("MAMMOTH_PXEPROXY_NEXT_SERVER", ""), "this host's IP on the provisioning segment (siaddr/TFTP-server offered to PXE clients)")
-	pf.StringVar(&o.BaseURL, "base-url", envOr("MAMMOTH_PXEPROXY_BASE_URL", ""), "mammoth engine machine-face base URL (e.g. http://172.16.20.250:8091)")
+	pf.StringVar(&o.BaseURL, "base-url", envOr("MAMMOTH_PXEPROXY_BASE_URL", ""), "mammoth engine machine-face base URL (e.g. http://172.16.20.250:8080)")
 	pf.StringVar(&o.TFTPRoot, "tftp-root", envOr("MAMMOTH_PXEPROXY_TFTP_ROOT", "/var/lib/mammoth/tftp"), "directory holding the exported external kit (auto-synced from the engine; created on first sync)")
 	syncDef := envOr("MAMMOTH_PXEPROXY_SYNC_INTERVAL", "5m")
 	syncDur, syncErr := time.ParseDuration(syncDef)

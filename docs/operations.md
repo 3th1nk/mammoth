@@ -297,7 +297,7 @@ MAMMOTH_PXEPROXY_BASE_URL=http://<engine>:8080 mammoth pxe-proxy --tftp-root /va
   `/netboot/observe` → pending_machines 台账;10 分钟同客户端去重窗。
 - compose:`deploy/compose.pxe-proxy.yml`(host 网络,tftp-root 卷挂载);
   env 模板:`deploy/pxe-proxy.env.example`。
-- 逐项说明:防火墙放行 67/69/4011(UDP)与 8091(TCP);**Secure Boot
+- 逐项说明:防火墙放行 67/69/4011(UDP)与 8080(TCP,引擎机器面——kit 同步与 sightings 回传);**Secure Boot
   需关闭**(iPXE 未签名);装机段地址避开占址设备(先 ARP/ping 探测)。
 
 外置 dnsmasq 形态仍受支持(示例配置在 kit 的 dnsmasq.conf.example),

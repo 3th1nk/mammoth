@@ -460,6 +460,16 @@ pxe-proxy 架构下引擎本就是引导链的硬依赖(trampoline 实时按 MAC
 全 NIC DHCP 兜底 netplan(cb72068)、完成回调 3×10s 重试(d4dbdae)、
 INSTALL_CONSOLE=vga(3e21237)。
 
+**实测补充(2026-10-30,PoolURL 默认保留)**:netboot seed 的 target apt
+primary 指向引擎 PoolURL(ISO 解包树)已实测完成全绿装机。注意事项:ISO
+固有 apt 仓形态只有 dists/<suite>/Release + Release.gpg、**无 InRelease**,
+subiquity 的镜像探测在**安装器环境无网/探测失败**时会回落交互确认门
+("Continue with autoinstall?"——曾与池段耗尽叠加误判为 PoolURL 问题,实
+为安装器环境网络所致)。企业内网建议 MAMMOTH_UBUNTU_APT_MIRROR 指向带
+签名的本地镜像(aptly/reprepro,自带 InRelease);若将来要让引擎把 pool
+树升格为一等 apt 源,需生成带签名的 apt 元数据(apt-ftparchive + 签名
+密钥管理),设计后再议。
+
 ## 已评估并排除的方向(决策记录,避免重新论证)
 
 - **办公电脑批量安装(非服务器镜像场景),2026-09-19 评估,不做**——骨架复用率

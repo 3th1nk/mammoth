@@ -89,8 +89,6 @@ func (c Config) Snapshot() map[string]any {
 	str("MAMMOTH_WINDOWS_INSTALL_SMB_PASSWORD", c.WindowsInstallSMBPassword)
 	dur("MAMMOTH_BOOT_SETTLE_DELAY", c.BootSettleDelay)
 	dur("MAMMOTH_VERIFY_READY_WAIT", c.VerifyReadyWait)
-	bol("MAMMOTH_NFS_EXPORT", c.NFSExportEnabled)
-	num("MAMMOTH_NFS_EXPORT_PORT", c.NFSExportPort)
 	str("MAMMOTH_MEDIA_RELAY_ADDR", c.MediaRelayAddr)
 	str("MAMMOTH_MEDIA_RELAY_USER", c.MediaRelayUser)
 	str("MAMMOTH_MEDIA_RELAY_PASSWORD", c.MediaRelayPassword)

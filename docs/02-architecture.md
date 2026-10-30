@@ -69,7 +69,7 @@ InstallSpec(声明式意图)
    ▼
 发行版原盘重打包为 boot-<token>.iso(应答文件烘入,离线 seed)
    ▼
-BMC 虚拟介质挂载 + 一次性引导(介质服务:内核 nfsd / 内置 nfsx 导出(评估,opt-in)/ SSH 中转)
+BMC 虚拟介质挂载 + 一次性引导(介质服务:内核 nfsd / 外部 NFS / SSH 中转)
    ▼
 安装环境 %pre:校验实际分区表 vs 快照 ─── 不一致 ──▶ 中止回报(LAYOUT_DRIFT)
    ▼                       │ 一致
@@ -87,7 +87,7 @@ BMC 虚拟介质挂载 + 一次性引导(介质服务:内核 nfsd / 内置 nfsx 
 |------|------|------|
 | PostgreSQL ≥14 | 主存储 + 任务队列 + 分布式协调 | **唯一运行时强依赖**:资源/契约/任务状态/事件存于同一库;队列用 `SKIP LOCKED` 表队列,互斥用 advisory lock;repo 接口抽象(仅 PostgreSQL,SQLite 最小部署已评估并放弃,见 10 §D2) |
 | 介质仓库 | 发行版原盘、任务引导介质(`boot-<token>.iso`) | 本地卷(`MAMMOTH_MEDIA_DIR`);S3 兼容对象存储为规划后端 |
-| 介质服务 | 让 BMC 可挂载介质 | 外部 NFS(内核 nfsd,`MAMMOTH_MEDIA_BASE_URI`;**定案形态**,ops.md §4.7)/ 内置只读 NFSv3 导出(`internal/nfsx`,go-nfs + mini rpcbind,默认关,免特权评估用)/ SSH 中转(`MAMMOTH_MEDIA_RELAY_*`,原子可见) |
+| 介质服务 | 让 BMC 可挂载介质 | 外部 NFS(内核 nfsd,`MAMMOTH_MEDIA_BASE_URI`;**定案形态**,ops.md §4.7)/ SSH 中转(`MAMMOTH_MEDIA_RELAY_*`,原子可见) |
 | 凭证加密 | credential 的静态加密 | 主密钥由部署方配置(`MAMMOTH_MASTER_KEY`;**轮换后存量凭证须重建**) |
 
 > 队列与协调由数据库承担的完整理由见 [10-tech-stack.md](10-tech-stack.md) D2/D3:

@@ -6,9 +6,6 @@
 # (docs/operations.md §4.7 checklist) or the `nfsd` sidecar below, which
 # manages the host kernel nfsd from a privileged container. Enable it with
 #   docker compose --profile nfs up -d
-# The engine's in-process NFS export (nfsx) is opt-in for unprivileged
-# evaluation only — BMCs and subpath-mounting installers need a
-# path-resolving server (MAMMOTH_NFS_EXPORT=true + port mappings).
 name: mammoth
 services:
   postgres:
@@ -56,7 +53,6 @@ services:
       # writable by it (e.g. `mkdir -p data/media && sudo chown 1000 data/media`).
       MAMMOTH_MEDIA_DIR: /media
       MAMMOTH_MEDIA_BASE_URI: nfs://${MAMMOTH_HOST_IP:?set MAMMOTH_HOST_IP (BMC-reachable address)}/export/media
-      MAMMOTH_NFS_EXPORT: "false"
       # Huawei iBMC mounts take ~12-15s (ISO9660 metadata validation) and
       # VmmControl Connect fails probabilistically (the driver retries ≤3x) —
       # raise before first use with Huawei machines (§4.7). Default 30s.

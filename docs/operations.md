@@ -420,19 +420,12 @@ task exception 收场(抓包画像见 huawei.md §6)。部署形态二选一:
   `/lib/modules` 供 modprobe)且宿主机 111/2049/20048 空闲。Docker
   Desktop 的 VM 没有 nfsd 内核支持,entrypoint 会给出明确报错并指向本节。
 
-**内置导出 nfsx 默认关闭**(`MAMMOTH_NFS_EXPORT=true` 显式开启),降级为
-免特权评估用途。进程内只读 NFSv3(go-nfs):NFS(100003) 与 mountd(100005)
-多路复用在 2049 单端口、仅 TCP;111 上是自研最小 portmapper(UDP+TCP 都
-答,GETPORT 对 nfs/mountd 一律回答 2049),认证只通告 AUTH_NULL;对**任意
-mount 路径**都应答介质根(`nfs://<host>/media/boot/x.iso` 的 /media 前缀
-被吞掉),写入落内存 overlay。消费方矩阵(为什么不能做默认):
-
-- BMC 虚拟介质:华为 iBMC 6.41 实锤不兼容(上文);
-- casper nfsroot(ubuntu22 PXE)与 anaconda 的 NFS 安装源挂载的是导出的
-  **子路径**,根应答 MNT 让这些查找解析到错误的树——需要路径解析型服务端
-  (内核 nfsd);
-- 挂载导出根再遍历的客户端可用(人工检查、fake-BMC 评估这类不真正挂载的
-  场景)。
+**原内置导出 nfsx 已移除(2026-10-30)**,`MAMMOTH_NFS_EXPORT` 配置项随之
+删除。进程内 go-nfs 实现(NFS/mountd 复用 2049 单端口仅 TCP、自研最小
+portmapper、AUTH_NULL、任意 mount 路径应答介质根)对真实消费方全员不可用:
+BMC 虚拟介质华为实锤不兼容(上文);casper nfsroot 与 anaconda 的 NFS
+安装源挂载导出的**子路径**,根应答 MNT 让查找解析到错误的树;fake 评估
+不真正挂载。实证与抓包画像保留在 huawei.md §6 作选型档案。
 
 内核 nfsd 部署清单(宿主机形态,容器化部署实机验证过):
 
@@ -443,15 +436,13 @@ mount 路径**都应答介质根(`nfs://<host>/media/boot/x.iso` 的 /media 前�
    建议把 mountd 钉在固定端口(RHEL/CentOS 系 `/etc/sysconfig/nfs` 配
    `RPCMOUNTDOPTS="--port 20048"`),防火墙放行 111/2049/20048 的 TCP+UDP;
    跨网段只要路由可达(实测定案:同一 L2 与跨网段均验证通过)。
-2. 引擎侧三个变化:`MAMMOTH_NFS_EXPORT=false`;
-   `MAMMOTH_MEDIA_BASE_URI=nfs://<host>/<真实导出路径>`——**URI 路径必须
-   精确对应 /etc/exports 的导出布局**(BMC 收到
-   `nfs://<base>/boot/boot-<token>.iso`;nfsx 的"任意路径都应答介质根"
-   在内核 nfsd 下不成立,基址不改 BMC 会去挂一个不存在的导出;且与引擎
-   HTTP 根目录是两个命名空间,别混);容器把同一宿主机目录 bind mount 到
-   `MAMMOTH_MEDIA_DIR`,引擎落盘的 ISO 即落在 NFS 导出内。compose 同时
-   移除 2049/111 端口映射——别让 docker-proxy 占住宿主机 rpcbind/nfsd
-   的端口,nfsd 起不来。
+2. 引擎侧:`MAMMOTH_MEDIA_BASE_URI=nfs://<host>/<真实导出路径>`——**URI
+   路径必须精确对应 /etc/exports 的导出布局**(BMC 收到
+   `nfs://<base>/boot/boot-<token>.iso`;与引擎 HTTP 根目录是两个命名
+   空间,别混);容器把同一宿主机目录 bind mount 到 `MAMMOTH_MEDIA_DIR`,
+   引擎落盘的 ISO 即落在 NFS 导出内。从旧版 compose 升级时记得移除当年
+   为内嵌导出发市的 2049/111 端口映射——docker-proxy 占住宿主机
+   rpcbind/nfsd 端口,nfsd 起不来。
 3. 超时预算:华为 VmmControl 成功挂载 ~12-15s(BMC 校验 ISO9660 元数据),
    且 Connect 概率性失败(一次 Exception 紧接着重试即成功;驱动侧已内置
    ≤3 次重试)——`MAMMOTH_BMC_TIMEOUT` 建议 ≥60s(默认 30s 不够,超时

@@ -122,8 +122,6 @@ type Config struct {
 
 	VerifyReadyWait time.Duration // verify_ready poll budget for the new system after the completion report
 
-	NFSExportEnabled   bool   // built-in read-only NFSv3 export of MediaDir (default false — kernel nfsd is the supported media export, ops.md §4.7)
-	NFSExportPort      int    // port for the built-in export (default 2049)
 	MediaRelayAddr     string // media relay SSH endpoint (host[:port]); empty = no relay
 	MediaRelayUser     string
 	MediaRelayPassword string
@@ -256,12 +254,6 @@ func FromEnv() (Config, error) {
 		ProbePrefix:           24,
 		ProbeWait:             10 * time.Minute,
 		MediaDir:              "data/media",
-		// Default off: the BMC-compatible media export is a kernel nfsd
-		// (huawei.md §6 verdict), which is a deployment-layer service, not an
-		// in-process one — see docs/operations.md §4.7. The built-in export
-		// stays available for unprivileged evaluation via MAMMOTH_NFS_EXPORT=true.
-		NFSExportEnabled:      false,
-		NFSExportPort:         2049,
 		BootSettleDelay:       0,
 		VerifyReadyWait:       10 * time.Minute,
 		ExternalURL:           "http://127.0.0.1:8080",
@@ -303,7 +295,6 @@ func FromEnv() (Config, error) {
 	applyInt(&c.QueueMaxReceiveCount, "MAMMOTH_QUEUE_MAX_RECEIVE_COUNT", &errs)
 	applyInt(&c.RunnerMaxTaskAttempts, "MAMMOTH_RUNNER_MAX_TASK_ATTEMPTS", &errs)
 	applyInt(&c.LayoutRetention, "MAMMOTH_LAYOUT_RETENTION", &errs)
-	applyInt(&c.NFSExportPort, "MAMMOTH_NFS_EXPORT_PORT", &errs)
 	applyInt(&c.ProbePrefix, "MAMMOTH_PROBE_PREFIX", &errs)
 	applyInt(&c.PXEDHCPPort, "MAMMOTH_PXE_DHCP_PORT", &errs)
 	applyInt(&c.PXETFTPPort, "MAMMOTH_PXE_TFTP_PORT", &errs)
@@ -349,7 +340,6 @@ func FromEnv() (Config, error) {
 		errs = append(errs, fmt.Errorf("MAMMOTH_ERASE_CONFIRM must be required|optional"))
 	}
 	applyBool(&c.RamdiskEnabled, "MAMMOTH_RAMDISK_ENABLED", &errs)
-	applyBool(&c.NFSExportEnabled, "MAMMOTH_NFS_EXPORT", &errs)
 	applyBool(&c.PXEEnabled, "MAMMOTH_PXE_ENABLED", &errs)
 	applyString(&c.PXEMode, "MAMMOTH_PXE_MODE", &errs)
 	applyString(&c.PXENextServer, "MAMMOTH_PXE_NEXT_SERVER", &errs)

@@ -198,11 +198,10 @@ func startServer(exe string, token string, dir string, logPath string) (int, err
 		"MAMMOTH_PXE_ENABLED":  "false",
 		// the virtual_media carrier needs a BMC-reachable media base URI —
 		// with it empty the boot stage fails on "boot ISO URI is empty" (the
-		// same variable scripts/agent-dev/run.sh sets). The in-server NFS
-		// export moves to 12049: 2049 is taken by the system nfsd on most
-		// macs.
-		"MAMMOTH_MEDIA_BASE_URI":  fmt.Sprintf("nfs://10.0.2.2:%d/mammoth-media", nfsExportPort),
-		"MAMMOTH_NFS_EXPORT_PORT": fmt.Sprint(nfsExportPort),
+		// same variable scripts/agent-dev/run.sh sets). The fake BMC never
+		// actually mounts, so the URI only has to be well-formed; real-media
+		// flows point at a deployment kernel nfsd (ops.md §4.7).
+		"MAMMOTH_MEDIA_BASE_URI": "nfs://10.0.2.2/mammoth-media",
 		"MAMMOTH_LOG_FORMAT":      "console",
 	})
 	cmd.Stdout, cmd.Stderr = logFile, logFile

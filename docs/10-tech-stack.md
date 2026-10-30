@@ -17,7 +17,6 @@
 | Redfish 客户端 | gofish(`stmcginnis/gofish`) | — | 带外盘查与控制;OEM 扩展自行封装 |
 | IPMI | 纯 Go 协议实现(以 `vmware/goipmi` 为基础裁剪) | — | chassis/bootdev/FRU 常用子集;零外部依赖 |
 | SSH | `golang.org/x/crypto/ssh` | — | inband_ssh 探针、介质中转 |
-| 内置 NFS 导出 | go-nfs(用户态 NFSv3)+ 自带 mini rpcbind(`internal/nfsx`) | — | 介质目录的进程内只读导出;**默认关**(`MAMMOTH_NFS_EXPORT=true` 仅供免特权评估)——受支持的介质服务是内核 nfsd(ops.md §4.7:nfsx 对 BMC vMedia 与子路径挂载消费方均不可用) |
 | ISO 重打包 | xorriso(探测/提取/装配,纯用户态) | — | 发行版 ISO → `boot-<token>.iso`(应答文件与内核参数烘入) |
 | 模板渲染 | 标准库 `text/template` | — | 应答文件渲染(纯文本注入) |
 | 介质组装 | xorriso | 外部工具,仅 builder 面引用 | 通用引导介质制作 |
@@ -159,7 +158,6 @@ mammoth/
 │   ├── inventory/            # 探针:inband_ssh(redfish 盘查在 bmc;ramdisk 规划)
 │   ├── render/               # 应答文件渲染,按方言分包:kickstart / autoinstall / preseed
 │   ├── store/                # repo + PG 迁移 + 表队列(PG)
-│   ├── nfsx/                 # 内置只读 NFSv3 导出(go-nfs + mini rpcbind)
 │   ├── mediarelay/           # 介质 SSH 中转(原子可见推送)
 │   ├── webhook/              # Webhook 签名投递(HMAC-SHA256、退避)
 │   ├── cli/                  # CLI(纯 HTTP 客户端,契约之外零语义)

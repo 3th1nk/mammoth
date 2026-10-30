@@ -26,7 +26,6 @@ import (
 	"github.com/3th1nk/mammoth/internal/inventory/inbandssh"
 	"github.com/3th1nk/mammoth/internal/mediarelay"
 	"github.com/3th1nk/mammoth/internal/netboot"
-	"github.com/3th1nk/mammoth/internal/nfsx"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/provision"
 	"github.com/3th1nk/mammoth/internal/render"
@@ -148,28 +147,12 @@ func serve(args []string) error {
 	}}
 
 	// Media repository: boot ISOs land in MediaDir; MediaBaseURI exposes it
-	// to BMCs (nfs://host/export base for the virtual media mount URI).
+	// to BMCs (nfs://host/export base for the virtual media mount URI). The
+	// NFS side of that URI is a deployment-layer kernel nfsd — see
+	// docs/operations.md §4.7 (the in-process export was removed: no real
+	// consumer survived the BMC/subpath-mount compatibility matrix).
 	if err := os.MkdirAll(cfg.MediaDir, 0o755); err != nil {
 		return fmt.Errorf("media dir: %w", err)
-	}
-
-	// Built-in media export (default on): MediaDir is served read-only over
-	// NFSv3 in-process, so the BMC mounts nfs://<this host>/... directly.
-	// Disable (MAMMOTH_NFS_EXPORT=false) to use an external NFS service.
-	if cfg.NFSExportEnabled {
-		nfsSrv, nerr := nfsx.Start(ctx, cfg.MediaDir, cfg.NFSExportPort)
-		if nerr != nil {
-			// Not fatal: deployments may serve the media dir from an external
-			// NFS service — they just must set MAMMOTH_MEDIA_BASE_URI.
-			logger.Warn("built-in nfs export unavailable", "err", nerr.Error())
-		} else {
-			logger.Info("built-in nfs export serving", "dir", cfg.MediaDir, "port", cfg.NFSExportPort)
-			go func() {
-				if serr := nfsSrv.Wait(); serr != nil {
-					logger.Warn("built-in nfs export stopped", "err", serr.Error())
-				}
-			}()
-		}
 	}
 
 	// Media relay (optional): when set, assembled boot media is pushed to the

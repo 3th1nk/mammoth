@@ -87,7 +87,6 @@ func TestSnapshotValuesAndUnsetRedacted(t *testing.T) {
 		"MAMMOTH_BIOS_CONFIRM":       "required",
 		"MAMMOTH_ERASE_CONFIRM":      "optional",
 		"MAMMOTH_PXE_ENABLED":        "false",
-		"MAMMOTH_NFS_EXPORT":         "false",
 	}
 	for key, want := range checks {
 		got, ok := snap[key].(string)

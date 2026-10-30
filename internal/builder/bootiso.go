@@ -434,16 +434,31 @@ func sha256File(path string) (string, error) {
 // place and never removed; a mismatch under cacheDir evicts the cached file
 // so the next fetch starts from clean bytes instead of a poisoned entry.
 func EnsureISOVerified(ctx context.Context, sourceURL, checksum, cacheDir string) (string, error) {
+	algo, want, _ := strings.Cut(checksum, ":")
+	if checksum != "" {
+		if algo != "sha256" || len(want) != 64 {
+			return "", fmt.Errorf("builder: image.checksum %q: only \"sha256:<64 hex chars>\" is supported", checksum)
+		}
+	}
 	path, err := EnsureISO(ctx, sourceURL, cacheDir)
+	if err != nil && checksum != "" && algo == "sha256" &&
+		!strings.HasPrefix(sourceURL, "http://") && !strings.HasPrefix(sourceURL, "https://") {
+		// Digest-probe fallback: a declared local path can vanish when the
+		// engine moves between deployment shapes (native → containerized:
+		// the old filesystem view is gone with the process). The bytes may
+		// still be here under their content address — <sha256>.iso in the
+		// cache root — and that name IS the identity, so probing it is
+		// trust-free. Full digest verification still runs below.
+		cand := filepath.Join(cacheDir, strings.ToLower(want)+".iso")
+		if st, serr := os.Stat(cand); serr == nil && st.Mode().IsRegular() {
+			path, err = cand, nil
+		}
+	}
 	if err != nil {
 		return "", err
 	}
 	if checksum == "" {
 		return path, nil
-	}
-	algo, want, ok := strings.Cut(checksum, ":")
-	if !ok || algo != "sha256" || len(want) != 64 {
-		return "", fmt.Errorf("builder: image.checksum %q: only \"sha256:<64 hex chars>\" is supported", checksum)
 	}
 	key, kerr := isoVerifiedKey(path)
 	if kerr != nil {

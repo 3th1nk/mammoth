@@ -180,3 +180,41 @@ func TestEnsureISOVerified(t *testing.T) {
 		t.Fatal("expected checksum-shape rejection")
 	}
 }
+
+func sha256hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// TestEnsureISOVerifiedDigestProbe pins the deployment-migration fallback: a
+// declared local source that no longer exists (native → containerized move)
+// resolves through its content address — <sha256>.iso in the cache root —
+// with full digest verification still applied to the probed bytes.
+func TestEnsureISOVerifiedDigestProbe(t *testing.T) {
+	dir := t.TempDir()
+	bytes := "migrated ISO payload"
+	digest := sha256hex(bytes)
+	// Pre-staged under the content address, NOT under the declared path.
+	if err := os.WriteFile(filepath.Join(dir, digest+".iso"), []byte(bytes), 0o644); err != nil {
+		t.Fatalf("pre-stage: %v", err)
+	}
+
+	path, err := EnsureISOVerified(context.Background(), "/home/old-view/images/u24.iso",
+		"sha256:"+digest, dir)
+	if err != nil {
+		t.Fatalf("digest probe: %v", err)
+	}
+	if filepath.Base(path) != digest+".iso" {
+		t.Fatalf("path = %s, want the digest-named cache entry", path)
+	}
+
+	// A poisoned digest-named file is rejected and evicted.
+	poison := filepath.Join(dir, sha256hex("other")+".iso")
+	if err := os.WriteFile(poison, []byte("poison"), 0o644); err != nil {
+		t.Fatalf("poison: %v", err)
+	}
+	if _, err := EnsureISOVerified(context.Background(), "/home/old-view/images/x.iso",
+		"sha256:"+sha256hex("other"), dir); err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("want mismatch for declared-digest poison, got %v", err)
+	}
+}

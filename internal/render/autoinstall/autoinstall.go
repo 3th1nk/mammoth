@@ -318,13 +318,24 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if len(network) > 0 {
 		auto["network"] = network
 	}
-	// The installer-env apt mirror (deployment-configured): subiquity checks
-	// its apt mirror at install start; the distro default (archive.ubuntu.com)
-	// is unreachable from mirrorless install L2s and the check gates the
-	// install behind a dialog (real-hardware: 2288H, the 22.04.5 PXE round).
-	if in.Netboot != nil && in.Netboot.AptMirror != "" {
+	// Target apt source (netboot only): default = the HTTP pool on the
+	// engine itself — the unpacked ISO tree IS a complete apt repo (dists/ +
+	// pool/, kernel debs included), reachable from any install L2 that can
+	// reach the engine at all. This makes the netboot install offline-safe
+	// for enterprise intranets: no egress, no external mirror, and the
+	// subiquity mirror check probes the pool instead of archive.ubuntu.com
+	// (whose check gated installs behind a dialog, real-hardware: 2288H,
+	// the 22.04.5 PXE round — and the same dependency stalled curtin's
+	// kernel install for good on egress-limited L2s, 2026-10-30).
+	// MAMMOTH_UBUNTU_APT_MIRROR overrides for deployments that explicitly
+	// want target packages from a real mirror.
+	if in.Netboot != nil && in.Netboot.PoolURL != "" {
+		uri := in.Netboot.PoolURL
+		if in.Netboot.AptMirror != "" {
+			uri = in.Netboot.AptMirror
+		}
 		auto["apt"] = map[string]any{
-			"primary": []map[string]any{{"arches": []string{"default"}, "uri": in.Netboot.AptMirror}},
+			"primary": []map[string]any{{"arches": []string{"default"}, "uri": uri}},
 		}
 	}
 

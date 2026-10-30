@@ -33,6 +33,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # The builder image's default CMD serves --mode=builder (its facet) —
+    # the engine refuses it (M3). All-in-one needs every facet in-process.
+    command: ["serve", "--mode=all"]
     environment:
       MAMMOTH_MODE: all
       MAMMOTH_DATABASE_URL: postgres://mammoth:mammoth@postgres:5432/mammoth?sslmode=disable

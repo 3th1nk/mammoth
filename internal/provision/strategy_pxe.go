@@ -197,6 +197,7 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 		if b.Boot.NetbootKernelArgs != "" {
 			args = b.Boot.NetbootKernelArgs
 		}
+		args = bootifFor(args, mac)
 		entry := &store.NetbootEntry{
 			MAC: mac, TaskID: task.ID, MachineID: task.MachineID, Token: ictx.Token,
 			Kind: "install", Kernel: tree.Kernel, Initrd: tree.Initrd,
@@ -316,4 +317,27 @@ func requireDiskHeadroom(dir string, min int64) error {
 			free>>20, min>>20, dir)
 	}
 	return nil
+}
+
+// bootifFor rewrites the BOOTIF argument in args to name the entry's own
+// NIC (pxelinux 01-<dashed-mac> form): the BMC's one-time PXE picks
+// whichever LOM it pleases on multi-port machines, and one args baked with
+// a single MAC's BOOTIF hangs casper's ipconfig forever on the port that
+// was not chosen (2026-10-30 geesunn: both LOMs cabled, alternating rounds
+// dead at the same initramfs line). Args without a BOOTIF gain one; BOOTIF
+// always terminates its token, so the rewrite is a plain splice.
+func bootifFor(args, mac string) string {
+	dashed := "01-" + strings.ToLower(strings.NewReplacer(":", "-", ".", "-").Replace(mac))
+	token := "BOOTIF=" + dashed
+	i := strings.Index(args, "BOOTIF=")
+	if i < 0 {
+		if args == "" {
+			return token
+		}
+		return args + " " + token
+	}
+	if j := strings.IndexByte(args[i:], ' '); j < 0 {
+		return args[:i] + token
+	}
+	return args[:i] + token + args[i+strings.IndexByte(args[i:], ' '):]
 }

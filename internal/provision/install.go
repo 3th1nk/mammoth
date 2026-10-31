@@ -1559,7 +1559,7 @@ func (e *Executor) ejectBootMediaBestEffort(ctx context.Context, task *store.Tas
 // installerRebootHangGrace bounds how long verify_ready tolerates a machine
 // that took the completion report but never came back from the installer's
 // self-reboot (the NFS-root teardown hang) before the BMC breaks it.
-const installerRebootHangGrace = 5 * time.Minute
+const installerRebootHangGrace = 10 * time.Minute
 
 // ── stage 5: verify_ready (docs/06-install-pipeline.md §4) ──────────────────
 func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store.Job) error {

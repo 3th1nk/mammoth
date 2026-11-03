@@ -43,7 +43,7 @@ Mammoth **只交付后端服务**,不包含、也不计划包含 Web UI:
    POST /api/v1/jobs
    {
      "type": "install",
-     "targets": {"machine_ids": [...]},
+     "targets": {"targets": [{"machine_id": "mch_…", "vars": {"ip": "10.0.0.11/24"}}]},
      "spec": {"image": {...}, "storage": {...}, "network": [...]}
    }
    → 202 + job_id;进度经 GET /jobs/{id} 或 SSE 事件流跟踪

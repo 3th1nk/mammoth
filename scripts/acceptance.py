@@ -190,7 +190,8 @@ def main():
     # 2. batch power_on
     print("· batch power_on")
     status, job = c.post("/api/v1/jobs", {
-        "type": "power", "targets": {"machine_ids": machines},
+        "type": "power",
+        "targets": {"targets": [{"machine_id": m} for m in machines]},
         "action": {"type": "power_on"}})
     ok &= check("batch job accepted (202)", status == 202, f"{status}")
     job_id = job["id"]
@@ -389,9 +390,9 @@ def main():
     # 4. idempotency
     print("· idempotency")
     key = f"acc-{time.time()}"
-    _, j1 = c.post("/api/v1/jobs", {"type": "power", "targets": {"machine_ids": [machines[1]]},
+    _, j1 = c.post("/api/v1/jobs", {"type": "power", "targets": {"targets": [{"machine_id": machines[1]}]},
                                     "action": {"type": "power_off"}}, headers={"Idempotency-Key": key})
-    _, j2 = c.post("/api/v1/jobs", {"type": "power", "targets": {"machine_ids": [machines[1]]},
+    _, j2 = c.post("/api/v1/jobs", {"type": "power", "targets": {"targets": [{"machine_id": machines[1]}]},
                                     "action": {"type": "power_off"}}, headers={"Idempotency-Key": key})
     ok &= check("replay returns the original job", j1["id"] == j2["id"], f"{j1['id']} vs {j2['id']}")
 
@@ -401,7 +402,7 @@ def main():
     print("· install flow (five stages)")
     status, ijob = c.post("/api/v1/jobs", {
         "type": "install",
-        "targets": {"machine_ids": [machines[0], machines[1]]},
+        "targets": {"targets": [{"machine_id": machines[0]}, {"machine_id": machines[1]}]},
         "spec": {
             "image": {"source": "https://mirror.example/rocky9.iso", "distro": "rocky9"},
             "storage": {"disks": [{
@@ -496,19 +497,19 @@ def main():
                     "clearpart --drives=nvme0n1 --initlabel --all" in ks,
                     "clearpart" in ks)
 
-    # abort_batch: one impossible target (per-machine override) fails
+    # abort_batch: one impossible target (per-machine spec_patch) fails
     # verify_layout → the sibling is canceled while waiting in install_os
     status, ajob = c.post("/api/v1/jobs", {
         "type": "install",
-        "targets": {
-            "machine_ids": [machines[1], machines[2]],
-            "overrides": {
-                # impossible selector for machine[1] only
-                machines[1]: {"storage": {"disks": [{
-                    "select": {"match": {"serial": "DOES-NOT-EXIST"}},
-                    "wipe": True,
-                    "partitions": [{"size": "rest", "fs": "xfs", "mount": "/"}]}]}},
-            }},
+        "targets": {"targets": [
+            {"machine_id": machines[1],
+             # impossible selector for machine[1] only (structural patch)
+             "spec_patch": {"storage": {"disks": [{
+                 "select": {"match": {"serial": "DOES-NOT-EXIST"}},
+                 "wipe": True,
+                 "partitions": [{"size": "rest", "fs": "xfs", "mount": "/"}]}]}}},
+            {"machine_id": machines[2]},
+        ]},
         "spec": {
             "image": {"source": "https://mirror.example/rocky9.iso", "distro": "rocky9"},
             "storage": {"disks": [{
@@ -571,7 +572,7 @@ def main():
                     str(status))
         status, kjob = c.post("/api/v1/jobs", {
             "type": "install",
-            "targets": {"machine_ids": [keepm_id]},
+            "targets": {"targets": [{"machine_id": keepm_id}]},
             "spec": {
                 "image": {"source": "https://mirror.example/rocky9.iso", "distro": "rocky9"},
                 "storage": {"disks": [
@@ -619,7 +620,7 @@ def main():
             # deviates from the baseline; simulate exactly that report path.
             status, djob = c.post("/api/v1/jobs", {
                 "type": "install",
-                "targets": {"machine_ids": [keepm_id]},
+                "targets": {"targets": [{"machine_id": keepm_id}]},
                 "spec": {
                     "image": {"source": "https://mirror.example/rocky9.iso", "distro": "rocky9"},
                     "storage": {"disks": [
@@ -662,7 +663,7 @@ def main():
     print("· hardware raid (configure_raid)")
     status, hwjob = c.post("/api/v1/jobs", {
         "type": "install",
-        "targets": {"machine_ids": [machines[0]]},
+        "targets": {"targets": [{"machine_id": machines[0]}]},
         "spec": {
             "image": {"source": "https://mirror.example/rocky9.iso", "distro": "rocky9"},
             "storage": {"raid": [{
@@ -709,7 +710,7 @@ def main():
     # partial distro + keep:partitions → rejected at submit (docs/06 §5)
     status, rej = c.post("/api/v1/jobs", {
         "type": "install",
-        "targets": {"machine_ids": [machines[0]]},
+        "targets": {"targets": [{"machine_id": machines[0]}]},
         "spec": {
             "image": {"source": "https://mirror.example/ubuntu-22.04.iso", "distro": "ubuntu22"},
             "storage": {"disks": [{
@@ -724,7 +725,7 @@ def main():
     # keep: disk IS allowed on a partial distro
     status, ud_ok = c.post("/api/v1/jobs", {
         "type": "install",
-        "targets": {"machine_ids": [machines[0]]},
+        "targets": {"targets": [{"machine_id": machines[0]}]},
         "spec": {
             "image": {"source": "https://mirror.example/ubuntu-22.04.iso", "distro": "ubuntu22"},
             "storage": {"disks": [
@@ -916,7 +917,7 @@ def main():
                 ok = False
             else:
                 status, cjob = c.post("/api/v1/jobs", {
-                    "type": "power", "targets": {"machine_ids": [machines[2]]},
+                    "type": "power", "targets": {"targets": [{"machine_id": machines[2]}]},
                     "action": {"type": "cycle"}})
                 job_id2 = cjob["id"]
                 # wait until the task is running, then SIGKILL the server mid-flight

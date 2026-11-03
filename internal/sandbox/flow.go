@@ -240,9 +240,13 @@ func runUp(ctx context.Context, exe string, state *State, save func()) error {
 	var job struct {
 		ID string `json:"id"`
 	}
+	targets := make([]map[string]any, 0, len(state.MachineIDs))
+	for _, id := range state.MachineIDs {
+		targets = append(targets, map[string]any{"machine_id": id})
+	}
 	if err := api.Post("/api/v1/jobs", map[string]any{
 		"type":    "install",
-		"targets": map[string]any{"machine_ids": state.MachineIDs},
+		"targets": map[string]any{"targets": targets},
 		"spec":    buildSpec(isoPath, pubKey),
 	}, &job); err != nil {
 		return err

@@ -254,9 +254,13 @@ func installCmd(newClient func() *Client) *cobra.Command {
 			}
 			var out map[string]any
 			c := newClient()
+			targets := make([]map[string]any, 0, len(machineIDs))
+			for _, id := range machineIDs {
+				targets = append(targets, map[string]any{"machine_id": id})
+			}
 			if err := c.Post("/api/v1/jobs", map[string]any{
 				"type":    "install",
-				"targets": map[string]any{"machine_ids": machineIDs},
+				"targets": map[string]any{"targets": targets},
 				"spec":    json.RawMessage(spec),
 			}, &out); err != nil {
 				return err

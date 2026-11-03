@@ -26,19 +26,40 @@ func (s *Server) CreateInstallPlan(ctx context.Context, request gen.CreateInstal
 	var hw bmc.HardwareView
 	_ = json.Unmarshal(machine.Hardware, &hw)
 
-	raw, err := json.Marshal(*request.Body)
+	// Same resolution pipeline as a real submission (docs/04-install-spec.md
+	// §5.3): bindings substitute into the template, post-substitution
+	// validation runs — a plan that resolves here installs there.
+	ctxv := varContext{
+		index:      1,
+		machineID:  machine.ID,
+		bmcAddress: machine.BMCAddress,
+		labels:     machine.Labels,
+		vars:       derefOr(request.Body.Vars, nil),
+	}
+	if machine.SerialNumber != nil {
+		ctxv.serial = *machine.SerialNumber
+	}
+	specRaw, err := json.Marshal(request.Body.Spec)
 	if err != nil {
-		return nil, err
+		return nil, verr("SCHEMA_INVALID_SPEC", "spec is not valid: %v", err)
+	}
+	resolved, err := resolveSpecVars(specRaw, ctxv)
+	if err != nil {
+		return nil, verr("SCHEMA_UNRESOLVED_VAR",
+			"machine %s: %v — every {var:…} in the spec needs a binding in vars", machine.ID, err)
+	}
+	if err := validateResolvedNetwork(resolved); err != nil {
+		return nil, verr("SCHEMA_INVALID_SPEC", "machine %s: %v", machine.ID, err)
 	}
 	// Library refs resolve exactly like a real submission (resolveImageRefs
 	// is the submit-side gate): image.id → file path + sha256 checksum. The
 	// plan must reject a fetching/failed image the same way the submission
 	// would — same validation surface, docs/03-api.md §4.
-	raw, err = s.resolveImageRefs(ctx, raw)
+	resolved, err = s.resolveImageRefs(ctx, resolved)
 	if err != nil {
 		return nil, err
 	}
-	plan, err := provision.PlanInstall(ctx, raw, &hw, s.Render)
+	plan, err := provision.PlanInstall(ctx, resolved, &hw, s.Render)
 	if err != nil {
 		return nil, err
 	}

@@ -114,7 +114,7 @@ def main():
     print("· submit alpine install (agent path)")
     status, job = c.req("POST", "/api/v1/jobs", {
         "type": "install",
-        "targets": {"machine_ids": [mid]},
+        "targets": {"targets": [{"machine_id": mid}]},
         "spec": {
             "boot": {"strategy": "virtual_media"},
             "image": {"source": "file://" + args.iso, "distro": "alpine"},

@@ -73,14 +73,33 @@ func (s *Server) PerformMachineAction(ctx context.Context, request gen.PerformMa
 }
 
 // CreateJob: batch submission (install spec / power batch / discover batch).
+// Targets carry per-machine bindings (vars) and an optional structural
+// spec_patch — docs/04-install-spec.md §5.3.
 func (s *Server) CreateJob(ctx context.Context, request gen.CreateJobRequestObject) (gen.CreateJobResponseObject, error) {
 	body := request.Body
-	if body == nil || len(body.Targets.MachineIds) == 0 {
-		return nil, verr("SCHEMA_INVALID_JOB", "targets.machine_ids must not be empty")
+	if body == nil || len(body.Targets.Targets) == 0 {
+		return nil, verr("SCHEMA_INVALID_JOB", "targets.targets must not be empty")
 	}
-	machineIDs := make([]string, 0, len(body.Targets.MachineIds))
-	for _, id := range body.Targets.MachineIds {
-		machineIDs = append(machineIDs, string(id))
+	machineIDs := make([]string, 0, len(body.Targets.Targets))
+	bindings := make(map[string]map[string]string, len(body.Targets.Targets))
+	patches := make(map[string]json.RawMessage, len(body.Targets.Targets))
+	for _, t := range body.Targets.Targets {
+		machineIDs = append(machineIDs, string(t.MachineId))
+		if len(derefOr(t.Vars, nil)) > 0 {
+			bindings[string(t.MachineId)] = *t.Vars
+		}
+		if t.SpecPatch != nil {
+			b, err := json.Marshal(*t.SpecPatch)
+			if err != nil {
+				return nil, verr("SCHEMA_INVALID_SPEC", "spec_patch is not valid: %v", err)
+			}
+			patches[string(t.MachineId)] = b
+		}
+	}
+	// vars/spec_patch carry install-spec semantics — meaningless for
+	// power/discover batches and rejected rather than silently ignored.
+	if body.Type != "install" && (len(bindings) > 0 || len(patches) > 0) {
+		return nil, verr("SCHEMA_INVALID_JOB", "targets[].vars/spec_patch are install-only")
 	}
 	if err := s.verifyMachinesExist(ctx, machineIDs); err != nil {
 		return nil, err
@@ -229,7 +248,8 @@ func (s *Server) CreateJob(ctx context.Context, request gen.CreateJobRequestObje
 		idempotencyKey:  derefOr(request.Params.IdempotencyKey, ""),
 		createdBy:       s.subject(ctx),
 		hostnamePattern: hostnamePattern,
-		overrides:       derefOr(body.Targets.Overrides, nil),
+		bindings:        bindings,
+		patches:         patches,
 	})
 	if err != nil {
 		return nil, err
@@ -352,32 +372,84 @@ func (s *Server) createJobRecord(ctx context.Context, in createJobRecord) (*gen.
 				return nil, terr
 			}
 			tctx := map[string]any{"token": token}
-			if pattern != "" {
-				tctx["hostname"] = strings.ReplaceAll(pattern, "{index}", itoa(i+1))
+
+			// Per-machine resolution pipeline (docs/04-install-spec.md §5.3):
+			// spec_patch → variable substitution → post-substitution
+			// validation. Bindings are request data the client can fix
+			// immediately, so any resolution failure rejects the WHOLE
+			// submission with the machine named — unlike hardware-state
+			// checks further down, which pre-fail only the offending task.
+			m, merr := s.Machines.Get(ctx, mid)
+			if merr != nil {
+				return nil, verr("SCHEMA_UNKNOWN_MACHINE", "unknown machine id %s", mid)
 			}
-			merged := mergeSpecOverride(in.specRaw, in.overrides, mid)
-			if merged != nil {
-				// Per-machine overrides may carry their own image.id (or
+			ctxv := varContext{
+				index:      i + 1,
+				machineID:  mid,
+				bmcAddress: m.BMCAddress,
+				labels:     m.Labels,
+				vars:       in.bindings[mid],
+			}
+			if m.SerialNumber != nil {
+				ctxv.serial = *m.SerialNumber
+			}
+			effective := in.specRaw
+			if patch, ok := in.patches[mid]; ok {
+				merged, perr := mergePatch(effective, patch)
+				if perr != nil {
+					return nil, verr("SCHEMA_INVALID_SPEC", "%s: %v", mid, perr)
+				}
+				effective = merged
+			}
+			resolved, rerr := resolveSpecVars(effective, ctxv)
+			if rerr != nil {
+				return nil, verr("SCHEMA_UNRESOLVED_VAR",
+					"machine %s: %v — every {var:…} in the spec needs a binding in targets[].vars", mid, rerr)
+			}
+			effective = resolved
+			if pattern != "" {
+				hostname, herr := resolveTemplate(pattern, ctxv)
+				if herr != nil {
+					return nil, verr("SCHEMA_UNRESOLVED_VAR",
+						"machine %s: identity.hostname_pattern: %v — every {var:…} in the pattern needs a binding in targets[].vars", mid, herr)
+				}
+				tctx["hostname"] = hostname
+			}
+
+			if effective != nil {
+				// Per-machine spec patches may carry their own image.id (or
 				// swap it for a bare source) — resolve the same way the
 				// base spec was.
-				if s.Images != nil {
-					resolved, rerr := s.resolveImageRefs(ctx, merged)
+				if _, patched := in.patches[mid]; patched && s.Images != nil {
+					imgResolved, rerr := s.resolveImageRefs(ctx, effective)
 					if rerr != nil {
 						return nil, rerr
 					}
-					merged = resolved
+					effective = imgResolved
 				}
-				tctx["spec"] = json.RawMessage(merged)
+
+				// Post-substitution gates: the resolved spec is what every
+				// machine actually installs — re-run the structural checks
+				// against it (a {var:} can hollow out a required field) and
+				// pin the network syntax down now that addresses are
+				// concrete.
+				var specStruct gen.InstallSpec
+				if err := json.Unmarshal(effective, &specStruct); err != nil {
+					return nil, verr("SCHEMA_INVALID_SPEC", "%s: resolved spec is not valid: %v", mid, err)
+				}
+				if err := validateInstallSpec(&specStruct); err != nil {
+					return nil, verr("SCHEMA_INVALID_SPEC", "machine %s: %v", mid, err)
+				}
+				if err := validateResolvedNetwork(effective); err != nil {
+					return nil, verr("SCHEMA_INVALID_SPEC", "machine %s: %v", mid, err)
+				}
+				tctx["spec"] = json.RawMessage(effective)
 			}
 
 			// Submit-side snapshot binding (docs/04-install-spec.md §5.1):
 			// a spec that keeps partitions must hit the machine's latest
 			// layout snapshot, or the task is marked failed at creation —
 			// without blocking sibling machines.
-			effective := in.specRaw
-			if merged != nil {
-				effective = merged
-			}
 			init := store.TaskInit{}
 			if verr := s.validateDistroKeepSupport(effective); verr != nil {
 				init.State = "failed"
@@ -472,7 +544,8 @@ type createJobRecord struct {
 	idempotencyKey  string
 	createdBy       string
 	hostnamePattern *string
-	overrides       map[string]gen.InstallSpec
+	bindings        map[string]map[string]string // machine → vars (install only)
+	patches         map[string]json.RawMessage   // machine → spec_patch (install only)
 }
 
 func ptrJob(j gen.Job) *gen.Job { return &j }
@@ -803,47 +876,6 @@ func newToken() (string, error) {
 }
 
 func itoa(v int) string { return strconv.Itoa(v) }
-
-// mergeSpecOverride merges a per-machine Install Spec fragment over the base
-// spec (docs/04-install-spec.md §5: shallow, per-machine). Merging happens on
-// the contract structs with zero-value detection: a fragment that did not set
-// a top-level field (e.g. image) must not wipe the base value — decoding the
-// fragment into the contract struct yields zero values for required fields.
-func mergeSpecOverride(base json.RawMessage, overrides map[string]gen.InstallSpec, machineID string) json.RawMessage {
-	ov, ok := overrides[machineID]
-	if !ok || len(base) == 0 {
-		return nil
-	}
-	var b gen.InstallSpec
-	if err := json.Unmarshal(base, &b); err != nil {
-		return nil
-	}
-	if ov.Image.Distro != "" || ov.Image.Source != nil || ov.Image.Checksum != nil {
-		b.Image = ov.Image
-	}
-	if ov.Storage != nil {
-		b.Storage = ov.Storage
-	}
-	if ov.Network != nil {
-		b.Network = ov.Network
-	}
-	if ov.Identity != nil {
-		b.Identity = ov.Identity
-	}
-	if ov.Access != nil {
-		b.Access = ov.Access
-	}
-	if ov.Scripts != nil {
-		b.Scripts = ov.Scripts
-	}
-	merged, err := json.Marshal(b)
-	if err != nil {
-		return nil
-	}
-	return merged
-}
-
-func isZeroImage(i gen.InstallSpec) bool { return false } // placeholder
 
 // appErrType is the errors.As target for coded application errors.
 func appErrType() *validationError { return &validationError{} }

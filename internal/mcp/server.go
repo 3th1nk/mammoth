@@ -199,9 +199,13 @@ func (s *Server) installSubmit(ctx context.Context, req *mcp.CallToolRequest, in
 		return nil, nil, err
 	}
 	var out map[string]any
+	targets := make([]map[string]any, 0, len(in.MachineIDs))
+	for _, id := range in.MachineIDs {
+		targets = append(targets, map[string]any{"machine_id": id})
+	}
 	if err := s.api.Post("/api/v1/jobs", map[string]any{
 		"type":    "install",
-		"targets": map[string]any{"machine_ids": in.MachineIDs},
+		"targets": map[string]any{"targets": targets},
 		"spec":    spec,
 	}, &out); err != nil {
 		return nil, nil, err

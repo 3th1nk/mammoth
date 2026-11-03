@@ -106,20 +106,20 @@ spec**——此后注册件的删除不影响已提交作业;`image.checksum` �
 ## 5. Install Spec
 
 安装意图的完整契约。`template` 持有它,job 可内联、可 `template_id` 引用 + 覆盖。
+spec 是**模板**:任意字符串值可携带 `{var:*}` 引用,提交时按台解析(§5.0)。
 
 ```jsonc
 POST /api/v1/jobs
 {
   "type": "install",
   "targets": {
-    "machine_ids": ["mch_7f3a9c", "mch_8b2e01"],
-    "overrides": {                        // per-machine 覆盖(与 spec 浅合并)
-      "mch_7f3a9c": {
-        "identity": { "hostname": "node-01" },
-        "network": [ { "match": { "mac": "aa:bb:cc:dd:ee:01" },
-                       "addresses": ["10.0.1.11/24"] } ]
-      }
-    }
+    "targets": [
+      // 逐台绑定:值差异(IP/主机名)走 vars;结构差异(某台盘布局不同)走 spec_patch
+      { "machine_id": "mch_7f3a9c",
+        "vars": { "ip_nic1": "10.0.1.11/24", "hostname": "node-01" } },
+      { "machine_id": "mch_8b2e01",
+        "vars": { "ip_nic1": "10.0.1.12/24", "hostname": "node-02" } }
+    ]
   },
   "spec": {
     "image": {
@@ -129,9 +129,9 @@ POST /api/v1/jobs
       "distro": "rocky9"                  // 显式声明;不做隐式探测(见 §6 取舍)
     },
     "storage":   { /* §5.1 */ },
-    "network":   [ /* §5.2 */ ],
+    "network":   [ /* §5.2;地址可引用 {var:*},网关/DNS 批量共享 */ ],
     "identity":  {
-      "hostname_pattern": "node-{index}"  // 未逐台指定时的生成规则
+      "hostname_pattern": "{var:hostname}"  // 也可 "node-{index}";显式逐台名 = 引用绑定变量
     },
     "access": {
       "root_password": "",                 // 缺省/空 = 自动生成;非空 = 明文口令
@@ -155,6 +155,34 @@ POST /api/v1/jobs
   }
 }
 ```
+
+### 5.0 targets — 批量绑定与变量模板
+
+一次批量 = 一份 spec 模板 + 每台一张 `vars` 绑定表(Cobbler system/xCAT nodedef
+的同形物,Tinkerbell hardware data 亦然):
+
+```jsonc
+{ "machine_id": "mch_7f3a9c",
+  "vars":       { "ip_nic1": "10.0.1.11/24", "hostname": "node-01" },
+  "spec_patch": { /* RFC 7386 深合并,仅限结构差异;null 删键;可缺省 */ } }
+```
+
+spec 模板里任意字符串值可携带引用,**提交时逐台解析**:
+
+- `{var:name}` → 该台 `vars[name]`(缺失 → 422 `SCHEMA_UNRESOLVED_VAR`,点名机器+变量);
+- 内建上下文:`{index}`(targets 数组 1 起序)、`{machine_id}`、`{serial}`、
+  `{bmc_address}`、`{label:key}`(label 缺失同样 422);
+- **字面量安全**:其余 `{...}` 一律原样保留——shell 的 `${...}`、awk 片段、JSON
+  示例不受伤;`content_base64` 是不透明 blob,不做模板;
+- 解析后校验:地址须为合法 IP/CIDR、网关/须为 IP、VLAN ID 须为正
+  (422 `SCHEMA_INVALID_ADDRESS`,点名位置)——错字挡在提交期,不会装完才发现
+  网络不通。
+
+**解析管线**:合并 `spec_patch` → 变量替换 → 解析后校验 → 方言渲染。方言层
+零感知,拿到的永远是解析后的 spec。`install-plan` 请求体 `{spec, vars}` 走同
+一条管线——试算通过即安装可过,变量语义只在引擎实现一次。批量静态 IP 就是
+这个机制的直接受益者:网关/DNS/匹配键共享一处修改,逐台 IP 各归各位。
+
 
 ### 5.1 storage — 三档语义
 
@@ -381,17 +409,15 @@ smartmontools/nvme(载体带则装,不带则跳过,启动零风险),对每块盘
 4. **`root_password` 缺省/空 = 自动生成**:一次性随机口令经任务事件一次性下发,
    避免批口令长期存续;`ssh_keys` 是更优路径,文档引导优先使用。字符串形态下
    哨兵值就是空串(空口令本身非法),非空值一律视为明文,无控制值歧义。
-5. **异构批次的衔接 = overrides 收参数差异,分组多 job 收意图差异**:一份共享
-   spec 只覆盖意图同构的批次。`targets.overrides` 浅合并是**顶层键整体替换**
-   (`internal/api/handlers_jobs.go` mergeSpecOverride,零值检测防误擦)——
-   storage/network/image 皆可逐机整段换,但 install 强制 base spec、列表字段
-   不可"只加一条";IP/主机名/可被选择器吸收的盘差属参数级,进 overrides。
-   RAID 布局/keep 语义/distro 不同属意图级差异,按等价类分组、一组一个 job——
-   试算(逐台)resolved plan 相同者即一组,逐组独立 policy 本来就是需求。
+5. **异构批次的衔接 = vars 收参数差异,spec_patch 收结构差异,分组多 job 收意图
+   差异**:一份共享 spec 只覆盖意图同构的批次。IP/主机名/网关属参数级,进
+   `targets[].vars`(§5.0);某台盘布局/keep 语义不同属结构级,进
+   `targets[].spec_patch`(RFC 7386 深合并);distro 不同属意图级差异,按等价类
+   分组、一组一个 job——试算(逐台)resolved plan 相同者即一组,逐组独立 policy
+   本来就是需求。
 6. **不引入 `[{targets, spec}]` 数组提交形态,组合逻辑留在客户端**:数组只买到
    一次 HTTP 往返 + 单一幂等键;若落成"单 job 多 spec 组",`job.spec` 审计面、
-   `policy.abort_batch`、concurrency 等 job 级语义全部重定义,改动落在已冻结的
-   v1 契约上。部分接受优于全有或全无:per-machine 无效片段创建时预失败该
-   task、不阻塞兄弟机器。与"模板化复用由客户端自行管理"(docs/03-api.md §4)
-   同一分工,薄封装先例 `internal/cli` / `scripts/acceptance.py`。若契约要动,
-   优先级更高的是 overrides 合并语义的显式化(如深合并声明),属增量兼容。
+   `policy.abort_batch`、concurrency 等 job 级语义全部重定义。vars + spec_patch
+   已覆盖参数级与结构级两类逐台差异,残余的意图级差异按 5 分组提交。与"模板化
+   复用由客户端自行管理"(docs/03-api.md §4)同一分工,薄封装先例
+   `internal/cli` / `scripts/acceptance.py`。

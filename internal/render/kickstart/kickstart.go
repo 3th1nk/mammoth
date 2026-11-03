@@ -918,12 +918,12 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// device" on 2288H in later boots after working once (2026-11-03).
 	// nfs --server --dir remains for legacy vMedia rounds without staging.
 	switch {
-	case (in.Netboot != nil && in.Netboot.PoolURL != "") || in.PoolTreeURL != "":
-		tree := in.Netboot.PoolURL
-		if tree == "" {
-			tree = in.PoolTreeURL
-		}
-		repoCmd = "url --url=" + tree
+	case in.Netboot != nil && in.Netboot.PoolURL != "":
+		repoCmd = "url --url=" + in.Netboot.PoolURL
+	case in.PoolTreeURL != "":
+		// vMedia rounds stage the tree pre-render; Netboot is nil there
+		// (PXE-only field) — a separate case keeps the deref impossible.
+		repoCmd = "url --url=" + in.PoolTreeURL
 	case nfsSource:
 		u := strings.TrimPrefix(in.ImageSource, "nfs://")
 		if i := strings.Index(u, "/"); i > 0 {

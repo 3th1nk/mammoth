@@ -809,3 +809,46 @@ func TestNetworkShellBondParamVocabulary(t *testing.T) {
 		t.Errorf("single arp_ip_target must render: %v", err)
 	}
 }
+
+// vMedia kickstart rounds stage a pool tree before rendering (prepareMedia
+// sets PoolTreeURL) while Netboot stays nil — a PXE-only field. The
+// pool-tree repoCmd switch dereferenced Netboot unconditionally and panicked
+// the engine at prepare_media (real-hardware 2026-11-03: task died right
+// after verify_layout, container Exited(2), install never reached the BMC).
+func TestPoolTreeURLWithoutNetbootRendersPoolSource(t *testing.T) {
+	d := New("rocky9")
+	in := render.InstallInputs{
+		AnswerBaseURL: "u", CompleteURL: "c",
+		ImageSource: "file:///media/lib-rocky9.iso", // library reference resolved to engine cache
+		PoolTreeURL: "http://192.0.2.10:8080/netboot/store/sha/iso",
+	}
+	answers, boot, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(answers[0].Content, "url --url=http://192.0.2.10:8080/netboot/store/sha/iso") {
+		t.Errorf("pool tree url missing from ks: %s", answers[0].Content)
+	}
+	if !strings.Contains(boot.KernelArgs, "inst.repo=http://192.0.2.10:8080/netboot/store/sha/iso") {
+		t.Errorf("inst.repo not pool tree: %q", boot.KernelArgs)
+	}
+}
+
+// PXE rounds keep the original precedence: Netboot.PoolURL wins over the
+// staged PoolTreeURL.
+func TestNetbootPoolURLPrecedenceOverPoolTree(t *testing.T) {
+	d := New("rocky9")
+	in := render.InstallInputs{
+		AnswerBaseURL: "u", CompleteURL: "c",
+		ImageSource: "file:///media/lib-rocky9.iso",
+		PoolTreeURL: "http://192.0.2.10:8080/netboot/store/sha/iso",
+		Netboot:     &render.NetbootInputs{PoolURL: "http://198.51.100.1:8080/netboot/store/pxe/iso"},
+	}
+	answers, _, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(answers[0].Content, "url --url=http://198.51.100.1:8080/netboot/store/pxe/iso") {
+		t.Errorf("netboot pool url must win: %s", answers[0].Content)
+	}
+}

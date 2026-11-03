@@ -442,7 +442,7 @@ func testServer(t *testing.T, opts Options) *Server {
 	s := &Server{
 		opts:  opts,
 		log:   discardLogger(),
-		nbpOK: map[string]bool{"undionly.kpxe": true, "shimx64.efi": true, "shimaa64.efi": true, "ipxe-amd64.efi": true},
+		nbpOK: map[string]bool{"undionly.kpxe": true, "shimx64.efi": true, "shimaa64.efi": true, "ipxe-amd64.efi": true, "ipxe-arm64.efi": true},
 		done:  make(chan error, 1),
 	}
 	return s
@@ -459,4 +459,60 @@ func hexClean(b []byte) string {
 		}
 	}
 	return hex.EncodeToString(b)
+}
+
+// TestUEFIPlainNBPReply pins the proxyDHCP escape knob (Options.UEFIPlainNBP):
+// grub2 cannot consume Proxy DHCP messages in UEFI mode (RackN KB-00043, RH
+// Bugzilla #1809246), so behind an unmodifiable site DHCP the UEFI chains
+// must switch to the unsigned plain iPXE binaries. The default stays the
+// signed shim chains — full-DHCP shapes (pool mode, external site dnsmasq)
+// never hit the defect and must not flip this.
+func TestUEFIPlainNBPReply(t *testing.T) {
+	var mac [6]byte
+	copy(mac[:], []byte{0x52, 0x54, 0x00, 0x12, 0x34, 0x56})
+
+	bootfile := func(t *testing.T, opts Options, arch uint16) string {
+		t.Helper()
+		s := testServer(t, opts)
+		req := discover(0x11223344, mac,
+			option{optVendorClass, []byte("PXEClient:Arch:00007:UNDI:003019")},
+			option{optArch, u16opt(arch)},
+		)
+		reply, _ := s.handle(req, 67, testSrc)
+		if reply == nil {
+			t.Fatal("want a reply")
+		}
+		p, err := parse(reply)
+		if err != nil {
+			t.Fatalf("reply does not parse: %v", err)
+		}
+		bf, ok := p.options[optBootfile]
+		if !ok {
+			t.Fatal("no bootfile option")
+		}
+		return string(bf)
+	}
+
+	base := Options{
+		NextServer: []byte{192, 168, 77, 1},
+		BaseURL:    "http://192.168.77.1:8080",
+	}
+
+	// Default: the signed chains, unchanged.
+	if got := bootfile(t, base, 7); got != "shimx64.efi" {
+		t.Errorf("x64 default = %q, want shimx64.efi", got)
+	}
+	if got := bootfile(t, base, 11); got != "shimaa64.efi" {
+		t.Errorf("arm64 default = %q, want shimaa64.efi", got)
+	}
+
+	// The knob flips both UEFI archs to unsigned plain iPXE (Secure Boot off).
+	plain := base
+	plain.UEFIPlainNBP = true
+	if got := bootfile(t, plain, 7); got != "ipxe-amd64.efi" {
+		t.Errorf("x64 plain = %q, want ipxe-amd64.efi", got)
+	}
+	if got := bootfile(t, plain, 11); got != "ipxe-arm64.efi" {
+		t.Errorf("arm64 plain = %q, want ipxe-arm64.efi", got)
+	}
 }

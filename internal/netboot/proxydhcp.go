@@ -9,10 +9,11 @@ import (
 
 // NBP file names inside the embedded NBPs filesystem (assets/pxe).
 const (
-	nbpBIOS     = "undionly.kpxe"  // BIOS chainloader, rides the NIC's UNDI ROM
-	nbpX64      = "shimx64.efi"    // UEFI x64 Secure Boot chain: shim (Microsoft-signed) loads grubx64.efi (Debian-signed grubnet)
-	nbpX64Plain = "ipxe-amd64.efi" // UEFI x64 without Secure Boot: plain iPXE, the wimboot carrier's host
-	nbpARM64    = "shimaa64.efi"   // UEFI aarch64 Secure Boot chain: same shape as x64 — shim (Microsoft-signed) loads grubaa64.efi (Debian-signed grubnetaa64)
+	nbpBIOS       = "undionly.kpxe"  // BIOS chainloader, rides the NIC's UNDI ROM
+	nbpX64        = "shimx64.efi"    // UEFI x64 Secure Boot chain: shim (Microsoft-signed) loads grubx64.efi (Debian-signed grubnet)
+	nbpX64Plain   = "ipxe-amd64.efi" // UEFI x64 without Secure Boot: plain iPXE, the wimboot carrier's host
+	nbpARM64      = "shimaa64.efi"   // UEFI aarch64 Secure Boot chain: same shape as x64 — shim (Microsoft-signed) loads grubaa64.efi (Debian-signed grubnetaa64)
+	nbpARM64Plain = "ipxe-arm64.efi" // UEFI aarch64 without Secure Boot: plain iPXE
 )
 
 // grubX64 and grubARM64 are the shim second stages: the firmware loads
@@ -225,6 +226,22 @@ func (s *Server) reply(p *packet) []byte {
 	}
 
 	name := nbpFor(arch)
+	// ProxyDHCP deployment knob (Options.UEFIPlainNBP): grub2 does not
+	// handle Proxy DHCP messages in UEFI mode — the upstream defect strands
+	// the shim→grubnet chain at the GRUB prompt even when the ROM merged the
+	// offers correctly (RackN KB-00043, RH Bugzilla #1809246; real-hardware
+	// signature: shim+grub TFTP transfers succeed, then silence — no grub.cfg
+	// request, no HTTP script fetch). Plain iPXE re-requests DHCP itself and
+	// is the reference client for this topology, so behind an unmodifiable
+	// site DHCP the UEFI chain switches to it (unsigned: Secure Boot off).
+	if s.opts.UEFIPlainNBP {
+		switch arch {
+		case ArchX64:
+			name = nbpX64Plain
+		case ArchARM64:
+			name = nbpARM64Plain
+		}
+	}
 	// The Windows carrier rides iPXE — the only documented wimboot host — so
 	// an x64 client whose armed entry is a wimboot tree gets the unsigned
 	// ipxe.efi instead of the Secure Boot chain (shim→grubnet has no wimboot

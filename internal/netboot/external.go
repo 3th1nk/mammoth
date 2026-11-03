@@ -49,6 +49,7 @@ func ExportExternalKit(dir string, nbps fs.FS, baseURL string) error {
 		"shimaa64.efi":         nil,
 		"grubaa64.efi":         nil,
 		"ipxe-amd64.efi":       nil, // the wimboot carrier's host (Windows; Secure Boot off)
+		"ipxe-arm64.efi":       nil, // plain iPXE (unsigned) — the UEFIPlainNBP chain's arm64 half
 		"boot.ipxe":            []byte(externalIPXETrampoline(ipxeBase)),
 		"grub/grub.cfg":        []byte(externalGRUBTrampoline(host)),
 		"dnsmasq.conf.example": []byte(ExternalDnsmasqExample(host, ipxeBase)),

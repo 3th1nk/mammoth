@@ -194,6 +194,16 @@ type Config struct {
 	// exists.
 	PXEDHCPPool   string
 	PXEDHCPRouter string // optional lease router; defaults to PXENextServer
+	// PXEUEFINBP selects the UEFI NBP chain (MAMMOTH_PXE_UEFI_NBP: shim |
+	// ipxe; default shim). "ipxe" = the unsigned plain iPXE binaries — the
+	// proxyDHCP-behind-an-unmodifiable-site-DHCP escape: grub2 cannot handle
+	// Proxy DHCP messages in UEFI mode (RackN KB-00043, RH #1809246), so the
+	// shim→grubnet chain strands at the GRUB prompt in that topology. Plain
+	// iPXE is unsigned: Secure Boot must be off — an SB-on machine behind an
+	// unmodifiable site DHCP has no PXE path (virtual media / UefiHttp, or
+	// negotiate options 66/67). Full-DHCP shapes (pool, external site
+	// dnsmasq) never hit the grub2 defect and must keep the default.
+	PXEUEFINBP string
 	// PXEBroadcastAddr (optional) replaces the limited broadcast
 	// (255.255.255.255) in PXE replies with a directed broadcast — macOS
 	// routing sends 255.255.255.255 via the default interface, which never
@@ -355,6 +365,7 @@ func FromEnv() (Config, error) {
 	applyBool(&c.PXEEnroll, "MAMMOTH_PXE_ENROLL", &errs)
 	applyString(&c.PXEEnrollToken, "MAMMOTH_PXE_ENROLL_TOKEN", &errs)
 	applyString(&c.BootStrategyDefault, "MAMMOTH_BOOT_STRATEGY", &errs)
+	applyString(&c.PXEUEFINBP, "MAMMOTH_PXE_UEFI_NBP", &errs)
 
 	if err := errors.Join(errs...); err != nil {
 		return c, err
@@ -371,6 +382,16 @@ func FromEnv() (Config, error) {
 	case "builtin", "external":
 	default:
 		return c, fmt.Errorf("config: invalid MAMMOTH_PXE_MODE %q (want builtin|external)", c.PXEMode)
+	}
+	switch c.PXEUEFINBP {
+	case "":
+		c.PXEUEFINBP = "shim"
+	case "shim", "ipxe":
+	default:
+		return c, fmt.Errorf("config: invalid MAMMOTH_PXE_UEFI_NBP %q (want shim|ipxe)", c.PXEUEFINBP)
+	}
+	if c.PXEUEFINBP == "ipxe" && c.PXEMode == "external" {
+		return c, fmt.Errorf("config: MAMMOTH_PXE_UEFI_NBP=ipxe is meaningless with MAMMOTH_PXE_MODE=external — external mode owns no DHCP replies; configure the site dnsmasq's dhcp-boot lines instead")
 	}
 	if c.PXEMode == "external" && c.PXEDHCPPool != "" {
 		return c, fmt.Errorf("config: MAMMOTH_PXE_MODE=external owns no DHCP — unset MAMMOTH_PXE_DHCP_POOL (the site dnsmasq serves leases)")

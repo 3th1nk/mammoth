@@ -299,6 +299,7 @@ func serve(args []string) error {
 			NextServer:   nextServer,
 			BaseURL:      strings.TrimSuffix(cfg.ExternalURL, "/"),
 			NBPs:         pxe.Files,
+			UEFIPlainNBP: cfg.PXEUEFINBP == "ipxe", // grub2 cannot consume Proxy DHCP in UEFI mode (see Options doc)
 			Resolver:     nbResolver,
 			DHCP:         dhcpPool,
 			Snoop:        leaseSnoop,

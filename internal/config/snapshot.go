@@ -113,6 +113,7 @@ func (c Config) Snapshot() map[string]any {
 	bol("MAMMOTH_PXE_ENABLED", c.PXEEnabled)
 	str("MAMMOTH_PXE_NEXT_SERVER", c.PXENextServer)
 	str("MAMMOTH_PXE_MODE", c.PXEMode)
+	str("MAMMOTH_PXE_UEFI_NBP", c.PXEUEFINBP)
 	num("MAMMOTH_PXE_DHCP_PORT", c.PXEDHCPPort)
 	num("MAMMOTH_PXE_TFTP_PORT", c.PXETFTPPort)
 	num("MAMMOTH_PXE_PROXY_PORT", c.PXEProxyPort)

@@ -38,6 +38,22 @@ type Options struct {
 	// BaseURL is the machine-face base URL (no trailing slash); iPXE
 	// clients are pointed at <BaseURL>/netboot/script.
 	BaseURL string
+	// UEFIPlainNBP serves the unsigned plain iPXE binaries (ipxe-amd64.efi /
+	// ipxe-arm64.efi) as the UEFI NBP instead of the shim→grubnet Secure
+	// Boot chain. The reason is an upstream defect: grub2 does not handle
+	// Proxy DHCP messages in UEFI mode, so behind a proxyDHCP responder
+	// (mammoth or a pxe-proxy beside an unmodifiable site DHCP) the grubnet
+	// stage cannot consume the split address/boot offers and strands at the
+	// GRUB prompt — shim+grub TFTP transfers succeed, then silence (no
+	// grub.cfg request, no HTTP script fetch; RackN KB-00043, RH Bugzilla
+	// #1809246). Plain iPXE re-requests DHCP itself and is the reference
+	// client for that topology. Plain iPXE is unsigned: Secure Boot must be
+	// off — a Secure-Boot-on machine behind an unmodifiable site DHCP has no
+	// PXE path at all (virtual media / UefiHttp, or negotiate DHCP options
+	// 66/67 on the site server). Default false keeps the signed chain (full
+	// DHCP shapes — pool mode, external site dnsmasq — never hit the grub2
+	// defect and must not flip this).
+	UEFIPlainNBP bool
 	// NBPs is the filesystem of network boot programs (embedded assets).
 	NBPs fs.FS
 	// Resolver answers boot lookups by MAC for the TFTP grub.cfg rendering

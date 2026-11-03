@@ -9,8 +9,8 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -72,6 +72,7 @@ replaces a hand-tuned dnsmasq; the kit is exported by the engine
 	pf.DurationVar(&o.SyncInterval, "sync-interval", syncDur, "kit re-sync period; 0 = sync once at startup")
 	pf.StringVar(&o.KitToken, "kit-token", envOr("MAMMOTH_PXEPROXY_KIT_TOKEN", ""), "bearer token for the engine kit endpoint (empty = anonymous; /netboot routes are public by default)")
 	pf.StringVar(&o.Segment, "segment", envOr("MAMMOTH_PXEPROXY_SEGMENT", ""), "provisioning segment label reported with sightings (informational)")
+	pf.StringVar(&o.UEFINBP, "uefi-nbp", envOr("MAMMOTH_PXEPROXY_UEFI_NBP", "shim"), `UEFI NBP chain: shim (default, Secure Boot holds) | ipxe (plain unsigned iPXE — grub2 cannot consume Proxy DHCP messages in UEFI mode (RackN KB-00043, RH #1809246), so behind an unmodifiable site DHCP the chain must switch; requires Secure Boot off)`)
 	pf.IntVar(&o.DHCPPort, "dhcp-port", envInt("MAMMOTH_PXEPROXY_DHCP_PORT", 67), "proxyDHCP listen port (coexists with the site DHCP across the L2)")
 	pf.IntVar(&o.ProxyPort, "proxy-port", envInt("MAMMOTH_PXEPROXY_PROXY_PORT", 4011), "PXE boot-server discovery port")
 	pf.IntVar(&o.TFTPPort, "tftp-port", envInt("MAMMOTH_PXEPROXY_TFTP_PORT", 69), "TFTP port")
@@ -92,6 +93,7 @@ type pxeProxyOptions struct {
 	SyncInterval time.Duration
 	KitToken     string
 	Segment      string
+	UEFINBP      string
 }
 
 // runPxeProxy validates the flags, syncs the kit, and serves until the
@@ -226,6 +228,12 @@ func (o pxeProxyOptions) netbootOptions() (netboot.Options, error) {
 	if base == "" {
 		return netboot.Options{}, fmt.Errorf("pxe-proxy: --base-url is required")
 	}
+	switch o.UEFINBP {
+	case "", "shim":
+	case "ipxe":
+	default:
+		return netboot.Options{}, fmt.Errorf("pxe-proxy: --uefi-nbp %q is not shim|ipxe", o.UEFINBP)
+	}
 	root := strings.TrimSpace(o.TFTPRoot)
 	st, err := os.Stat(root)
 	if err != nil || !st.IsDir() {
@@ -238,13 +246,14 @@ func (o pxeProxyOptions) netbootOptions() (netboot.Options, error) {
 	// the endpoint is a courtesy feed, not a log.
 	obs := &sightingFeed{base: base, token: o.KitToken, segment: o.Segment, seen: map[string]time.Time{}}
 	return netboot.Options{
-		DHCPPort:   o.DHCPPort,
-		ProxyPort:  o.ProxyPort,
-		TFTPPort:   o.TFTPPort,
-		SyslogPort: o.SyslogPort,
-		NextServer: ns,
-		BaseURL:    base,
-		NBPs:       os.DirFS(root),
+		DHCPPort:     o.DHCPPort,
+		ProxyPort:    o.ProxyPort,
+		TFTPPort:     o.TFTPPort,
+		SyslogPort:   o.SyslogPort,
+		NextServer:   ns,
+		BaseURL:      base,
+		NBPs:         os.DirFS(root),
+		UEFIPlainNBP: o.UEFINBP == "ipxe",
 		OnObserve: func(mac string, arch netboot.Arch) {
 			obs.report(mac, string(arch))
 		},

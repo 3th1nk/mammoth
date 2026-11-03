@@ -912,30 +912,30 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	repoCmd := "url --url=" + in.ImageSource // fallback: only reachable when no case below matches
 	nfsSource := strings.HasPrefix(in.ImageSource, "nfs://")
 	vMediaTreeSource := false
+	// Whenever a pool tree is staged (PXE always; vMedia kickstart rounds),
+	// it wins over the nfs command: HTTP with retry beats the dracut
+	// nfs-ISO download+loop-mount flow, which failed "failed to setup loop
+	// device" on 2288H in later boots after working once (2026-11-03).
+	// nfs --server --dir remains for legacy vMedia rounds without staging.
 	switch {
+	case (in.Netboot != nil && in.Netboot.PoolURL != "") || in.PoolTreeURL != "":
+		tree := in.Netboot.PoolURL
+		if tree == "" {
+			tree = in.PoolTreeURL
+		}
+		repoCmd = "url --url=" + tree
 	case nfsSource:
 		u := strings.TrimPrefix(in.ImageSource, "nfs://")
 		if i := strings.Index(u, "/"); i > 0 {
 			repoCmd = fmt.Sprintf("nfs --server=%s --dir=%s", u[:i], path.Dir(u[i:]))
 		}
 	case in.Netboot == nil:
-		// vMedia: prepare stages the plain pool tree for kickstart rounds
-		// (PoolTreeURL) — the selective RHEL9 boot CD carries no stage2/
-		// packages, and dracut cannot mount an NFS ISO FILE path; the tree
-		// over HTTP (fetched with the static ip= arguments the driver
-		// bakes) is the only installable source shape there. The seed
-		// itself rides the CD (cdrom:/ks.cfg). A http(s) TREE url in the
-		// spec keeps the url command (network packages, boot.iso shape).
-		if in.PoolTreeURL != "" {
-			repoCmd = "url --url=" + in.PoolTreeURL
-		} else if (strings.HasPrefix(in.ImageSource, "http://") || strings.HasPrefix(in.ImageSource, "https://")) &&
+		if (strings.HasPrefix(in.ImageSource, "http://") || strings.HasPrefix(in.ImageSource, "https://")) &&
 			!strings.HasSuffix(in.ImageSource, ".iso") {
 			vMediaTreeSource = true // tree url kept: network packages
 		} else {
 			repoCmd = "cdrom"
 		}
-	default:
-		repoCmd = "url --url=" + in.Netboot.PoolURL
 	}
 
 	// Declared package repos (docs/04-install-spec.md §5.5): `repo`
@@ -1002,20 +1002,20 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// inst.repo: when the distro source is an NFS-hosted ISO, anaconda can
 	// fetch packages from it directly — this allows single-slot BMCs to boot
 	// with ONLY the boot ISO (packages come over the network).
-	// inst.repo mirrors the same three cases (anaconda nfs syntax requires
+	// inst.repo mirrors the same precedence (anaconda nfs syntax requires
 	// host:/path — an .iso path is loop-mounted automatically).
 	repo := "cdrom"
 	switch {
+	case in.Netboot != nil && in.Netboot.PoolURL != "":
+		repo = in.Netboot.PoolURL
+	case in.PoolTreeURL != "":
+		repo = in.PoolTreeURL
 	case nfsSource:
 		u := strings.TrimPrefix(in.ImageSource, "nfs://")
 		if i := strings.Index(u, "/"); i > 0 {
 			u = u[:i] + ":" + u[i:]
 		}
 		repo = "nfs:" + u
-	case in.Netboot != nil:
-		repo = in.Netboot.PoolURL
-	case in.PoolTreeURL != "":
-		repo = in.PoolTreeURL
 	case vMediaTreeSource:
 		repo = in.ImageSource
 	}

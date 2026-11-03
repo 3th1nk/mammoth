@@ -60,12 +60,12 @@ func TestRepoCmdMatrix(t *testing.T) {
 		}
 	})
 
-	t.Run("pxe nfs source: nfs command wins over the pool url", func(t *testing.T) {
+	t.Run("pxe nfs source: staged pool tree wins over the flaky nfs loop-mount", func(t *testing.T) {
 		in := base
 		in.ImageSource = "nfs://192.168.1.132/data/media/images/x.iso"
 		in.Netboot = &render.NetbootInputs{PoolURL: pooled}
 		cmd, _ := renderRepoCmd(t, in)
-		if cmd != "nfs --server=192.168.1.132 --dir=/data/media/images" {
+		if cmd != "url --url="+pooled {
 			t.Fatalf("repo cmd: %q", cmd)
 		}
 	})
@@ -106,7 +106,7 @@ func TestRepoCmdMatrix(t *testing.T) {
 		}
 	})
 
-	t.Run("vmedia nfs source: nfs loop-mount of the hosted iso", func(t *testing.T) {
+	t.Run("vmedia nfs source: nfs command + nfs loop-mount inst.repo (legacy no-tree shape)", func(t *testing.T) {
 		in := base
 		in.ImageSource = "nfs://192.168.1.132/data/media/images/x.iso"
 		cmd, args := renderRepoCmd(t, in)

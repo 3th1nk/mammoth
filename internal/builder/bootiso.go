@@ -142,6 +142,17 @@ func BuildBootISO(ctx context.Context, opt BootMediaOptions, kernelArgs string) 
 	if err != nil {
 		return "", err
 	}
+	// vMedia source-surface guard: SELECTIVE families (RHEL9-lineage) boot
+	// from a boot-only CD — kernel+initrd+bootloader, NO stage2, no packages.
+	// `inst.repo=cdrom` there strands the installer at a dracut emergency
+	// shell (2288H 2026-11-03: /dev/root does not exist — the CD carries no
+	// images/install.img). Such media need a NETWORK source: nfs:// (the ISO
+	// loop-mounts, stage2 and packages both) or an http(s) tree URL.
+	// FullRepack families carry the packages on the CD and are fine.
+	if !layout.FullRepack() && strings.Contains(kernelArgs, "inst.repo=cdrom") {
+		return "", fmt.Errorf(
+			"builder: this media family (RHEL9-lineage) boots from a boot-only CD — no stage2/packages on the media. vMedia needs a network install source (nfs:// or an http(s) tree URL); library references (image.id) install via PXE")
+	}
 	if layout.FullRepack() {
 		buildSem <- struct{}{}
 		defer func() { <-buildSem }()

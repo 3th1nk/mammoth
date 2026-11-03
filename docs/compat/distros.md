@@ -6,7 +6,20 @@
 
 | 发行版 | 驱动 | 安装器 | 应答文件 | 保留分区 | 网络稳定选择器 | 状态 |
 |--------|------|--------|----------|----------|----------------|------|
-| Rocky/RHEL 系(Rocky 9/Alma 9) | `rocky9` | Anaconda | kickstart(`inst.ks=`) | **full**:`%pre` 漂移守卫 + `--onpart/--noformat` | MAC → 接口名在 `%pre` 安装期解析 | ✅ v0.1 |
+| Rocky/RHEL 系(Rocky 9/Alma 9) | `rocky9` | Anaconda | kickstart(`inst.ks=`) | **full**:`%pre` 漂移守卫 + `--onpart/--noformat` | MAC → 接口名在 `%pre` 安装期解析 | ✅ v0.1(PXE 真机闭环 2026-11-03,2288H,见 PXE 安装源注记) |
+
+> **PXE 安装源注记(rocky9 系,2288H 真机 2026-11-03)**:库镜像(id 引用)经 PXE
+> + kickstart 装机时,prepare 自动把 ISO 解包为免 token 共享树
+> (`/netboot/store/<sha>/iso`),kickstart 的 `url` 命令与 inst.repo 均指向它——
+> `image.id` 引用开箱即用,无需 nfs:// 源。**关键坑:anaconda 源解析里
+> kickstart 命令优先于内核参数**——只把 inst.repo 指向池树而 ks.cfg 的
+> `url --url=` 仍是引擎缓存路径时,packaging 照样死于 file:///media/...(真机
+> 抓包:inst.repo 正确、packaging.log 仍报 Invalid URL)。修复点在 kickstart
+> 驱动的 RepoCmd(nfs:// 源继续走 `nfs --server --dir` ISO 扫描,真机 6-9 分钟
+> 全绿)。次级坑:minimal 介质 .treeinfo 首变体(BaseOS)是空壳(Packages 空),
+> anaconda 解析到它即报同款错误——`EnsurePoolTree` 暂存 plain 池时执行
+> `pinTreeinfoVariant` 锁定 [general] 默认变体并剔除空壳段;变体段**不要**
+> 注入 arch 行(介质自身不带,注入反而破坏 9.3 的变体解析,真机复验)。
 | **Rocky 10 / RHEL 10 系** | `rocky10` | Anaconda(**UEFI-only**,上游移除 Legacy BIOS) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,机制同源) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H) |
 | **CentOS 7** | `centos7` | Anaconda 19.31(python2 世代) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H;大盘需独立 /boot,见注记) |
 | **银河麒麟 V11**(Server V11 2503) | `kylinv11` | Anaconda(现代代际) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,机制同源) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H;中文 NFS 路径全链路验证) |

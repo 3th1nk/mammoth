@@ -34,7 +34,7 @@ sudo env MAMMOTH_PXE_ENABLED=true \
 
 # 3. 提交一次 pxe 策略安装(机器 MAC 即 qemu 里的 52:54:00:12:34:56;
 #    先 discover 让库存有 NIC MAC,再:)
-curl -H "$AUTH" -d '{"type":"install","targets":{"machine_ids":["mch_…"]},
+curl -H "$AUTH" -d '{"type":"install","targets":{"targets":[{"machine_id":"mch_…"}]},
   "spec":{"image":{"distro":"rocky9","source":"https://…/Rocky.iso"},
           "boot":{"strategy":"pxe"}}}' localhost:8080/api/v1/jobs
 

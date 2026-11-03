@@ -151,6 +151,12 @@ const (
 	// NetbootPoolNFS — the ISO unpacks under the boot tree and is consumed
 	// over NFS (casper's netboot=nfs squashfs root).
 	NetbootPoolNFS NetbootPool = "nfs_tree"
+	// NetbootPoolPlain — the ISO unpacks under the boot tree and serves as a
+	// plain tokenless tree (no d-i pool semantics): RHEL-lineage kickstart
+	// installs point inst.repo straight at the tree root and anaconda
+	// consumes repodata/ + Packages/ from it (an HTTP ISO file is not
+	// installable — anaconda fetches only unpacked trees over HTTP).
+	NetbootPoolPlain NetbootPool = "plain_tree"
 )
 
 // NetbootInstallDriver is the optional capability describing how a distro

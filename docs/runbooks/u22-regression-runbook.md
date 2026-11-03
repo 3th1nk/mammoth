@@ -47,7 +47,7 @@ curl -X POST http://localhost:8080/api/v1/machines -H "Authorization: Bearer $MA
 # 提交 install(等 machine state=ready 后)
 curl -X POST http://localhost:8080/api/v1/jobs -H "Authorization: Bearer $MAMMOTH_API_TOKEN" \
   -H "Content-Type: application/json" -d @- <<'EOF'
-{"type":"install","targets":{"machine_ids":["<machine_id>"]},"spec":{
+{"type":"install","targets":{"targets":[{"machine_id":"<machine_id>"}]},"spec":{
   "image":{"distro":"ubuntu22","source":"http://<248>/ubuntu-22.04.5-live-server-amd64.iso"},
   "identity":{"hostname":"u22-regression"},
   "storage":{"disks":[{"select":{"match":{"serial":"<系统盘序列号>"}},"wipe":true,

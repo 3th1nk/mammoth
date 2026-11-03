@@ -262,16 +262,20 @@ curl -s -H "$TOKEN" localhost:8080/api/v1/machines/mch_.../layout    # 最新布
 # 快照只表达采集时刻的事实——规划与执行间隔久了,先刷新再试算:
 curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
   -d '{"type":"discover"}' localhost:8080/api/v1/machines/mch_.../actions
-# 4. 试算安装方案(只读:select 解析到哪块盘、keep 是否命中快照,不烧引导)
+# 4. 试算安装方案(只读:select 解析到哪块盘、keep 是否命中快照,不烧引导;
+#    vars 按 {var:*} 替换 spec,与真实提交同一管线)
 curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
-  -d '{"spec":{"image":{"distro":"rocky9"},"storage":{"disks":[{"select":{"match":{"size":"largest"}},"wipe":true}]}}}' \
+  -d '{"spec":{"image":{"distro":"rocky9"},"storage":{"disks":[{"select":{"match":{"size":"largest"}},"wipe":true}]}},"vars":{}}' \
   localhost:8080/api/v1/machines/mch_.../install-plan
 
-# 5. 批量安装(完整 Install Spec:一份意图,按发行版落地方言)
+# 5. 批量安装(完整 Install Spec:一份意图模板,提交期逐台解析——
+#    逐台 IP/主机名走 targets[].vars,docs/04 §5.0)
 curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
   -d '{
     "type": "install",
-    "targets": {"machine_ids": ["mch_a", "mch_b"]},
+    "targets": {"targets": [
+      {"machine_id": "mch_a", "vars": {"ip_nic1": "172.16.1.11/24", "hostname": "node-01"}},
+      {"machine_id": "mch_b", "vars": {"ip_nic1": "172.16.1.12/24", "hostname": "node-02"}}]},
     "spec": {
       "image":  {"source": "https://mirror.example/rocky9.iso", "distro": "rocky9"},
       "storage": {"disks": [{
@@ -283,17 +287,19 @@ curl -s -X POST -H "$TOKEN" -H 'Content-Type: application/json' \
             {"size": "rest", "fs": "xfs",  "mount": "/"}]}]},
       "network": [{
           "match": {"mac": "aa:bb:cc:dd:ee:01"}, "set_name": "eno1",
-          "addresses": ["172.16.1.11/24"],
+          "addresses": ["{var:ip_nic1}"],
           "routes": [{"to": "default", "via": "172.16.1.1"}],
           "nameservers": {"addresses": ["10.0.0.53"]}}],
-      "identity": {"hostname_pattern": "node-{index}"},
+      "identity": {"hostname_pattern": "{var:hostname}"},
       "access":   {"ssh_keys": ["ssh-ed25519 AAA you@host"]},
       "scripts":  [{"stage": "post_install", "content_base64": "ZWNobyBkb25lCg=="}],
       "boot":     {"strategy": "virtual_media"}
     },
     "policy": {"concurrency": 2, "on_task_failure": "continue"}
   }'
-# → 202 + job_id;两台机器并发装机,单机失败不阻塞批次
+# → 202 + job_id;两台机器并发装机,单机失败不阻塞批次;缺绑定整单即拒
+#   (422 SCHEMA_UNRESOLVED_VAR,点名机器+变量)
+# → 不需要显式逐台名时,{index}(node-{index})依旧可用
 # → root 密码缺省按任务随机,经 task.root_password 事件一次性投递
 # → 数据盘保留:disks[].keep: disk|partitions + preserve(按快照分区号;
 #   支持矩阵见 docs/06 §5,试算可预检 keep 是否命中)

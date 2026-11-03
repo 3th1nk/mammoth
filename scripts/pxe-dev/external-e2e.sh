@@ -65,7 +65,7 @@ for i in $(seq 1 30); do
 done
 curl -s -X POST -H "Authorization: Bearer devtoken" -H "Content-Type: application/json" "http://127.0.0.1:$HTTP_PORT/api/v1/jobs" -d '{
   "type": "install",
-  "targets": {"machine_ids": ["'"$MID"'"]},
+  "targets": {"targets": [{"machine_id": "'"$MID"'"}]},
   "spec": {
     "boot": {"strategy": "pxe"},
     "image": {"source": "file://'"$ALPINE_ISO"'", "distro": "alpine"},

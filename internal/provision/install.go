@@ -312,8 +312,8 @@ type scriptView struct {
 }
 
 // loadSpec resolves the effective spec: the per-task snapshot (base spec
-// shallow-merged with the machine's override, taken at submit time) wins over
-// the job-level snapshot (docs/04-install-spec.md §5 targets.overrides).
+// after spec_patch merge + {var:*} substitution, taken at submit time) wins
+// over the job-level template snapshot (docs/04-install-spec.md §5.0).
 func (e *Executor) loadSpec(ctx context.Context, task *store.Task, job *store.Job) (*installSpecView, error) {
 	var spec installSpecView
 	source := job.SpecResolved

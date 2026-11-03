@@ -95,6 +95,17 @@ func EnsurePoolTree(ctx context.Context, e *Executor, isoPath, sha string, pool 
 	if err := extract(ctx, isoPath, filepath.Join(tmp, "iso")); err != nil {
 		return "", fmt.Errorf("pool store extraction failed: %w", err)
 	}
+	if pool == render.NetbootPoolPlain {
+		// RHEL-lineage minimal media ship multi-variant treeinfos whose
+		// variant sections lack the arch field anaconda matches by, and the
+		// first variant can be a stub with an empty Packages dir — either
+		// way anaconda dies on "Error setting up software source" (2288H
+		// real-hardware). Pin the tree to the media's own default variant
+		// ([general] variant) with the arch injected.
+		if terr := pinTreeinfoVariant(filepath.Join(tmp, "iso")); terr != nil {
+			return "", fmt.Errorf("treeinfo variant pin failed: %w", terr)
+		}
+	}
 	if pool == render.NetbootPoolHTTP {
 		// Signed, udeb-complete d-i mirror (see StageNetbootPool). The key is
 		// instance-stable (MediaDir-held, first-use generated).
@@ -173,4 +184,65 @@ func SweepPoolStore(mediaDir string, log *slog.Logger) {
 		}
 		log.Info("pool store entry swept (unused past TTL)", "dir", dir)
 	}
+}
+
+// pinTreeinfoVariant rewrites a multi-variant .treeinfo down to the media's
+// own default variant ([general] variant): the [tree] variants list is
+// pinned to that single variant and the other [variant-*] sections are
+// dropped (minimal media list BaseOS first with an empty Packages dir —
+// anaconda resolves the source to it and dies on "Error setting up software
+// source", real-hardware 2288H). Variant sections are otherwise left
+// untouched — wire-verified: injecting an arch line the media itself does
+// not carry breaks anaconda's variant resolution on 9.3 (2026-11-03).
+// No .treeinfo (non-RHEL media) is a no-op.
+func pinTreeinfoVariant(root string) error {
+	raw, err := os.ReadFile(filepath.Join(root, ".treeinfo"))
+	if err != nil {
+		return nil // not RHEL-lineage media: nothing to pin
+	}
+	lines := strings.Split(string(raw), "\n")
+	variant := ""
+	inGeneral := false
+	for _, ln := range lines {
+		t := strings.TrimSpace(ln)
+		switch {
+		case strings.HasPrefix(t, "["):
+			inGeneral = t == "[general]"
+		case inGeneral && strings.HasPrefix(t, "variant"):
+			key, v, _ := strings.Cut(t, "=")
+			if strings.TrimSpace(key) == "variant" && strings.TrimSpace(v) != "" {
+				variant = strings.TrimSpace(v)
+			}
+		}
+	}
+	if variant == "" {
+		return nil // single/unknown variant layout: the treeinfo is fine as-is
+	}
+	keep := func(t string) bool {
+		return !strings.HasPrefix(t, "[variant-") || t == "[variant-"+variant+"]"
+	}
+	var b strings.Builder
+	inDropped := false
+	for _, ln := range lines {
+		t := strings.TrimSpace(ln)
+		if strings.HasPrefix(t, "[") {
+			inDropped = !keep(t)
+			if !inDropped {
+				b.WriteString(t)
+				b.WriteString("\n")
+			}
+			continue
+		}
+		if inDropped {
+			continue
+		}
+		if strings.HasPrefix(t, "variants") {
+			if _, _, ok := strings.Cut(t, "="); ok {
+				ln = "variants = " + variant
+			}
+		}
+		b.WriteString(ln)
+		b.WriteString("\n")
+	}
+	return os.WriteFile(filepath.Join(root, ".treeinfo"), []byte(b.String()), 0o644)
 }

@@ -140,6 +140,18 @@ func (d *Driver) KeepPartitionSupport() render.SupportLevel { return render.Supp
 // one caveat pending real-hardware confirmation (docs/compat/distros.md).
 func (d *Driver) PXESupport() render.SupportLevel { return render.SupportFull }
 
+// NetbootCarrier: the boot files extract from the distro ISO itself (RHEL
+// images/pxeboot — the kernel pair anaconda/dracut network-boots natively).
+func (d *Driver) NetbootCarrier() render.NetbootCarrier { return render.NetbootCarrierISO }
+
+// NetbootPool: the unpacked tree stages tokenless under /netboot/store/ and
+// inst.repo points straight at the tree root — anaconda consumes repodata/ +
+// Packages/ from it. The staged tree's .treeinfo is variant-pinned at
+// extraction (minimal media ship multi-variant treeinfos whose variant
+// sections lack the arch field anaconda matches by — 2288H real-hardware
+// finding, see provision.pinTreeinfoVariant).
+func (d *Driver) NetbootPool() render.NetbootPool { return render.NetbootPoolPlain }
+
 // dialect carries the installer-generation deltas between distro members of
 // the kickstart package. Every version-specific behaviour branches here —
 // one declarative place to extend when a new distro lands (kylinv11 etc.
@@ -886,6 +898,17 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			repoCmd = fmt.Sprintf("nfs --server=%s --dir=%s", u[:i], path.Dir(u[i:]))
 		}
 	}
+	// A library-reference source resolves to the engine-local cache path —
+	// meaningless to the installer (it becomes file:///media/... there). PXE
+	// carries the staged pool tree URL (prepare stages the unpack before
+	// rendering): point the `url` command at it. The kickstart command
+	// PRECEDES inst.repo in anaconda's source resolution, so fixing the
+	// kernel argument alone never helps — wire finding 2288H 2026-11-03:
+	// inst.repo was pool-correct while packaging still died on
+	// file:///media/....iso/repodata.
+	if in.Netboot != nil && in.Netboot.PoolURL != "" && !strings.HasPrefix(in.ImageSource, "nfs://") {
+		repoCmd = "url --url=" + in.Netboot.PoolURL
+	}
 
 	// Declared package repos (docs/04-install-spec.md §5.5): `repo`
 	// directives for the INSTALLER (packages beyond the media's own set),
@@ -964,6 +987,12 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		repo = "nfs:" + u
 	} else {
 		repo = in.ImageSource
+	}
+	// PXE carrier: the engine-local cache path is meaningless to the
+	// installer — anaconda consumes the staged pool tree URL instead (final
+	// at render time: prepare stages the unpacked tree before rendering).
+	if in.Netboot != nil && in.Netboot.PoolURL != "" {
+		repo = in.Netboot.PoolURL
 	}
 
 	answers := []render.AnswerFile{{Name: "ks.cfg", Content: buf.String()}}

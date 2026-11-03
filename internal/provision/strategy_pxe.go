@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -145,7 +146,7 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 	// udeb-complete mirror staging inside the same tree (first build only —
 	// visible means complete).
 	switch pool {
-	case render.NetbootPoolHTTP, render.NetbootPoolNFS:
+	case render.NetbootPoolHTTP, render.NetbootPoolNFS, render.NetbootPoolPlain:
 		sha, err := builder.FileSHA256(distroISO)
 		if err != nil {
 			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
@@ -165,15 +166,20 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 		// fetched the seed; subiquity fell back to the interactive language
 		// picker). The pool tree's TTL sweep reclaims the per-task files
 		// with the tree.
-		seedDir := poolDir
-		for _, a := range b.Answers {
-			dest := filepath.Join(seedDir, a.Name)
-			if merr := os.MkdirAll(filepath.Dir(dest), 0o755); merr != nil {
-				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true, "%s", merr.Error())
-			}
-			if werr := os.WriteFile(dest, []byte(a.Content), 0o644); werr != nil {
-				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
-					"seed file %s: %s", a.Name, werr.Error())
+		// The PLAIN pool (kickstart) never takes this copy: its rendered
+		// ks.cfg carries the root credential and stays behind the
+		// unguessable /render/{token} URL instead (inst.ks=).
+		if pool != render.NetbootPoolPlain {
+			seedDir := poolDir
+			for _, a := range b.Answers {
+				dest := filepath.Join(seedDir, a.Name)
+				if merr := os.MkdirAll(filepath.Dir(dest), 0o755); merr != nil {
+					return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true, "%s", merr.Error())
+				}
+				if werr := os.WriteFile(dest, []byte(a.Content), 0o644); werr != nil {
+					return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+						"seed file %s: %s", a.Name, werr.Error())
+				}
 			}
 		}
 	}
@@ -240,6 +246,12 @@ func nfsRootFor(mediaNFSBase, relPath string) string {
 // arm one-shot points the firmware at PXE and powers the machine. No media
 // mount, no settle delay — the boot tree is already complete on this host's
 // disk, so there is no out-of-band transfer tail to wait out.
+//
+// The power sequence matters: Huawei iBMC (6.41 / 2288H V5, wire-verified
+// 2026-11-02) clears a pending One-time override on the power transition —
+// set-while-on → off → on landed the machine on its local disk twice with
+// zero PXE DISCOVER on the wire. iBMC's own docs configure one-time boot
+// with the system powered down, so arm goes off → set → on.
 func (s *pxeStrategy) arm(ctx context.Context, b *bootSession) error {
 	e := s.e
 	task := b.Task
@@ -247,12 +259,55 @@ func (s *pxeStrategy) arm(ctx context.Context, b *bootSession) error {
 	if !ok {
 		return classifiedErr("CREDENTIAL_UNAVAILABLE", true, "machine or credential unavailable")
 	}
+	if _, err := e.BMC.Do(ctx, addr, cred, proto, "set_power", func(ctx context.Context, d bmc.Driver) (any, error) {
+		return nil, d.SetPower(ctx, addr, cred, bmc.PowerOff)
+	}); err != nil {
+		return err
+	}
+	if err := awaitPowerOff(ctx, e, task, addr, cred, proto); err != nil {
+		return err
+	}
 	if _, err := e.BMC.Do(ctx, addr, cred, proto, "set_boot_device", func(ctx context.Context, d bmc.Driver) (any, error) {
 		return nil, d.SetBootDevice(ctx, addr, cred, bmc.BootPXE, true)
 	}); err != nil {
 		return err
 	}
-	return powerIntoInstaller(ctx, e, task, true)
+	if _, err := e.BMC.Do(ctx, addr, cred, proto, "set_power", func(ctx context.Context, d bmc.Driver) (any, error) {
+		return nil, d.SetPower(ctx, addr, cred, bmc.PowerOn)
+	}); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	if err := e.Jobs.RecordInstallProgress(ctx, task.ID, map[string]any{"booted_at": now}); err != nil {
+		return err
+	}
+	obs.FromContext(ctx).InfoContext(ctx, "machine cold-booted into installer", "action", "off_set_on")
+	return nil
+}
+
+// awaitPowerOff waits out the chassis power-down (PowerOn against a still
+// running chassis is a silent no-op on several BMCs); proceeds after the
+// deadline rather than failing — a forced power-on is harmless.
+func awaitPowerOff(ctx context.Context, e *Executor, task *store.Task, addr string, cred bmc.Credentials, proto bmc.Protocol) error {
+	deadline := time.Now().Add(45 * time.Second)
+	for {
+		ps, err := e.BMC.Do(ctx, addr, cred, proto, "power_state", func(ctx context.Context, d bmc.Driver) (any, error) {
+			return d.PowerState(ctx, addr, cred)
+		})
+		if err == nil && ps.(bmc.PowerState) == bmc.PowerStateOff {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			obs.FromContext(ctx).WarnContext(ctx, "power-off transition not observed in time; continuing",
+				obs.FieldTaskID, task.ID)
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
 }
 
 // release disarms the registry rows and removes the boot tree.

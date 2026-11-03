@@ -186,7 +186,7 @@ Install Spec → 确认后安装**。当前 spec 校验只发生在 `POST /jobs`
 "这份 spec 在这台机器上会装成什么样":
 
 ```
-POST /machines/{id}/install-plan      (body = InstallSpec,同 install job)
+POST /machines/{id}/install-plan      (body = {spec, vars},与 install 同一解析管线)
 → 200  安装计划(仅解析,不入队、不装机):
    {
      "resolved_disks": [ { "device": "sda",

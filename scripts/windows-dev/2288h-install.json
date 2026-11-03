@@ -1,6 +1,6 @@
 {
   "type": "install",
-  "targets": {"machine_ids": ["mch_0f1e2d3c4b5a"]},
+  "targets": {"targets": [{"machine_id": "mch_0f1e2d3c4b5a"}]},
   "spec": {
     "image": {
       "source": "file:///data/os_iso/windows2019/cn_windows_server_2019_x64_dvd_4de40f33.iso",

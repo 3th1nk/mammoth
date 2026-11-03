@@ -121,7 +121,7 @@ func TestMergePatch(t *testing.T) {
 
 func TestValidateResolvedNetwork(t *testing.T) {
 	valid := json.RawMessage(`{"network":[
-		{"match":{"mac":"aa:bb:cc:dd:ee:01"},"addresses":["10.0.0.11/24","192.168.1.5"],"routes":[{"to":"default","via":"10.0.0.1"}],"nameservers":{"addresses":["10.0.0.53","fd00::53"]}},
+		{"match":{"mac":"aa:bb:cc:dd:ee:01"},"addresses":["10.0.0.11/24"],"routes":[{"to":"default","via":"10.0.0.1"}],"nameservers":{"addresses":["10.0.0.53","fd00::53"]}},
 		{"bond":{"mode":"active-backup"},"addresses":["10.1.0.2/24"]},
 		{"vlan":{"id":100,"link":"bond0"},"addresses":["10.2.0.2/24"]}
 	]}`)
@@ -137,6 +137,9 @@ func TestValidateResolvedNetwork(t *testing.T) {
 		}
 	}
 	fail(`{"network":[{"match":{"mac":"aa"},"addresses":["10.0.0.999/24"]}]}`, "10.0.0.999")
+	// bare IP (no prefix): the render layer parses addresses with
+	// netip.ParsePrefix — reject at submission with the actionable form
+	fail(`{"network":[{"match":{"mac":"aa"},"addresses":["192.168.1.221"]}]}`, "CIDR form")
 	fail(`{"network":[{"match":{"mac":"aa"},"addresses":["not-an-ip"]}]}`, "not-an-ip")
 	fail(`{"network":[{"match":{"mac":"aa"},"nameservers":{"addresses":["1.2.3.4.5"]}}]}`, "nameserver")
 	fail(`{"network":[{"match":{"mac":"aa"},"routes":[{"to":"default","via":"gg::1"}]}]}`, "route via")

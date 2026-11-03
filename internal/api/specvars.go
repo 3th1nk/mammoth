@@ -207,8 +207,13 @@ func validateResolvedNetwork(raw json.RawMessage) error {
 			return verr("SCHEMA_INVALID_ADDRESS", "network[%d]: vlan id must be a positive 802.1Q tag", i)
 		}
 		for _, a := range e.Addresses {
-			if !validIPorCIDR(a) {
-				return verr("SCHEMA_INVALID_ADDRESS", "%s: address %q is not a valid IP or CIDR", e.name(i), a)
+			// The render layer parses addresses with netip.ParsePrefix — a bare
+			// IP carries no netmask and dies at RENDER_FAILED after submission
+			// (2288H: plan preview showed a generic dialect-boundary message
+			// while the real cause was the missing /24). Enforce CIDR here.
+			if _, _, err := net.ParseCIDR(a); err != nil {
+				return verr("SCHEMA_INVALID_ADDRESS",
+					"%s: address %q must be CIDR form with a prefix length (e.g. 10.0.0.5/24) — a bare IP carries no netmask", e.name(i), a)
 			}
 		}
 		for _, d := range e.Nameservers.Addresses {
@@ -264,12 +269,4 @@ func (e netEntryView) name(i int) string {
 	}
 }
 
-// validIPorCIDR accepts a bare IP or an address with a prefix length —
-// cloud-init v2 accepts both spellings and so does the render layer.
-func validIPorCIDR(s string) bool {
-	if net.ParseIP(strings.Trim(s, "[]")) != nil {
-		return true
-	}
-	ip, _, err := net.ParseCIDR(s)
-	return err == nil && ip != nil
-}
+

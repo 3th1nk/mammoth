@@ -108,7 +108,12 @@ func PlanInstall(ctx context.Context, specJSON json.RawMessage, hw *bmc.Hardware
 		}
 		inputs.Raid = append(inputs.Raid, rr)
 	}
-	if _, _, rerr := driver.RenderAnswers(inputs, render.MachineView{ID: "plan"}); rerr != nil {
+	// Hardware rides along: dialects resolve controller-assigned disk names
+	// (LogicalDriveN) against the inventory by capacity during render
+	// validation — an empty MachineView made debian13 RAID-volume machines
+	// die on "capacity is unknown" while the real pipeline (which passes
+	// hardware) installs fine (2288H 2026-11-03).
+	if _, _, rerr := driver.RenderAnswers(inputs, render.MachineView{ID: "plan", Hardware: hw}); rerr != nil {
 		return nil, classifiedErr("RENDER_FAILED", false, "%s", rerr.Error())
 	}
 

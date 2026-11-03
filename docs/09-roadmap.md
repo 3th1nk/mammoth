@@ -384,6 +384,19 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
      行 + 真机验证,无新方言工作。注意点:引擎渲染 `rootpw --plaintext`
      (一次性随机),不涉 openEuler 默认 SM3 散列(那是 `--iscrypted`
      手写 ks 的坑);驱动名建议 `openeuler24`。随真机窗口与复验轮顺带;
+   - **驱动注入机制(候选,2026-11-03 立项,传统 PXE 实践对照确认的缺口)**——
+     现状:无 dracut --add-drivers / 驱动盘(DD)机制,发行版通路依赖介质
+     inbox 驱动,agent 通路明确"仅 inbox 驱动机型"(04-install-spec §5.4
+     边界);缓解靠载体选型(ramdisk/agent 载体 lts 内核 + modloop 全量
+     存储驱动、PXE 用 alpine NETBOOT tarball 规避 standard ISO initramfs
+     缺机房网卡驱动,05-inventory 注)——但发行版安装器通路
+     (kickstart/preseed/autoinstall)对带外特有阵列卡/新网卡无解。
+     候选形态(按成本递增):①compat 矩阵把"驱动缺失机型"记为
+     known_defects(装机失败时提示载体切换,零代码);②PXE 引导树外挂
+     驱动目录 + kickstart 系 %post dracut 重建 initramfs(装后自愈);
+     ③安装器驱动盘注入(anaconda inst.dd / dracut DD 进 initrd,装前
+     生效,prepare 阶段构建)。触发器:真实机型因驱动缺失装机失败且
+     载体切换不可行,届时从①起步逐档评估;
    - **真机 relay 回归**——等网络设备配 ip helper 的协调窗口(giaddr 应答
      已有单测,见 11-pxe-walkthrough §4);
    - ~~**uniontechos**~~ **✅ 已闭环(2026-09-19 真机,见第 2 项)**;剩余

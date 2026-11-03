@@ -478,6 +478,17 @@ func serve(args []string) error {
 			Logger: logger,
 		}
 		go func() { _ = fetcher.Run(ctx) }()
+		// Directory scanner: ISOs the operator copies into the images dir
+		// register themselves (sha256 content-addressed, distro sniffed);
+		// rows whose cache file vanished out of band are flagged missing
+		// and auto-restored when the file returns.
+		scanner := &images.DirectoryScanner{
+			Repo:   imageRepo,
+			Events: eventRepo,
+			Dir:    filepath.Join(cfg.MediaDir, "images"),
+			Logger: logger,
+		}
+		go func() { _ = scanner.Run(ctx) }()
 	}
 
 	// Runner facet (execution plane).

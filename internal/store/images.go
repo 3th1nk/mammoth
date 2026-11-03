@@ -112,6 +112,15 @@ func (r *ImageRepo) SetDetected(ctx context.Context, id, distro, version string)
 	return err
 }
 
+// SetMissing marks a ready row whose cache file vanished out of band
+// (operator moved or removed it in the media images directory). The
+// directory scanner restores the row to ready when the file returns.
+func (r *ImageRepo) SetMissing(ctx context.Context, id, cause string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE images SET state = 'missing', error = $2, updated_at = now() WHERE id = $1`, id, cause)
+	return err
+}
+
 // SetFailed marks a fetch dead with its reason. The row stays: the
 // registration (and its sha256 gate) is the operator's record; resubmitting
 // re-downloads.

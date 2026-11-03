@@ -3265,7 +3265,11 @@ components:
           description: Cached file size; set when ready.
         state:
           type: string
-          enum: [fetching, ready, failed]
+          enum: [fetching, ready, failed, missing]
+          description: >
+            `missing` — the ready file was removed from the media images
+            directory out of band; the directory scanner flags it and
+            restores the row automatically when the file returns.
         error:
           type: string
           description: Failure reason when failed (checksum mismatch,

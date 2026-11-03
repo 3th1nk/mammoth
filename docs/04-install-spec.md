@@ -95,6 +95,13 @@ POST /api/v1/credentials
 拉取完成后引擎自动嗅探 ISO 内容回填空缺的 `distro`/`version`——
 纯 Go ISO 9660 解析(PVD+目录指纹:.treeinfo/.discinfo/.disk/info/sources/apks),
 注册者自带的值优先;
+**目录自动导入**:操作者直接拷入 `MediaDir/images` 的 ISO 由目录扫描器
+(60s 周期)自动注册——内容寻址硬链接为 `<sha256>.iso` 规范名、嗅探
+distro/version、来源记为 `dir://<文件名>`;文件被带外移除时条目转
+`missing`(不自动删行,引用它的装机清晰失败),文件回归即恢复 ready;
+scp 半程文件(修改时间在稳定窗口内)留待下一轮。库的 http(s) 注册通道
+不受影响,且 `<sha>.iso` 预置文件免下载的语义(文件名即校验和)使目录
+导入与 API 注册天然互通;
 必填——校验和是门禁不是元数据)→ fetch worker 串行拉取进内容寻址缓存
 (`MediaDir/images/<sha256>.iso`,digest 重复的注册共享同一文件,下载中
 失败/损坏一律不落缓存,事件 `image.ready`/`image.failed`)。安装 spec 的

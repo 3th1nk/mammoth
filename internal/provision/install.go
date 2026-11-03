@@ -1040,6 +1040,31 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		}
 	}
 
+	// vMedia × kickstart family (RHEL9-lineage selective boot CD — no
+	// stage2/packages on the media, and dracut cannot mount an NFS ISO FILE
+	// path): stage the plain pool tree and point the kickstart source at its
+	// URL. The tree carries images/install.img (dracut's stage2) and the
+	// variant repo (packages); the machine reaches it over the network with
+	// the static ip= arguments the driver bakes. Runs before the render —
+	// the URL is FINAL at render time (docs/04-install-spec.md §5.0).
+	if name, _ := effectiveStrategyName(e, spec); name == strategyVirtualMedia {
+		if driver0, derr := e.Render.For(spec.Image.Distro); derr == nil && render.FamilyOf(driver0) == "kickstart" && !strings.HasPrefix(spec.Image.Source, "nfs://") {
+			distroISO, ferr := builder.EnsureISOVerified(ctx, spec.Image.Source, spec.Image.Checksum, e.MediaDir)
+			if ferr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+					"distro ISO fetch failed: %s", ferr.Error())
+			}
+			sha, herr := builder.FileSHA256(distroISO)
+			if herr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true, "distro ISO hash failed: %s", herr.Error())
+			}
+			if _, perr := EnsurePoolTree(ctx, e, distroISO, sha, render.NetbootPoolPlain, nil); perr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true, "%s", perr.Error())
+			}
+			in.PoolTreeURL = fmt.Sprintf("%s/netboot/store/%s/iso", strings.TrimSuffix(e.ExternalURL, "/"), sha)
+		}
+	}
+
 	driver, err := e.Render.For(spec.Image.Distro)
 	if err != nil {
 		return classifiedErr("SCHEMA_UNKNOWN_DISTRO", false, "%s", err.Error())

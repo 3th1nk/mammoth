@@ -591,6 +591,13 @@ type InstallInputs struct {
 	// even load its setup resources. Other dialects ignore it.
 	MediaLanguage string
 
+	// PoolTreeURL, set for virtual-media kickstart rounds: the staged,
+	// tokenless unpacked-tree URL the kickstart `url` command and inst.repo
+	// point at. The selective RHEL9 boot CD carries no stage2/packages and
+	// dracut cannot mount an NFS ISO file path — the tree over HTTP is the
+	// only installable source shape there (prepare stages it pre-render).
+	PoolTreeURL string
+
 	BootDrive string         // resolved bootloader device
 	Disks     []ResolvedDisk `json:"disks"`
 	Network   []NetworkEntry `json:"network,omitempty"`

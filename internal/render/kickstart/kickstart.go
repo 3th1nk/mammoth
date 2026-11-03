@@ -919,7 +919,16 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			repoCmd = fmt.Sprintf("nfs --server=%s --dir=%s", u[:i], path.Dir(u[i:]))
 		}
 	case in.Netboot == nil:
-		if (strings.HasPrefix(in.ImageSource, "http://") || strings.HasPrefix(in.ImageSource, "https://")) &&
+		// vMedia: prepare stages the plain pool tree for kickstart rounds
+		// (PoolTreeURL) — the selective RHEL9 boot CD carries no stage2/
+		// packages, and dracut cannot mount an NFS ISO FILE path; the tree
+		// over HTTP (fetched with the static ip= arguments the driver
+		// bakes) is the only installable source shape there. The seed
+		// itself rides the CD (cdrom:/ks.cfg). A http(s) TREE url in the
+		// spec keeps the url command (network packages, boot.iso shape).
+		if in.PoolTreeURL != "" {
+			repoCmd = "url --url=" + in.PoolTreeURL
+		} else if (strings.HasPrefix(in.ImageSource, "http://") || strings.HasPrefix(in.ImageSource, "https://")) &&
 			!strings.HasSuffix(in.ImageSource, ".iso") {
 			vMediaTreeSource = true // tree url kept: network packages
 		} else {
@@ -1005,6 +1014,8 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		repo = "nfs:" + u
 	case in.Netboot != nil:
 		repo = in.Netboot.PoolURL
+	case in.PoolTreeURL != "":
+		repo = in.PoolTreeURL
 	case vMediaTreeSource:
 		repo = in.ImageSource
 	}

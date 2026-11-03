@@ -198,6 +198,11 @@ iPXE 脚本),默认关闭。启用清单:
 - **PROXY 模式(有站点 DHCP)**:站点 DHCP 继续分配地址;mammoth(或
   网段代理 pxe-proxy / 外置 dnsmasq)只补 PXE 引导选项(67/4011),
   真机在 spec 里声明静态地址(routes 形态 netplan)。
+- **站点 DHCP 可谈判时的第一选择**:引导信息直接配进站点 DHCP 的
+  scope/策略(option 66 = TFTP server,option 67 = bootfile;dnsmasq 即
+  一行 `dhcp-boot`)——这是"已有站点 DHCP 的网段"上唯一支持 UEFI
+  Secure Boot 的 PXE 形态(proxyDHCP 下 grub2 不处理 UEFI Proxy DHCP
+  消息,边界与谈判配置见 §pxe-proxy 的共存节)。
 - **跨 VLAN 装机**:站点交换机对装机 VLAN 配 DHCP relay(ip helper),
   应答按 giaddr(RFC 2131)回程;TFTP/HTTP 是单播——NextServer 与
   介质/API 的地址必须从装机 VLAN 可路由。
@@ -223,7 +228,11 @@ MAMMOTH_PXE_MODE=external        # builtin(默认)| external
 ```
 undionly.kpxe            # BIOS:PXE ROM → iPXE
 shimx64.efi grubx64.efi  # UEFI x64 Secure Boot 链(Microsoft/Debian 签名)
-grub/x86_64-efi/…        # grubnet 模块表
+shimaa64.efi grubaa64.efi # UEFI aarch64 Secure Boot 链(同款签名对)
+ipxe-amd64.efi           # 未签名 iPXE(UEFI x64):windows wimboot 载体的宿主
+ipxe-arm64.efi           # 未签名 iPXE(UEFI arm64):--uefi-nbp=ipxe 链的 arm64 半边
+grub/x86_64-efi/…        # grubnet 模块表(x64)
+grub/arm64-efi/…         # grubnet 模块表(arm64)
 boot.ipxe                # iPXE 蹦床:chain .../netboot/script?mac=${net0/mac}
 grub/grub.cfg            # grub 蹦床:configfile (http,mammoth)/netboot/grub/${net_default_mac}
 dnsmasq.conf.example     # 站点 dnsmasq 配置模板(tag 路由已写好)
@@ -231,7 +240,8 @@ dnsmasq.conf.example     # 站点 dnsmasq 配置模板(tag 路由已写好)
 
 部署三步:①把 kit 目录同步给站点 TFTP(如 dnsmasq 的 tftp-root);②按
 `dnsmasq.conf.example` 配站点 dnsmasq(真实地址池 + tag 路由:BIOS→
-undionly→iPXE→蹦床,UEFI x64→shim→grub→蹦床,iPXE 类→boot.ipxe);
+undionly→iPXE→蹦床,UEFI x64→shimx64→grubx64→蹦床,UEFI aarch64→
+shimaa64→grubaa64→蹦床(client-arch 11),iPXE 类→boot.ipxe);
 ③蹦床里的 HTTP 地址已按 `MAMMOTH_EXTERNAL_URL` 填好,保证客户端可达即可。
 
 > **站点 DHCP 为 Windows Server 的注意项**:Windows DHCP 的 option 43 需按
@@ -248,33 +258,9 @@ undionly→iPXE→蹦床,UEFI x64→shim→grub→蹦床,iPXE 类→boot.ipxe);
 DHCP,option 93 固件观测不工作(观测档案不更新);多 NIC 主机上 iPXE 的
 `net0` 未必是 PXE 出口网卡,错位时查无 entry、机器回盘(蹦床注释已注明)。
 
-```
-undionly.kpxe            # BIOS:PXE ROM → iPXE
-shimx64.efi grubx64.efi  # UEFI x64 Secure Boot 链(Microsoft/Debian 签名)
-shimaa64.efi grubaa64.efi # UEFI aarch64 Secure Boot 链(同款签名对)
-ipxe-amd64.efi           # 未签名 iPXE(UEFI x64):windows wimboot 载体的宿主
-grub/x86_64-efi/…        # grubnet 模块表(x64)
-grub/arm64-efi/…         # grubnet 模块表(arm64)
-boot.ipxe                # iPXE 蹦床:chain .../netboot/script?mac=${net0/mac}
-grub/grub.cfg            # grub 蹦床:configfile (http,mammoth)/netboot/grub/${net_default_mac}
-dnsmasq.conf.example     # 站点 dnsmasq 配置模板(tag 路由已写好)
-```
-
-部署三步:①把 kit 目录同步给站点 TFTP(如 dnsmasq 的 tftp-root);②按
-`dnsmasq.conf.example` 配站点 dnsmasq(真实地址池 + tag 路由:BIOS→
-undionly→iPXE→蹦床,UEFI x64→shimx64→grubx64→蹦床,UEFI aarch64→
-shimaa64→grubaa64→蹦床(client-arch 11),iPXE 类→boot.ipxe);
-③蹦床里的 HTTP 地址已按 `MAMMOTH_EXTERNAL_URL` 填好,保证客户端可达即可。
-
-原理:**客户端自报身份**。mammoth 不参与 DHCP 就看不到 MAC,两个蹦床让
-客户端把 MAC 放进 URL——iPXE 展开 `${net0/mac}`,grub 展开
-`${net_default_mac}`——落回与 builtin 模式完全相同的 HTTP 端点
-(`/netboot/script?mac=`、`/netboot/grub/<mac>`),entry 注册、enroll
-回落、无 entry 即退出回盘的语义原样生效。**模式代价**:mammoth 看不到
-DHCP,option 93 固件观测不工作(观测档案不更新);多 NIC 主机上 iPXE 的
-`net0` 未必是 PXE 出口网卡,错位时查无 entry、机器回盘(蹦床注释已注明)。
-
-qemu 同型验证(网桥 + dnsmasq + UEFI guest 经此链完成 alpine agent 全装)
+qemu 同型验证(网桥 + dnsmasq + UEFI guest 经此链完成 alpine agent 全装;
+OVMF 取 secboot 变体——**签名 shim 链在 Secure Boot 开启下走通**,即
+"全 DHCP 单服务器形态不受 grub2 proxyDHCP 缺陷影响"的实证)
 见 `scripts/pxe-dev/external-e2e.sh`。
 
 ### pxe-proxy — Go 原生网段代理(dnsmasq 的替代形态,2026-10-29)
@@ -291,6 +277,11 @@ MAMMOTH_PXEPROXY_BASE_URL=http://<engine>:8080 mammoth pxe-proxy --tftp-root /va
 
 - `--next-server` 可选:未指定时从首个 PXE 请求的到达接口自动学习本机
   IPv4(IP_PKTINFO),多网卡/容器免配置;显式指定优先。
+- `--uefi-nbp=shim|ipxe`(默认 shim,env `MAMMOTH_PXEPROXY_UEFI_NBP`):
+  UEFI NBP 链选择——`ipxe` = 未签名裸 iPXE,绕开"grub2 不处理 UEFI
+  Proxy DHCP 消息"的上游缺陷(RackN KB-00043 / RH #1809246),本拓扑
+  (站点 DHCP 不可控)下 UEFI 机型的开关,SB 须关;取舍与边界见下方
+  共存节。
 - kit 自动同步:启动 + 每 5 分钟(`--sync-interval`),stat 指纹 ETag +
   `If-None-Match` 协商——内容未变 304 零下载;变更则下载解包原子替换
   TFTP root,失败保留旧 root(坏下载不得卡机器在 PXE 提示)。
@@ -298,8 +289,9 @@ MAMMOTH_PXEPROXY_BASE_URL=http://<engine>:8080 mammoth pxe-proxy --tftp-root /va
   `/netboot/observe` → pending_machines 台账;10 分钟同客户端去重窗。
 - compose:`deploy/compose.pxe-proxy.yml`(host 网络,tftp-root 卷挂载);
   env 模板:`deploy/pxe-proxy.env.example`。
-- 逐项说明:防火墙放行 67/69/4011(UDP)与 8080(TCP,引擎机器面——kit 同步与 sightings 回传);**Secure Boot
-  需关闭**(iPXE 未签名);装机段地址避开占址设备(先 ARP/ping 探测)。
+- 逐项说明:防火墙放行 67/69/4011(UDP)与 8080(TCP,引擎机器面——kit 同步与 sightings 回传);UEFI 机型
+  的 Secure Boot 边界见下方共存节(默认 shim 链签名有效,proxy 拓扑受
+  grub2 上游缺陷约束);装机段地址避开占址设备(先 ARP/ping 探测)。
 
 外置 dnsmasq 形态仍受支持(示例配置在 kit 的 dnsmasq.conf.example),
 pxe-proxy 是它的免配置替代。qemu 同型验证(网桥 + dnsmasq + UEFI guest 经此链完成 alpine agent 全装)
@@ -316,6 +308,79 @@ dhcp-boot=tag:winboot,tag:!ipxe,ipxe-amd64.efi,,<tftp-server>
 ```
 
 windows 全链 rig 见 `scripts/windows-dev/external-win-e2e.sh`。
+
+### 站点 DHCP 不可控:共存边界与最佳实践(2026-11-03)
+
+装机 VLAN 上已有站点 DHCP 且不可改造时,**proxyDHCP 旁挂(pxeproxy)是
+唯一共存形态**——POOL 模式与 external(站点 dnsmasq 全量 DHCP)都是完整
+地址权威,并存即双权威(租约打架/外来客户端抽干小池,allowlist 门禁的
+2288H 机房教训即源于此)。行业同型实践:FOG 的 dnsmasq proxy 是官方
+推荐的"站点 DHCP 必须继续使用且不可改"形态,MAAS rack ProxyDHCP 是
+产品级特性,pixiecore 为参考实现——本形态是业界一等场景,但有一条上游
+硬边界(见下),必须按机型固件分型对待。
+
+**第一推荐仍是谈判**:在站点 DHCP 的 scope/策略上加两条选项——
+option 66(TFTP server = pxe-proxy/引擎的装机网地址)+ option 67
+(bootfile = 对应架构 NBP)。这是"已有站点 DHCP 的网段"上唯一支持
+UEFI Secure Boot 的 PXE 形态(单服务器完整 ACK,grub 不受下述缺陷影响),
+谈判成本通常低于预期(两条选项,不动地址池)。各家形态:
+
+```
+# ISC dhcpd(subnet 或 host 级)
+option tftp-server-name "192.168.77.1";        # 066
+filename "undionly.kpxe";                      # 067(BIOS;UEFI 按 tag 分架构)
+# dnsmasq(一行)
+dhcp-boot=undionly.kpxe,,192.168.77.1
+# Windows DHCP:scope 策略页 066 = TFTP 地址,067 = 文件名(名称带前导零);
+# 多数 UEFI ROM 认 66/67,不强制 option 43(Windows option 43 TLV 注意项
+# 见 4.5.1)
+```
+
+**上游硬边界:grub2 不处理 UEFI 模式下的 Proxy DHCP 消息**(RackN
+KB-00043;Red Hat Bugzilla #1809246,连 dnsmasq 社区都确认 dnsmasq proxy
+无法引导 UEFI 客户端):shim→grubnet 链在 proxy 形态下哪怕 ROM 完美合并
+两份 OFFER、TFTP 全部成功,grubnet 也拿不到带引导信息的 DHCP ACK,连
+grub.cfg 都不请求,直接落 GRUB 提示符。**失败签名**:TFTP 传输
+shimx64/grubx64 成功 → 静默(无 grub.cfg RRQ、无 HTTP 脚本 fetch)。
+
+应对(按机型固件分型,各 VLAN 部署时逐机型核):
+
+- **BIOS**(undionly→iPXE):iPXE 自己重新 DHCP,是 proxyDHCP 的参考
+  客户端(Pixiecore 模型的目标客户端)——本形态的主验证路径,预期直接
+  可用;
+- **UEFI SB-off**:`--uefi-nbp=ipxe`(builtin 即
+  `MAMMOTH_PXE_UEFI_NBP=ipxe`)把 UEFI NBP 切到未签名裸 iPXE
+  (ipxe-amd64/arm64.efi,external kit 自动导出),绕开 grub2 缺陷;
+- **UEFI SB-on**:行业无解(KB-00043 原文 "not a valid solution")——
+  此类机型走虚拟介质载体 / UefiHttp,或回到谈判路径;不要在该组合上
+  反复消耗排障时间。
+
+**多网段 pxe-proxy 部署的局限与最佳实践**(跨网段生产的标准形态:一个
+mammoth(承载网)+ 每装机 VLAN 一个 pxe-proxy):
+
+- **落点原则**:DHCP 广播不跨段,proxyDHCP 必须驻留在机器 L2 内——每个
+  装机 VLAN 一个 pxe-proxy,不要试图让一个中央 proxy 服务多段。跨段
+  仅在"ip helper 把 DISCOVER 转发给 pxe-proxy + giaddr 回程"形态下成立:
+  helper 列表逐点核对(漏配即 pxe-proxy 全盲,客户端 PXE-E53),giaddr
+  分支已实现、relay 真机回归未完成(docs/11-pxe-walkthrough.md §4,
+  roadmap 挂账项)。TFTP(69)/HTTP 是单播可路由,防火墙放行
+  67/69/4011(UDP)与 8080(TCP)。
+- **kit 自动同步即资产分发**:引擎刷新引导资产后,各 VLAN pxe-proxy 按
+  5 分钟周期(ETag 协商,内容未变零下载)自动跟进,免手工逐段拷贝;
+  `--uefi-nbp` 是部署级决策,各 VLAN 口径一致。
+- **排障第一检查点 = sighting 有无**:每次 proxyDHCP 应答都会回传
+  sightings(POST /netboot/observe → pending_machines 台账),引擎侧
+  machines.pxe_firmware 沉淀 (MAC, arch) 观测。无 sighting = DISCOVER
+  根本没到 pxe-proxy(helper 列表 / L2 归属 / 端口绑定冲突,与站点 DHCP
+  同机会撞 UDP 67);有 sighting 而引导失败 = 下游问题(TFTP 可达性 /
+  grub2 边界 / 蹦床 HTTP 可达性),按下面的判别表走。
+- **站点 DHCP 的 siaddr 默认自指**(ISC dhcpd/dnsmasq 同行为,changelog
+  明言对齐):OFFER/ACK 的 next-server 字段默认填站点 DHCP 自己的地址,
+  粗心的 ROM 可能据此拿错 TFTP 目标(FOG 社区常见 "client pulls from
+  the wrong IP")。判别:抓包对比两份 OFFER 的 siaddr 与客户端实际 RRQ
+  的目标 IP;完整四看清单见 docs/11-pxe-walkthrough.md §4。
+- **验证矩阵与失败形态判别表**:docs/runbooks/pxe-proxy-validation.md
+  (BIOS → UEFI SB-off → UEFI SB-on 边界定案 → relay 的四步序列)。
 
 ## 4.5.2 Windows PXE 的部署层 SMB 导出
 

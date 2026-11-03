@@ -397,6 +397,35 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
      ③安装器驱动盘注入(anaconda inst.dd / dracut DD 进 initrd,装前
      生效,prepare 阶段构建)。触发器:真实机型因驱动缺失装机失败且
      载体切换不可行,届时从①起步逐档评估;
+   - **启动时 DHCP 探测自检(候选,2026-11-03 立项)**——netboot/pxe-proxy
+     启动时主动发探测 DISCOVER,按应答分类本网段地址服务形态(站点 DHCP
+     有/无/多个、应答是否携带引导选项),据此校验模式配置并给出可操作告警:
+     池模式撞站点 DHCP = 双地址权威租约打架;proxy 模式无站点 DHCP = 客户端
+     必然拿不到引导信息(PXE-E53 类引导即死)。与"装机网段地址服务可观测"
+     (本文件独立定稿节)互补:那节管运行时 per-MAC 观测,本项管启动时配置
+     自检(NBpxeserver 同类能力佐证价值)。触发:随 pxe-proxy 跨网段真机
+     回归(relay 回归)窗口顺带;
+   - **proxy 模式 UEFI NBP 链选择**——**✅ 已落地(2026-11-03,单测全绿,
+     真机回归随 pxe-proxy 窗口)**——上游硬边界:grub2 不处理 UEFI 模式的
+     Proxy DHCP 消息(RackN KB-00043、RH Bugzilla #1809246),shim→grubnet
+     链在"pxe-proxy + 不可控站点 DHCP"拓扑下必然落 GRUB 提示符(失败
+     签名:shim/grub TFTP 成功 → 静默)。新增 `MAMMOTH_PXE_UEFI_NBP=
+     shim|ipxe`(builtin)与 `pxe-proxy --uefi-nbp`(默认 shim):ipxe =
+     未签名裸 iPXE(ipxe-amd64/arm64.efi,external kit 同步补导出 arm64
+     件),绕开 grub2 缺陷,SB 须关;SB-on + 不可控站点 DHCP = 行业无解
+     (走 vMedia/UefiHttp 或谈判站点 DHCP option 66/67,部署边界与谈判
+     配置落 docs/operations.md §站点 DHCP 共存节,验证矩阵落
+     runbooks/pxe-proxy-validation.md);全 DHCP 形态(池/external)永不
+     命中该缺陷,保持签名链默认;
+   - **iPXE sanboot/httpdisk 直挂 ISO(候选,2026-11-03 立项)**——HTTP 直挂
+     原盘 ISO 引导(iPXE sanboot http://…),免任务级重打包;硬前提 =
+     文件面 HTTP Range/ETag(池树通路已具备,2026-11-03 落地)。能力边界
+     先行说清:sanboot 引导的是 ISO 自带引导器,内核参数/应答文件无法注入
+     ——这正是重打包载体存在的理由,故适用面仅限 rescue/live 介质、自带
+     网络寻址应答机制的原盘、以及 vMedia 固件死路机型的又一逃生门
+     (compat/huawei.md windows vMedia 节那类);UEFI 侧 iPXE sanboot 支持
+     度未验证且 SB 链不可用(裸 iPXE,wimboot 同款例外)。触发:真实需求
+     (rescue 场景或 vMedia 死路机型复现)再排;
    - **真机 relay 回归**——等网络设备配 ip helper 的协调窗口(giaddr 应答
      已有单测,见 11-pxe-walkthrough §4);
    - ~~**uniontechos**~~ **✅ 已闭环(2026-09-19 真机,见第 2 项)**;剩余

@@ -928,7 +928,10 @@ paths:
         Machine-facing endpoint for the PXE boot path: serves the per-task
         boot tree (kernel/initrd/aux files extracted from the distro media)
         that the iPXE script references. The unguessable task token in the
-        path is the credential, mirroring /render/{token}/{file}.
+        path is the credential, mirroring /render/{token}/{file}. Byte-range
+        requests are honored: an interruptible fetch of a large initrd
+        resumes at the last byte (206 with Content-Range; every response
+        advertises Accept-Ranges: bytes).
       responses:
         '200':
           description: Boot artifact content
@@ -1014,6 +1017,9 @@ paths:
         The tree carries the enrollment token in its overlay — the same
         provisioning-L2 trust model as the per-task boot trees. 404 when
         enrollment is disabled or the name is not in the fixed allowlist.
+        Byte-range requests are honored (206 with Content-Range,
+        Accept-Ranges: bytes), same resumable-fetch semantics as
+        /netboot/files/{token}/{file}.
       responses:
         '200':
           description: Boot artifact content

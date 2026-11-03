@@ -76,6 +76,14 @@ func (s *Server) FetchNetbootEnrollFile(ctx context.Context, request gen.FetchNe
 		return nil, verrStatus(http.StatusNotFound, "NETBOOT_UNKNOWN_ENROLLMENT",
 			"file %q is not available", request.Name)
 	}
+	// Same Range answer as FetchNetbootFile — the enroll tree carries the
+	// full kernel+initrd for every unknown MAC in the room, same resume
+	// economics (see rangeFetch for the nil-response mechanics).
+	if gc := rangeFetch(ctx); gc != nil {
+		defer f.Close()
+		serveRangeAware(gc, f, st)
+		return nil, nil
+	}
 	// Ownership transfers to the response visitor (see FetchNetbootFile —
 	// deferring Close here truncated transfers on real hardware).
 	return gen.FetchNetbootEnrollFile200ApplicationoctetStreamResponse{

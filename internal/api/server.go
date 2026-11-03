@@ -148,12 +148,19 @@ func New(d Deps, apiToken string) *gin.Engine {
 				Token: c.Param("token"),
 				File:  sub + c.Param("rest"),
 			}
-			resp, err := srv.FetchNetbootFile(c.Request.Context(), req)
+			// The gin context itself, not c.Request.Context(): the strict
+			// handler reads Range headers off it (rangeFetch), mirroring
+			// what the generated wrapper passes for the single-file route.
+			resp, err := srv.FetchNetbootFile(c, req)
 			if err != nil {
 				writeError(c, err)
 				return
 			}
-			_ = resp.VisitFetchNetbootFileResponse(c.Writer)
+			// A Range fetch already wrote its 206 on the gin writer and
+			// returned a nil response — visiting nil would panic.
+			if resp != nil {
+				_ = resp.VisitFetchNetbootFileResponse(c.Writer)
+			}
 		})
 	}
 	// Per-MAC GRUB config over HTTP — the external-PXE escape hatch's

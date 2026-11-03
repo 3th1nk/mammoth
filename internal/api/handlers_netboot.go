@@ -100,29 +100,21 @@ func (s *Server) serveGrubByMAC(c *gin.Context) {
 // apk repository). Paths are cleaned and confined to the granted subtree —
 // traversal is structurally impossible.
 func (s *Server) FetchNetbootFile(ctx context.Context, request gen.FetchNetbootFileRequestObject) (gen.FetchNetbootFileResponseObject, error) {
-	e, err := s.NetbootRepo.ByToken(ctx, request.Token)
+	f, st, err := s.openBootTreeFile(ctx, request.Token, request.File)
 	if err != nil {
 		return nil, err
 	}
-	rel, ok := entryGrants(e, request.File)
-	if !ok {
-		obs.FromContext(ctx).InfoContext(ctx, "netboot file rejected", "token", e.Token, "file", request.File)
-		return nil, verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
-			"file %q is not part of this boot tree", request.File)
-	}
-	path := filepath.Join(s.MediaDir, "netboot", e.Token, rel)
-	f, err := os.Open(path)
-	if err != nil {
-		obs.FromContext(ctx).InfoContext(ctx, "netboot file miss", "token", e.Token, "file", rel)
-		return nil, verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
-			"file %q is not available yet", request.File)
-	}
-	obs.FromContext(ctx).InfoContext(ctx, "netboot file served", "file", rel)
-	st, err := f.Stat()
-	if err != nil || !st.Mode().IsRegular() {
-		f.Close()
-		return nil, verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
-			"file %q is not available", request.File)
+	// Range fetches answer straight on the gin writer and return a nil
+	// response: the strict contract has no 206 shape, and the generated
+	// wrapper writes nothing when response and error are both nil. Without
+	// this, a dropped connection mid-initrd (hundreds of MB over the
+	// provisioning LAN) restarts the fetch from byte zero — resumable
+	// clients (curl/wget, d-i retriever, casper) only pick up at the last
+	// byte when the server honors Range.
+	if gc := rangeFetch(ctx); gc != nil {
+		defer f.Close()
+		serveRangeAware(gc, f, st)
+		return nil, nil
 	}
 	// File ownership transfers to the generated response visitor: it is
 	// read (and closed, being an io.ReadCloser) only after this handler
@@ -132,6 +124,62 @@ func (s *Server) FetchNetbootFile(ctx context.Context, request gen.FetchNetbootF
 		Body:          f,
 		ContentLength: st.Size(),
 	}, nil
+}
+
+// openBootTreeFile resolves a boot-tree file request to an open handle:
+// entry lookup by token, grant check (flat allowlist + subtree grants),
+// then open + regular-file stat under MediaDir/netboot/<token>/. Shared by
+// the strict handler's whole-body path and its Range branch.
+func (s *Server) openBootTreeFile(ctx context.Context, token, file string) (*os.File, os.FileInfo, error) {
+	e, err := s.NetbootRepo.ByToken(ctx, token)
+	if err != nil {
+		return nil, nil, err
+	}
+	rel, ok := entryGrants(e, file)
+	if !ok {
+		obs.FromContext(ctx).InfoContext(ctx, "netboot file rejected", "token", e.Token, "file", file)
+		return nil, nil, verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
+			"file %q is not part of this boot tree", file)
+	}
+	path := filepath.Join(s.MediaDir, "netboot", e.Token, rel)
+	f, err := os.Open(path)
+	if err != nil {
+		obs.FromContext(ctx).InfoContext(ctx, "netboot file miss", "token", e.Token, "file", rel)
+		return nil, nil, verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
+			"file %q is not available yet", file)
+	}
+	obs.FromContext(ctx).InfoContext(ctx, "netboot file served", "file", rel)
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		f.Close()
+		return nil, nil, verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
+			"file %q is not available", file)
+	}
+	return f, st, nil
+}
+
+// rangeFetch returns the gin context when the request carries a Range
+// header. The generated strict wrapper passes the *gin.Context AS the
+// handler's ctx (server.go ContextWithFallback note) — that is the only
+// channel through which a strict handler can see request headers or reach
+// the writer, and the only place a 206 can be produced without touching
+// generated code.
+func rangeFetch(ctx context.Context) *gin.Context {
+	gc, ok := ctx.(*gin.Context)
+	if !ok || gc.GetHeader("Range") == "" {
+		return nil
+	}
+	return gc
+}
+
+// serveRangeAware hands f to http.ServeContent: 206 + Content-Range for
+// resumable clients, 416 for unsatisfiable ranges, 304 for conditional
+// fetches, and Accept-Ranges on every answer so the client learns resume is
+// an option. Content-Type is preset to keep the octet-stream the contract
+// declares (ServeContent otherwise sniffs it from the file extension).
+func serveRangeAware(c *gin.Context, f *os.File, st os.FileInfo) {
+	c.Header("Content-Type", "application/octet-stream")
+	http.ServeContent(c.Writer, c.Request, st.Name(), st.ModTime(), f)
 }
 
 // entryGrants resolves a requested file to its on-disk path relative to the
@@ -206,7 +254,10 @@ func (s *Server) fetchPoolStoreFile(c *gin.Context, sha, rest string) error {
 	}
 	obs.FromContext(c.Request.Context()).InfoContext(c.Request.Context(),
 		"pool store file served", "sha256", sha, "file", rel)
-	c.DataFromReader(http.StatusOK, st.Size(), "application/octet-stream", f, nil)
+	// ServeContent instead of a bare stream: the pool tree carries the
+	// heavy pulls (distro install trees, install.wim) and a mid-transfer
+	// drop on those restarts from byte zero unless Range is honored.
+	serveRangeAware(c, f, st)
 	return nil
 }
 

@@ -892,11 +892,26 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// ISO installs via the `nfs` command (dir = the file's directory;
 	// anaconda scans it for the ISO) or inst.repo on the kernel command line.
 	repoCmd := "url --url=" + in.ImageSource
-	if strings.HasPrefix(in.ImageSource, "nfs://") {
+	nfsSource := strings.HasPrefix(in.ImageSource, "nfs://")
+	if nfsSource {
 		u := strings.TrimPrefix(in.ImageSource, "nfs://")
 		if i := strings.Index(u, "/"); i > 0 {
 			repoCmd = fmt.Sprintf("nfs --server=%s --dir=%s", u[:i], path.Dir(u[i:]))
 		}
+	}
+	// http(s) sources pointing at an UNPACKED TREE (no .iso suffix) keep the
+	// url command on every carrier — packages flow from the network mirror
+	// (the historical vMedia shape: boot.iso media + network packages).
+	vMediaTreeSource := in.Netboot == nil && !nfsSource &&
+		(strings.HasPrefix(in.ImageSource, "http://") || strings.HasPrefix(in.ImageSource, "https://")) &&
+		!strings.HasSuffix(in.ImageSource, ".iso")
+	// vMedia with an ISO-file or engine-local source: packages ride the
+	// BMC-mounted CD — the repacked boot ISO is a copy of the source ISO and
+	// carries the full distro tree. A cache path renders file:///media/...
+	// on the installer and an ISO-over-HTTP is not an installable source:
+	// the `cdrom` command is the source.
+	if in.Netboot == nil && !nfsSource && !vMediaTreeSource {
+		repoCmd = "cdrom"
 	}
 	// A library-reference source resolves to the engine-local cache path —
 	// meaningless to the installer (it becomes file:///media/... there). PXE
@@ -906,7 +921,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// kernel argument alone never helps — wire finding 2288H 2026-11-03:
 	// inst.repo was pool-correct while packaging still died on
 	// file:///media/....iso/repodata.
-	if in.Netboot != nil && in.Netboot.PoolURL != "" && !strings.HasPrefix(in.ImageSource, "nfs://") {
+	if in.Netboot != nil && in.Netboot.PoolURL != "" && !nfsSource {
 		repoCmd = "url --url=" + in.Netboot.PoolURL
 	}
 
@@ -975,7 +990,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// fetch packages from it directly — this allows single-slot BMCs to boot
 	// with ONLY the boot ISO (packages come over the network).
 	repo := "cdrom"
-	if strings.HasPrefix(in.ImageSource, "nfs://") {
+	if nfsSource {
 		// anaconda nfs syntax requires host:/path (an .iso path is loop-mounted
 		// automatically — the supported way to install from an NFS-hosted ISO;
 		// an HTTP ISO file is NOT installable: anaconda can only fetch an
@@ -985,12 +1000,16 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			u = u[:i] + ":" + u[i:]
 		}
 		repo = "nfs:" + u
-	} else {
-		repo = in.ImageSource
 	}
+	// vMedia tree-URL sources keep the url passthrough — packages flow from
+	// the network mirror (see RepoCmd above); ISO files and engine-local
+	// paths keep the cdrom default (unopenable sources otherwise).
 	// PXE carrier: the engine-local cache path is meaningless to the
 	// installer — anaconda consumes the staged pool tree URL instead (final
 	// at render time: prepare stages the unpacked tree before rendering).
+	if vMediaTreeSource {
+		repo = in.ImageSource
+	}
 	if in.Netboot != nil && in.Netboot.PoolURL != "" {
 		repo = in.Netboot.PoolURL
 	}

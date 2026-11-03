@@ -20,6 +20,10 @@
 > anaconda 解析到它即报同款错误——`EnsurePoolTree` 暂存 plain 池时执行
 > `pinTreeinfoVariant` 锁定 [general] 默认变体并剔除空壳段;变体段**不要**
 > 注入 arch 行(介质自身不带,注入反而破坏 9.3 的变体解析,真机复验)。
+> **nfs:// 源降级为不推荐**:其 dracut 流(下载 1.6G ISO 入 tmpfs +
+> loop-mount 取 stage2)在同一台 2288H 上首轮成功后连续多轮
+> 「failed to setup loop device」循环直至 emergency(2026-11-03)——非确定性,
+> 池树 HTTP 流(带重试)为推荐形态。
 | **Rocky 10 / RHEL 10 系** | `rocky10` | Anaconda(**UEFI-only**,上游移除 Legacy BIOS) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,机制同源) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H) |
 | **CentOS 7** | `centos7` | Anaconda 19.31(python2 世代) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H;大盘需独立 /boot,见注记) |
 | **银河麒麟 V11**(Server V11 2503) | `kylinv11` | Anaconda(现代代际) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,机制同源) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H;中文 NFS 路径全链路验证) |

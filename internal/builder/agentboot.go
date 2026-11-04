@@ -120,7 +120,7 @@ func agentScript() string {
 # any failing command would kill the whole runtime silently (no report, no
 # shell). This runtime handles its own errors: strip the -e and re-exec. The
 # child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
-SCRIPT_VERSION="ab-v14"
+SCRIPT_VERSION="ab-v15"
 case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
 log "agent runtime $SCRIPT_VERSION starting"
 
@@ -223,6 +223,25 @@ bootstrap_tools() {
     # The agent bootstraps its own toolchain from the pool — the same repo
     # the base system installs from (boot media apks or alpine_repo= URL).
     apk add --no-cache sfdisk util-linux e2fsprogs dosfstools openssl >/dev/console 2>&1
+    # Storage/HBA drivers live in modloop: the NETBOOT initramfs carries
+    # only the scsi mid-layer, and the sysinit hwdrivers coldplug runs
+    # before modloop is mounted — its pass over an empty /lib/modules
+    # finds nothing, and once modloop lands nobody re-probes. Re-run the
+    # coldplug here (modloop is long since mounted by the time the local
+    # runlevel fires) with a modprobe fallback list for the common
+    # controllers, or the agent sees no disks at all (2288H 2026-11-04,
+    # PXE carrier: four identical rounds. The vMedia carrier never hits
+    # this — its initramfs ships the full scsi feature set inside the
+    # initramfs itself).
+    rc-service hwdrivers restart >/dev/console 2>&1 || hwdrivers >/dev/console 2>&1 || true
+    mdev -s >/dev/console 2>&1 || true
+    for m in megaraid_sas hpsa aacraid mpt3sas cciss nvme_core nvme; do
+        modprobe "$m" >/dev/console 2>&1
+    done
+    log "bootstrap: hwdrivers=$? modloop_mount=$(grep -i modloop /proc/mounts | head -1 | cut -d\" \" -f2) \
+disks=[$(lsblk -ndo NAME,TYPE 2>/dev/null | tr \"\n\" \" \")] \
+loaded=[$(grep -oE \"megaraid_sas|hpsa|aacraid|nvme\" /proc/modules | tr \"\n\" \" \")] \
+dmesg_sas=$(dmesg 2>/dev/null | grep -ci -E \"megaraid|mfi\")"
     # filesystem modules for the target mounts (ext4 usually auto-loads via
     # modprobe, but the modloop lookup is not worth racing)
     modprobe ext4 >/dev/console 2>&1

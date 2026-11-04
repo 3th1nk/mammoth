@@ -47,9 +47,9 @@ func envPort(key string, def int) int {
 	return def
 }
 
-func httpPort() int  { return envPort("MAMMOTH_SANDBOX_HTTP_PORT", 18080) }
-func dbPort() int    { return envPort("MAMMOTH_SANDBOX_DB_PORT", 55433) }
-func sshBase() int   { return envPort("MAMMOTH_SANDBOX_SSH_PORT", 2222) }
+func httpPort() int { return envPort("MAMMOTH_SANDBOX_HTTP_PORT", 18080) }
+func dbPort() int   { return envPort("MAMMOTH_SANDBOX_DB_PORT", 55433) }
+func sshBase() int  { return envPort("MAMMOTH_SANDBOX_SSH_PORT", 2222) }
 
 // Dir is the sandbox state directory: state.json, the one-shot SSH key, the
 // alpine ISO cache, guest disks and logs. Assets survive `sandbox down`.

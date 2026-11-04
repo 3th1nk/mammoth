@@ -88,7 +88,7 @@ func TestBuildInstallSpecRawYAML(t *testing.T) {
 	s := &Server{}
 	spec, err := s.buildInstallSpec(installSubmitIn{
 		MachineIDs: []string{"mch_1"},
-		RawSpec: "boot:\n  strategy: pxe\nimage:\n  source: file:///di.iso\n  distro: alpine\n",
+		RawSpec:    "boot:\n  strategy: pxe\nimage:\n  source: file:///di.iso\n  distro: alpine\n",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -204,4 +204,3 @@ func TestTerminalJob(t *testing.T) {
 		}
 	}
 }
-

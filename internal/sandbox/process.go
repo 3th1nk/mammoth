@@ -202,7 +202,7 @@ func startServer(exe string, token string, dir string, logPath string) (int, err
 		// actually mounts, so the URI only has to be well-formed; real-media
 		// flows point at a deployment kernel nfsd (ops.md §4.7).
 		"MAMMOTH_MEDIA_BASE_URI": "nfs://10.0.2.2/mammoth-media",
-		"MAMMOTH_LOG_FORMAT":      "console",
+		"MAMMOTH_LOG_FORMAT":     "console",
 	})
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	return startDetached(cmd)

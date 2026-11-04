@@ -121,8 +121,8 @@ type jobGetIn struct {
 }
 
 type jobWaitIn struct {
-	JobID        string `json:"job_id" jsonschema:"job id (job_…)"`
-	TimeoutSecs  int    `json:"timeout_seconds,omitempty" jsonschema:"give up after this long (default 900, max 3600)"`
+	JobID       string `json:"job_id" jsonschema:"job id (job_…)"`
+	TimeoutSecs int    `json:"timeout_seconds,omitempty" jsonschema:"give up after this long (default 900, max 3600)"`
 }
 
 type jobCancelIn struct {
@@ -312,7 +312,7 @@ type taskView struct {
 	ID        string `json:"id"`
 	MachineID string `json:"machine_id"`
 	State     string `json:"state"`
-	Stages []struct {
+	Stages    []struct {
 		Name  string `json:"name"`
 		State string `json:"state"`
 	} `json:"stages"`

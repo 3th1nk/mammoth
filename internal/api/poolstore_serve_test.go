@@ -44,7 +44,6 @@ func TestPoolStoreSubtreeServing(t *testing.T) {
 	}
 }
 
-
 func TestServeExternalKitETag(t *testing.T) {
 	root := t.TempDir()
 	os.WriteFile(filepath.Join(root, "undionly.kpxe"), []byte("nbp"), 0o644)

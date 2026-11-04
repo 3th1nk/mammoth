@@ -268,5 +268,3 @@ func (e netEntryView) name(i int) string {
 		return fmt.Sprintf("network[%d]", i)
 	}
 }
-
-

@@ -26,6 +26,7 @@ func baseInputs() render.InstallInputs {
 		}},
 		AnswerBaseURL: "http://10.0.0.1:8080/render/tok123",
 		CompleteURL:   "http://10.0.0.1:8080/render/tok123/complete",
+		AgentLogURL:   "http://10.0.0.1:8080/render/tok123/agentlog",
 	}
 }
 
@@ -57,6 +58,7 @@ func TestRenderAnswersPlan(t *testing.T) {
 		"MAMMOTH_ROOT_PASSWORD='s3cret'",
 		"MAMMOTH_BOOT_DRIVE='vda'",
 		"MAMMOTH_COMPLETE_URL='http://10.0.0.1:8080/render/tok123/complete'",
+		"MAMMOTH_LOG_URL='http://10.0.0.1:8080/render/tok123/agentlog'",
 		"ssh-ed25519 AAA key1",
 	} {
 		if !strings.Contains(sh, want) {
@@ -73,6 +75,7 @@ func TestRenderAnswersPlan(t *testing.T) {
 		Hostname    string `json:"hostname"`
 		BootDrive   string `json:"boot_drive"`
 		CompleteURL string `json:"complete_url"`
+		AgentLogURL string `json:"agent_log_url"`
 		Disks       []struct {
 			Device     string `json:"device"`
 			Partitions []struct {
@@ -87,6 +90,10 @@ func TestRenderAnswersPlan(t *testing.T) {
 	}
 	if doc.Version != 1 || doc.Hostname != "node-1" || doc.BootDrive != "vda" {
 		t.Errorf("json plan fields wrong: %+v", doc)
+	}
+	if doc.CompleteURL != "http://10.0.0.1:8080/render/tok123/complete" ||
+		doc.AgentLogURL != "http://10.0.0.1:8080/render/tok123/agentlog" {
+		t.Errorf("json plan callback/log urls wrong: %+v", doc)
 	}
 	if len(doc.Disks) != 1 || len(doc.Disks[0].Partitions) != 2 || !doc.Disks[0].Partitions[1].Grow {
 		t.Errorf("json plan partitions wrong: %+v", doc.Disks)

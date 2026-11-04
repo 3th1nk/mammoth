@@ -291,9 +291,26 @@ func TestSyslogIPRegistryAttribution(t *testing.T) {
 		return ok && attrs["task_id"] == "task-vmedia"
 	})
 
-	// Forget (the release paths) drops the attribution: the next line from
-	// the same address is source-only again.
+	// Forget (the release paths) shortens the attribution to a grace
+	// window: lines still in flight keep resolving — the installer's
+	// closing syslog lines race the release and must not be lost — and
+	// once the grace lapses the same address is source-only again.
+	ips.grace = 500 * time.Millisecond
 	ips.Forget("task-vmedia")
+	conn, err = net.DialUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)},
+		&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: s.opts.SyslogPort})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write([]byte("closing line within grace")); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	waitFor(t, func() bool {
+		attrs, ok := cap.find("closing line within grace")
+		return ok && attrs["task_id"] == "task-vmedia"
+	})
+	time.Sleep(600 * time.Millisecond)
 	conn, err = net.DialUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)},
 		&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: s.opts.SyslogPort})
 	if err != nil {

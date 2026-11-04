@@ -209,6 +209,14 @@ func New(d Deps, apiToken string) *gin.Engine {
 	router.POST("/render/:token/diag/:name", func(c *gin.Context) {
 		srv.UploadDiag(c)
 	})
+	// Agent runtime log ships: the agent carrier renders no syslog= and
+	// runs no installer journal, so its runtime-log tail is the only
+	// machine-side view of the install — filed into the task log under the
+	// path token, the agent families' analog of the syslog sink. Same
+	// machine-face credentialing as the rest of /render.
+	router.POST("/render/:token/agentlog", func(c *gin.Context) {
+		srv.UploadAgentLog(c)
+	})
 	router.GET("/render/:token/run/*rest", func(c *gin.Context) {
 		req := gen.FetchAnswerFileRequestObject{
 			Token: c.Param("token"),

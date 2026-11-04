@@ -120,7 +120,7 @@ func agentScript() string {
 # any failing command would kill the whole runtime silently (no report, no
 # shell). This runtime handles its own errors: strip the -e and re-exec. The
 # child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
-SCRIPT_VERSION="ab-v15"
+SCRIPT_VERSION="ab-v16"
 case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
 log "agent runtime $SCRIPT_VERSION starting"
 
@@ -179,6 +179,36 @@ bringup_network() {
     return 1
 }
 
+# ── runtime log shipper (the machine-side view of the install) ─────────────
+# The agent carrier renders no syslog= and runs no installer journal — the
+# only machine-side record is this runtime's own log. Ship the tail to the
+# engine every beat so the task record shows the install as the machine saw
+# it, not just the orchestration's own lines (2026-11-03 lab finding on the
+# installer families' sink). All best-effort: a failed ship never touches
+# the install itself. MAMMOTH_LOG_URL comes from the plan; plan-validation
+# renders without one make this a no-op.
+LOGSHIP_OFF=0
+logship() {
+    local size
+    [ -n "$MAMMOTH_LOG_URL" ] || return 0
+    [ -s /tmp/mammoth-log.txt ] || return 0
+    size=$(wc -c < /tmp/mammoth-log.txt 2>/dev/null) || return 0
+    [ "$size" -gt "$LOGSHIP_OFF" ] || return 0
+    tail -c +$((LOGSHIP_OFF + 1)) /tmp/mammoth-log.txt > /tmp/mammoth-ship.txt 2>/dev/null || return 0
+    # keep the LAST 64KiB per ship — package fetches and parted runs burst
+    # well past this between beats, and the newest lines are the ones an
+    # operator is watching for.
+    if [ "$(wc -c < /tmp/mammoth-ship.txt)" -gt 65536 ]; then
+        tail -c 65536 /tmp/mammoth-ship.txt > /tmp/mammoth-ship.cut 2>/dev/null \
+            && mv /tmp/mammoth-ship.cut /tmp/mammoth-ship.txt
+    fi
+    if wget -q -T 10 -O /dev/null --post-file=/tmp/mammoth-ship.txt "$MAMMOTH_LOG_URL"; then
+        LOGSHIP_OFF=$size
+    fi
+    # a failed ship leaves LOGSHIP_OFF alone: the next beat re-sends the
+    # whole increment.
+}
+
 report() { # report <ok|failed> <detail>
     # The body must survive json.Decoder no matter what went into $2: bare
     # control bytes (<0x20) inside a JSON string are a parse error, and a
@@ -189,6 +219,7 @@ report() { # report <ok|failed> <detail>
     printf '{"status":"%s","detail":"%s"}' "$1" "$DETAIL" > /tmp/mammoth-report.json
     log "report body: $(cat /tmp/mammoth-report.json 2>/dev/null)"
     bringup_network || return 1
+    logship # the last shipper beat may be up to 10s stale; flush before the callback
     for i in 1 2 3; do
         if wget -q -T 10 -O /dev/null --post-file=/tmp/mammoth-report.json "$MAMMOTH_COMPLETE_URL"; then
             log "completion reported ($1)"; return 0
@@ -712,6 +743,11 @@ log "agent start (kernel $(uname -r))"
 find_plan || bail plan "agent-plan.sh not found (media scan + ${BASE:-<no base>}/agent-plan.sh)"
 . "$PLAN"
 [ -n "$MAMMOTH_COMPLETE_URL" ] || bail plan "plan carries no COMPLETE_URL"
+# shipper rides behind the runtime: every beat ships what the log gained
+# since the last one; the report flush picks up the final lines before the
+# completion callback (reboot kills the loop, bail's drop-to-shell keeps it
+# shipping — the operator's diagnostic session is part of the record too).
+( while :; do sleep 10; logship; done ) &
 if [ "$MAMMOTH_WIN_MODE" = "apply" ]; then
     log "windows apply-image flow"
     win_apply || bail win_apply "windows apply failed: $(tail -c 220 /tmp/mammoth-storage.err 2>/dev/null | tr '\n' ' ' | tr -d '"\\')"

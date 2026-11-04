@@ -612,6 +612,12 @@ type InstallInputs struct {
 	// answer file names on it (rocky9: /ks.cfg; ubuntu22: /user-data).
 	AnswerBaseURL string
 	CompleteURL   string // %post callback
+	// AgentLogURL is the agent carrier's runtime-log sink (the
+	// /render/{token}/agentlog endpoint): the agent ships its log tail here
+	// while the install runs, so the task record shows the machine-side
+	// view. Empty for the installer families — their syslog= kernel
+	// argument covers the same need.
+	AgentLogURL string
 
 	// SyslogPort is the installer-log sink's UDP port (the netboot service's
 	// MAMMOTH_PXE_SYSLOG_PORT). Drivers render it into syslog=/inst.syslog=

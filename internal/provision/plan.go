@@ -79,6 +79,7 @@ func PlanInstall(ctx context.Context, specJSON json.RawMessage, hw *bmc.Hardware
 		Disks:         resolved,
 		AnswerBaseURL: "http://plan/render/plan",
 		CompleteURL:   "http://plan/render/plan/complete",
+		AgentLogURL:   "http://plan/render/plan/agentlog",
 	}
 	for _, n := range spec.Network {
 		inputs.Network = append(inputs.Network, n.toRender())

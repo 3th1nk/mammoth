@@ -46,6 +46,10 @@ func TestAgentOverlay(t *testing.T) {
 		"apk add --root \"$TARGET\"",
 		"grub-install --root-directory=\"$TARGET\" --removable --no-nvram",
 		"MAMMOTH_COMPLETE_URL",
+		// the runtime log shipper: the machine-side view of the install
+		"MAMMOTH_LOG_URL",
+		"logship",
+		"--post-file=/tmp/mammoth-ship.txt",
 		"reboot -f",
 		"C12A7328-F81F-11D2-BA4B-00A0C93EC93B", // EFI System Partition GUID
 	} {

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/obs"
@@ -184,6 +185,55 @@ func (s *Server) UploadDiag(c *gin.Context) {
 	}
 	obs.FromContext(c.Request.Context()).InfoContext(c.Request.Context(), "diagnostics uploaded",
 		obs.FieldTaskID, task.ID, "file", name, "bytes", c.Request.ContentLength)
+	c.Status(http.StatusNoContent)
+}
+
+// agentLogMaxBytes caps one agent-log ship — the agent tail-caps itself to
+// 64KiB per beat (agentboot.go), and this is the server-side contract
+// mirror; anything bigger is truncated, not rejected.
+const agentLogMaxBytes = 64 << 10
+
+// agentLogLineMax caps one filed line (an uncapped apk fetch progress line
+// would otherwise dwarf the whole record).
+const agentLogLineMax = 8 << 10
+
+// UploadAgentLog files the agent runtime's log tail into the task log:
+// body is plain text, one increment of [mammoth-agent] lines since the
+// last ship, split and filed line by line the way the syslog sink files
+// installer lines. Oversized ships are truncated, not rejected — the ship
+// is best-effort on the machine side and must never wedge the install on
+// a server-side size opinion.
+func (s *Server) UploadAgentLog(c *gin.Context) {
+	task, err := s.Jobs.GetTaskByToken(c.Request.Context(), c.Param("token"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, agentLogMaxBytes+1))
+	if err != nil {
+		problem(c, http.StatusBadRequest, "SCHEMA_INVALID_AGENT_LOG", "Agent log rejected", err.Error(), false)
+		return
+	}
+	if len(body) > agentLogMaxBytes {
+		body = body[:agentLogMaxBytes]
+	}
+	ctx := c.Request.Context()
+	shipped := 0
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if line == "" {
+			continue
+		}
+		if len(line) > agentLogLineMax {
+			line = line[:agentLogLineMax]
+		}
+		s.Logs.AppendTaskLog(ctx, task.ID, "INFO", "agent", line, nil)
+		shipped++
+	}
+	if shipped > 0 {
+		obs.FromContext(ctx).InfoContext(ctx, "agent log shipped",
+			obs.FieldTaskID, task.ID, "lines", shipped, "bytes", c.Request.ContentLength)
+	}
 	c.Status(http.StatusNoContent)
 }
 

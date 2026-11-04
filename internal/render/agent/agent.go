@@ -186,6 +186,7 @@ func (d *Driver) renderJSON(in render.InstallInputs) (string, error) {
 	fmt.Fprintf(&b, "  \"root_password\": %q,\n", in.RootPassword)
 	fmt.Fprintf(&b, "  \"boot_drive\": %q,\n", in.BootDrive)
 	fmt.Fprintf(&b, "  \"complete_url\": %q,\n", in.CompleteURL)
+	fmt.Fprintf(&b, "  \"agent_log_url\": %q,\n", in.AgentLogURL)
 	fmt.Fprintf(&b, "  \"packages\": [\"alpine-base\", \"linux-lts\", \"openssh\"],\n")
 	fmt.Fprintf(&b, "  \"ssh_keys\": [")
 	for i, k := range in.SSHPublicKeys {
@@ -300,6 +301,7 @@ func renderSH(in render.InstallInputs) string {
 	fmt.Fprintf(&b, "MAMMOTH_ROOT_PASSWORD=%s\n", shQuote(in.RootPassword))
 	fmt.Fprintf(&b, "MAMMOTH_BOOT_DRIVE=%s\n", shQuote(in.BootDrive))
 	fmt.Fprintf(&b, "MAMMOTH_COMPLETE_URL=%s\n", shQuote(in.CompleteURL))
+	fmt.Fprintf(&b, "MAMMOTH_LOG_URL=%s\n", shQuote(in.AgentLogURL))
 	fmt.Fprintf(&b, "MAMMOTH_PACKAGES=%s\n", shQuote("alpine-base linux-lts openssh"))
 	fmt.Fprintf(&b, "MAMMOTH_SSH_KEYS=%s\n", shQuote(strings.Join(sshKeys(in.SSHPublicKeys), "\n")))
 

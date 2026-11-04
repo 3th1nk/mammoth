@@ -833,6 +833,7 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		Network:          networkEntries(spec.Network),
 		AnswerBaseURL:    fmt.Sprintf("%s/render/%s", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
 		CompleteURL:      fmt.Sprintf("%s/render/%s/complete", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
+		AgentLogURL:      fmt.Sprintf("%s/render/%s/agentlog", strings.TrimSuffix(e.ExternalURL, "/"), ictx.Token),
 		SyslogPort:       e.SyslogPort,
 		InstallConsole:   e.InstallConsole,
 		Scripts:          scriptsFrom(spec.Scripts),
@@ -1137,13 +1138,21 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	}
 	// Syslog attribution: the sink resolves vMedia (and site-DHCP proxy)
 	// senders through the spec's declared static addresses — no DHCP lease
-	// exists on those shapes for the lease-reverse chain. TTL = the task's
+	// exists on those shapes for the lease-reverse chain. The boot
+	// environment's own address rides along when it differs from the
+	// declaration: a declared static address without a default route renders
+	// ip= from the pool reservation (Netboot.StaticIP), and the
+	// initramfs-phase syslog lines arrive from THAT address while only the
+	// subiquity-phase ones come from the declared one. TTL = the task's
 	// budget plus headroom; a retried task re-prepares and re-registers,
-	// and the release paths forget early.
+	// and the release paths forget early (grace-shortened, not dropped).
 	if e.IPRegistry != nil {
-		ips := make([]string, 0, 4)
+		ips := make([]string, 0, 5)
 		for _, n := range in.Network {
 			ips = append(ips, n.Addresses...)
+		}
+		if in.Netboot != nil && in.Netboot.StaticIP != "" {
+			ips = append(ips, in.Netboot.StaticIP)
 		}
 		e.IPRegistry.Register(task.ID, ips, job.Policy.TaskTimeout()+time.Hour)
 	}

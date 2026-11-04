@@ -145,6 +145,13 @@ type Config struct {
 	// production one).
 	DevFakeBMCDelay time.Duration
 
+	// DevFakeDiskGB overrides every auto-provisioned fake-BMC disk size
+	// (decimal GB, MAMMOTH_FAKE_DISK_GBYTES) — the fake:// protocol
+	// workaround for BMC-less machines needs its inventory to match the
+	// real drives, because the installer resolves disks on the machine by
+	// the snapshot size (±1%). Dev knob like DevFakeBMCDelay.
+	DevFakeDiskGB float64
+
 	// OTELExporterEndpoint enables OTLP trace export when non-empty.
 	// Without it, tracing stays at the API boundary instrumentation level
 	// with a no-op exporter (zero overhead, zero dependencies).
@@ -332,6 +339,7 @@ func FromEnv() (Config, error) {
 	applyDuration(&c.BootSettleDelay, "MAMMOTH_BOOT_SETTLE_DELAY", &errs)
 	applyDuration(&c.VerifyReadyWait, "MAMMOTH_VERIFY_READY_WAIT", &errs)
 	applyDuration(&c.DevFakeBMCDelay, "MAMMOTH_FAKE_BMC_DELAY", &errs)
+	applyFloat(&c.DevFakeDiskGB, "MAMMOTH_FAKE_DISK_GBYTES", &errs)
 
 	applyBool(&c.BMCTLSInsecure, "MAMMOTH_BMC_TLS_INSECURE", &errs)
 	// MAMMOTH_BIOS_CONFIRM=optional disables the submit-side confirm flag
@@ -474,6 +482,17 @@ func applyDuration(dst *time.Duration, key string, errs *[]error) {
 			return
 		}
 		*dst = d
+	}
+}
+
+func applyFloat(dst *float64, key string, errs *[]error) {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil || f <= 0 {
+			*errs = append(*errs, fmt.Errorf("config: %s=%q is not a positive number", key, v))
+			return
+		}
+		*dst = f
 	}
 }
 

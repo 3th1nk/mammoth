@@ -78,6 +78,16 @@ type Driver struct {
 	// Delay simulates a slow BMC on every operation — used to exercise
 	// heartbeats, lease renewal and the reaper without real hardware.
 	Delay time.Duration
+
+	// DiskGB, when non-zero, sizes every auto-provisioned disk at that
+	// decimal-GB value instead of the fixture capacities. The inventory of
+	// a fake:// registration must be able to mirror the REAL drives of a
+	// BMC-less machine: the installer resolves disks ON the machine by the
+	// snapshot size (±1%), so a fixture 4 TB entry against a smaller SSD
+	// stalls the install at disk resolution. One size for all default
+	// disks keeps the single-drive headless shape unambiguous under
+	// select largest/smallest.
+	DiskGB float64
 }
 
 func New() *Driver {
@@ -96,7 +106,7 @@ func (d *Driver) Add(addr string) *BMC {
 		Serial:         serial,
 		Power:          bmc.PowerStateOff,
 		ConsoleBaseURL: "https://fake.bmc/console",
-		Hardware:       defaultHardware(serial),
+		Hardware:       defaultHardware(serial, d.DiskGB),
 		FirmwareList:   defaultFirmware(),
 		SensorList:     defaultSensors(),
 		SELList:        defaultSEL(),
@@ -108,9 +118,11 @@ func (d *Driver) Add(addr string) *BMC {
 }
 
 // defaultHardware scripts a plausible two-NVMe + one-HDD server so the
-// discovery flow, acceptance and spec-view tests have stable data.
-func defaultHardware(serial string) *bmc.HardwareView {
-	return &bmc.HardwareView{
+// discovery flow, acceptance and spec-view tests have stable data. A
+// non-zero diskGB overrides every disk size (the fake:// protocol
+// workaround for BMC-less machines — see Driver.DiskGB).
+func defaultHardware(serial string, diskGB float64) *bmc.HardwareView {
+	hw := &bmc.HardwareView{
 		SerialNumber: serial,
 		CPU:          bmc.CPUView{Model: "Fake Xeon 6542Y", Cores: 32},
 		MemoryBytes:  128 * 1024 * 1024 * 1024,
@@ -125,6 +137,13 @@ func defaultHardware(serial string) *bmc.HardwareView {
 		},
 		Coverage: bmc.CoverageFull,
 	}
+	if diskGB > 0 {
+		size := int64(diskGB * 1e9)
+		for i := range hw.Disks {
+			hw.Disks[i].SizeBytes = size
+		}
+	}
+	return hw
 }
 
 // defaultBIOS scripts a plausible attribute table so the bios read/write

@@ -133,6 +133,9 @@ func serve(args []string) error {
 		fakeDriver.Delay = cfg.DevFakeBMCDelay
 		fakeInbandDelay = cfg.DevFakeBMCDelay
 	}
+	if cfg.DevFakeDiskGB > 0 {
+		fakeDriver.DiskGB = cfg.DevFakeDiskGB
+	}
 	registry.Register(fakeDriver)
 	registry.Register(redfish.New(cfg.BMCTLSInsecure, cfg.BMCTimeout))
 	registry.Register(ipmidrv.New(cfg.IPMIInterface, cfg.BMCTimeout))

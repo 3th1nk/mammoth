@@ -107,6 +107,7 @@ func (c Config) Snapshot() map[string]any {
 		m["MAMMOTH_ERASE_CONFIRM"] = "optional"
 	}
 	dur("MAMMOTH_FAKE_BMC_DELAY", c.DevFakeBMCDelay)
+	m["MAMMOTH_FAKE_DISK_GBYTES"] = strconv.FormatFloat(c.DevFakeDiskGB, 'f', -1, 64)
 	str("MAMMOTH_OTEL_EXPORTER_ENDPOINT", c.OTELExporterEndpoint)
 	str("MAMMOTH_METRICS_ADDR", c.MetricsAddr)
 	str("MAMMOTH_EXTERNAL_URL", c.ExternalURL)

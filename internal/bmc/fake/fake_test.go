@@ -181,3 +181,43 @@ func TestHealthAndSEL(t *testing.T) {
 		}
 	})
 }
+
+// DiskGB mirrors a BMC-less machine's real drives onto the auto-provisioned
+// inventory: the installer resolves disks on the machine by the snapshot
+// size (±1%), so a fixture 4 TB entry against a smaller real SSD stalls the
+// install at disk resolution. One size for all default disks.
+func TestDiskGBOverride(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("default fixtures unchanged when unset", func(t *testing.T) {
+		hw, err := New().CollectInventory(ctx, "fake://disk-def", bmc.Credentials{})
+		if err != nil {
+			t.Fatalf("CollectInventory: %v", err)
+		}
+		if hw.Disks[2].SizeBytes != 4000787030016 {
+			t.Fatalf("fixture sda size drifted: %d", hw.Disks[2].SizeBytes)
+		}
+	})
+
+	t.Run("override sizes every default disk", func(t *testing.T) {
+		d := New()
+		d.DiskGB = 256
+		hw, err := d.CollectInventory(ctx, "fake://disk-256", bmc.Credentials{})
+		if err != nil {
+			t.Fatalf("CollectInventory: %v", err)
+		}
+		if len(hw.Disks) != 3 {
+			t.Fatalf("disk count changed: %d", len(hw.Disks))
+		}
+		for _, disk := range hw.Disks {
+			if disk.SizeBytes != 256e9 {
+				t.Fatalf("disk %s size = %d, want 256e9", disk.Name, disk.SizeBytes)
+			}
+		}
+		// PhysicalDrives (the RAID member pool) reads the same hardware.
+		drives, err := d.PhysicalDrives(ctx, "fake://disk-256", bmc.Credentials{})
+		if err != nil || len(drives) != 3 || drives[0].SizeBytes != 256e9 {
+			t.Fatalf("PhysicalDrives must follow the override: %+v %v", drives, err)
+		}
+	})
+}

@@ -549,10 +549,17 @@ func (s *Server) GetMachineSEL(ctx context.Context, request gen.GetMachineSELReq
 }
 
 // outOfBandFor resolves machine → (decrypted credentials, address, protocol).
+// protocol=none machines reject here with an explicit 422 — their synchronous
+// BMC-touching reads (console/bios/drives/health/sel) are unavailable by
+// construction, and an empty-credential lookup error would only confuse.
 func (s *Server) outOfBandFor(ctx context.Context, machineID string) (bmc.Credentials, string, bmc.Protocol, error) {
 	m, err := s.Machines.Get(ctx, machineID)
 	if err != nil {
 		return bmc.Credentials{}, "", "", err
+	}
+	if m.BMCProtocol == "none" {
+		return bmc.Credentials{}, "", "", verrStatus(http.StatusUnprocessableEntity, "HEADLESS_UNSUPPORTED",
+			"protocol none machines have no BMC — this out-of-band view is unavailable (docs/13-headless-design.md)")
 	}
 	credRow, err := s.Credentials.Get(ctx, m.BMCCredentialID)
 	if err != nil {

@@ -2,10 +2,13 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/netboot"
+	"github.com/3th1nk/mammoth/internal/store"
 )
 
 // The headless (protocol=none) registration gates (docs/13-headless-design.md
@@ -117,4 +120,109 @@ func TestValidateBMCShape(t *testing.T) {
 			t.Errorf("%s: err = %v, want %s", tc.name, err, tc.want)
 		}
 	}
+}
+
+// The headless submission gate (docs/13-headless-design.md §2/§4): PXE is
+// the only carrier, hardware RAID needs the BMC they don't have. Both
+// pre-fail the machine's task; non-headless machines sail through.
+func TestValidateHeadlessShape(t *testing.T) {
+	s := &Server{Deps: Deps{BootStrategyDefault: "virtual_media"}}
+	ctx := context.Background()
+	noneMch, redMch := "mch_none", "mch_red"
+
+	// Machines behind the gate.
+	machines := map[string]*store.Machine{
+		noneMch: {ID: noneMch, BMCProtocol: "none"},
+		redMch:  {ID: redMch, BMCProtocol: "redfish"},
+	}
+	s.Machines = fakeMachineGetter(t, machines)
+
+	spec := func(boot string, raidMode string) json.RawMessage {
+		raw, _ := json.Marshal(map[string]any{
+			"boot": map[string]any{"strategy": boot},
+			"storage": map[string]any{
+				"raid": []map[string]any{{"name": "vd0", "level": "1", "mode": raidMode}},
+			},
+		})
+		return raw
+	}
+
+	codeOf := func(err error) string {
+		ve, ok := err.(*validationError)
+		if !ok {
+			return err.Error()
+		}
+		return ve.Code()
+	}
+
+	if got := codeOf(s.validateHeadlessShape(ctx, noneMch, spec("", ""))); got != "SCHEMA_UNSUPPORTED_BOOT_STRATEGY" {
+		t.Errorf("deployment default virtual_media must reject for none machines, got %q", got)
+	}
+	if err := s.validateHeadlessShape(ctx, noneMch, spec("virtual_media", "")); err == nil {
+		t.Error("explicit virtual_media must reject for none machines")
+	}
+	if err := s.validateHeadlessShape(ctx, noneMch, spec("pxe", "")); err != nil {
+		t.Errorf("pxe must pass: %v", err)
+	}
+	if got := codeOf(s.validateHeadlessShape(ctx, noneMch, spec("pxe", "hardware"))); got != "SCHEMA_INVALID_STORAGE" {
+		t.Errorf("hardware raid must reject, got %q", got)
+	}
+	if err := s.validateHeadlessShape(ctx, noneMch, spec("pxe", "software")); err != nil {
+		t.Errorf("software raid must pass: %v", err)
+	}
+	// Non-headless machines are not this gate's subject — virtual_media +
+	// hardware raid pass untouched (their own gates live elsewhere).
+	if err := s.validateHeadlessShape(ctx, redMch, spec("virtual_media", "hardware")); err != nil {
+		t.Errorf("non-headless machine must pass untouched: %v", err)
+	}
+}
+
+// fakeMachineGetter builds a minimal MachineRepo-backed Server.Machines for
+// gates that only read machine rows — backed by a real PG when available,
+// skipped otherwise (the gates are read-only consumers).
+func fakeMachineGetter(t *testing.T, machines map[string]*store.Machine) *store.MachineRepo {
+	t.Helper()
+	dsn := os.Getenv("MAMMOTH_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("MAMMOTH_TEST_PG_DSN not set; skipping gate suite needing machine rows")
+	}
+	db, err := store.Open(dsn)
+	if err != nil {
+		t.Fatalf("open pg: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := store.Migrate(context.Background(), db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repo := store.NewMachineRepo(db)
+	// The gate suite's controller machines need a real credential row
+	// (credentials FK); its secret is undecryptable — the gate never
+	// decrypts, it only reads the protocol column.
+	if _, err := db.Exec(`
+		INSERT INTO credentials (id, name, type, secret_encrypted)
+		VALUES ('cred_gate_test', 'gate-suite', 'bmc', '\x00'::bytea)
+		ON CONFLICT (id) DO NOTHING`); err != nil {
+		t.Fatalf("seed credential: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM credentials WHERE id = 'cred_gate_test'`)
+	})
+	for id, m := range machines {
+		addr := "fake://" + id
+		credID := any("cred_gate_test")
+		if m.BMCProtocol == "none" {
+			addr = "none://52:54:00:ga:te:" + id[len(id)-2:]
+			credID = nil // headless machines carry no BMC credential
+		}
+		if _, err := db.Exec(`
+			INSERT INTO machines (id, labels, bmc_address, bmc_protocol, bmc_credential_id, state)
+			VALUES ($1, '{}'::jsonb, $2, $3, $4, 'ready')`,
+			id, addr, m.BMCProtocol, credID); err != nil {
+			t.Fatalf("seed machine %s: %v", id, err)
+		}
+		t.Cleanup(func() {
+			_, _ = db.Exec(`DELETE FROM machines WHERE id = $1`, id)
+		})
+	}
+	return repo
 }

@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// TFTP wire constants (RFC 1350 + RFC 2348/2349 options).
+// TFTP wire constants (RFC 1350).
 const (
 	tftpRRQ  = 1
 	tftpDATA = 3
@@ -23,17 +23,25 @@ const (
 
 	tftpTimeout    = 1 * time.Second
 	tftpMaxRetries = 5
-	// OACK acknowledgements get fewer retries before tolerance kicks in:
-	// some PXE ROMs (Huawei X722 NIC shim, 2288H) never ACK the OACK at
-	// all and expect DATA to just follow — each wasted second here is a
-	// second of the boot chain, and the client's own RRQ retry makes the
-	// old give-up path self-heal only after ~10s.
+	// The tsize-OACK acknowledgement gets fewer retries before tolerance
+	// kicks in: several PXE clients (Huawei X722 shim, the Insyde UEFI PXE
+	// stack on 2288H) never ACK the OACK at all and expect DATA to just
+	// follow — lingering here stalls the boot chain, and the client's own
+	// RRQ retry makes a give-up path self-heal only after ~10s.
 	tftpOACKRetries = 2
-	// Classic 512 vs option-negotiated blocks; the cap keeps replies inside
-	// one Ethernet frame so they never fragment (fragmented UDP + TFTP is a
-	// known firmware trap).
-	tftpBlockSize  = 512
-	tftpMaxBlkSize = 1428
+	// Classic 512-byte DATA blocks, NEVER negotiated. This is deliberate and
+	// real-hardware-earned: blksize negotiation (RFC 2348 OACK) is the most
+	// firmware-fragile step of the whole boot chain —
+	//   - Huawei X722 shim (2288H): never ACKs the OACK; tolerated by sending
+	//     DATA anyway, but only ever at the classic size,
+	//   - Insyde UEFI PXE (2288H, 2026-11-04): never ACKs the OACK AND never
+	//     accepts a negotiated-size DATA block — the NBP download dies at
+	//     block 1 and the machine falls off the boot chain entirely.
+	// The site-dnsmasq shape — no blksize answer, bare 512-byte DATA — is
+	// the only form proven to boot every ROM measured. TFTP carries only the
+	// NBP set and trampolines (kernel/initrd/answers all ride HTTP), so the
+	// throughput loss is irrelevant. dnsmasq behavior, codified.
+	tftpBlockSize = 512
 )
 
 // serveTFTP answers read requests from files (the embedded NBP set) until
@@ -72,7 +80,9 @@ func serveTFTP(ctx context.Context, conn *net.UDPConn, files fs.FS, render func(
 	}
 }
 
-// rrqOptions is what the client asked for beyond a classic read.
+// rrqOptions is what the client asked for beyond a classic read. Both
+// options are parsed for log clarity only — the transfer never honors them
+// (see tftpBlockSize for the firmware-evidence reason).
 type rrqOptions struct {
 	blksize int
 	tsize   bool
@@ -95,10 +105,8 @@ func parseRRQ(b []byte) (string, rrqOptions, error) {
 	for i := 2; i+1 < len(parts); i += 2 {
 		switch strings.ToLower(parts[i]) {
 		case "blksize":
-			// RFC 2348: an oversized request is not an error — the OACK
-			// names the (smaller) value actually used, so clamp.
 			if n, err := strconv.Atoi(parts[i+1]); err == nil && n > 0 {
-				opts.blksize = max(8, min(n, tftpMaxBlkSize))
+				opts.blksize = n
 			}
 		case "tsize":
 			opts.tsize = true
@@ -107,21 +115,25 @@ func parseRRQ(b []byte) (string, rrqOptions, error) {
 	return name, opts, nil
 }
 
-// transferTFTP streams one file to one client: OACK when options were
-// requested, then lockstep DATA/ACK with retransmit on timeout. A name the
+// transferTFTP streams one file to one client. blksize is never negotiated —
+// DATA always moves at the classic 512 (see tftpBlockSize). tsize IS answered
+// when the client asked for it: the Insyde UEFI PXE stack (2288H) allocates
+// its NBP download buffer from tsize — with no answer it allocates zero and
+// every DATA block dies as PXE-E99 ("NBP filesize is 0 Bytes", 2026-11-04).
+// The OACK therefore carries tsize only; clients that never ACK an OACK
+// (X722 shim, Insyde) are tolerated by sending DATA anyway. A name the
 // render hook answers (the per-MAC grub.cfg) is served from memory; anything
 // else comes from the static embedded FS.
 func transferTFTP(c *net.UDPConn, addr *net.UDPAddr, files fs.FS, render func(string, net.IP) []byte, name string, opts rrqOptions, log func(string, ...any)) {
 	var r io.Reader
+	var closer io.Closer
 	var size int64
 	var knowsSize bool
-	var closer io.Closer
 
 	if render != nil {
 		if content := render(name, addr.IP); content != nil {
 			r = bytes.NewReader(content)
-			size = int64(len(content))
-			knowsSize = true
+			size, knowsSize = int64(len(content)), true
 		}
 	}
 	if r == nil {
@@ -153,31 +165,22 @@ func transferTFTP(c *net.UDPConn, addr *net.UDPAddr, files fs.FS, render func(st
 		}
 	}()
 
-	if opts.tsize || opts.blksize != tftpBlockSize {
+	// tsize answer without blksize echo: the transfer stays at the classic
+	// 512 while the client still learns the size (RFC 2348 §2 — unacknowledged
+	// options keep their default; a server MAY answer only the subset it
+	// honors). Clients that ACK the OACK proceed normally; clients that stay
+	// silent on it (X722 shim, Insyde first hop) get the DATA anyway.
+	if opts.tsize && knowsSize {
 		var oack []byte
 		oack = binary.BigEndian.AppendUint16(oack, tftpOACK)
 		oack = binary.BigEndian.AppendUint16(oack, 0)
-		if opts.tsize && knowsSize {
-			oack = append(oack, "tsize\x00"...)
-			oack = append(oack, strconv.FormatInt(size, 10)+"\x00"...)
-		}
-		if opts.blksize != tftpBlockSize {
-			oack = append(oack, "blksize\x00"...)
-			oack = append(oack, strconv.Itoa(opts.blksize)+"\x00"...)
-		}
-		// Tolerance over strictness: a client that ACKs the OACK proceeds
-		// normally (block-0 ACK received, lockstep starts at DATA 1). A
-		// client that stays silent on the OACK — the X722 shim, which never
-		// ACKs block 0 — is served the first DATA block anyway: it either
-		// accepts it and the transfer proceeds, or keeps stalling and
-		// sendFile's own retries end the session. Abandoning the transfer
-		// here instead only forced the client to re-RRQ (its ~10s self-heal
-		// on real hardware).
+		oack = append(oack, "tsize\x00"...)
+		oack = append(oack, strconv.FormatInt(size, 10)+"\x00"...)
 		if !sendExpectACKN(c, addr, oack, 0, tftpOACKRetries) {
 			log("tftp: client %s did not ack oack for %q — sending data anyway", addr.IP, name)
 		}
 	}
-	if err := sendFile(c, addr, r, opts.blksize); err != nil {
+	if err := sendFile(c, addr, r, tftpBlockSize); err != nil {
 		log("tftp: transfer of %q to %s failed: %v", name, addr.IP, err)
 	}
 }
@@ -213,7 +216,7 @@ func sendExpectACK(c *net.UDPConn, addr *net.UDPAddr, pkt []byte, want uint16) b
 }
 
 // sendExpectACKN is sendExpectACK with the retry budget spelled out — the
-// OACK wait uses fewer retries before the X722 tolerance takes over.
+// tsize-OACK wait uses fewer retries before the no-ACK tolerance takes over.
 func sendExpectACKN(c *net.UDPConn, addr *net.UDPAddr, pkt []byte, want uint16, retries int) bool {
 	for range retries {
 		if _, err := c.WriteToUDP(pkt, addr); err != nil {

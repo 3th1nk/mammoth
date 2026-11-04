@@ -217,6 +217,21 @@ type Config struct {
 	// reaches guests behind a local vmnet bridge (qemu verification setup).
 	// Linux deployments need no override.
 	PXEBroadcastAddr string
+	// PXEWoLBroadcast (optional, MAMMOTH_PXE_WOL_BROADCAST) enables the
+	// engine's direct Wake-on-LAN sends for headless (protocol=none) boots:
+	// the L2 broadcast address of the machine segment ("192.168.1.255").
+	// Only useful when the ENGINE itself sits on the machine segment; the
+	// cross-segment shape points PXEWoLProxyURL at the segment's
+	// pxe-proxy relay instead. Empty = no direct send.
+	PXEWoLBroadcast string
+	// PXEWoLProxyURL (optional, MAMMOTH_PXE_WOL_PROXY_URL) is the pxe-proxy
+	// relay endpoint (http://<proxy>:9100 — the proxy started with
+	// --wol-listen) for headless boots on a segment the engine is not on.
+	// Tried after the direct send fails or is unconfigured.
+	PXEWoLProxyURL string
+	// PXEWoLProxyToken (optional) is the bearer token the proxy relay
+	// requires (the proxy's --wol-token).
+	PXEWoLProxyToken string
 	// PXEEnroll turns on the zero-registration entry (MAMMOTH_PXE_ENROLL,
 	// docs/09-roadmap.md): unknown MACs are offered the shared enrollment
 	// payload — an alpine probe environment that scans /sys and reports
@@ -370,6 +385,9 @@ func FromEnv() (Config, error) {
 	applyString(&c.PXEDHCPPool, "MAMMOTH_PXE_DHCP_POOL", &errs)
 	applyString(&c.PXEDHCPRouter, "MAMMOTH_PXE_DHCP_ROUTER", &errs)
 	applyString(&c.PXEBroadcastAddr, "MAMMOTH_PXE_BROADCAST_ADDR", &errs)
+	applyString(&c.PXEWoLBroadcast, "MAMMOTH_PXE_WOL_BROADCAST", &errs)
+	applyString(&c.PXEWoLProxyURL, "MAMMOTH_PXE_WOL_PROXY_URL", &errs)
+	applyString(&c.PXEWoLProxyToken, "MAMMOTH_PXE_WOL_PROXY_TOKEN", &errs)
 	applyBool(&c.PXEEnroll, "MAMMOTH_PXE_ENROLL", &errs)
 	applyString(&c.PXEEnrollToken, "MAMMOTH_PXE_ENROLL_TOKEN", &errs)
 	applyString(&c.BootStrategyDefault, "MAMMOTH_BOOT_STRATEGY", &errs)

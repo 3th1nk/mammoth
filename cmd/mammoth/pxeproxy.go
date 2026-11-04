@@ -17,6 +17,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/3th1nk/mammoth/internal/config"
 	"github.com/3th1nk/mammoth/internal/netboot"
 )
 
@@ -77,6 +78,9 @@ replaces a hand-tuned dnsmasq; the kit is exported by the engine
 	pf.IntVar(&o.ProxyPort, "proxy-port", envInt("MAMMOTH_PXEPROXY_PROXY_PORT", 4011), "PXE boot-server discovery port")
 	pf.IntVar(&o.TFTPPort, "tftp-port", envInt("MAMMOTH_PXEPROXY_TFTP_PORT", 69), "TFTP port")
 	pf.IntVar(&o.SyslogPort, "syslog-port", envInt("MAMMOTH_PXEPROXY_SYSLOG_PORT", 514), "installer-log sink port (bind failure degrades to a warning)")
+	pf.StringVar(&o.WoLListen, "wol-listen", envOr("MAMMOTH_PXEPROXY_WOL_LISTEN", ""), `HTTP listen address for the Wake-on-LAN relay (e.g. ":9100", empty = off) — the engine calls POST /wol {"mac": ...} for cross-segment headless boots: WoL is an L2 broadcast and the engine is not on the machine's segment, this proxy is`)
+	pf.StringVar(&o.WoLToken, "wol-token", envOr("MAMMOTH_PXEPROXY_WOL_TOKEN", ""), "bearer token required on /wol requests (empty = unauthenticated; the provisioning L2 is the trust boundary, same as the kit)")
+	pf.StringVar(&o.WoLBroadcast, "wol-broadcast", envOr("MAMMOTH_PXEPROXY_WOL_BROADCAST", "255.255.255.255"), "broadcast address the relay sends magic packets to (the provisioning segment's directed broadcast is the precise form)")
 	_ = cmd.MarkFlagRequired("next-server")
 	_ = cmd.MarkFlagRequired("base-url")
 	return cmd
@@ -94,6 +98,9 @@ type pxeProxyOptions struct {
 	KitToken     string
 	Segment      string
 	UEFINBP      string
+	WoLListen    string
+	WoLToken     string
+	WoLBroadcast string
 }
 
 // runPxeProxy validates the flags, syncs the kit, and serves until the
@@ -123,7 +130,98 @@ func runPxeProxy(o pxeProxyOptions) error {
 	if err != nil {
 		return err
 	}
+	if o.WoLListen != "" {
+		go serveWoLRelay(o)
+	}
 	return srv.Wait()
+}
+
+// serveWoLRelay runs the Wake-on-LAN relay's tiny HTTP face: one endpoint,
+// POST /wol {"mac": "..."} → the magic packet on this segment's broadcast.
+// The relay exists because WoL is an L2 broadcast and the engine — usually
+// parked on an ops segment — cannot reach the machine segment's sleepers;
+// the proxy IS on the machine segment by construction. A bind failure is
+// fatal for the relay goroutine but must not kill the PXE service (the
+// manual power-on fallback keeps headless boots alive without it).
+func serveWoLRelay(o pxeProxyOptions) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /wol", func(w http.ResponseWriter, r *http.Request) {
+		if o.WoLToken != "" && r.Header.Get("Authorization") != "Bearer "+o.WoLToken {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+		if err != nil {
+			http.Error(w, "unreadable body", http.StatusBadRequest)
+			return
+		}
+		mac, err := netboot.ParseWoLRequest(body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := netboot.SendWoL(o.WoLBroadcast, mac); err != nil {
+			fmt.Fprintf(os.Stderr, "pxe-proxy: wol relay %s: %v\n", mac, err)
+			http.Error(w, "send failed", http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	if err := http.ListenAndServe(o.WoLListen, mux); err != nil {
+		fmt.Fprintf(os.Stderr, "pxe-proxy: wol relay on %s failed: %v (manual power-on remains the fallback)\n", o.WoLListen, err)
+	}
+}
+
+// wakeOnLANClient bounds the relay call — a hung proxy must not stall the
+// boot stage's wake step (the evidence wait that follows is the real gate).
+var wakeOnLANClient = &http.Client{Timeout: 10 * time.Second}
+
+// wakeOnLANFunc composes the engine's headless wake path (docs/
+// 13-headless-design.md §4): the direct L2 broadcast when the engine sits
+// on the machine segment (MAMMOTH_PXE_WOL_BROADCAST), then the segment
+// proxy's relay for the cross-segment shape (MAMMOTH_PXE_WOL_PROXY_URL —
+// the proxy runs with --wol-listen). nil = neither configured; the manual
+// power-on fallback covers the deployment.
+func wakeOnLANFunc(cfg config.Config) func(mac string) error {
+	direct, proxy := cfg.PXEWoLBroadcast != "", cfg.PXEWoLProxyURL != ""
+	if !direct && !proxy {
+		return nil
+	}
+	return func(mac string) error {
+		var firstErr error
+		if direct {
+			if err := netboot.SendWoL(cfg.PXEWoLBroadcast, mac); err != nil {
+				firstErr = err
+			} else {
+				return nil
+			}
+		}
+		if proxy {
+			body, _ := json.Marshal(netboot.WoLRequest{MAC: mac})
+			req, err := http.NewRequest(http.MethodPost,
+				strings.TrimSuffix(cfg.PXEWoLProxyURL, "/")+"/wol", bytes.NewReader(body))
+			if err == nil {
+				req.Header.Set("Content-Type", "application/json")
+				if cfg.PXEWoLProxyToken != "" {
+					req.Header.Set("Authorization", "Bearer "+cfg.PXEWoLProxyToken)
+				}
+				resp, derr := wakeOnLANClient.Do(req)
+				if derr == nil {
+					defer resp.Body.Close()
+					if resp.StatusCode == http.StatusNoContent {
+						return nil
+					}
+					err = fmt.Errorf("wol relay answered %s", resp.Status)
+				} else {
+					err = derr
+				}
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+		return firstErr
+	}
 }
 
 // syncKit pulls the engine's exported external kit

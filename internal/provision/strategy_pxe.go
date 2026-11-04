@@ -255,6 +255,13 @@ func nfsRootFor(mediaNFSBase, relPath string) string {
 func (s *pxeStrategy) arm(ctx context.Context, b *bootSession) error {
 	e := s.e
 	task := b.Task
+	// Headless machines (docs/13-headless-design.md §4) have no BMC to
+	// point at PXE and no power state to read — arm works from evidence
+	// (WoL / in-band reboot / manual power-on, then a PXE sighting) instead
+	// of the power sequence below.
+	if m, merr := e.Machines.Get(ctx, task.MachineID); merr == nil && m.BMCProtocol == "none" {
+		return e.armHeadless(ctx, b)
+	}
 	cred, addr, proto, ok := e.outOfBand(ctx, task)
 	if !ok {
 		return classifiedErr("CREDENTIAL_UNAVAILABLE", true, "machine or credential unavailable")

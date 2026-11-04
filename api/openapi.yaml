@@ -2880,6 +2880,18 @@ components:
             judgment — SMB export configured → setup, absent → agent (the
             resolution lands at prepare time). Other distros reject setup
             or agent; auto resolves to setup only.
+        evidence_wait_seconds:
+          type: integer
+          minimum: 60
+          maximum: 3600
+          default: 600
+          description: |
+            Headless (protocol=none) boot stage: how long to wait for boot
+            evidence (a PXE sighting of the machine) before warning the
+            operator to power the machine on manually (docs/
+            13-headless-design.md §4). The wait itself continues — a manual
+            power-on after the window self-heals the flow — up to the task
+            timeout. BMC-carried strategies ignore it.
 
 
     Policy:

@@ -118,6 +118,11 @@ type installSpecView struct {
 	Boot struct {
 		Strategy  string `json:"strategy"`
 		Installer string `json:"installer"`
+		// EvidenceWaitSeconds bounds the headless (protocol=none) boot
+		// stage's first wait for boot evidence before warning the operator
+		// to power the machine on manually (docs/13-headless-design.md §4).
+		// 0 = the default (10m).
+		EvidenceWaitSeconds int `json:"evidence_wait_seconds"`
 	} `json:"boot"`
 	Storage struct {
 		Disks []storageDiskView `json:"disks"`

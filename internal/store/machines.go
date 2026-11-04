@@ -390,19 +390,22 @@ type rowScanner interface{ Scan(dest ...any) error }
 func scanMachine(row rowScanner) (*Machine, error) {
 	var m Machine
 	var labels []byte
-	var sshCred, vendor, model, serial, firmware sql.NullString
+	// bmc_credential_id is NULL for protocol=none machines (headless,
+	// migration 00011) — same nullable treatment as its ssh sibling.
+	var bmcCred, sshCred, vendor, model, serial, firmware sql.NullString
 	var hardware, lastError, firmwareList []byte
 	var sshAddr sql.NullString
 	var pxeFirmware sql.NullString
 	var pxeSeen sql.NullTime
 	err := row.Scan(
-		&m.ID, &labels, &m.BMCAddress, &m.BMCProtocol, &m.BMCCredentialID, &sshCred, &sshAddr,
+		&m.ID, &labels, &m.BMCAddress, &m.BMCProtocol, &bmcCred, &sshCred, &sshAddr,
 		&vendor, &model, &serial, &firmware, &hardware, &firmwareList,
 		&m.PowerState, &m.State, &lastError, &m.CreatedAt, &m.UpdatedAt,
 		&pxeFirmware, &pxeSeen,
 	)
 	if err == nil {
 		m.SSHAddress = sshAddr.String
+		m.BMCCredentialID = bmcCred.String
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound

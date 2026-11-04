@@ -304,3 +304,35 @@ func normalizeMAC(s string) string {
 // NormalizeMAC is the canonical MAC spelling for API boundaries: queries on
 // the machine face and store rows all use the same lowercase colon form.
 func NormalizeMAC(s string) string { return normalizeMAC(s) }
+
+// HeadlessMACPrefix is the synthetic address scheme for protocol=none
+// machines (docs/13-headless-design.md §2): the BMC-less machine's identity
+// is its NIC MAC, carried where other protocols keep their controller
+// address — same shape as fake://, so the UNIQUE(bmc_address) constraint
+// keeps registrations one-per-machine with no schema change.
+const HeadlessMACPrefix = "none://"
+
+// HeadlessMAC parses a headless machine address into its canonical MAC.
+// It validates strictly — 12 hex digits after normalization — because the
+// registration path keys a machine row on the result. Anything that is not
+// "none://<mac>" (or a bare MAC) yields "".
+func HeadlessMAC(address string) string {
+	mac, ok := strings.CutPrefix(address, HeadlessMACPrefix)
+	if !ok {
+		return ""
+	}
+	mac = normalizeMAC(mac)
+	if len(mac) != 17 { // xx:xx:xx:xx:xx:xx
+		return ""
+	}
+	for i := 0; i < len(mac); i += 3 {
+		if !isHexPair(mac[i]) || !isHexPair(mac[i+1]) {
+			return ""
+		}
+	}
+	return mac
+}
+
+func isHexPair(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f'
+}

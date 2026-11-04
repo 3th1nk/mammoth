@@ -1687,10 +1687,17 @@ components:
     # ── machines ───────────────────────────────────────────────────────────
     BMCProtocol:
       type: string
-      enum: [redfish, ipmi, auto, fake]
+      enum: [redfish, ipmi, auto, fake, none]
       description: |
         `auto` probes Redfish first and falls back to IPMI.
         `fake` selects the in-process simulator for development and testing.
+        `none` registers a BMC-less (headless) machine (docs/
+        13-headless-design.md): identity is the NIC MAC carried in the
+        synthetic address `none://<mac>`; installs are driven over PXE with
+        the machine's own boot (Wake-on-LAN, graceful in-band reboot of an
+        installed system, or a manual power-on as the fallback). Out-of-band
+        actions (power, boot device, BIOS, drive erase) are unsupported on
+        `none` machines; `credential_id` must be empty.
     BootDevice:
       type: string
       enum: [pxe, disk, cdrom, bios]
@@ -1704,10 +1711,14 @@ components:
     BMC:
       type: object
       required: [address, credential_id]
+      description: |
+        The required keys must be present for every protocol; for `none`
+        their values are the headless identity — `address` is
+        `none://<mac>` and `credential_id` is the empty string.
       properties:
         address:
           type: string
-          description: Out-of-band management address (host or host:port).
+          description: Out-of-band management address (host or host:port); `none://<mac>` for protocol `none`, `fake://<name>` for the simulator.
         protocol:
           $ref: '#/components/schemas/BMCProtocol'
         credential_id:

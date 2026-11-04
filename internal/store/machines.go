@@ -17,10 +17,16 @@ func NewMachineRepo(db *sql.DB) *MachineRepo { return &MachineRepo{db: db} }
 
 func (r *MachineRepo) Create(ctx context.Context, m *Machine) error {
 	labels, _ := json.Marshal(m.Labels)
+	// protocol=none machines have no BMC credential; an empty string means
+	// NULL — a literal "" would violate the credentials FK.
+	var credID any
+	if m.BMCCredentialID != "" {
+		credID = m.BMCCredentialID
+	}
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO machines (id, labels, bmc_address, bmc_protocol, bmc_credential_id, ssh_credential_id, ssh_address)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		m.ID, labels, m.BMCAddress, m.BMCProtocol, m.BMCCredentialID, m.SSHCredentialID, m.SSHAddress)
+		m.ID, labels, m.BMCAddress, m.BMCProtocol, credID, m.SSHCredentialID, m.SSHAddress)
 	if isUniqueViolation(err) {
 		return fmt.Errorf("%w: bmc address %q already registered", ErrConflict, m.BMCAddress)
 	}
@@ -143,12 +149,18 @@ func (r *MachineRepo) List(ctx context.Context, f ListFilter) ([]*Machine, *Curs
 // ssh credential (docs/03-api.md §2 PATCH semantics).
 func (r *MachineRepo) Update(ctx context.Context, m *Machine) error {
 	labels, _ := json.Marshal(m.Labels)
+	// Same empty-string-is-NULL rule as Create: protocol=none machines
+	// carry no BMC credential (credentials FK).
+	var credID any
+	if m.BMCCredentialID != "" {
+		credID = m.BMCCredentialID
+	}
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE machines SET
 		  labels = $2, bmc_address = $3, bmc_protocol = $4,
 		  bmc_credential_id = $5, ssh_credential_id = $6, ssh_address = $7, updated_at = now()
 		WHERE id = $1`,
-		m.ID, labels, m.BMCAddress, m.BMCProtocol, m.BMCCredentialID, m.SSHCredentialID, m.SSHAddress)
+		m.ID, labels, m.BMCAddress, m.BMCProtocol, credID, m.SSHCredentialID, m.SSHAddress)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return fmt.Errorf("%w: bmc address %q already registered", ErrConflict, m.BMCAddress)

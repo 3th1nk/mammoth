@@ -8,6 +8,7 @@ import (
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/bmc"
+	"github.com/3th1nk/mammoth/internal/netboot"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/provision"
 	"github.com/3th1nk/mammoth/internal/store"
@@ -102,15 +103,34 @@ func (s *Server) registerMachine(ctx context.Context, body *gen.MachineCreate) (
 		SSHCredentialID: derefStr(body.SshCredentialId),
 		SSHAddress:      sshAddressOf(body.Ssh),
 	}
-	// The referenced credential must exist and be a BMC credential.
-	cred, err := s.Credentials.Get(ctx, m.BMCCredentialID)
-	if err != nil {
-		return nil, verr("SCHEMA_UNKNOWN_CREDENTIAL", "bmc credential %q not found", m.BMCCredentialID)
-	}
-	if cred.Type != "bmc" {
-		return nil, verr("SCHEMA_INVALID_CREDENTIAL", "credential %q is not a bmc credential", m.BMCCredentialID)
+	// Headless registration (docs/13-headless-design.md §2): a protocol=
+	// none machine has no controller — its identity is the NIC MAC carried
+	// in the synthetic none:// address, and there is no credential to
+	// resolve. The MAC normalization folds 00-11-22 / 001122ab forms into
+	// the canonical colon spelling, so one machine maps to one row under
+	// UNIQUE(bmc_address) however the operator spelled the address.
+	if protocol == "none" {
+		mac := netboot.HeadlessMAC(body.Bmc.Address)
+		if mac == "" {
+			return nil, verr("SCHEMA_INVALID_MACHINE",
+				"protocol none requires bmc.address in the none://<mac> form — the NIC MAC is the machine's identity (docs/13-headless-design.md)")
+		}
+		m.BMCAddress = netboot.HeadlessMACPrefix + mac
+		m.BMCCredentialID = ""
+	} else {
+		// The referenced credential must exist and be a BMC credential.
+		cred, err := s.Credentials.Get(ctx, m.BMCCredentialID)
+		if err != nil {
+			return nil, verr("SCHEMA_UNKNOWN_CREDENTIAL", "bmc credential %q not found", m.BMCCredentialID)
+		}
+		if cred.Type != "bmc" {
+			return nil, verr("SCHEMA_INVALID_CREDENTIAL", "credential %q is not a bmc credential", m.BMCCredentialID)
+		}
 	}
 	if err := s.Machines.Create(ctx, m); err != nil {
+		return nil, err
+	}
+	if err := validateBMCShape(m.BMCProtocol, m.BMCAddress, m.BMCCredentialID); err != nil {
 		return nil, err
 	}
 	s.Events.Append(ctx, "machine", m.ID, "machine.created", map[string]any{"bmc_address": m.BMCAddress})
@@ -120,16 +140,20 @@ func (s *Server) registerMachine(ctx context.Context, body *gen.MachineCreate) (
 	// Auto-discovery on registration (docs/05-inventory.md §5): a machine
 	// should reach a complete spec view without a second API call. Failure
 	// to enqueue leaves the machine in registering — the explicit discover
-	// action is the retry path.
-	if _, err := s.createJobRecord(ctx, createJobRecord{
-		jobType:    "discover",
-		flow:       provision.FlowDiscover,
-		machineIDs: []string{m.ID},
-		actionRaw:  json.RawMessage(`{"type":"discover","probe":"auto"}`),
-		createdBy:  "system",
-	}); err != nil {
-		obs.FromContext(ctx).ErrorContext(ctx, "auto-discovery enqueue failed",
-			obs.FieldMachineID, m.ID, "err", err.Error())
+	// action is the retry path. Headless machines skip it: there is no
+	// controller to probe; their facts arrive from the enrollment report
+	// (claim) or the in-band probes an install spec may configure.
+	if protocol != "none" {
+		if _, err := s.createJobRecord(ctx, createJobRecord{
+			jobType:    "discover",
+			flow:       provision.FlowDiscover,
+			machineIDs: []string{m.ID},
+			actionRaw:  json.RawMessage(`{"type":"discover","probe":"auto"}`),
+			createdBy:  "system",
+		}); err != nil {
+			obs.FromContext(ctx).ErrorContext(ctx, "auto-discovery enqueue failed",
+				obs.FieldMachineID, m.ID, "err", err.Error())
+		}
 	}
 
 	fresh, err := s.Machines.Get(ctx, m.ID)
@@ -219,6 +243,14 @@ func (s *Server) UpdateMachine(ctx context.Context, request gen.UpdateMachineReq
 			if body.Bmc.CredentialId != nil {
 				m.BMCCredentialID = string(*body.Bmc.CredentialId)
 			}
+			// Keep the protocol/address/credential triple consistent when a
+			// PATCH crosses the headless boundary in either direction
+			// (docs/13-headless-design.md §2): none carries its identity
+			// MAC in a none:// address and no credential; every other
+			// protocol is a controller and needs both.
+			if err := validateBMCShape(m.BMCProtocol, m.BMCAddress, m.BMCCredentialID); err != nil {
+				return nil, err
+			}
 		}
 		if body.SshCredentialId != nil {
 			if *body.SshCredentialId == "" {
@@ -296,6 +328,33 @@ func (s *Server) DeleteMachine(ctx context.Context, request gen.DeleteMachineReq
 	}
 	s.Events.Append(ctx, "machine", string(request.Id), "machine.deleted", nil)
 	return gen.DeleteMachine204Response{}, nil
+}
+
+// validateBMCShape keeps the protocol/address/credential triple consistent
+// (docs/13-headless-design.md §2): protocol none is the headless path — the
+// address must carry the identity MAC in the none:// form and no credential;
+// every other protocol is a controller and needs both.
+func validateBMCShape(protocol, address, credentialID string) error {
+	if protocol == "none" {
+		if netboot.HeadlessMAC(address) == "" {
+			return verr("SCHEMA_INVALID_MACHINE",
+				"protocol none requires bmc.address in the none://<mac> form — the NIC MAC is the machine's identity (docs/13-headless-design.md)")
+		}
+		if credentialID != "" {
+			return verr("SCHEMA_INVALID_MACHINE",
+				"protocol none machines have no BMC credential — clear credential_id when switching to none")
+		}
+		return nil
+	}
+	if credentialID == "" {
+		return verr("SCHEMA_INVALID_MACHINE",
+			"protocol %q requires bmc.credential_id — a controller protocol cannot lose its credential", protocol)
+	}
+	if netboot.HeadlessMAC(address) != "" {
+		return verr("SCHEMA_INVALID_MACHINE",
+			"the none:// address form belongs to protocol none — set bmc.address to the controller address")
+	}
+	return nil
 }
 
 // sshAddressOf extracts the in-band address from the optional ssh object.

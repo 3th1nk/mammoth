@@ -162,6 +162,19 @@ func (s *Server) ClaimPendingMachine(ctx context.Context, request gen.ClaimPendi
 	if err != nil {
 		return nil, err
 	}
+	// Headless claim (docs/13-headless-design.md §3.1): the claim body
+	// must explicitly carry bmc.protocol=none — the sighting tells you
+	// WHICH machine this is, and promoting it to a BMC-less registration
+	// is an operator decision, never an accident of an omitted field.
+	// The identity MAC is the pending row's (the machine booted PXE with
+	// it): the body address is rewritten onto none://<mac> so the claim
+	// lands on the same machine the room announced, however the request
+	// spelled the address. Controller claims (redfish/ipmi/auto) keep the
+	// plain POST /machines path untouched.
+	if request.Body != nil &&
+		request.Body.Bmc.Protocol != nil && *request.Body.Bmc.Protocol == gen.BMCProtocolNone {
+		request.Body.Bmc.Address = netboot.HeadlessMACPrefix + mac
+	}
 	m, err := s.registerMachine(ctx, request.Body)
 	if err != nil {
 		// A bmc_address conflict surfaces here (409) — the sighting stays

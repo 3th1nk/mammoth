@@ -66,7 +66,7 @@ type Machine struct {
 	ID              string
 	Labels          map[string]string
 	BMCAddress      string
-	BMCProtocol     string // redfish | ipmi | auto | fake
+	BMCProtocol     string // redfish | ipmi | auto | fake | none
 	BMCCredentialID string
 	SSHCredentialID *string
 	SSHAddress      string

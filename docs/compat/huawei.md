@@ -856,3 +856,60 @@ resource from iMana),不再依赖人开 KVM。诊断增强候选,不值得单独
 | 装机 | SP U 盘由 BIOS POST 消费 | NFS VmmControl 端到端闭环 | 不适配,存档 |
 | 诊断 | IPMI 截屏 / SOL Blackbox | 屏幕取证靠人开 KVM | 增强候选,待验 |
 | BMC 复位 | Cold Reset 标准命令 | Manager.Reset 实测恢复劣化 | IPMI 等价已明,无需动作 |
+
+## Insyde UEFI PXE 栈的 TFTP 形态(tsize 必答、blksize 不可协商,2026-11-04 真机定案)
+
+pxe-proxy + 不可控站点 DHCP 拓扑(dnsmasq 模拟,192.168.1.x)真机两阶段定位,
+2288H V5 的 Insyde UEFI PXE 固件栈(与 Huawei X722 NIC shim 的"不 ACK OACK"
+同族、更重):
+
+1. **协商形态(blksize=1468 OACK)**:第一跳 NBP 下载不 ACK OACK **且不接受
+   协商尺寸的 DATA**——传输死在 block 1,固件报 PXE-E53/E99 后落回盘;
+2. **无协商形态(server 不回 OACK 直接 512 DATA)**:固件按 **tsize** 预分配
+   NBP 下载缓冲——无应答即 0 字节缓冲,DATA 无处落,KVM 实证
+   `NBP filesize is 0 Bytes` + PXE-E99。
+
+**最终形态**(唯一全 ROM 真机验证过的 dnsmasq 行为,engine 已固化):
+tsize 有答(OACK 仅携带 tsize,blksize 不回显 = 保持 RFC 默认 512)、
+DATA 恒 512、OACK 无 ACK 走 X722 容忍路径(netboot/tftp.go)。修复后真机
+验证:shim→grubnet→蹦床→per-MAC 配置→kernel/initrd→casper/subiquity
+装机器全链走通(ubuntu26 与 alpine agent 双载体)。
+
+**附带翻案**:此前"grub2 不处理 UEFI Proxy DHCP 消息(RackN KB-00043)"
+的假设在本机被证伪——wire 实证两服务器合并、shim/grub 加载、modloop
+枚举、蹦床读取、grub HTTP(configfile (http,host:port))全部工作,
+per-MAC 配置拉取与引擎归因正常。KB-00043 的失败签名(TFTP 成功后静默
+落 grub 提示符)在本机的实际成因是 **grub.cfg 蹦床的 TFTP blksize 协商
+会话死亡**(grub 收到的是空/半配置),与 grub2 上游缺陷无关。proxyDHCP
+下 grubnet 链在此机型上**完整可用**。
+
+## pxe-proxy 跨网段实验实录(2026-11-03/04,192.168.1.x)
+
+拓扑:引擎 .250(external)+ pxe-proxy .5 + 模拟站点 DHCP .107(仅地址池,
+零引导信息)+ 真机 .74(UEFI/SB-off)。
+
+- **两服务器合并真机走通**:客户端从站点 DHCP 拿地址(.172),向 proxy 的
+  4011 发 boot-server 请求、接受 proxy 的 NBP 文件名——proxyDHCP 模型
+  在真机上成立(此前"pxe-proxy 不工作"的全部根因都在下游:grub.cfg
+  蹦床的 TFTP 协商死亡,见上节);
+- **蹦床不可被 kit 周期同步覆盖实验**:pxe-proxy 的 kit 自动同步整树替换
+  TFTP root,人工改动的蹦床 5 分钟内被覆盖——联调期临时改动须
+  `--sync-interval 0` 后再改;
+- **模拟站点 DHCP 的池会被外来客户端抽干**:清完租约 5-10 分钟内外来
+  VMware 虚机等占满 7 地址小池(lease 表 6/7 为外来 MAC),装机环境
+  DHCP 反复断粮(agent initramfs 卡 "Obtaining IP via DHCP"、ubuntu
+  casper 同理)——**真实站点 DHCP 的无差别应答形态同样如此**,池模式
+  allowlist 的价值再实证。模拟配置最终形态:`dhcp-host=<真机MAC>` +
+  `dhcp-ignore=tag:!known` + TTL 30m;
+- **装后静态地址不得落在 DHCP 池段内**:池段地址随时被外来客户端租走
+  (实验中 .175 即被一台 VMware 虚机租用)——与 04-install-spec
+  "池地址是引导期临时身份,不得渲染进目标 netplan"的定案互证;
+- **agent PXE 载体深缺口(已修,复验待窗口)**:alpine agent 经 pxe-proxy
+  载体四连 identical 失败"cannot resolve LogicalDrive0"——NETBOOT
+  initramfs 精简 features(无 HBA 驱动),modloop 后置加载依赖 openrc
+  hwdrivers coldplug,而 coldplug 跑得比 modloop 挂载早;engine 修复 =
+  bootstrap 阶段重跑 coldplug + modprobe 兜底(commit 4b75b7b)。qemu
+  复现(megasas 虚拟卡 + HTTP modloop)定案机制。**ubuntu26 载体的
+  subiquity "Continue with autoinstall?" 确认门同窗口未定案**(autoinstall
+  数据已加载、early_commands 在跑,门仍弹出;待装机环境 /proc/cmdline
+  实证,与 DHCP 无关——casper 当时已拿到地址)。

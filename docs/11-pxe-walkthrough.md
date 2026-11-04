@@ -149,6 +149,8 @@ DHCP 不可共存(UDP 67 排他,见 operations.md §4.5 第 1 条)。
 | PXE-E55(ProxyDHCP no reply on 4011) | 4011 无人应答 | proxyDHCP 未起/被防火墙挡;mammoth 未启用 PXE |
 | PXE-E32(TFTP open timeout) | TFTP 首包拿不到 | next-server 不可达、TFTP 根目录缺文件、站点 DHCP option 43 编码错误把 NBP 路径弄丢(见下) |
 | PXE-E99 / 卡图形 logo | NBP 拉完但跑不起来 | Secure Boot 拒签(应走 shim 链)、架构不匹配(arm64 机器发了 x64 NBP——option 93 观测可查) |
+| PXE-E99 + `NBP filesize is 0 Bytes`(固件屏) | TFTP 服务器未答 tsize | Insyde UEFI PXE(2288H 实证)按 tsize 预分配下载缓冲,无 tsize = 0 字节缓冲——engine 已修复(tsize 必答,commit 7c6e522);见 compat/huawei.md §Insyde TFTP 形态 |
+| shim/grub 的 TFTP 传输卡 block 1 → 静默落盘 | blksize 协商尺寸 DATA 被固件拒收 | Insyde/X722 族形态(不 ACK OACK 且不接受协商尺寸 DATA)——engine 已修复(DATA 恒 512,永不协商);自建 TFTP/第三方 TFTP 服务同坑 |
 
 抓包永远是 PXE 排障的第一工具(比读 BMC/固件文档快):
 
@@ -159,6 +161,12 @@ tcpdump -ni <装机口> 'udp port 67 or udp port 69 or udp port 4011'
 看四样:DISCOVER 是否到达(链路/ VLAN 问题)、OFFER 是否带 next-server+
 filename( mammoth 应答内容)、TFTP RRQ 是否出现(引导项是否生效)、ACK0
 是否缺失(X722 形态,tftp 容忍已覆盖)。
+
+**2026-11-04 补充(2288H Insyde 实证)**:固件屏上 `NBP filesize is 0 Bytes`
+是 tsize 缺失的指纹(非 NBP 文件为空);`Station IP/Server IP/NBP filename`
+三行都正确而传输失败 = blksize 协商形态问题——两者均已被 engine 的
+"tsize 必答 + DATA 恒 512" 形态覆盖(commit 7c6e522),若使用外置 TFTP
+(dnsmasq 之外的自建服务)遇到同签名,按同形态对齐。
 
 ### 4.7 安装器起来了但 autoinstall 没生效:seed 拉取三步定位(2026-10-28)
 

@@ -382,6 +382,34 @@ mammoth(承载网)+ 每装机 VLAN 一个 pxe-proxy):
 - **验证矩阵与失败形态判别表**:docs/runbooks/pxe-proxy-validation.md
   (BIOS → UEFI SB-off → UEFI SB-on 边界定案 → relay 的四步序列)。
 
+**站点 DHCP 模拟/小池的运维实践(2026-11-04 真机实验实录)**:模拟
+站点 DHCP(dnsmasq 仅地址池)联调时,三件事必须在配置层解决,否则
+装机环境反复断粮且现象极具迷惑性(表现为 install 卡在 "Obtaining IP
+via DHCP" / subiquity 提示门,而引擎侧只见 DISCOVER 无 OFFER):
+
+1. **小池会被外来客户端抽干**:无差别应答下,清完租约 5-10 分钟内
+   外来设备(实验实录:VMware 虚机、邻段设备等)即占满小池(7 地址
+   池 6/7 为外来 MAC)。解法 = allowlist:`dhcp-host=<装机MAC>` 逐台
+   登记 + `dhcp-ignore=tag:!known`(未知客户端直接忽略)——与 mammoth
+   池模式的 allowlist 门禁同思想;真实站点 DHCP 的无差别应答形态
+   同样会抽干小池,这也是池模式存在的理由之一。
+2. **TTL 按"装机窗口 ×2"定**:默认 1h 租约在多轮装机下不回收,
+   装机环境拿不到地址;`dhcp-range=...,30m`(或更短)让租约自然
+   回收。dnsmasq lease 文件位置随发行版(CentOS 在
+   /var/lib/dnsmasq/,Debian 在 /var/lib/misc/)——排障先看对文件。
+3. **装后静态地址严禁选在池段内**:动态租约随时被外来客户端租走
+   (实验实录:声明 .175 后被一台 VMware 虚机租用,ping 通的
+   是别人)——与 04-install-spec "池地址是引导期临时身份,不得
+   渲染进目标 netplan"互证;装后地址从池外选,且 ping 静默 ≠
+   空闲(禁 ping/离线设备),以环境主人确认为准。
+
+**固件 TFTP 行为边界(2288H Insyde 实证,engine 已覆盖)**:Insyde
+UEFI PXE 栈要求 tsize 必答(按它预分配 NBP 下载缓冲)且不接受
+blksize 协商尺寸的 DATA——engine TFTP 形态(tsize 必答 + DATA 恒
+512,永不协商,commit 7c6e522)是唯一全 ROM 真机验证过的形态;自建
+第三方 TFTP 服务时按同形态对齐,指纹与判别见 docs/11-pxe-walkthrough
+§抓包表(PXE-E99 + "NBP filesize is 0 Bytes")。
+
 ## 4.5.2 Windows PXE 的部署层 SMB 导出
 
 windows wimboot 载体的 install 源是**部署层 SMB 只读共享**(与 NFS 介质

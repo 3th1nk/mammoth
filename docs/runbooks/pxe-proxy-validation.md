@@ -35,6 +35,8 @@ Proxy DHCP 消息,RackN KB-00043 / RH Bugzilla #1809246)要求按机型固件
 | 3 | 客户端 TFTP RRQ 目标 = 站点 DHCP 的地址 | 站点 siaddr 默认自指 + 粗心 ROM | 抓包对比两份 OFFER 的 siaddr 与实际 RRQ 目标 |
 | 4 | PXE-E32 / E38(TFTP 超时) | next-server 不可达(地址 / 端口 / 防火墙) | pxe-proxy 启动日志 `next_server=`;UDP 69 放行;从机器 L2 `tftp get` 探测 |
 | 5 | pxe-proxy 起不来(bind: address already in use) | 与站点 DHCP 同机,UDP 67 冲突 | 进程日志;pxe-proxy 必须独立主机 |
+| 6 | 装机环境卡 "Obtaining IP via DHCP"(install_os 长跑无进展) | 模拟站点 DHCP 的池被外来客户端抽干(实录:清完租约 5-10 分钟 6/7 被占) | 站点 DHCP 的 lease 文件 + "no address available" 日志;解法 = dhcp-host allowlist + TTL 30m(operations.md 共存节) |
+| 7 | agent 报 "cannot resolve LogicalDrive0 (closest 空)" | modloop 后置加载缺口:NETBOOT initramfs 无 HBA 驱动、hwdrivers coldplug 早于 modloop(commit 4b75b7b 已修) | agent bail log 的 bootstrap 诊断行(modloop 挂载点/块设备表/已加载驱动);复验待窗口 |
 
 排障第一检查点永远是 **sighting 有无**(operations.md 共存节):无
 sighting 是"包没到"(helper 列表 / L2 归属 / 端口冲突),有 sighting 而

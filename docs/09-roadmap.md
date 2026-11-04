@@ -426,6 +426,18 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
      (compat/huawei.md windows vMedia 节那类);UEFI 侧 iPXE sanboot 支持
      度未验证且 SB 链不可用(裸 iPXE,wimboot 同款例外)。触发:真实需求
      (rescue 场景或 vMedia 死路机型复现)再排;
+   - **agent PXE 载体 modloop 加载缺口(2026-11-04 真机暴露,✅ 代码落地,
+     复验待窗口)**——pxe-proxy 跨网段真机首次把 agent PXE 载体跑到
+     storage 即四连 identical 失败(看不到盘):NETBOOT initramfs 精简
+     features(无 HBA 驱动),modloop 后置加载依赖 openrc hwdrivers
+     coldplug,coldplug 却跑得比 modloop 挂载早(qemu megasas 复现定案;
+     vMedia 载体的 ISO initramfs 内建全量驱动,结构上免疫——09-19 的
+     agent 真机闭环为 vMedia 载体,PXE 载体 agent 通路此前从未真机到过
+     storage)。修复 = bootstrap 重跑 coldplug + 控制器 modprobe 兜底 +
+     自包含诊断行随 bail log 回传(commit 4b75b7b)。**同窗口ubuntu26
+     载体 subiquity 确认门未定案**(autoinstall 数据已加载、early_commands
+     在跑,门仍弹;待装机环境 /proc/cmdline 实证,已排除 DHCP 因素);
+     复验 = pxe-proxy 拓扑重跑 alpine(装后 .221)+ ubuntu26;
    - **真机 relay 回归**——等网络设备配 ip helper 的协调窗口(giaddr 应答
      已有单测,见 11-pxe-walkthrough §4);
    - ~~**uniontechos**~~ **✅ 已闭环(2026-09-19 真机,见第 2 项)**;剩余

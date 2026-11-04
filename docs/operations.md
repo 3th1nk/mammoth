@@ -284,7 +284,13 @@ MAMMOTH_PXEPROXY_BASE_URL=http://<engine>:8080 mammoth pxe-proxy --tftp-root /va
   共存节。
 - kit 自动同步:启动 + 每 5 分钟(`--sync-interval`),stat 指纹 ETag +
   `If-None-Match` 协商——内容未变 304 零下载;变更则下载解包原子替换
-  TFTP root,失败保留旧 root(坏下载不得卡机器在 PXE 提示)。
+  TFTP root,失败保留旧 root(坏下载不得卡机器在 PXE 提示)。两个易误判
+  的语义:`--sync-interval 0` 只禁**周期**重同步,启动时的初始同步仍然
+  执行(联调期手工改 TFTP root 的文件,一次 restart 就会被引擎 kit
+  覆盖回去——先 restart 再改,且预期被覆盖);ETag 协商下引擎 kit
+  未变化时本地文件**不会**被覆盖(304 零下载),2026-11-04 排障中
+  "探针蹦床被周期同步覆盖"的推断即属此类误判——真因是固件第一跳
+  的 TFTP 形态问题(见下方共存节)。
 - 观测回传:proxyDHCP 应答时把 sightings(MAC/固件)POST 到
   `/netboot/observe` → pending_machines 台账;10 分钟同客户端去重窗。
 - compose:`deploy/compose.pxe-proxy.yml`(host 网络,tftp-root 卷挂载);

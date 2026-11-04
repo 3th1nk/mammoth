@@ -251,6 +251,17 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		early = append(early, fmt.Sprintf(
 			"nohup sh -c 'journalctl -b -f -o short | logger -d -n %s -P %d -t mammoth-install' >/dev/null 2>&1 &",
 			host, port))
+		// One-shot kernel-args snapshot, same sink. When subiquity shows the
+		// confirm gate despite the seed being loaded, the ONLY ground truth
+		// is the /proc/cmdline the installer actually saw (autoinstall data
+		// loaded + DHCP fine yet the gate still appeared — ubuntu26 live
+		// round, undecided). The forwarder above only sees the journal; the
+		// initramfs/casper phase never reaches it, so the ds=/ip= arguments
+		// must be echoed explicitly to compare task logs against the netboot
+		// render.
+		early = append(early, fmt.Sprintf(
+			"cat /proc/cmdline | logger -d -n %s -P %d -t mammoth-install",
+			host, port))
 	}
 	// Controller-named volumes whose kernel name mammoth cannot know (the
 	// snapshot itself carries the controller view): subiquity rewrites

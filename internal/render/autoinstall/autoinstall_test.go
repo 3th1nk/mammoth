@@ -764,6 +764,16 @@ func TestLiveLogForwarderEarlyCommand(t *testing.T) {
 	if !strings.HasPrefix(first, "nohup sh -c '") || !strings.HasSuffix(first, "' >/dev/null 2>&1 &") {
 		t.Fatalf("forwarder must be a backgrounded stream (early-commands are synchronous):\n%s", first)
 	}
+	// Kernel-args snapshot rides the same sink, right after the forwarder:
+	// the confirm-gate ground truth (ubuntu26 live round) — without it the
+	// initramfs phase stays invisible and ds= never gets compared.
+	if len(early) < 2 {
+		t.Fatal("kernel-args snapshot early-command missing")
+	}
+	snap, _ := early[1].(string)
+	if !strings.Contains(snap, "cat /proc/cmdline | logger -d -n m -P 5514 -t mammoth-install") {
+		t.Fatalf("kernel-args snapshot must echo /proc/cmdline to the same sink:\n%s", snap)
+	}
 }
 
 // TestInstallConsoleVgaOrder pins the vga console order: the kernel

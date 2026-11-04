@@ -50,6 +50,43 @@ func TestRegisterHeadlessValidation(t *testing.T) {
 	}
 }
 
+// The claim's hardware projection (docs/13-headless-design.md §3.1): disks
+// and NICs of the probe report become the machine's hardware view with
+// coverage=partial — the view PXE observation and netboot arming key on for
+// headless machines. Old reports (no nics) still project their disks;
+// garbage yields nil so the claim just skips the projection.
+func TestHardwareFromReport(t *testing.T) {
+	hw := hardwareFromReport([]byte(`{
+		"captured_at":"2026-11-04T00:00:00Z","source":"ramdisk",
+		"disks":[{"device":"sda","size_bytes":250059350016,"serial":"S3Z4","partitions":[]}],
+		"nics":[{"name":"eno1","mac":"aa:bb:cc:dd:ee:01","link_up":true},
+		        {"name":"eno2","mac":"AA-BB-CC-DD-EE-02","link_up":false},
+		        {"name":"bad","mac":"nonsense"}]
+	}`))
+	if hw == nil || hw.Coverage != "partial" {
+		t.Fatalf("hardware = %+v, want partial coverage", hw)
+	}
+	if len(hw.Disks) != 1 || hw.Disks[0].Name != "sda" || hw.Disks[0].SizeBytes != 250059350016 {
+		t.Errorf("disks = %+v", hw.Disks)
+	}
+	if len(hw.NICs) != 2 || hw.NICs[0].MAC != "aa:bb:cc:dd:ee:01" || !hw.NICs[0].LinkUp {
+		t.Errorf("nics = %+v", hw.NICs)
+	}
+	if hw.NICs[1].MAC != "aa:bb:cc:dd:ee:02" || hw.NICs[1].LinkUp {
+		t.Errorf("nic normalization/link_up = %+v", hw.NICs[1])
+	}
+
+	if hw := hardwareFromReport([]byte(`{"disks":[{"device":"sda","size_bytes":1}]}`)); hw == nil || len(hw.NICs) != 0 {
+		t.Errorf("disk-only report must project, got %+v", hw)
+	}
+	if hw := hardwareFromReport([]byte(`not json`)); hw != nil {
+		t.Errorf("garbage report must yield nil, got %+v", hw)
+	}
+	if hw := hardwareFromReport([]byte(`{"disks":[],"nics":[]}`)); hw != nil {
+		t.Errorf("empty scan must yield nil, got %+v", hw)
+	}
+}
+
 // The protocol/address/credential triple must stay consistent across PATCHes
 // that cross the headless boundary in either direction.
 func TestValidateBMCShape(t *testing.T) {

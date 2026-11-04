@@ -3197,6 +3197,17 @@ components:
           items:
             type: object
             additionalProperties: true
+        nics:
+          type: array
+          description: |
+            NIC facts from the probe's /sys/class/net scan (headless flow,
+            docs/13-headless-design.md §3.1): each entry carries at least
+            `name` and `mac`, optionally `link_up`. Claim projects these
+            onto the machine's hardware view so PXE observation and netboot
+            arming can key on the MACs.
+          items:
+            type: object
+            additionalProperties: true
 
     TaskLog:
       type: object

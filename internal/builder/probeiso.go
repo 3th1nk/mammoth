@@ -250,6 +250,24 @@ scan() {
 		[ $first -eq 1 ] && first=0 || printf ',' >> "$OUT"
 		printf '{%s}' "$line" >> "$OUT"
 	done
+	# NIC facts (headless flow, docs/13 §3.1): claim projects these onto the
+	# machine's hardware view so PXE observation (ObservePXE matches
+	# hardware->'nics') and netboot MAC arming work without a BMC. carrier
+	# reads as 0/1 only when the interface is up; other states (and the
+	# looback's all-zero address) are not facts worth reporting.
+	printf '],"nics":[' >> "$OUT"
+	nfirst=1
+	for n in /sys/class/net/*; do
+		name="${n##*/}"
+		[ "$name" = "lo" ] && continue
+		mac=$(cat "$n/address" 2>/dev/null)
+		case "$mac" in ""|"00:00:00:00:00:00") continue ;; esac
+		nline="\"name\":\"$name\",\"mac\":\"$mac\""
+		carrier=$(cat "$n/carrier" 2>/dev/null)
+		case "$carrier" in 0|1) nline="$nline,\"link_up\":$carrier" ;; esac
+		[ $nfirst -eq 1 ] && nfirst=0 || printf ',' >> "$OUT"
+		printf '{%s}' "$nline" >> "$OUT"
+	done
 	printf ']}' >> "$OUT"
 }
 

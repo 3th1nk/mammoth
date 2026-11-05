@@ -13,6 +13,7 @@ import (
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/bmc"
+	"github.com/3th1nk/mammoth/internal/inventory/inbandssh"
 	"github.com/3th1nk/mammoth/internal/render"
 	"github.com/3th1nk/mammoth/internal/render/kickstart"
 	"github.com/3th1nk/mammoth/internal/render/windows"
@@ -51,7 +52,7 @@ const win2288hSpec = `{
 func TestPlanInstallWindows2288h(t *testing.T) {
 	reg := windowsPlanRegistry(t)
 
-	plan, err := PlanInstall(context.Background(), json.RawMessage(win2288hSpec), hw2288h(), reg)
+	plan, err := PlanInstall(context.Background(), json.RawMessage(win2288hSpec), hw2288h(), nil, reg)
 	if err != nil {
 		t.Fatalf("PlanInstall: %v", err)
 	}
@@ -79,7 +80,7 @@ func TestPlanInstallWindows2288h(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PlanInstall(context.Background(), raw, hw2288h(), reg); err != nil {
+	if _, err := PlanInstall(context.Background(), raw, hw2288h(), nil, reg); err != nil {
 		t.Fatalf("PlanInstall(contract round-trip): %v", err)
 	}
 }
@@ -90,7 +91,7 @@ func TestPlanInstallRejectionIsClassified(t *testing.T) {
 	// selectors against an empty inventory must fail with the machine-readable
 	// code a real install would produce — AsClassified is the contract the API
 	// error mapper relies on to surface these as 422s, not 500s.
-	_, err := PlanInstall(context.Background(), json.RawMessage(win2288hSpec), &bmc.HardwareView{}, reg)
+	_, err := PlanInstall(context.Background(), json.RawMessage(win2288hSpec), &bmc.HardwareView{}, nil, reg)
 	if err == nil {
 		t.Fatal("expected selector failure against empty inventory")
 	}
@@ -135,7 +136,7 @@ func TestPlanInstallRootDeviceHintsAndAlignment(t *testing.T) {
 		return ci.Code
 	}
 
-	plan, err := PlanInstall(context.Background(), spec(`"root_device_hints": {"min_size_gb": 100}, `), hw, reg)
+	plan, err := PlanInstall(context.Background(), spec(`"root_device_hints": {"min_size_gb": 100}, `), hw, nil, reg)
 	if err != nil {
 		t.Fatalf("floored plan: %v", err)
 	}
@@ -143,21 +144,21 @@ func TestPlanInstallRootDeviceHintsAndAlignment(t *testing.T) {
 		t.Fatalf("boot_drive = %q, want sdb (the floor must keep the 64G stick from winning largest)", plan.BootDrive)
 	}
 
-	_, err = PlanInstall(context.Background(), spec(`"root_device_hints": {"min_size_gb": 1024}, `), hw, reg)
+	_, err = PlanInstall(context.Background(), spec(`"root_device_hints": {"min_size_gb": 1024}, `), hw, nil, reg)
 	if codeOf(err) != "LAYOUT_DISK_NOT_FOUND" {
 		t.Fatalf("starved floor code = %v, want LAYOUT_DISK_NOT_FOUND", err)
 	}
 
-	_, err = PlanInstall(context.Background(), spec(`"alignment": "1m", `), hw, reg)
+	_, err = PlanInstall(context.Background(), spec(`"alignment": "1m", `), hw, nil, reg)
 	if codeOf(err) != "SCHEMA_INVALID_STORAGE" {
 		t.Fatalf("bad alignment code = %v, want SCHEMA_INVALID_STORAGE", err)
 	}
-	_, err = PlanInstall(context.Background(), spec(`"root_device_hints": {"min_size_gb": 0}, `), hw, reg)
+	_, err = PlanInstall(context.Background(), spec(`"root_device_hints": {"min_size_gb": 0}, `), hw, nil, reg)
 	if codeOf(err) != "SCHEMA_INVALID_STORAGE" {
 		t.Fatalf("non-positive floor code = %v, want SCHEMA_INVALID_STORAGE", err)
 	}
 
-	if _, err := PlanInstall(context.Background(), spec(`"alignment": "4k", `), hw, reg); err != nil {
+	if _, err := PlanInstall(context.Background(), spec(`"alignment": "4k", `), hw, nil, reg); err != nil {
 		t.Fatalf("advisory alignment must plan clean: %v", err)
 	}
 
@@ -171,7 +172,7 @@ func TestPlanInstallRootDeviceHintsAndAlignment(t *testing.T) {
 	  "identity": {"hostname_pattern": "n1"},
 	  "boot": {"strategy": "virtual_media"}
 	}`)
-	plan, err = PlanInstall(context.Background(), raidSpec, hw, reg)
+	plan, err = PlanInstall(context.Background(), raidSpec, hw, nil, reg)
 	if err != nil {
 		t.Fatalf("unknown-size disk under floor: %v", err)
 	}
@@ -215,7 +216,7 @@ func TestPlanInstallLvm(t *testing.T) {
 	}
 
 	// happy path: root rides the LV — the boot drive falls to the /boot holder
-	plan, err := PlanInstall(context.Background(), spec(disks+freshVG), hw, reg)
+	plan, err := PlanInstall(context.Background(), spec(disks+freshVG), hw, nil, reg)
 	if err != nil {
 		t.Fatalf("lvm plan: %v", err)
 	}
@@ -226,7 +227,7 @@ func TestPlanInstallLvm(t *testing.T) {
 	// PV selector grabbing a disk[] claim: consumed devices are exclusive
 	_, err = PlanInstall(context.Background(), spec(disks+
 		`"lvm": [{"name": "vg0", "pvs": [{"match": {"size": "smallest"}}],
-		  "logvols": [{"name": "root", "size": "rest", "fs": "xfs", "mount": "/"}]}]`), hw, reg)
+		  "logvols": [{"name": "root", "size": "rest", "fs": "xfs", "mount": "/"}]}]`), hw, nil, reg)
 	if codeOf(t, err) != "SCHEMA_INVALID_STORAGE" {
 		t.Fatalf("PV overlap code = %v, want SCHEMA_INVALID_STORAGE", err)
 	}
@@ -234,7 +235,7 @@ func TestPlanInstallLvm(t *testing.T) {
 	// ambiguous PV selector (both SAS disks, no size pick)
 	_, err = PlanInstall(context.Background(), spec(disks+
 		`"lvm": [{"name": "vg0", "pvs": [{"match": {"protocol": "sas"}}],
-		  "logvols": [{"name": "root", "size": "rest", "fs": "xfs", "mount": "/"}]}]`), hw, reg)
+		  "logvols": [{"name": "root", "size": "rest", "fs": "xfs", "mount": "/"}]}]`), hw, nil, reg)
 	if codeOf(t, err) != "SELECT_AMBIGUOUS" {
 		t.Fatalf("ambiguous PV code = %v, want SELECT_AMBIGUOUS", err)
 	}
@@ -243,24 +244,60 @@ func TestPlanInstallLvm(t *testing.T) {
 	_, err = PlanInstall(context.Background(), spec(disks+
 		`"lvm": [{"name": "vg0", "pvs": [{"match": {"size": "largest"}}],
 		  "logvols": [{"name": "root", "size": "rest", "fs": "xfs", "mount": "/"},
-		              {"name": "data", "size": "rest", "fs": "xfs", "mount": "/data"}]}]`), hw, reg)
+		              {"name": "data", "size": "rest", "fs": "xfs", "mount": "/data"}]}]`), hw, nil, reg)
 	if codeOf(t, err) != "SCHEMA_INVALID_STORAGE" {
 		t.Fatalf("double-rest code = %v, want SCHEMA_INVALID_STORAGE", err)
-	}
-
-	// keep:vg binds to the executor's layout snapshot — the API-side plan
-	// reads LAYOUT_SNAPSHOT_REQUIRED (same semantics as keep:partitions)
-	_, err = PlanInstall(context.Background(), spec(disks+
-		`"lvm": [{"name": "vgdata", "keep": "vg"}]`), hw, reg)
-	if codeOf(t, err) != "LAYOUT_SNAPSHOT_REQUIRED" {
-		t.Fatalf("keep:vg plan code = %v, want LAYOUT_SNAPSHOT_REQUIRED", err)
 	}
 
 	// unknown distro + lvm still hits the structural validation first — the
 	// shape errors are distro-independent
 	_, err = PlanInstall(context.Background(), spec(disks+
-		`"lvm": [{"name": "vg0", "pvs": [], "logvols": [{"name": "root", "size": "10G", "fs": "xfs", "mount": "/"}]}]`), hw, reg)
+		`"lvm": [{"name": "vg0", "pvs": [], "logvols": [{"name": "root", "size": "10G", "fs": "xfs", "mount": "/"}]}]`), hw, nil, reg)
 	if codeOf(t, err) != "SCHEMA_INVALID_STORAGE" {
 		t.Fatalf("pv-less group code = %v, want SCHEMA_INVALID_STORAGE", err)
+	}
+
+	// keep:vg binds against the snapshot the handler passes (the same facts
+	// verify_layout reads): VG present → resolved; missing VG / snapshot
+	// without LVM facts → LAYOUT_VG_NOT_FOUND; fresh name colliding with the
+	// machine's existing group → LAYOUT_VG_EXISTS. This is the batch guard:
+	// each target machine's plan reads its own reality before submission.
+	snap := []inbandssh.VgFacts{{
+		Name: "vgdata", PVCount: 1, SizeBytes: 900 << 30,
+		PVs: []inbandssh.PvFacts{{Name: "sdb2", SizeBytes: 900 << 30}},
+		LVs: []inbandssh.LvFacts{{Name: "lvdata", SizeBytes: 890 << 30, FSType: "xfs"}},
+	}}
+	keepSpec := func(vg string) json.RawMessage {
+		return json.RawMessage(`{
+		  "image": {"source": "file:///x/os.iso", "distro": "rocky9"},
+		  "storage": {"disks": [{"select": {"match": {"size": "smallest"}}, "wipe": true, "partitions": [
+		    {"size": "1024M", "fs": "xfs", "mount": "/boot"},
+		    {"size": "rest", "fs": "xfs", "mount": "/"}]}],
+		  "lvm": [` + vg + `]},
+		  "identity": {"hostname_pattern": "n1"},
+		  "boot": {"strategy": "virtual_media"}
+		}`)
+	}
+	keepVG := `{"name": "vgdata", "keep": "vg", "preserve": [{"name": "lvdata", "mount": "/data"}]}`
+
+	plan, err = PlanInstall(context.Background(), keepSpec(keepVG), hw, snap, reg)
+	if err != nil {
+		t.Fatalf("keep:vg plan with snapshot: %v", err)
+	}
+	if plan.BootDrive != "sda" {
+		t.Fatalf("boot_drive = %q, want sda (/ stays on the plain boot partition)", plan.BootDrive)
+	}
+
+	if _, err = PlanInstall(context.Background(), keepSpec(keepVG), hw, nil, reg); codeOf(t, err) != "LAYOUT_VG_NOT_FOUND" {
+		t.Fatalf("keep:vg without snapshot code = %v, want LAYOUT_VG_NOT_FOUND", err)
+	}
+	if _, err = PlanInstall(context.Background(), keepSpec(`{"name": "vgother", "keep": "vg"}`), hw, snap, reg); codeOf(t, err) != "LAYOUT_VG_NOT_FOUND" {
+		t.Fatalf("missing VG code = %v, want LAYOUT_VG_NOT_FOUND", err)
+	}
+	_, err = PlanInstall(context.Background(), spec(disks+
+		`"lvm": [{"name": "vgdata", "pvs": [{"match": {"size": "largest"}}],
+		  "logvols": [{"name": "root", "size": "rest", "fs": "xfs", "mount": "/"}]}]`), hw, snap, reg)
+	if codeOf(t, err) != "LAYOUT_VG_EXISTS" {
+		t.Fatalf("fresh-name collision code = %v, want LAYOUT_VG_EXISTS", err)
 	}
 }

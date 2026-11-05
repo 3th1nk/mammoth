@@ -11,8 +11,9 @@ package provision
 // in-band snapshot fallback and keep:partitions snapshot binding need the
 // executor context, which the API process does not have. keep: partitions
 // therefore resolves the same way a snapshot-less install fails
-// (LAYOUT_SNAPSHOT_REQUIRED). The two paths converge when the plan endpoint
-// gains snapshot access.
+// (LAYOUT_SNAPSHOT_REQUIRED). keep:vg converges since the handler started
+// passing the snapshot's LVM facts (snapLvm) — the plan binds kept groups
+// against the same facts verify_layout reads.
 
 import (
 	"context"
@@ -22,14 +23,18 @@ import (
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/bmc"
+	"github.com/3th1nk/mammoth/internal/inventory/inbandssh"
 	"github.com/3th1nk/mammoth/internal/render"
 )
 
 // PlanInstall resolves specJSON (an InstallSpec, same shape as an install
 // job's spec) against hw and validates the dialect renders it. hw=nil means
 // the machine has no inventory — selectors fail exactly like a real install
-// without discovery.
-func PlanInstall(ctx context.Context, specJSON json.RawMessage, hw *bmc.HardwareView, drivers *render.Registry) (*gen.InstallPlan, error) {
+// without discovery. snapLvm carries the machine's layout snapshot LVM facts
+// (nil = no snapshot or one predating the LVM section): keep:vg groups bind
+// against it exactly like verify_layout does — the batch guard reads
+// per-machine reality, not just the spec.
+func PlanInstall(ctx context.Context, specJSON json.RawMessage, hw *bmc.HardwareView, snapLvm []inbandssh.VgFacts, drivers *render.Registry) (*gen.InstallPlan, error) {
 	var spec installSpecView
 	if err := json.Unmarshal(specJSON, &spec); err != nil {
 		return nil, classifiedErr("SCHEMA_INVALID_SPEC", false, "spec unreadable: %s", err.Error())
@@ -67,7 +72,7 @@ func PlanInstall(ctx context.Context, specJSON json.RawMessage, hw *bmc.Hardware
 	// to the machine's layout snapshot in the executor, not in the API
 	// process — the plan reads as LAYOUT_SNAPSHOT_REQUIRED, same as
 	// keep:partitions does.
-	resolvedLvm, err := planResolveLvm(spec.Storage.Lvm, spec.Storage.Raid, spec.minDeviceSizeGB(), hw, claimed)
+	resolvedLvm, err := planResolveLvm(spec.Storage.Lvm, spec.Storage.Raid, spec.minDeviceSizeGB(), hw, snapLvm, claimed)
 	if err != nil {
 		return nil, err
 	}
@@ -271,9 +276,11 @@ func intPtr(i int) *int    { return &i }
 // planResolveLvm mirrors verify_layout's LVM resolution for the plan view
 // (same selector semantics, same error codes). claimed carries the devices
 // disks[] already resolved to (device → claimer) so PV overlap surfaces here
-// exactly as the real pipeline reports it. keep:vg groups always fail with
-// LAYOUT_SNAPSHOT_REQUIRED: snapshot binding needs the executor context.
-func planResolveLvm(vgs []volumeGroupView, raids []raidSpecView, minSizeGB *int, hw *bmc.HardwareView, claimed map[string]string) ([]render.ResolvedVolgroup, error) {
+// exactly as the real pipeline reports it. snapLvm is the machine's snapshot
+// LVM facts — keep:vg groups bind against it here (VG missing / snapshot
+// without an LVM section → LAYOUT_VG_NOT_FOUND, the same code the executor
+// raises), so the batch guard reads per-machine reality before submission.
+func planResolveLvm(vgs []volumeGroupView, raids []raidSpecView, minSizeGB *int, hw *bmc.HardwareView, snapLvm []inbandssh.VgFacts, claimed map[string]string) ([]render.ResolvedVolgroup, error) {
 	resolved := make([]render.ResolvedVolgroup, 0, len(vgs))
 	raidByName := map[string]raidSpecView{}
 	for _, r := range raids {
@@ -281,10 +288,71 @@ func planResolveLvm(vgs []volumeGroupView, raids []raidSpecView, minSizeGB *int,
 	}
 	for i, vg := range vgs {
 		if vg.Keep == "vg" {
-			return nil, classifiedErr("LAYOUT_SNAPSHOT_REQUIRED", false,
-				"lvm[%d]: keep:vg binds to the machine's layout snapshot, which the plan endpoint cannot read — submit the install to verify against the machine", i)
+			if snapLvm == nil {
+				return nil, classifiedErr("LAYOUT_VG_NOT_FOUND", false,
+					"lvm[%d]: keep:vg needs LVM facts in the machine's layout snapshot — re-run discover (in-band, lvm2 present)", i)
+			}
+			var facts *inbandssh.VgFacts
+			for fi := range snapLvm {
+				if snapLvm[fi].Name == vg.Name {
+					facts = &snapLvm[fi]
+					break
+				}
+			}
+			if facts == nil {
+				return nil, classifiedErr("LAYOUT_VG_NOT_FOUND", false,
+					"lvm[%d]: volume group %s is not present in the machine's layout snapshot", i, vg.Name)
+			}
+			rg := render.ResolvedVolgroup{Name: vg.Name, KeepVG: true}
+			lvByName := map[string]inbandssh.LvFacts{}
+			for _, lv := range facts.LVs {
+				lvByName[lv.Name] = lv
+			}
+			for _, p := range vg.Preserve {
+				lv, ok := lvByName[p.Name]
+				if !ok {
+					return nil, classifiedErr("LAYOUT_VG_NOT_FOUND", false,
+						"lvm[%d]: logical volume %s/%s is not present in the machine's layout snapshot", i, vg.Name, p.Name)
+				}
+				rg.Preserved = append(rg.Preserved, render.ResolvedPreserveLV{
+					Name: p.Name, Mount: p.Mount,
+					FS:        firstNonEmptyStr(p.FS, lv.FSType),
+					SizeBytes: lv.SizeBytes,
+				})
+			}
+			for _, pv := range facts.PVs {
+				dev := parentDiskName(pv.Name, *hw)
+				if prev, dup := claimed[dev]; dup {
+					return nil, classifiedErr("SCHEMA_INVALID_STORAGE", false,
+						"lvm[%d]: PV device %s of kept group %s is already claimed by %s", i, pv.Name, vg.Name, prev)
+				}
+				claimed[dev] = fmt.Sprintf("lvm[%d] (keep:vg)", i)
+				serial := ""
+				for _, hd := range hw.Disks {
+					if hd.Name == dev {
+						serial = hd.Serial
+						break
+					}
+				}
+				rg.PVs = append(rg.PVs, render.ResolvedPV{
+					Device: dev, Serial: serial, SizeBytes: pv.SizeBytes,
+					PartitionNumber: partitionNumberOf(pv.Name, dev),
+				})
+			}
+			resolved = append(resolved, rg)
+			continue
 		}
 		rg := render.ResolvedVolgroup{Name: vg.Name}
+		// Fresh group: the name must not collide with the machine's existing
+		// groups — anaconda/curtin fail the install minutes in.
+		if snapLvm != nil {
+			for _, facts := range snapLvm {
+				if facts.Name == vg.Name {
+					return nil, classifiedErr("LAYOUT_VG_EXISTS", false,
+						"lvm[%d]: volume group %s already exists on this machine — declare keep:vg to adopt it, or pick another name", i, vg.Name)
+				}
+			}
+		}
 		for j, pv := range vg.PVs {
 			switch {
 			case pv.Match != nil:

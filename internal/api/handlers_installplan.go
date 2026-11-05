@@ -12,6 +12,7 @@ import (
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/bmc"
+	"github.com/3th1nk/mammoth/internal/inventory/inbandssh"
 	"github.com/3th1nk/mammoth/internal/provision"
 )
 
@@ -59,7 +60,20 @@ func (s *Server) CreateInstallPlan(ctx context.Context, request gen.CreateInstal
 	if err != nil {
 		return nil, err
 	}
-	plan, err := provision.PlanInstall(ctx, resolved, &hw, s.Render)
+	// Layout snapshot rides along: its LVM facts back the keep:vg bindings
+	// (the executor reads the same snapshot in verify_layout), and its disk
+	// health readings surface as advisory warnings below.
+	var snapLvm []inbandssh.VgFacts
+	raw, _, lerr := s.Machines.LatestLayout(ctx, machine.ID)
+	if lerr == nil {
+		var snapMeta struct {
+			Lvm []inbandssh.VgFacts `json:"lvm,omitempty"`
+		}
+		if json.Unmarshal(raw, &snapMeta) == nil {
+			snapLvm = snapMeta.Lvm
+		}
+	}
+	plan, err := provision.PlanInstall(ctx, resolved, &hw, snapLvm, s.Render)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +82,7 @@ func (s *Server) CreateInstallPlan(ctx context.Context, request gen.CreateInstal
 	// submitting, so an explicitly failed disk reading in the machine's
 	// latest layout snapshot always surfaces here as a warning — the plan
 	// stays advisory; blocking is the submission's job.
-	if raw, _, lerr := s.Machines.LatestLayout(ctx, machine.ID); lerr == nil {
+	if lerr == nil {
 		var snap struct {
 			Disks []struct {
 				Device string `json:"device"`

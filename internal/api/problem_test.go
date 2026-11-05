@@ -31,7 +31,7 @@ func TestWriteErrorMapsClassified(t *testing.T) {
 	}
 	// distro-less spec → provision.classifiedErr(SCHEMA_INVALID_SPEC)
 	_, err := provision.PlanInstall(context.Background(),
-		json.RawMessage(`{"storage":{}}`), nil, reg)
+		json.RawMessage(`{"storage":{}}`), nil, nil, reg)
 	if err == nil {
 		t.Fatal("expected SCHEMA_INVALID_SPEC from distro-less spec")
 	}

@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -118,6 +119,13 @@ type installSpecView struct {
 	Boot struct {
 		Strategy  string `json:"strategy"`
 		Installer string `json:"installer"`
+		// KernelArgs / InstalledKernelArgs are the user-declared kernel
+		// arguments (docs/04-install-spec.md §5.4): the first lands on the
+		// installer's boot line, the second is persisted into the installed
+		// system's bootloader. Token-validated before render
+		// (validateBootExtras); dialects append them verbatim.
+		KernelArgs          string `json:"kernel_args"`
+		InstalledKernelArgs string `json:"installed_kernel_args"`
 	} `json:"boot"`
 	Storage struct {
 		Disks []storageDiskView `json:"disks"`
@@ -337,7 +345,67 @@ func (e *Executor) loadSpec(ctx context.Context, task *store.Task, job *store.Jo
 	if err := validateStorageExtras(&spec); err != nil {
 		return nil, err
 	}
+	if err := validateBootExtras(&spec); err != nil {
+		return nil, err
+	}
 	return &spec, nil
+}
+
+// validateBootExtras enforces the boot.kernel_args / boot.installed_kernel_args
+// contract (docs/04-install-spec.md §5.4): whitespace-separated tokens, each
+// matching the conservative charset (no quoting, no `;`, no whitespace inside
+// a token — the same string is interpolated verbatim into iPXE kernel lines
+// and GRUB linux lines, so anything shell/grub-relevant is refused at parse
+// instead of exploding hours later on the machine), and none of the keys the
+// pipeline itself owns — those would silently duplicate or shadow the
+// engine-composed arguments (BOOTIF/ip drive the netboot NIC binding,
+// inst.ks/ds/file/auto carry the seed, console is MAMMOTH_INSTALL_CONSOLE's).
+func validateBootExtras(spec *installSpecView) error {
+	for field, args := range map[string]string{
+		"boot.kernel_args":           spec.Boot.KernelArgs,
+		"boot.installed_kernel_args": spec.Boot.InstalledKernelArgs,
+	} {
+		if args == "" {
+			continue
+		}
+		for _, tok := range strings.Fields(args) {
+			if !kernelArgTokenRe.MatchString(tok) {
+				return classifiedErr("SCHEMA_INVALID_BOOT", false,
+					"%s token %q: must match ^[A-Za-z0-9._,:%%/+=@^~-]+$ (whitespace-separated, no quoting)",
+					field, tok)
+			}
+			key := tok
+			if i := strings.IndexByte(tok, '='); i > 0 {
+				key = tok[:i]
+			}
+			if reservedKernelArgs[key] {
+				return classifiedErr("SCHEMA_INVALID_BOOT", false,
+					"%s key %q is pipeline-owned (the engine composes it); set the deployment knob instead",
+					field, key)
+			}
+		}
+	}
+	return nil
+}
+
+// kernelArgTokenRe is the charset gate every user kernel-argument token must
+// pass: it admits every realistic boot flag (nomodeset, modprobe.blacklist=nouveau,
+// console=ttyS0,115200n8 would pass if console were not reserved, nvme_core.io_timeout=240,
+// pci=realloc, iommu=pt) and excludes everything that could alter meaning in
+// an iPXE/GRUB/sh interpolation context (space, quotes, backslash, `;`, `$`,
+// newlines, control bytes).
+var kernelArgTokenRe = regexp.MustCompile(`^[A-Za-z0-9._,:%/+=@^~-]+$`)
+
+// reservedKernelArgs names the keys the engine composes on the install boot
+// lines itself — a user duplicate would shadow or split semantics (kernel
+// "last one wins" applies only per-parameter, and these few drive the
+// pipeline's own plumbing).
+var reservedKernelArgs = map[string]bool{
+	"BOOTIF": true, "ip": true, "console": true, "modules": true,
+	"inst.ks": true, "inst.repo": true, "inst.syslog": true, "inst.text": true,
+	"auto": true, "priority": true, "preseed/file": true, "seedfrom": true,
+	"ds": true, "file": true, "modloop": true, "alpine_repo": true,
+	"apkovl": true, "mammoth_base": true,
 }
 
 // validateStorageExtras enforces the storage-level optional semantics the
@@ -837,6 +905,10 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		SyslogPort:       e.SyslogPort,
 		InstallConsole:   e.InstallConsole,
 		Scripts:          scriptsFrom(spec.Scripts),
+		// User-declared kernel arguments (docs/04-install-spec.md §5.4):
+		// token-validated at parse; drivers append to their boot lines.
+		ExtraKernelArgs:     spec.Boot.KernelArgs,
+		InstalledKernelArgs: spec.Boot.InstalledKernelArgs,
 	}
 	for _, r := range spec.PackageSource.Repos {
 		in.PackageSource = append(in.PackageSource, render.RepoSpec{

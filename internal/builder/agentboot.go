@@ -597,7 +597,7 @@ install_bootloader() {
 set default=0
 set timeout=1
 menuentry 'mammoth' {
-    linux /boot/vmlinuz-$kflavor root=UUID=$rootuuid modules=sd-mod,usb-storage,ext4 quiet
+    linux /boot/vmlinuz-$kflavor root=UUID=$rootuuid modules=sd-mod,usb-storage,ext4 quiet${MAMMOTH_INSTALLED_KERNEL_ARGS:+ $MAMMOTH_INSTALLED_KERNEL_ARGS}
     initrd /boot/initramfs-$kflavor
 }
 EOF

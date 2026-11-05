@@ -60,6 +60,19 @@ type BootParams struct {
 	NetbootKernelArgs string `json:"netboot_kernel_args,omitempty"`
 }
 
+// WithExtraArgs appends the user-declared installer kernel arguments to a
+// composed boot line (boot.kernel_args, docs/04-install-spec.md §5.4). The
+// tokens were validated at parse (single whitespace-separated words,
+// conservative charset — no quoting, no `;`), so plain concatenation is safe
+// in both interpolation contexts the args reach: iPXE `kernel` lines verbatim
+// and GRUB `linux` lines (via the renderer's ; escaping).
+func WithExtraArgs(args, extra string) string {
+	if extra == "" {
+		return args
+	}
+	return strings.TrimSpace(args) + " " + extra
+}
+
 // NetbootInputs carries the PXE-install source locations (non-nil when the
 // submission pinned boot.strategy=pxe, docs/06-install-pipeline.md §3.3):
 // drivers with a network-install source shape their args / seed against it.
@@ -648,6 +661,19 @@ type InstallInputs struct {
 	// setup.exe flow for windows). Windows-only today; other dialects reject
 	// it at submit.
 	Installer string
+
+	// ExtraKernelArgs is the user-declared installer-environment kernel
+	// arguments (boot.kernel_args, docs/04-install-spec.md §5.4): drivers
+	// append the tokens verbatim to every boot line they compose (ISO and
+	// netboot shapes). Token-validated before render — plain concatenation
+	// is safe (no whitespace inside a token, no quoting metacharacters).
+	// windows rejects the field.
+	ExtraKernelArgs string
+	// InstalledKernelArgs is the user-declared persistence set
+	// (boot.installed_kernel_args): kickstart renders bootloader --append,
+	// autoinstall/preseed write GRUB_CMDLINE_LINUX and re-run update-grub,
+	// the agent appends to its grub.cfg menu line. windows rejects it.
+	InstalledKernelArgs string
 	// SpecializeXML is the sysprep Specialize.xml action file with the SpBcd
 	// module stripped — provision extracts it from the prepared install.wim
 	// for the windows agent apply path; the agent injects it back into the

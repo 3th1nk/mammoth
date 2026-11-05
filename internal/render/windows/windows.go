@@ -116,6 +116,22 @@ func (d *Driver) WindowsOSImageNameFor(explicit string) string {
 // driver's unattend supports.
 func (d *Driver) FirmwareSupport() render.FirmwareSupport { return render.FirmwareUEFIOnly }
 
+// rejectKernelArgs refuses the boot.kernel_args / boot.installed_kernel_args
+// declarations on windows: WinPE boots a BCD store, not a kernel command
+// line — there is no GRUB_CMDLINE_LINUX to persist and no installer cmdline
+// to extend (driver problems here are solved by injecting drivers into the
+// image, not boot flags). Render-time honest rejection, same gate shape as
+// package_source — both real installs and plan dry-runs hit it.
+func rejectKernelArgs(distro string, in render.InstallInputs) error {
+	if in.ExtraKernelArgs != "" {
+		return fmt.Errorf("%s: boot.kernel_args is not supported — WinPE boots a BCD store, not a kernel command line", distro)
+	}
+	if in.InstalledKernelArgs != "" {
+		return fmt.Errorf("%s: boot.installed_kernel_args is not supported — the windows boot store has no kernel command line to persist", distro)
+	}
+	return nil
+}
+
 // mediaLocale is the language the media carries, rendered into both the
 // windowsPE and oobeSystem international components: setup and the
 // installed system speak the media's language. Values must name a language
@@ -286,6 +302,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if len(in.SSHPublicKeys) > 0 {
 		return nil, render.BootParams{}, fmt.Errorf("%s: access.ssh_keys is not supported (Server Core has no sshd by default)", d.distro)
 	}
+	if err := rejectKernelArgs(d.distro, in); err != nil {
+		return nil, render.BootParams{}, err
+	}
 
 	render.NormalizeESP(in.Disks)
 	hostname, err := computerName(in.Hostname)
@@ -388,6 +407,9 @@ func (d *Driver) renderAgentApply(in render.InstallInputs) ([]render.AnswerFile,
 	}
 	if len(in.SSHPublicKeys) > 0 {
 		return nil, render.BootParams{}, fmt.Errorf("%s: access.ssh_keys is not supported (Server Core has no sshd by default)", d.distro)
+	}
+	if err := rejectKernelArgs(d.distro, in); err != nil {
+		return nil, render.BootParams{}, err
 	}
 
 	render.NormalizeESP(in.Disks)

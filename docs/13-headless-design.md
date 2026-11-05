@@ -115,6 +115,39 @@ arm(none):
 - **fake 通路共存**:POC 期间的 fake 注册机器与 none 机器并存——
   headless 落地后 POC 机器迁移到 none,fake 保留为 dev 形态。
 
+### 7.1 WoL 兼容性边界(2026-11-04 澄清,记录口径)
+
+**发送侧零区分**:AMD magic packet(6×FF+16×MAC)是链路层事实标准,
+UDP 封装(port 9)与裸 Ethernet 帧(0x0842)NIC 均认载荷模式——按芯片
+(Intel/Realtek/Broadcom)或主板厂商均无需区分,本引擎的发送实现一层
+不用改。规范内唯一可选扩展 SecureOn(附 6 字节密码)仅极少数企业环境,
+不实现。
+
+**差异全在接收侧五层**:
+1. 网卡芯片——只区分**附加唤醒模式**(仅 magic/+单播/+ARP/pattern),
+   magic 是全员基线;
+2. 主板——断电供电电路与 PME 路径(PCIe 时代免 WOL 线);
+3. BIOS/UEFI——**ErP/S5 深睡开启 = 软关机后 NIC 完全断电,WoL 必死**
+   (现场 WoL 失效第一大因);WoL/PME Wake 开关;来电自启(G3 物理断电
+   任何 WoL 无解,只能来电自启或人工);
+4. OS 驱动——**Linux 的 ethtool WoL 默认 `d`(禁用)**:装好的 Linux
+   被软关机后 NIC 不再监听,下次 WoL 无效(Windows 驱动默认开);
+5. L2 拓扑——广播不可路由(路由器默认拒定向广播),跨段必须代理代发
+   (已实现)。
+
+Intel 专项:vPro/AMT 平台**不属于 headless 场景**(ME 固件自带带外管理,
+应走 AMT 的 Redfish 通路,能力远超 WoL);个别早期 2.5G 型号(I225
+早期步进)有"WoL 唤醒后链路不恢复"勘误,靠 NIC 固件更新解决;Intel
+消费级主板 BIOS 的 ErP 默认开启常见,排障第一查。
+
+**打磨待办(暂不实施)**:
+- POC 确认清单增列 WoL 支持确认项(BIOS WoL/PME Wake 选项存在性、
+  ErP 可关),与 C4(来电自启)并列;不做也不阻塞(人工重启 C1 本身
+  是兜底,headlessArm 的 WoL 失败仅 WARN 落人工路径);
+- 装好的系统固化 NIC armed:装后配置 systemd .link `WakeOnLan=magic`
+  (ethtool 语义),保证软关机后的重装/唤醒场景仍可 WoL——装机流程走
+  reboot 不软关机,影响面小,属打磨项。
+
 ## 8. 实施记录(2026-11-04,feat/headless 分支)
 
 | 切片 | 内容 | 落点 |

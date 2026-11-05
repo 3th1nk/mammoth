@@ -743,6 +743,11 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 				"size":   fmt.Sprintf("%dM", p.SizeMB),
 				"wipe":   "superblock",
 			}
+			// Grow takes the pre-computed remainder — before the raw-carve
+			// branch below, which is itself a grow consumer (the PV).
+			if p.Grow {
+				part["size"] = restSize
+			}
 			// BIOS + GPT needs the 1MiB bios_grub partition (curtin refuses to
 			// install grub without an explicit one); UEFI uses the esp partition
 			// (mounted by the OS as /boot/efi). A layout may declare both.
@@ -765,9 +770,6 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 				// "needed bootloader partition" check.
 				part["flag"] = "boot"
 				part["grub_device"] = true
-			}
-			if p.Grow {
-				part["size"] = restSize
 			}
 			config = append(config, part)
 

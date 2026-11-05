@@ -61,6 +61,19 @@ func TestRenderPartitionCarvePV(t *testing.T) {
 	storage := auto["storage"].(map[string]any)
 	config := storage["config"].([]any)
 
+	// The carve partition must carry the real remainder (bytes) — a "0M"
+	// string here means the grow pre-compute missed the raw branch and
+	// curtin would reject the storage config (regression guard).
+	for _, e := range config {
+		em := e.(map[string]any)
+		if em["id"] == "part-disk-sda-2" {
+			size, ok := em["size"].(float64)
+			if !ok || size < 1e12 {
+				t.Fatalf("carve PV size = %v, want the holder's remaining bytes", em["size"])
+			}
+		}
+	}
+
 	body := dumpConfig(t, config)
 
 	// The holder disk boots (ESP carries grub_device) and the raw PV

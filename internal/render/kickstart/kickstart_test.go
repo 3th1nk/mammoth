@@ -406,6 +406,145 @@ func TestRenderSoftwareRaidSinglePartition(t *testing.T) {
 	}
 }
 
+// storage.lvm (docs/04-install-spec.md §5.1): a fresh group renders the
+// anaconda chain — PV partition on the consumed disk, volgroup, logvol
+// (rest → --grow, swap spelled as the swap mountpoint).
+func TestRenderLvm(t *testing.T) {
+	d := New("rocky9")
+	in := render.InstallInputs{
+		AnswerBaseURL: "https://m/render/t", CompleteURL: "https://m/render/t/complete",
+		ImageSource: "i", BootDrive: "sda",
+		Disks: []render.ResolvedDisk{
+			{Device: "sda", Wipe: true, Partitions: []render.ResolvedPartition{
+				{Mount: "/boot", FS: "xfs", SizeMB: 1024}}},
+		},
+		Lvm: []render.ResolvedVolgroup{
+			{Name: "vg0", PVs: []render.ResolvedPV{
+				{Device: "sdb", Serial: "ser-b", SizeBytes: 2000398934016},
+			}, Logvols: []render.ResolvedLogvol{
+				{Name: "root", FS: "xfs", Mount: "/", Grow: true},
+				{Name: "swap", FS: "swap", Mount: "swap", SizeMB: 4096},
+			}},
+		},
+	}
+	answers, _, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	ks := answers[0].Content
+	for _, want := range []string{
+		"clearpart --drives=sda,sdb --initlabel --all",
+		"part pv.vg0-0 --size=1 --grow --ondisk=sdb",
+		"volgroup vg0 pv.vg0-0",
+		"logvol / --vgname=vg0 --name=root --fstype=xfs --size=1 --grow",
+		"logvol swap --vgname=vg0 --name=swap --fstype=swap --size=4096",
+	} {
+		if !strings.Contains(ks, want) {
+			t.Errorf("kickstart lvm missing %q", want)
+		}
+	}
+}
+
+// keep:vg adopts the machine's existing group — --useexisting, no PV
+// partitions, only the declared mounts come back as logvol lines.
+func TestRenderLvmKeepVG(t *testing.T) {
+	d := New("rocky9")
+	in := render.InstallInputs{
+		AnswerBaseURL: "https://m/render/t", CompleteURL: "https://m/render/t/complete",
+		ImageSource: "i", BootDrive: "sda",
+		Disks: []render.ResolvedDisk{
+			{Device: "sda", Wipe: true, Partitions: []render.ResolvedPartition{
+				{Mount: "/", FS: "xfs", Grow: true}}},
+		},
+		Lvm: []render.ResolvedVolgroup{
+			{Name: "vg-data", KeepVG: true, Preserved: []render.ResolvedPreserveLV{
+				{Name: "lv-data", Mount: "/data", FS: "xfs"},
+			}},
+		},
+	}
+	answers, _, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	ks := answers[0].Content
+	for _, want := range []string{
+		"volgroup vg-data --noformat --useexisting",
+		"logvol /data --vgname=vg-data --name=lv-data --noformat --useexisting",
+	} {
+		if !strings.Contains(ks, want) {
+			t.Errorf("keep:vg adoption missing %q", want)
+		}
+	}
+	if strings.Contains(ks, "part pv.") {
+		t.Errorf("keep:vg must not create PV partitions")
+	}
+}
+
+// / on a logical volume needs a separate non-LVM /boot (anaconda cannot
+// boot from LVM) — the layout without it is rejected at render.
+func TestRenderLvmRequiresBoot(t *testing.T) {
+	d := New("rocky9")
+	in := render.InstallInputs{
+		AnswerBaseURL: "u", CompleteURL: "c", ImageSource: "i",
+		Disks: []render.ResolvedDisk{
+			{Device: "sda", Wipe: true},
+		},
+		Lvm: []render.ResolvedVolgroup{
+			{Name: "vg0", PVs: []render.ResolvedPV{{Device: "sdb"}},
+				Logvols: []render.ResolvedLogvol{
+					{Name: "root", FS: "xfs", Mount: "/", Grow: true}}},
+		},
+	}
+	if _, _, err := d.RenderAnswers(in, render.MachineView{}); err == nil ||
+		!strings.Contains(err.Error(), "separate /boot") {
+		t.Fatalf("want /boot constraint, got %v", err)
+	}
+}
+
+// A software raid volume consumed as PV renders the array AS the pv — and
+// lifts the one-partition constraint (the volume is not mounted directly).
+func TestRenderLvmRaidPV(t *testing.T) {
+	d := New("rocky9")
+	in := render.InstallInputs{
+		AnswerBaseURL: "https://m/render/t", CompleteURL: "https://m/render/t/complete",
+		ImageSource: "i", BootDrive: "sda",
+		Disks: []render.ResolvedDisk{
+			{Device: "sda", Wipe: true, Partitions: []render.ResolvedPartition{
+				{Mount: "/boot", FS: "xfs", SizeMB: 1024}}},
+		},
+		Raid: []render.ResolvedRaid{
+			{Name: "md0", Level: "1", Mode: "software", Members: []string{"sdb", "sdc"}},
+		},
+		Lvm: []render.ResolvedVolgroup{
+			{Name: "vg0", PVs: []render.ResolvedPV{
+				{RaidName: "md0", RaidMode: "software", RaidLevel: "1",
+					RaidMembers: []string{"sdb", "sdc"}},
+			}, Logvols: []render.ResolvedLogvol{
+				{Name: "root", FS: "ext4", Mount: "/", Grow: true},
+			}},
+		},
+	}
+	answers, _, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	ks := answers[0].Content
+	for _, want := range []string{
+		"part raid.md0-0 --size=1 --grow --ondisk=sdb",
+		"part raid.md0-1 --size=1 --grow --ondisk=sdc",
+		"raid pv.vg0-0 --level=1 --device=md0 raid.md0-0 raid.md0-1",
+		"volgroup vg0 pv.vg0-0",
+		"logvol / --vgname=vg0 --name=root --fstype=ext4 --size=1 --grow",
+	} {
+		if !strings.Contains(ks, want) {
+			t.Errorf("raid-backed PV missing %q", want)
+		}
+	}
+	if strings.Contains(ks, "raid / --fstype") {
+		t.Errorf("the consumed volume must not render as a mounted raid line")
+	}
+}
+
 // Static spec network entries must become pinned dracut early-network args —
 // the remote kickstart fetch needs network before anaconda runs (real-hardware
 // finding: without ip= the installer never fetched the answer file).

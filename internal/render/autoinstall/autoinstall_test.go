@@ -863,3 +863,142 @@ func TestDefaultDhcpNetplan(t *testing.T) {
 		t.Errorf("dhcp4 missing: %s", raw)
 	}
 }
+
+// storage.lvm (docs/04-install-spec.md §5.1): a fresh group renders the
+// curtin chain — raw wiped PV disk, lvm_volgroup, lvm_partition (rest omits
+// size = all remaining VG space), format, mount.
+func TestRenderLvm(t *testing.T) {
+	d := New("ubuntu24")
+	in := render.InstallInputs{
+		TaskToken: "tokL", MachineID: "mch_l", ImageSource: "i",
+		AnswerBaseURL: "https://m/render/tokL", CompleteURL: "https://m/render/tokL/complete",
+		Disks: []render.ResolvedDisk{
+			{Device: "sda", Wipe: true, Partitions: []render.ResolvedPartition{
+				{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+				{Mount: "/boot", FS: "ext4", SizeMB: 1024},
+			}},
+		},
+		Lvm: []render.ResolvedVolgroup{
+			{Name: "vg0", PVs: []render.ResolvedPV{
+				{Device: "sdb", Serial: "ser-b", SizeBytes: 2000398934016},
+			}, Logvols: []render.ResolvedLogvol{
+				{Name: "root", FS: "ext4", Mount: "/", Grow: true},
+				{Name: "swap", FS: "swap", Mount: "swap", SizeMB: 4096},
+			}},
+		},
+	}
+	answers, _, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	_, ud := fetchUser(t, answers)
+	st := ud["autoinstall"].(map[string]any)["storage"].(map[string]any)
+	byID := map[string]map[string]any{}
+	for _, c := range st["config"].([]any) {
+		e := c.(map[string]any)
+		byID[e["id"].(string)] = e
+	}
+	if pv := byID["pv-vg0-0"]; pv == nil || pv["wipe"] != "superblock" || pv["type"] != "disk" {
+		t.Errorf("raw PV disk entry wrong: %v", pv)
+	} else if pv["serial"] != "ser-b" {
+		t.Errorf("PV disk must match by serial, got %v", pv["serial"])
+	}
+	vg := byID["vg-vg0"]
+	if vg == nil || vg["type"] != "lvm_volgroup" {
+		t.Fatalf("lvm_volgroup missing: %v", vg)
+	}
+	devices := fmtDevList(vg["devices"])
+	if len(devices) != 1 || devices[0] != "pv-vg0-0" {
+		t.Errorf("volgroup devices wrong: %v", devices)
+	}
+	root := byID["lv-vg0-root"]
+	if root == nil || root["type"] != "lvm_partition" || root["volgroup"] != "vg-vg0" {
+		t.Fatalf("lvm_partition root wrong: %v", root)
+	}
+	if _, has := root["size"]; has {
+		t.Errorf("rest-sized LV must omit size (curtin: all remaining VG space), got %v", root["size"])
+	}
+	if swap := byID["lv-vg0-swap"]; swap == nil || swap["size"] != "4096M" {
+		t.Errorf("fixed LV size wrong: %v", swap)
+	}
+	if f := byID["fmt-lv-vg0-root"]; f == nil || f["fstype"] != "ext4" || f["volume"] != "lv-vg0-root" {
+		t.Errorf("LV format entry wrong: %v", f)
+	}
+	if m := byID["mnt-lv-vg0-root"]; m == nil || m["path"] != "/" {
+		t.Errorf("LV mount entry wrong: %v", m)
+	}
+	if m := byID["mnt-lv-vg0-swap"]; m != nil {
+		t.Errorf("swap LV must carry no mount entry: %v", m)
+	}
+
+	// software raid PV: curtin renders no md arrays — reject at render.
+	in.Lvm[0].PVs[0] = render.ResolvedPV{RaidName: "md0", RaidMode: "software"}
+	if _, _, err := d.RenderAnswers(in, render.MachineView{}); err == nil ||
+		!strings.Contains(err.Error(), "curtin renders no md arrays") {
+		t.Fatalf("want software-raid PV rejection, got %v", err)
+	}
+}
+
+// keep:vg preserves the machine's existing group: preserved holder + PV
+// partition entries carry preserve flags, the LV keeps its snapshot size,
+// and the declared mount comes back through format+mount with the known fs.
+func TestRenderLvmKeepVG(t *testing.T) {
+	d := New("ubuntu24")
+	in := render.InstallInputs{
+		TaskToken: "tokK", MachineID: "mch_k", ImageSource: "i",
+		AnswerBaseURL: "https://m/render/tokK", CompleteURL: "https://m/render/tokK/complete",
+		Disks: []render.ResolvedDisk{
+			{Device: "sda", Wipe: true, Partitions: []render.ResolvedPartition{
+				{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+				{Mount: "/", FS: "ext4", Grow: true},
+			}},
+		},
+		Lvm: []render.ResolvedVolgroup{
+			{Name: "vg-data", KeepVG: true,
+				PVs: []render.ResolvedPV{
+					{Device: "sdb", Serial: "ser-b", PartitionNumber: 2, SizeBytes: 1999},
+				},
+				Preserved: []render.ResolvedPreserveLV{
+					{Name: "lv-data", Mount: "/data", FS: "xfs", SizeBytes: 999},
+				}},
+		},
+	}
+	answers, _, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	_, ud := fetchUser(t, answers)
+	st := ud["autoinstall"].(map[string]any)["storage"].(map[string]any)
+	byID := map[string]map[string]any{}
+	for _, c := range st["config"].([]any) {
+		e := c.(map[string]any)
+		byID[e["id"].(string)] = e
+	}
+	holder := byID["keepdisk-sdb-0"]
+	if holder == nil || holder["preserve"] != true || holder["wipe"] != nil {
+		t.Errorf("preserved holder must not wipe: %v", holder)
+	}
+	part := byID["keeppv-sdb-0"]
+	if part == nil || part["number"] != float64(2) || part["size"] != float64(1999) || part["preserve"] != true {
+		t.Errorf("preserved PV partition wrong: %v", part)
+	}
+	vg := byID["vg-vg-data"]
+	if vg == nil || vg["preserve"] != true || fmtDevList(vg["devices"])[0] != "keeppv-sdb-0" {
+		t.Errorf("preserved volgroup wrong: %v", vg)
+	}
+	lv := byID["lv-vg-data-lv-data"]
+	if lv == nil || lv["preserve"] != true || lv["size"] != float64(999) {
+		t.Errorf("preserved LV wrong (curtin verifies the snapshot size): %v", lv)
+	}
+	if m := byID["mnt-lv-vg-data-lv-data"]; m == nil || m["path"] != "/data" {
+		t.Errorf("preserved LV mount missing: %v", m)
+	}
+}
+
+func fmtDevList(v any) []string {
+	out := []string{}
+	for _, d := range v.([]any) {
+		out = append(out, d.(string))
+	}
+	return out
+}

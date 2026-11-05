@@ -447,7 +447,8 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
 
 ## 长期方向(不承诺排期)
 
-- 多机 Raid/LVM 拓扑编排
+- 多机 Raid/LVM 拓扑编排(单机 storage.lvm 已落地——新建卷组与 keep:vg
+  重装保留,docs/04-install-spec.md §5.1.1;剩余为跨机器拓扑面)
 - gRPC 内部面间协议(当前为队列 + DB,足够)
 - **redfish over 169.254(host↔BMC 带内通道)**——服务器 BMC 经
   NCSI/共享网卡与宿主 OS 间存在链路本地直连(常见 169.254.0.0/16,

@@ -599,3 +599,100 @@ func TestNetbootDeclarations(t *testing.T) {
 		t.Errorf("debian12 PXE support must be full")
 	}
 }
+
+// storage.lvm (docs/04-install-spec.md §5.1, debian shape): partman-auto
+// works one target — the recipe gains the PV unit (method{ lvm }) and the
+// $lvmok LV units; the body switches to the lvm method and seeds new_vg_name.
+func TestRenderLvm(t *testing.T) {
+	d := New("debian12")
+	in := wipeInputs()
+	in.Lvm = []render.ResolvedVolgroup{{
+		Name: "vg0",
+		PVs:  []render.ResolvedPV{{Device: "sda", SizeBytes: 960197124096}},
+		Logvols: []render.ResolvedLogvol{
+			{Name: "root", FS: "ext4", Mount: "/", Grow: true},
+			{Name: "swap", FS: "swap", Mount: "swap", SizeMB: 4096},
+		},
+	}}
+	answers, _, err := d.RenderAnswers(in, render.MachineView{
+		ID: "mch_d", Hardware: &bmc.HardwareView{Disks: []bmc.DiskView{
+			{Name: "sda", SizeBytes: 960197124096},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	preseed, _, _ := fetchAnswers(t, answers)
+	for _, want := range []string{
+		"d-i partman-auto/method string lvm",
+		"d-i partman-auto-lvm/new_vg_name string vg0",
+		"method{ lvm } vg_name{ vg0 }",
+		"$lvmok{ }",
+		"in_vg { vg0 } lv_name{ root }",
+		"filesystem{ ext4 }",
+		"mountpoint{ / }",
+		"in_vg { vg0 } lv_name{ swap }",
+		"method{ swap } format{ }",
+	} {
+		if !strings.Contains(preseed, want) {
+			t.Errorf("preseed lvm missing %q", want)
+		}
+	}
+}
+
+// debian LVM rejections (partman-auto is single-target): keep:vg cannot
+// adopt groups, multi-PV and off-target PVs are not expressible.
+func TestRenderLvmRejects(t *testing.T) {
+	base := func() render.InstallInputs {
+		in := wipeInputs()
+		in.Disks = []render.ResolvedDisk{{Device: "sda", Wipe: true, Partitions: []render.ResolvedPartition{
+			{Mount: "/", FS: "ext4", Grow: true}}}}
+		return in
+	}
+	cases := []struct {
+		name string
+		mut  func(*render.InstallInputs)
+		want string
+	}{
+		{"keep vg", func(in *render.InstallInputs) {
+			in.Lvm = []render.ResolvedVolgroup{{Name: "vg-data", KeepVG: true}}
+		}, "partman cannot adopt"},
+		{"two volume groups", func(in *render.InstallInputs) {
+			in.Lvm = []render.ResolvedVolgroup{
+				{Name: "vg0", PVs: []render.ResolvedPV{{Device: "sda"}},
+					Logvols: []render.ResolvedLogvol{{Name: "root", FS: "ext4", Mount: "/", Grow: true}}},
+				{Name: "vg1", PVs: []render.ResolvedPV{{Device: "sda"}},
+					Logvols: []render.ResolvedLogvol{{Name: "data", FS: "ext4", Mount: "/data", Grow: true}}},
+			}
+		}, "only one volume group is supported"},
+		{"multi-pv group", func(in *render.InstallInputs) {
+			in.Lvm = []render.ResolvedVolgroup{
+				{Name: "vg0", PVs: []render.ResolvedPV{{Device: "sda"}, {Device: "sdb"}},
+					Logvols: []render.ResolvedLogvol{{Name: "root", FS: "ext4", Mount: "/", Grow: true}}},
+			}
+		}, "exactly one pv"},
+		{"pv off target", func(in *render.InstallInputs) {
+			in.Lvm = []render.ResolvedVolgroup{
+				{Name: "vg0", PVs: []render.ResolvedPV{{Device: "sdb"}},
+					Logvols: []render.ResolvedLogvol{{Name: "root", FS: "ext4", Mount: "/", Grow: true}}},
+			}
+		}, "only one install target disk is supported"},
+		{"xfs logvol", func(in *render.InstallInputs) {
+			in.Lvm = []render.ResolvedVolgroup{
+				{Name: "vg0", PVs: []render.ResolvedPV{{Device: "sda"}},
+					Logvols: []render.ResolvedLogvol{{Name: "root", FS: "xfs", Mount: "/", Grow: true}}},
+			}
+		}, "not available in the netinst installer"},
+	}
+	for _, tc := range cases {
+		in := base()
+		tc.mut(&in)
+		if _, _, err := New("debian12").RenderAnswers(in, render.MachineView{
+			ID: "mch_d", Hardware: &bmc.HardwareView{Disks: []bmc.DiskView{
+				{Name: "sda", SizeBytes: 960197124096},
+			}},
+		}); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: want %q, got %v", tc.name, tc.want, err)
+		}
+	}
+}

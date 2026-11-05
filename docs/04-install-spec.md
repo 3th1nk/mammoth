@@ -238,6 +238,58 @@ spec 模板里任意字符串值可携带引用,**提交时逐台解析**:
 - 批量目标中任一机器缺少 layout 快照而 spec 含 `keep: partitions` → 该任务在提交时即标记
   `LAYOUT_SNAPSHOT_REQUIRED`(不阻塞其他机器,见 policy)。
 
+#### 5.1.1 storage.lvm — 声明式卷组(新建与重装保留)
+
+LVM 在**安装期**由安装器落地(anaconda `volgroup/logvol`、curtin
+`lvm_volgroup/lvm_partition`、partman lvm 配方)——BMC 无 LVM 概念,流水线不新增阶段。
+每组两种模式:
+
+```jsonc
+"lvm": [
+  {   // ① 新建:PV 整设备消费(隐式擦除,与 disks[]/raid 成员互斥,如同 raid members)
+    "name": "vg0",
+    "pvs": [ { "match": { "size": "largest" } },          // 选择器引盘…
+             { "raid": "md0" } ],                          // …或整引 raid[] 卷(该卷不得自带 partitions)
+    "logvols": [
+      { "name": "root", "size": "rest", "fs": "xfs", "mount": "/" },  // rest = 占满 VG 剩余(每 VG 至多一个)
+      { "name": "swap", "size": "4G", "fs": "swap", "mount": "swap" }
+    ]
+  },
+  {   // ② 重装保留 keep:vg:整卷组原子采用——VG 与全部 LV 原样保留、不格式化
+    "name": "vgdata",
+    "keep": "vg",
+    "preserve": [                                          // 可选(0..n):要自动挂回的既有 LV
+      { "name": "lvdata", "mount": "/data", "fs": "xfs" }  // 挂载点禁 / 、/boot、/boot/efi
+    ]
+    // preserve 留空 = 纯保护墓碑:PV 盘登记消费表防选择器抢占 + 装后核对存活,不写 fstab
+  }
+]
+```
+
+**约束与语义**:
+
+- VG/LV 名 `^[A-Za-z][A-Za-z0-9_.]{0,63}$`(**禁 `-`**——/dev/mapper 会把 `-` 双写,下游工具全部遭殃);
+- 新建模式 `pvs`/`logvols` 必填;`keep: vg` 时两者必须为空,绑定事实来自 layout 快照
+  (同 `keep: partitions` 依赖快照的契约):快照无 LVM 事实或 VG/LV 缺失 → `LAYOUT_VG_NOT_FOUND`;
+- **新建 VG 名不得与机器既有 VG 同名**(快照有 LVM 事实时预检)→ `LAYOUT_VG_EXISTS`
+  ——否则 anaconda/curtin 会在安装几分钟内报「vg 已存在」而失败;
+- keep:vg 的 PV 盘(含分区级 PV 所在盘)在 verify_layout 登记消费表,`disks[]`/raid/
+  新建 VG 选择器**抢不走**;不声明 keep:vg 的既有 VG 默认**不受影响**——其 PV 盘只要
+  不被选择器命中就原样存活,装后 lvm2 自动激活,可手动挂载(debian 不装 lvm 时需先
+  `apt install lvm2`);想要这份保护就显式 `keep: vg`;
+- LV 带 `esp` flag 或挂 `/boot/efi` → 引擎层拒绝(ESP 不可能住 LVM);
+- **`/` 落在 LV 上时 kickstart 族要求非 LV 的 `/boot` 分区**(anaconda 无法从 LVM 引导,
+  渲染期拒绝);ubuntu/debian 无此要求(grub2 可读 LVM);boot drive 相应回落到 `/boot` 所在盘;
+- 不支持 thin provisioning 与 percent sizing(curtin/partman 均无,跨方言对齐优先,后续项);
+- **装后核验**(按 bond 同款口径):声明随任务上下文快照,verify_ready 带内比对
+  `vgs/pvs/lvs` 实测(含 preserve 的挂载点)——缺 VG/缺已声明 LV/挂载点不符 →
+  `INSTALL_LVM_MISMATCH`;采集不到 LVM 事实(无 lvm2/带内不可用)→ `verify_ready_degraded` 降级事件,
+  未声明的既有 VG 不在核对范围。
+
+**方言矩阵**(详见 §5.3):kickstart 全支持(含 keep:vg、raid 卷作 PV);autoinstall 拒
+software-raid PV(curtin 无 md 配方),其余全支持;preseed 仅新建、单 VG 单 PV 且 PV 必须是
+唯一安装目标(partman-auto 单配方),keep:vg 拒绝;windows/agent 整体拒绝。
+
 ### 5.2 network — 对齐 cloud-init network-config v2 形状
 
 ```jsonc
@@ -305,6 +357,10 @@ spec 是发行版无关的声明;方言不能落地的项在**渲染期显式拒
 | 多条静态接口 | ✅ | ✅ | ❌ netcfg 单接口(一条静态 + 其余 dhcp) | 单接口(MAC 绑定) |
 | 软件 RAID | ✅(raid 行) | —(未接) | ❌ partman md 配方未接 | ❌ |
 | 硬件 RAID 卷 | ✅(绑定设备) | ✅(serial 绑定) | ✅(绑定设备,单目标) | ❌ |
+| LVM 新建 | ✅(volgroup/logvol) | ✅(curtin lvm_*) | ✅(单 VG 单 PV,`/` 在 LV 无需 /boot) | ❌ |
+| LVM + 软件 RAID 叠加 | ✅(raid 卷作 PV) | ❌(curtin 无 md) | ❌(软件 RAID 本就拒绝) | ❌ |
+| LVM keep:vg(重装保留) | ✅(`--useexisting`) | ✅(curtin preserve) | ❌ partman 无法采纳既有组 | ❌ |
+| `/` 在 LV 需独立 /boot | ✅(anaconda 强制) | 不需要(grub2 读 LVM) | 不需要(grub2 读 LVM) | — |
 | 多安装目标盘 | ✅ | ✅ | ❌ partman-auto 单盘(其余盘 keep: disk) | ❌ |
 | xfs | ✅ | ✅(curtin) | ❌ netinst partman 白名单 ext2/3/4、vfat/fat32、swap | —(ntfs) |
 

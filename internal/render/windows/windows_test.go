@@ -234,6 +234,12 @@ func TestRenderWindowsBoundary(t *testing.T) {
 			in.Raid = []render.ResolvedRaid{{Name: "v0", Mode: "hardware"}}
 			return in
 		}, "RAID is not supported"},
+		{"lvm", func(in render.InstallInputs) render.InstallInputs {
+			in.Lvm = []render.ResolvedVolgroup{{Name: "vg0",
+				PVs:     []render.ResolvedPV{{Device: "sda"}},
+				Logvols: []render.ResolvedLogvol{{Name: "root", FS: "ext4", Mount: "/"}}}}
+			return in
+		}, "LVM is not supported"},
 		{"pre script powershell", func(in render.InstallInputs) render.InstallInputs {
 			in.Scripts = []render.ScriptEntry{{Stage: "pre_install", Shell: "powershell", Inline: "Write-Host hi"}}
 			return in

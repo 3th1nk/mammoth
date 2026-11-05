@@ -2465,6 +2465,91 @@ components:
           items:
             $ref: '#/components/schemas/PartitionSpec'
 
+    VolumeGroupSpec:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          pattern: '^[A-Za-z][A-Za-z0-9_.]{0,63}$'
+          description: |
+            Volume group name. LVM device-mapper encodes `-` in names by
+            doubling it under /dev/mapper, so dashes are rejected.
+        keep:
+          type: string
+          enum: [vg]
+          description: |
+            Adopt the machine's EXISTING volume group of this name instead of
+            creating one: the VG and all its logical volumes survive the
+            reinstall untouched (no reformat); `pvs`/`logvols` must be absent.
+            Binding facts come from the machine's layout snapshot (like
+            keep:partitions) — a snapshot lacking LVM facts, or a VG missing
+            from it, is rejected (LAYOUT_VG_NOT_FOUND). The group's PV devices
+            are protected from selector grabs by disks[]/raid/fresh VGs.
+        pvs:
+          type: array
+          minItems: 1
+          description: |
+            Physical volumes backing a NEW group. Each entry consumes a WHOLE
+            device (implicitly wiped, like raid members) and must not overlap
+            disks[] entries, raid members, or other PVs. Exactly one of
+            match/raid per entry.
+          items:
+            type: object
+            properties:
+              match:
+                $ref: '#/components/schemas/DiskSelectorMatch'
+              raid:
+                type: string
+                description: Reference to a storage.raid[] volume name (the
+                  whole array becomes a PV). That volume must not declare
+                  partitions of its own.
+        logvols:
+          type: array
+          minItems: 1
+          description: Logical volumes to create (new-group mode only).
+          items:
+            type: object
+            required: [name, size, fs]
+            properties:
+              name:
+                type: string
+                pattern: '^[A-Za-z][A-Za-z0-9_.]{0,63}$'
+              size:
+                $ref: '#/components/schemas/SizeSpec'
+              fs:
+                type: string
+                enum: [vfat, xfs, ext4, swap]
+              mount:
+                type: string
+                description: Mountpoint; `swap` declares a swap volume (no
+                  fstab entry). ESP mounts (/boot/efi) can never live on LVM.
+              flags:
+                type: array
+                items:
+                  type: string
+        preserve:
+          type: array
+          description: |
+            keep:vg mode only (optional, 0..n): mount intents for EXISTING
+            logical volumes. Empty/absent = protect-only adoption — the VG
+            must survive and is verified post-install, but nothing is mounted
+            (undeclared LVs stay unmounted for manual mounting). LVs inside a
+            kept group that are not listed are left untouched either way.
+          items:
+            type: object
+            required: [name, mount]
+            properties:
+              name:
+                type: string
+                description: Existing logical volume name within the group.
+              mount:
+                type: string
+                description: Mountpoint; must not be /, /boot, or /boot/efi.
+              fs:
+                type: string
+                enum: [vfat, xfs, ext4, swap]
+
     StorageSpec:
       type: object
       required: [disks]
@@ -2481,6 +2566,30 @@ components:
             entries. Level/member-count rules: 0→2+, 1→2+, 5→3+, 10→4+.
           items:
             $ref: '#/components/schemas/RaidSpec'
+        lvm:
+          type: array
+          description: |
+            Declarative LVM volume groups, built at install time by the
+            installer (anaconda volgroup/logvol, curtin lvm_volgroup/
+            lvm_partition, partman lvm recipe) — the BMC has no LVM concept,
+            so no configure_raid involvement. Two modes per group: NEW
+            (declare pvs+logvols — PVs consume whole devices like raid
+            members) or KEEP (declare keep:vg — adopt the machine's existing
+            group, optional preserve[] mounts). Dialect limits: kickstart
+            fully supports both modes; autoinstall (curtin) rejects
+            software-RAID PVs but supports both modes; preseed (debian)
+            supports new groups only, exactly one VG with one PV on the
+            install target, and cannot keep existing groups; windows/agent
+            reject the whole block. VG/LV names must not contain dashes.
+            Existing groups NOT declared here are never touched: their PV
+            disks stay outside the consumption set, the installed system
+            auto-activates them at boot, and they can be mounted by hand
+            (debian installs without the lvm2 package when no LVM is
+            declared — apt install lvm2 first). Undeclared groups get no
+            selector protection: a disks[]/PV selector may still claim their
+            disks — declare keep:vg to protect one explicitly.
+          items:
+            $ref: '#/components/schemas/VolumeGroupSpec'
         root_device_hints:
           type: object
           properties:

@@ -25,8 +25,12 @@ verify_layout → configure_raid → prepare_media → boot → install_os → v
   fake 脚本化/ipmi 不支持)→ 重扫库存 → 卷名绑定逻辑盘(卷名以控制器实际命名为准,
   幂等按"成员序列号集合 + RAID 级别"判定);
 - **software**:不在此 stage 落盘,由渲染层产出 anaconda raid 行(成员全盘 raid
-  分区 `--grow`,每卷单挂载点;多分区需 LVM,后续);
+  分区 `--grow`,每卷单挂载点;多挂载点布局走 `storage.lvm` 卷组,§5.1.1);
 - 成员选择器与 `disks[]` 共用同一解析器,重叠即 `SCHEMA_INVALID_STORAGE`。
+- **LVM 不经过本 stage**:卷组由安装器在安装期落地(anaconda volgroup/logvol、
+  curtin lvm_volgroup/lvm_partition、partman lvm 配方)——BMC 无 LVM 概念,
+  configure_raid 只管 Redfish Volume 与软件 RAID 的表达(解析与消费规则见
+  docs/04-install-spec.md §5.1.1)。
 
 ## 3. prepare_media(载荷准备,builder 面执行)
 
@@ -174,6 +178,13 @@ iPXE    ──HTTP GET /netboot/files/<token>/…──▶ kernel/initrd(+modloo
   这一步能抓到。带内不可达(无凭证/认证未配)时降级为
   `task.verify_ready_degraded` 事件,bond 视为未核验,完成上报仍是验证面;
   采集输出缺 bond 段(旧采集形态)同理降级而非误判为"无 bond";
+- **LVM 健康核验**(docs/04-install-spec.md §5.1.1,bond 同款口径):声明了
+  `storage.lvm` 的任务把期望(新建组的 VG/LV 名、keep:vg 组的存活与 preserve
+  挂载点)快照进任务上下文;verify_ready 带内采集时同读 `vgs/pvs/lvs`
+  实测(采集段 `===LVM===`,LV 挂载点由 lsblk 树联接)——新建组缺失、LV 缺失、
+  keep 组被擦(其 PV 盘被抢占)或挂载点不符 → `INSTALL_LVM_MISMATCH`(可重试);
+  无 lvm2/采集缺 LVM 段 → `task.verify_ready_degraded` 降级;未声明的既有 VG
+  不在核对范围(合同外);
 - 恢复引导顺序。
 
 ## 6. 发行版驱动(OS Driver)

@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,16 +45,42 @@ type installTaskContext struct {
 	BootStrategy string         `json:"boot_strategy,omitempty"`
 	Netboot      *netbootRecord `json:"netboot,omitempty"`
 	Resolved     struct {
-		Disks []render.ResolvedDisk `json:"disks"`
-		Raid  []render.ResolvedRaid `json:"raid,omitempty"`
+		Disks []render.ResolvedDisk     `json:"disks"`
+		Raid  []render.ResolvedRaid     `json:"raid,omitempty"`
+		Lvm   []render.ResolvedVolgroup `json:"lvm,omitempty"`
 	} `json:"resolved,omitempty"`
 	RaidBindings map[string]string `json:"raid_bindings,omitempty"`
 	// BondChecks snapshots the declared bonds in verification form
-	// (render.BondExpectations) — verify_ready cross-checks the live
+	// (render.BondExpected) — verify_ready cross-checks the live
 	// system against it when in-band access is configured; without it the
 	// declared bonds go unverified (degrade event, docs/06-install-pipeline.md §4).
 	BondChecks []render.BondExpected `json:"bond_checks,omitempty"`
-	Install    *installProgress      `json:"install,omitempty"`
+	// LvmChecks snapshots the declared volume groups in verification form
+	// (same contract shape as BondChecks): a fresh group must exist with its
+	// logical volumes, a kept group must have survived with its declared
+	// mounts back in place. Facts come from the in-band collector's
+	// ===LVM=== section; without facts the checks degrade, not fail.
+	LvmChecks []lvmExpectation `json:"lvm_checks,omitempty"`
+	Install   *installProgress `json:"install,omitempty"`
+}
+
+// lvmExpectation is one declared volume group in post-install verification
+// form (docs/04-install-spec.md §5.1): the group must exist on the installed
+// system, and each entry of LVs must be present — for kept groups the Mount
+// is the declared fstab intent the collector's layout must show mounted
+// (empty Mount LVs in fresh groups carry "": name-only existence checks).
+// Undeclared groups are outside the contract and never asserted.
+type lvmExpectation struct {
+	Name string `json:"name"`
+	// Keep marks the keep:vg mode — the group must predate the install and
+	// survive it (a wiped PV disk under it would fail this check).
+	Keep bool               `json:"keep,omitempty"`
+	LVs  []lvmLVExpectation `json:"logvols,omitempty"`
+}
+
+type lvmLVExpectation struct {
+	Name  string `json:"name"`
+	Mount string `json:"mount,omitempty"`
 }
 
 type installProgress struct {
@@ -130,6 +157,7 @@ type installSpecView struct {
 	Storage struct {
 		Disks []storageDiskView `json:"disks"`
 		Raid  []raidSpecView    `json:"raid"`
+		Lvm   []volumeGroupView `json:"lvm"`
 		// Alignment is enum-validated and ADVISORY: every installer aligns
 		// natively (anaconda/curtin 1 MiB, WinPE 1 MiB), so nothing
 		// forwards it (docs/04-install-spec.md §5.1).
@@ -296,6 +324,39 @@ type raidSpecView struct {
 	Partitions []partitionView `json:"partitions"`
 }
 
+// volumeGroupView mirrors the contract's storage.lvm[] entries
+// (docs/04-install-spec.md §5.1). Keep "vg" switches to the adopt-existing
+// mode: pvs/logvols must be empty and binding facts come from the machine's
+// layout snapshot (like keep:partitions).
+type volumeGroupView struct {
+	Name     string           `json:"name"`
+	Keep     string           `json:"keep"`
+	PVs      []lvmPVView      `json:"pvs"`
+	Logvols  []logvolView     `json:"logvols"`
+	Preserve []preserveLVView `json:"preserve"`
+}
+
+// lvmPVView is one whole-device PV: a disk selector or a raid[] volume
+// reference (exactly one — validateLvmShape enforces the XOR).
+type lvmPVView struct {
+	Match *selectMatchView `json:"match"`
+	Raid  string           `json:"raid"`
+}
+
+type logvolView struct {
+	Name  string   `json:"name"`
+	Size  string   `json:"size"`
+	FS    string   `json:"fs"`
+	Mount string   `json:"mount"`
+	Flags []string `json:"flags"`
+}
+
+type preserveLVView struct {
+	Name  string `json:"name"`
+	Mount string `json:"mount"`
+	FS    string `json:"fs"`
+}
+
 type preserveView struct {
 	Number int    `json:"number"`
 	Mount  string `json:"mount"`
@@ -423,7 +484,198 @@ func validateStorageExtras(spec *installSpecView) error {
 		return classifiedErr("SCHEMA_INVALID_STORAGE", false,
 			"storage.root_device_hints.min_size_gb: must be > 0")
 	}
+	return validateLvmShape(spec)
+}
+
+// lvmNameRe is the VG/LV name contract (docs/04-install-spec.md §5.1):
+// device-mapper double-encodes dashes under /dev/mapper, so names may carry
+// alphanumerics, underscore and dot only, must start with a letter.
+var lvmNameRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.]{0,63}$`)
+
+// validateLvmShape enforces the storage.lvm structural contract, shared by
+// the install-plan dry-run and the executor's loadSpec (same mirrorless
+// reuse as validateStorageExtras). Machine-relative rules — selector
+// resolution, snapshot binding, VG-name collisions with the machine's
+// existing groups — stay with verify_layout; only what the spec alone
+// determines lives here.
+func validateLvmShape(spec *installSpecView) error {
+	vgs := spec.Storage.Lvm
+	if len(vgs) == 0 {
+		return nil
+	}
+	raidByName := map[string]int{} // raid name → spec raid index
+	raidPartitions := map[int]bool{}
+	for i, r := range spec.Storage.Raid {
+		raidByName[r.Name] = i
+		raidPartitions[i] = len(r.Partitions) > 0
+	}
+	raidRefCounts := map[string]int{}
+	// Partition mounts (disks[] + raid[]) — LV mounts must not collide.
+	partMounts := map[string]string{}
+	for i, d := range spec.Storage.Disks {
+		for _, p := range d.Partitions {
+			if mnt := p.Mount; mnt != "" && mnt != "swap" {
+				if _, dup := partMounts[mnt]; !dup {
+					partMounts[mnt] = fmt.Sprintf("disks[%d]", i)
+				}
+			}
+		}
+	}
+	for i, r := range spec.Storage.Raid {
+		for _, p := range r.Partitions {
+			if mnt := p.Mount; mnt != "" && mnt != "swap" {
+				if _, dup := partMounts[mnt]; !dup {
+					partMounts[mnt] = fmt.Sprintf("raid[%d]", i)
+				}
+			}
+		}
+	}
+
+	vgNames := map[string]bool{}
+	for i, vg := range vgs {
+		if !lvmNameRe.MatchString(vg.Name) {
+			return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+				"lvm[%d]: name %q must match [A-Za-z][A-Za-z0-9_.]{0,63} (no dashes — /dev/mapper double-encodes them)", i, vg.Name)
+		}
+		if vgNames[vg.Name] {
+			return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+				"lvm[%d]: volume group %s declared twice", i, vg.Name)
+		}
+		vgNames[vg.Name] = true
+
+		switch vg.Keep {
+		case "":
+			if len(vg.PVs) == 0 {
+				return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+					"lvm[%d]: a fresh volume group needs at least one pv", i)
+			}
+			if len(vg.Logvols) == 0 {
+				return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+					"lvm[%d]: a fresh volume group needs at least one logvol", i)
+			}
+			if len(vg.Preserve) > 0 {
+				return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+					"lvm[%d]: preserve belongs to keep:vg groups (a fresh group has nothing to preserve)", i)
+			}
+		case "vg":
+			if len(vg.PVs) > 0 || len(vg.Logvols) > 0 {
+				return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+					"lvm[%d]: keep:vg adopts the existing group whole — pvs/logvols must be absent (preserve[] declares mounts)", i)
+			}
+		default:
+			return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+				"lvm[%d]: unknown keep %q (only \"vg\" is supported)", i, vg.Keep)
+		}
+
+		for j, pv := range vg.PVs {
+			hasMatch, hasRaid := pv.Match != nil, pv.Raid != ""
+			switch {
+			case hasMatch == hasRaid:
+				return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+					"lvm[%d].pvs[%d]: declare exactly one of match (disk selector) or raid (array reference)", i, j)
+			case hasRaid:
+				ri, ok := raidByName[pv.Raid]
+				if !ok {
+					return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+						"lvm[%d].pvs[%d]: raid volume %s is not declared in storage.raid", i, j, pv.Raid)
+				}
+				if raidPartitions[ri] {
+					return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+						"lvm[%d].pvs[%d]: raid volume %s declares partitions; a volume consumed as a PV must be partition-free", i, j, pv.Raid)
+				}
+				raidRefCounts[pv.Raid]++
+				if raidRefCounts[pv.Raid] > 1 {
+					return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+						"lvm[%d].pvs[%d]: raid volume %s is already consumed by another volume group", i, j, pv.Raid)
+				}
+			}
+		}
+
+		lvNames := map[string]bool{}
+		restCount := 0
+		for _, lv := range vg.Logvols {
+			if !lvmNameRe.MatchString(lv.Name) {
+				return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+					"lvm[%d].logvols: name %q must match [A-Za-z][A-Za-z0-9_.]{0,63}", i, lv.Name)
+			}
+			if lvNames[lv.Name] {
+				return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+					"lvm[%d].logvols: logical volume %s declared twice", i, lv.Name)
+			}
+			lvNames[lv.Name] = true
+			switch lv.FS {
+			case "vfat", "xfs", "ext4", "swap":
+			default:
+				return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+					"lvm[%d].logvols: fs %q is not a Linux filesystem (vfat/xfs/ext4/swap)", i, lv.FS)
+			}
+			if lv.Size == "rest" {
+				restCount++
+				if restCount > 1 {
+					return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+						"lvm[%d].logvols: only one rest-sized logvol per volume group", i)
+				}
+			} else if mb, err := sizeToMB(lv.Size); err != nil || mb <= 0 {
+				return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+					"lvm[%d].logvols: size %q is not a size string (512M, 100G) or rest", i, lv.Size)
+			}
+			if hasFlagStr(lv.Flags, "esp") || lv.Mount == "/boot/efi" {
+				return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+					"lvm[%d].logvols: %s cannot live on LVM — an EFI system partition needs plain disk", i, lv.Mount)
+			}
+			if mnt := lv.Mount; mnt != "" && mnt != "swap" {
+				if prev, dup := partMounts[mnt]; dup {
+					return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+						"lvm[%d].logvols: mount %s is already claimed by %s", i, mnt, prev)
+				}
+				partMounts[mnt] = fmt.Sprintf("lvm[%d]", i)
+			}
+		}
+
+		preservedNames := map[string]bool{}
+		for _, p := range vg.Preserve {
+			if p.Name == "" {
+				return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+					"lvm[%d].preserve: name is required", i)
+			}
+			if preservedNames[p.Name] {
+				return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+					"lvm[%d].preserve: logical volume %s listed twice", i, p.Name)
+			}
+			preservedNames[p.Name] = true
+			switch p.Mount {
+			case "", "/", "/boot", "/boot/efi":
+				return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+					"lvm[%d].preserve: mount %q must be a non-boot data path (boot-critical paths need a fresh, deterministic install)", i, p.Mount)
+			}
+			if p.FS != "" {
+				switch p.FS {
+				case "vfat", "xfs", "ext4", "swap":
+				default:
+					return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+						"lvm[%d].preserve: fs %q is not a Linux filesystem (vfat/xfs/ext4/swap)", i, p.FS)
+				}
+			}
+			if mnt := p.Mount; mnt != "" && mnt != "swap" {
+				if _, dup := partMounts[mnt]; dup {
+					return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+						"lvm[%d].preserve: mount %s is already claimed by %s", i, mnt, partMounts[mnt])
+				}
+				partMounts[mnt] = fmt.Sprintf("lvm[%d].preserve", i)
+			}
+		}
+	}
 	return nil
+}
+
+// hasFlagStr mirrors preseed.hasFlag for the spec view's flag lists.
+func hasFlagStr(flags []string, want string) bool {
+	for _, f := range flags {
+		if f == want {
+			return true
+		}
+	}
+	return false
 }
 
 // ── stage 1: verify_layout (docs/06-install-pipeline.md §1) ─────────────────
@@ -447,7 +699,7 @@ func (e *Executor) verifyLayout(ctx context.Context, task *store.Task, job *stor
 		// Redfish-blind storage (docs/compat/huawei.md §4): fall back to the
 		// in-band layout snapshot, which carries device names + serials —
 		// enough to resolve selectors on machines whose BMC hides drives.
-		snap, serr := e.layoutSnapshot(ctx, task.MachineID)
+		snap, _, serr := e.layoutSnapshot(ctx, task.MachineID)
 		if serr != nil {
 			return classifiedErr("LAYOUT_DISK_NOT_FOUND", false,
 				"machine %s has no hardware inventory and no layout snapshot: run discover (with in-band access)",
@@ -509,7 +761,7 @@ func (e *Executor) verifyLayout(ctx context.Context, task *store.Task, job *stor
 		case d.Keep == "partitions":
 			// Bind the latest snapshot: preserved partitions must exist; the
 			// snapshot facts become the %pre drift baseline (docs/06 §4).
-			snap, err := e.layoutSnapshot(ctx, task.MachineID)
+			snap, _, err := e.layoutSnapshot(ctx, task.MachineID)
 			if err != nil {
 				return classifiedErr("LAYOUT_SNAPSHOT_REQUIRED", false,
 					"storage.disks[%d]: keep:partitions requires a layout snapshot (%s)", i, err.Error())
@@ -685,20 +937,196 @@ func (e *Executor) verifyLayout(ctx context.Context, task *store.Task, job *stor
 		raids = append(raids, rr)
 	}
 
+	// LVM resolution (docs/04-install-spec.md §5.1): fresh groups consume
+	// whole devices exactly like raid members — implicitly wiped, mutually
+	// exclusive with disks[]/raid members/each other. keep:vg groups adopt
+	// the machine's existing one, bound to the layout snapshot (the same
+	// snapshot contract keep:partitions uses); their PV disks are claimed
+	// here so disks[]/raid/fresh selectors cannot wipe the data pool.
+	volgroups := make([]render.ResolvedVolgroup, 0, len(spec.Storage.Lvm))
+	lvmChecks := make([]lvmExpectation, 0, len(spec.Storage.Lvm))
+	if len(spec.Storage.Lvm) > 0 {
+		raidByName := map[string]render.ResolvedRaid{}
+		for _, rr := range raids {
+			raidByName[rr.Name] = rr
+		}
+		_, snapLvm, snapErr := e.layoutSnapshot(ctx, task.MachineID)
+		keepDeclared := false
+		for _, vg := range spec.Storage.Lvm {
+			if vg.Keep == "vg" {
+				keepDeclared = true
+			}
+		}
+		if keepDeclared && snapErr != nil {
+			return classifiedErr("LAYOUT_SNAPSHOT_REQUIRED", false,
+				"lvm: keep:vg requires a layout snapshot (%s)", snapErr.Error())
+		}
+		for i, vg := range spec.Storage.Lvm {
+			if vg.Keep == "vg" {
+				if snapLvm == nil {
+					return classifiedErr("LAYOUT_VG_NOT_FOUND", false,
+						"lvm[%d]: keep:vg needs LVM facts in the machine's layout snapshot — re-run discover (in-band, lvm2 present)", i)
+				}
+				var facts *inbandssh.VgFacts
+				for fi := range snapLvm {
+					if snapLvm[fi].Name == vg.Name {
+						facts = &snapLvm[fi]
+						break
+					}
+				}
+				if facts == nil {
+					return classifiedErr("LAYOUT_VG_NOT_FOUND", false,
+						"lvm[%d]: volume group %s is not present in the machine's layout snapshot", i, vg.Name)
+				}
+				rg := render.ResolvedVolgroup{Name: vg.Name, KeepVG: true}
+				lvByName := map[string]inbandssh.LvFacts{}
+				for _, lv := range facts.LVs {
+					lvByName[lv.Name] = lv
+				}
+				check := lvmExpectation{Name: vg.Name, Keep: true}
+				for _, p := range vg.Preserve {
+					lv, ok := lvByName[p.Name]
+					if !ok {
+						return classifiedErr("LAYOUT_VG_NOT_FOUND", false,
+							"lvm[%d]: logical volume %s/%s is not present in the machine's layout snapshot", i, vg.Name, p.Name)
+					}
+					rg.Preserved = append(rg.Preserved, render.ResolvedPreserveLV{
+						Name: p.Name, Mount: p.Mount,
+						FS:        firstNonEmptyStr(p.FS, lv.FSType),
+						SizeBytes: lv.SizeBytes,
+					})
+					check.LVs = append(check.LVs, lvmLVExpectation{Name: p.Name, Mount: p.Mount})
+				}
+				for _, pv := range facts.PVs {
+					dev := parentDiskName(pv.Name, hw)
+					if prev, dup := usedDevices[dev]; dup {
+						return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+							"lvm[%d]: PV device %s of kept group %s is already claimed by %s", i, pv.Name, vg.Name, prev)
+					}
+					usedDevices[dev] = fmt.Sprintf("lvm[%d] (keep:vg)", i)
+					serial := ""
+					for _, hd := range hw.Disks {
+						if hd.Name == dev {
+							serial = hd.Serial
+							break
+						}
+					}
+					rg.PVs = append(rg.PVs, render.ResolvedPV{
+						Device: dev, Serial: serial, SizeBytes: pv.SizeBytes, PartitionNumber: partitionNumberOf(pv.Name, dev),
+					})
+				}
+				volgroups = append(volgroups, rg)
+				lvmChecks = append(lvmChecks, check)
+				continue
+			}
+
+			// Fresh group: the name must not collide with the machine's
+			// existing groups — anaconda/curtin would fail the install
+			// ("vg already exists") minutes in.
+			if snapLvm != nil {
+				for _, facts := range snapLvm {
+					if facts.Name == vg.Name {
+						return classifiedErr("LAYOUT_VG_EXISTS", false,
+							"lvm[%d]: volume group %s already exists on this machine — declare keep:vg to adopt it, or pick another name", i, vg.Name)
+					}
+				}
+			}
+			rg := render.ResolvedVolgroup{Name: vg.Name}
+			for j, pv := range vg.PVs {
+				switch {
+				case pv.Match != nil:
+					var pool []bmc.DiskView
+					for _, hd := range hw.Disks {
+						if !diskMatchesSelector(*pv.Match, minSizeGB, hd) {
+							continue
+						}
+						pool = append(pool, hd)
+					}
+					var candidates []bmc.DiskView
+					if pv.Match.Size != "" && len(pool) > 0 {
+						candidates = append(candidates, *bestDiskBySize(pool, pv.Match.Size))
+					} else {
+						candidates = pool
+					}
+					if len(candidates) != 1 {
+						if len(candidates) == 0 {
+							return classifiedErr("LAYOUT_DISK_NOT_FOUND", false,
+								"lvm[%d].pvs[%d]: selector matches no disk on %s", i, j, task.MachineID)
+						}
+						return classifiedErr("SELECT_AMBIGUOUS", false,
+							"lvm[%d].pvs[%d]: selector matches %d disks; refine the match", i, j, len(candidates))
+					}
+					if prev, dup := usedDevices[candidates[0].Name]; dup {
+						return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+							"lvm[%d].pvs[%d]: %s already claimed by %s", i, j, candidates[0].Name, prev)
+					}
+					usedDevices[candidates[0].Name] = fmt.Sprintf("lvm[%d]", i)
+					rg.PVs = append(rg.PVs, render.ResolvedPV{
+						Device: candidates[0].Name, Serial: candidates[0].Serial,
+						SizeBytes: candidates[0].SizeBytes,
+					})
+				case pv.Raid != "":
+					rr := raidByName[pv.Raid] // validateLvmShape guarantees presence
+					rg.PVs = append(rg.PVs, render.ResolvedPV{
+						RaidName: rr.Name, RaidMode: rr.Mode, RaidLevel: rr.Level,
+						RaidMembers: rr.Members, RaidSizeBytes: rr.SizeBytes,
+					})
+				}
+			}
+			check := lvmExpectation{Name: vg.Name}
+			for _, lv := range vg.Logvols {
+				rl := render.ResolvedLogvol{Name: lv.Name, FS: lv.FS, Mount: lv.Mount, Flags: lv.Flags}
+				if lv.Size == "rest" {
+					rl.Grow = true
+				} else {
+					mb, err := sizeToMB(lv.Size)
+					if err != nil {
+						return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+							"lvm[%d].logvols: %s", i, err.Error())
+					}
+					rl.SizeMB = mb
+				}
+				rg.Logvols = append(rg.Logvols, rl)
+				check.LVs = append(check.LVs, lvmLVExpectation{Name: lv.Name})
+			}
+			volgroups = append(volgroups, rg)
+			lvmChecks = append(lvmChecks, check)
+		}
+	}
+
 	ictx := installTaskContext{}
 	_ = json.Unmarshal(task.Context, &ictx)
 	raw, _ := json.Marshal(struct {
-		Disks []render.ResolvedDisk `json:"disks"`
-		Raid  []render.ResolvedRaid `json:"raid,omitempty"`
-	}{Disks: resolved, Raid: raids})
-	if err := e.Jobs.PatchTaskContext(ctx, task.ID, task.StageIndex, map[string]any{"resolved": json.RawMessage(raw)}); err != nil {
+		Disks []render.ResolvedDisk     `json:"disks"`
+		Raid  []render.ResolvedRaid     `json:"raid,omitempty"`
+		Lvm   []render.ResolvedVolgroup `json:"lvm,omitempty"`
+	}{Disks: resolved, Raid: raids, Lvm: volgroups})
+	patch := map[string]any{"resolved": json.RawMessage(raw)}
+	if len(lvmChecks) > 0 {
+		patch["lvm_checks"] = lvmChecks
+	}
+	if err := e.Jobs.PatchTaskContext(ctx, task.ID, task.StageIndex, patch); err != nil {
 		return err
 	}
 	ictx.Resolved.Disks = resolved
 	ictx.Resolved.Raid = raids
+	ictx.Resolved.Lvm = volgroups
+	ictx.LvmChecks = lvmChecks
 	obs.FromContext(ctx).InfoContext(ctx, "layout resolved",
-		"disks", len(resolved), "raid", len(raids))
+		"disks", len(resolved), "raid", len(raids), "lvm", len(volgroups))
 	return nil
+}
+
+// partitionNumberOf derives the PV partition number from its kernel name
+// (sda2 → 2, nvme0n1p3 → 3); a whole-device PV (md0, sda) yields 0.
+func partitionNumberOf(pvName, parentDisk string) int {
+	rest := strings.TrimPrefix(pvName, parentDisk)
+	rest = strings.TrimPrefix(rest, "p")
+	n, err := strconv.Atoi(rest)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // checkRaidShape enforces level/member-count rules (docs: 0→2+, 1→2+, 5→3+, 10→4+).
@@ -861,10 +1289,25 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	var hw bmc.HardwareView
 	_ = json.Unmarshal(m.Hardware, &hw)
 	// Bootloader target: the disk (or bound hardware-raid volume) hosting /.
+	// When / lives on a logical volume, anaconda/curtin boot through the
+	// non-LVM /boot partition instead — its holder becomes the target
+	// (docs/04-install-spec.md §5.1 boot rule).
+	rootOnLV := false
+	for _, vg := range ictx.Resolved.Lvm {
+		for _, lv := range vg.Logvols {
+			if lv.Mount == "/" {
+				rootOnLV = true
+			}
+		}
+	}
+	rootMount, bootMount := "/", "/"
+	if rootOnLV {
+		rootMount, bootMount = "/boot", "/boot"
+	}
 	bootDrive := ""
 	for _, d := range ictx.Resolved.Disks {
 		for _, p := range d.Partitions {
-			if p.Mount == "/" {
+			if p.Mount == rootMount || (rootOnLV && p.Mount == bootMount) {
 				bootDrive = d.Device
 			}
 		}
@@ -874,11 +1317,11 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 			continue
 		}
 		for _, p := range r.Partitions {
-			if p.Mount == "/" {
+			if p.Mount == rootMount || (rootOnLV && p.Mount == bootMount) {
 				bootDrive = r.BoundDevice
 			}
 		}
-		if bootDrive == "" {
+		if bootDrive == "" && !rootOnLV {
 			bootDrive = r.BoundDevice
 		}
 	}
@@ -923,6 +1366,31 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		}
 	}
 	in.Raid = raidInputs
+
+	// LVM inputs ride the resolved groups; PVs backed by hardware-RAID
+	// volumes inherit the volume's post-configure_raid binding (device,
+	// SCSI serial and capacity — the same facts the volume itself renders
+	// from), so the PV targets the discovered logical drive.
+	lvmInputs := ictx.Resolved.Lvm
+	for gi := range lvmInputs {
+		for pi := range lvmInputs[gi].PVs {
+			pv := &lvmInputs[gi].PVs[pi]
+			if pv.RaidName == "" || pv.RaidMode != "hardware" {
+				continue
+			}
+			for _, rr := range raidInputs {
+				if rr.Name == pv.RaidName {
+					pv.RaidBoundDevice = rr.BoundDevice
+					pv.RaidVolumeSerial = rr.VolumeSerial
+					if pv.RaidSizeBytes == 0 {
+						pv.RaidSizeBytes = rr.SizeBytes
+					}
+					break
+				}
+			}
+		}
+	}
+	in.Lvm = lvmInputs
 
 	// PXE install-source inputs (docs/06-install-pipeline.md §3.3): the
 	// strategy is known before rendering (spec declaration or deployment
@@ -1696,6 +2164,7 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 	// system answers (docs/06-install-pipeline.md §4). Without in-band
 	// credentials the completion report is the verification surface.
 	bondChecked := false
+	lvmChecked := false
 	m, err := e.Machines.Get(ctx, task.MachineID)
 	if err != nil {
 		return err
@@ -1825,6 +2294,23 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 									"machine", task.MachineID, "bonds", len(ictx.BondChecks))
 							}
 						}
+						// LVM health (docs/04-install-spec.md §5.1): the same
+						// contract-vs-live comparison as bonds — a kept data
+						// group that got wiped or a fresh group whose creation
+						// silently failed must not verify green. nil Lvm means
+						// the collection predates the LVM section — facts
+						// unavailable, not "no volume groups".
+						if len(ictx.LvmChecks) > 0 {
+							if res.Lvm == nil {
+								e.lvmUnverifiedEvent(ctx, task, "in-band collection carried no LVM facts")
+							} else if verr := verifyLvm(res, ictx.LvmChecks); verr != nil {
+								return classifiedErr("INSTALL_LVM_MISMATCH", true, "%s", verr.Error())
+							} else {
+								lvmChecked = true
+								obs.FromContext(ctx).InfoContext(ctx, "post-install lvm health verified",
+									"machine", task.MachineID, "volume_groups", len(ictx.LvmChecks))
+							}
+						}
 					}
 				}
 			}
@@ -1836,6 +2322,11 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 	// never reaches here with bonds: its render rejects them).
 	if len(ictx.BondChecks) > 0 && !bondChecked {
 		e.bondUnverifiedEvent(ctx, task, "in-band probe unavailable (no credentials or auth not configured)")
+	}
+	// Same degrade for declared volume groups (windows/agent rejects LVM, so
+	// only Linux paths carry these).
+	if len(ictx.LvmChecks) > 0 && !lvmChecked {
+		e.lvmUnverifiedEvent(ctx, task, "in-band probe unavailable (no credentials or auth not configured)")
 	}
 
 	// Success compensation: eject all media, restore boot order.
@@ -1903,11 +2394,58 @@ func verifyBonds(res *inbandssh.Result, checks []render.BondExpected) error {
 
 // bondUnverifiedEvent records the degrade: declared bonds the in-band path
 // could not check. The completion report remains the only verification
-// surface in that case (docs/06-install-pipeline.md §4).
+// surface (docs/06-install-pipeline.md §4).
 func (e *Executor) bondUnverifiedEvent(ctx context.Context, task *store.Task, reason string) {
 	obs.FromContext(ctx).WarnContext(ctx, "verify_ready degraded: declared bonds not verified", "machine", task.MachineID, "reason", reason)
 	e.Events.Append(ctx, "task", task.ID, "task.verify_ready_degraded", map[string]any{
 		"reason": "declared bonds not verified: " + reason,
+	})
+}
+
+// verifyLvm holds the installed system's volume groups against the declared
+// contract (docs/04-install-spec.md §5.1 — the same post-install check bond
+// health runs): fresh groups must exist with their logical volumes, kept
+// groups must have survived with their declared mounts back in place.
+// Undeclared groups are outside the contract and never asserted.
+func verifyLvm(res *inbandssh.Result, checks []lvmExpectation) error {
+	byName := map[string]inbandssh.VgFacts{}
+	for _, vg := range res.Lvm {
+		byName[vg.Name] = vg
+	}
+	for _, want := range checks {
+		got, ok := byName[want.Name]
+		if !ok {
+			if want.Keep {
+				return fmt.Errorf("volume group %s: kept group missing on the installed system (wiped or renamed)", want.Name)
+			}
+			return fmt.Errorf("volume group %s: declared but not present on the installed system", want.Name)
+		}
+		for _, lv := range want.LVs {
+			mount := ""
+			found := false
+			for _, glv := range got.LVs {
+				if glv.Name == lv.Name {
+					found, mount = true, glv.Mount
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("volume group %s: logical volume %s missing on the installed system", want.Name, lv.Name)
+			}
+			if lv.Mount != "" && mount != lv.Mount {
+				return fmt.Errorf("volume group %s: logical volume %s mounted at %q, declared %q", want.Name, lv.Name, mount, lv.Mount)
+			}
+		}
+	}
+	return nil
+}
+
+// lvmUnverifiedEvent records the degrade: declared volume groups the in-band
+// path could not check (mirrors bondUnverifiedEvent).
+func (e *Executor) lvmUnverifiedEvent(ctx context.Context, task *store.Task, reason string) {
+	obs.FromContext(ctx).WarnContext(ctx, "verify_ready degraded: declared volume groups not verified", "machine", task.MachineID, "reason", reason)
+	e.Events.Append(ctx, "task", task.ID, "task.verify_ready_degraded", map[string]any{
+		"reason": "declared volume groups not verified: " + reason,
 	})
 }
 
@@ -2042,23 +2580,43 @@ type snapPartitionEx struct {
 	Mountpoint string `json:"mountpoint"`
 }
 
-// layoutSnapshot loads and parses the machine's latest layout snapshot.
-func (e *Executor) layoutSnapshot(ctx context.Context, machineID string) ([]snapPartition, error) {
+// layoutSnapshot loads and parses the machine's latest layout snapshot:
+// disks with partitions, plus the LVM facts section when the collector ran
+// one carrying it (older snapshots predate ===LVM=== — lvmFacts is nil then,
+// meaning "facts unavailable", not "no volume groups").
+func (e *Executor) layoutSnapshot(ctx context.Context, machineID string) ([]snapPartition, []inbandssh.VgFacts, error) {
 	content, _, err := e.Machines.LatestLayout(ctx, machineID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var wrapped struct {
-		Disks []snapPartition `json:"disks"`
+		Disks []snapPartition     `json:"disks"`
+		Lvm   []inbandssh.VgFacts `json:"lvm,omitempty"`
 	}
 	if err := json.Unmarshal(content, &wrapped); err != nil {
-		return nil, fmt.Errorf("snapshot unreadable: %w", err)
+		return nil, nil, fmt.Errorf("snapshot unreadable: %w", err)
 	}
 	snap := wrapped.Disks
 	if len(snap) == 0 {
-		return nil, fmt.Errorf("snapshot has no disks")
+		return nil, nil, fmt.Errorf("snapshot has no disks")
 	}
-	return snap, nil
+	return snap, wrapped.Lvm, nil
+}
+
+// parentDiskName maps a PV device fact (/dev/sda2 → "sda2", possibly a whole
+// disk like "md0") to the hardware disk it lives on, by longest inventory
+// prefix — precise where string heuristics are not (md0 vs sda2).
+func parentDiskName(dev string, hw bmc.HardwareView) string {
+	best := ""
+	for _, d := range hw.Disks {
+		if strings.HasPrefix(dev, d.Name) && len(d.Name) > len(best) {
+			best = d.Name
+		}
+	}
+	if best != "" {
+		return best
+	}
+	return dev
 }
 
 // onPartName derives the full kernel partition name: nvme0n1 → nvme0n1p2,
@@ -2283,7 +2841,7 @@ func (e *Executor) configureRaid(ctx context.Context, task *store.Task, job *sto
 	// volume's SCSI serial and kernel name as the OS actually sees them —
 	// what curtin (ubuntu) and kickstart storage resolution match on.
 	_ = e.collectLayout(ctx, task, false)
-	if snap, serr := e.layoutSnapshot(ctx, task.MachineID); serr == nil {
+	if snap, _, serr := e.layoutSnapshot(ctx, task.MachineID); serr == nil {
 		for i := range ictx.Resolved.Raid {
 			if ictx.Resolved.Raid[i].Mode != "hardware" || ictx.Resolved.Raid[i].BoundDevice == "" {
 				continue

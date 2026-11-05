@@ -292,6 +292,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if len(in.Raid) > 0 {
 		return nil, render.BootParams{}, fmt.Errorf("%s: RAID is not supported yet — submit plain disks", d.distro)
 	}
+	if len(in.Lvm) > 0 {
+		return nil, render.BootParams{}, fmt.Errorf("%s: LVM is not supported — submit plain disks (unattend has no volume group semantics)", d.distro)
+	}
 	preScripts, postScripts, err := splitScripts(d.distro, in.Scripts)
 	if err != nil {
 		return nil, render.BootParams{}, err
@@ -394,6 +397,9 @@ func (d *Driver) renderAgentApply(in render.InstallInputs) ([]render.AnswerFile,
 	}
 	if len(in.Raid) > 0 {
 		return nil, render.BootParams{}, fmt.Errorf("%s: RAID is not supported yet — submit plain disks", d.distro)
+	}
+	if len(in.Lvm) > 0 {
+		return nil, render.BootParams{}, fmt.Errorf("%s: LVM is not supported — submit plain disks (unattend has no volume group semantics)", d.distro)
 	}
 	preScripts, postScripts, err := splitScripts(d.distro, in.Scripts)
 	if err != nil {

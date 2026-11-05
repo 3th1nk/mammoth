@@ -37,6 +37,19 @@
 | **Windows Server 2022** | `windows2022` | 同 windows2019(媒体形态版本稳定) | 同 windows2019 | 同 windows2019 | 同 windows2019 | ✅ **真机全自动闭环(2026-10-29,updated Oct 2026 零售 zh-cn:六阶段全绿,回调到达,静态网 .217 按 spec 落网;经 genisoimage -udf 重打包 + 树权限 go+rX + normalizeUNC 四层修复,详见下方 windows 节)** |
 | **Windows Server 2025** | `windows2025` | 同 windows2019(26100 系) | 同 windows2019 | 同 windows2019 | 同 windows2019 | ✅ **真机全自动闭环(2026-10-29,updated Oct 2026 OEM zh-cn:六阶段全绿,回调到达,静态网 .218 按 spec 落网,setup 仅 ~13 分钟;OOBE 新增诊断数据页已由 ProtectYourPC=3 跳过)** |
 
+## LVM 支持矩阵(storage.lvm,docs/04-install-spec.md §5.1.1)
+
+| 方言 | 新建卷组 | keep:vg(重装保留) | 限制 |
+|------|---------|--------------------|------|
+| rocky9/10、centos7、kylin(UOS 同族) | ✅ anaconda `volgroup/logvol` | ✅ `--noformat --useexisting` | `/` 在 LV 上须有非 LV `/boot`(anaconda 强制);raid 卷可作 PV(该卷的 raid 行即 PV) |
+| ubuntu22/24(autoinstall) | ✅ curtin `lvm_volgroup/lvm_partition`(rest LV 省略 size) | ✅ curtin `preserve`(VG/PV/LV 存在性校验) | software RAID 卷不能作 PV(curtin 无 md 配方) |
+| debian12/13(preseed) | ✅ partman lvm 配方 | ❌ partman 无法采纳既有组 | 单 VG 单 PV 且 PV 必须是唯一安装目标(partman-auto 单配方);LV fs 走 netinst 白名单 |
+| windows / agent | ❌ | ❌ | unattend/agent 无卷组语义,渲染期拒绝 |
+
+装后核验:`vgs/pvs/lvs` 实测随任务上下文期望比对(缺组/缺 LV/挂载点不符 →
+`INSTALL_LVM_MISMATCH`;采集缺 LVM 段 → `verify_ready_degraded` 降级)。未声明的
+既有 VG 不受影响,装后可手动挂载(debian 需先补 lvm2 包)。
+
 ## 保留分区支持语义(SupportLevel)
 
 | 级别 | 提交侧行为 | 渲染侧行为 |

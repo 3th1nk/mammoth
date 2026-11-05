@@ -559,12 +559,26 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 	// Hardware RAID volumes are install targets like disks — the bound
 	// volume identifies by its SCSI serial (refreshed from the in-band
 	// snapshot at configure_raid; the controller assigns it, Redfish does
-	// not expose it).
+	// not expose it). Volumes consumed as LVM PVs skip the partition chain
+	// and ride as pvOnly raw targets.
 	type diskTarget struct {
 		id, device, serial string
 		wipe               bool
 		sizeBytes          int64
 		partitions         []render.ResolvedPartition
+		pvOnly             bool // LVM PV: wiped raw device, no partition chain
+	}
+	raidPV := map[string]bool{}
+	for _, vg := range in.Lvm {
+		for _, pv := range vg.PVs {
+			if pv.RaidName != "" {
+				if pv.RaidMode != "hardware" {
+					return nil, nil, fmt.Errorf(
+						"%s: software RAID volume %s cannot back a volume group (curtin renders no md arrays); use disks or a hardware RAID volume", d.distro, pv.RaidName)
+				}
+				raidPV[pv.RaidName] = true
+			}
+		}
 	}
 	targets := []diskTarget{}
 	for _, r := range in.Raid {
@@ -578,7 +592,8 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 			serial = "" // kernel names take the path form
 		}
 		targets = append(targets, diskTarget{id: "raid-" + r.Name, device: r.BoundDevice,
-			serial: serial, wipe: true, sizeBytes: r.SizeBytes, partitions: r.Partitions})
+			serial: serial, wipe: true, sizeBytes: r.SizeBytes,
+			partitions: r.Partitions, pvOnly: raidPV[r.Name]})
 	}
 	for _, disk := range in.Disks {
 		if disk.KeepDisk {
@@ -592,27 +607,38 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 			serial: disk.Serial, wipe: disk.Wipe, sizeBytes: diskSizeOf(m, disk.Device),
 			partitions: disk.Partitions})
 	}
-
-	const gap = int64(1024 * 1024)
-	for _, disk := range targets {
-		if len(disk.partitions) == 0 {
+	// Fresh volume groups: whole-disk PVs ride as wiped raw targets (the
+	// devices are consumed like raid members, so they never appear in
+	// disks[] — no id collision).
+	for _, vg := range in.Lvm {
+		if vg.KeepVG {
 			continue
 		}
-		if !disk.wipe {
-			return nil, nil, fmt.Errorf("%s: disk %s must declare wipe or keep", d.distro, disk.device)
+		for pi, pv := range vg.PVs {
+			if pv.RaidName != "" {
+				continue // hardware raid PV target already registered above
+			}
+			targets = append(targets, diskTarget{id: fmt.Sprintf("pv-%s-%d", vg.Name, pi),
+				device: pv.Device, serial: pv.Serial, wipe: true,
+				sizeBytes: pv.SizeBytes, pvOnly: true})
 		}
-		diskBytes := disk.sizeBytes
+	}
 
-		// curtin identifies drives by serial (udev ID_SERIAL_SHORT) —
-		// controller logical drives report their SCSI serial there, while
-		// their kernel names are unstable. Path is the fallback for
-		// serial-less (fake) disks.
+	// emitDiskEntry renders the curtin disk entry for one target: serial
+	// matching when the drive reports one, path (+ resolve-disk.sh dyn slot)
+	// otherwise. grubDevice marks a bootloader target (subiquity's check);
+	// raw PV disks and preserved holders are not.
+	emitDiskEntry := func(disk diskTarget, grubDevice, preserve bool) error {
 		entry := map[string]any{
-			"id":     disk.id,
-			"type":   "disk",
-			"ptable": "gpt",
-			"wipe":   "superblock",
-			"name":   "mammoth-" + disk.device,
+			"id":   disk.id,
+			"type": "disk",
+			"name": "mammoth-" + disk.device,
+		}
+		if preserve {
+			entry["preserve"] = true
+		} else {
+			entry["ptable"] = "gpt"
+			entry["wipe"] = "superblock"
 		}
 		if disk.serial != "" {
 			entry["serial"] = disk.serial
@@ -626,10 +652,11 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 			path := "/dev/" + disk.device
 			if render.IsKernelDeviceName(disk.device) {
 				// Snapshot cross-check: keep size drift visible (±1%, the band
-				// every resolver in this codebase uses).
-				if disk.sizeBytes > 0 && diskSizeOf(m, disk.device) > 0 &&
+				// every resolver in this codebase uses). Preserved holders
+				// carry a PV-partition size, not the disk's — no cross-check.
+				if !preserve && disk.sizeBytes > 0 && diskSizeOf(m, disk.device) > 0 &&
 					!sizeWithinTolerance(diskSizeOf(m, disk.device), disk.sizeBytes) {
-					return nil, nil, fmt.Errorf("%s: disk %s drifted from the snapshot size — re-probe the machine",
+					return fmt.Errorf("%s: disk %s drifted from the snapshot size — re-probe the machine",
 						d.distro, disk.device)
 				}
 			} else {
@@ -637,9 +664,34 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 			}
 			entry["path"] = path
 		}
-		entry["grub_device"] = true
+		if grubDevice {
+			entry["grub_device"] = true
+		}
 		rendered++
 		config = append(config, entry)
+		return nil
+	}
+
+	const gap = int64(1024 * 1024)
+	for _, disk := range targets {
+		if len(disk.partitions) == 0 {
+			if disk.pvOnly {
+				if !disk.wipe {
+					return nil, nil, fmt.Errorf("%s: disk %s must declare wipe or keep", d.distro, disk.device)
+				}
+				if err := emitDiskEntry(disk, false, false); err != nil {
+					return nil, nil, err
+				}
+			}
+			continue
+		}
+		if !disk.wipe {
+			return nil, nil, fmt.Errorf("%s: disk %s must declare wipe or keep", d.distro, disk.device)
+		}
+		diskBytes := disk.sizeBytes
+		if err := emitDiskEntry(disk, true, false); err != nil {
+			return nil, nil, err
+		}
 
 		// Pre-compute grow sizes: rest takes the remainder minus a 1MiB gap
 		// per partition (alignment headroom).
@@ -709,6 +761,97 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 					"type":   "mount",
 					"path":   p.Mount,
 					"device": fID,
+				})
+			}
+		}
+	}
+	// LVM (docs/04-install-spec.md §5.1): fresh groups emit
+	// lvm_volgroup → lvm_partition → format → mount (curtin's native chain;
+	// a rest-sized LV omits size — all remaining VG space). keep:vg groups
+	// adopt the machine's existing one: preserved PV holders and partitions
+	// carry preserve flags, and curtin verifies VG/PV/LV existence instead
+	// of creating anything.
+	for _, vg := range in.Lvm {
+		vgID := "vg-" + vg.Name
+		devices := []string{}
+		if vg.KeepVG {
+			for pi, pv := range vg.PVs {
+				if pv.Device == "" {
+					return nil, nil, fmt.Errorf(
+						"%s: kept group %s has a PV with no holding device — re-run discover", d.distro, vg.Name)
+				}
+				holderID := fmt.Sprintf("keepdisk-%s-%d", pv.Device, pi)
+				holder := diskTarget{id: holderID, device: pv.Device, serial: pv.Serial}
+				if err := emitDiskEntry(holder, false, true); err != nil {
+					return nil, nil, err
+				}
+				refID := holderID
+				if pv.PartitionNumber > 0 {
+					// PV on a partition: preserved partition entry, and the
+					// volgroup references the partition (curtin allows both
+					// whole-disk and partition PV devices).
+					refID = fmt.Sprintf("keeppv-%s-%d", pv.Device, pi)
+					config = append(config, map[string]any{
+						"id": refID, "type": "partition", "device": holderID,
+						"number": pv.PartitionNumber, "size": pv.SizeBytes, "preserve": true,
+					})
+				}
+				devices = append(devices, refID)
+			}
+			config = append(config, map[string]any{
+				"id": vgID, "type": "lvm_volgroup", "name": vg.Name,
+				"devices": devices, "preserve": true,
+			})
+			rendered++
+			for _, lv := range vg.Preserved {
+				if lv.FS == "" {
+					return nil, nil, fmt.Errorf(
+						"%s: kept logical volume %s/%s has no known filesystem — declare preserve.fs (the snapshot carries no fstype)", d.distro, vg.Name, lv.Name)
+				}
+				lvID := fmt.Sprintf("lv-%s-%s", vg.Name, lv.Name)
+				config = append(config, map[string]any{
+					"id": lvID, "type": "lvm_partition", "name": lv.Name,
+					"volgroup": vgID, "size": lv.SizeBytes, "preserve": true,
+				})
+				fID := "fmt-" + lvID
+				config = append(config, map[string]any{
+					"id": fID, "type": "format", "volume": lvID, "fstype": lv.FS,
+				})
+				if lv.Mount != "" && lv.Mount != "swap" {
+					config = append(config, map[string]any{
+						"id": "mnt-" + lvID, "type": "mount", "path": lv.Mount, "device": fID,
+					})
+				}
+			}
+			continue
+		}
+		for pi, pv := range vg.PVs {
+			if pv.RaidName != "" {
+				devices = append(devices, "raid-"+pv.RaidName)
+			} else {
+				devices = append(devices, fmt.Sprintf("pv-%s-%d", vg.Name, pi))
+			}
+		}
+		config = append(config, map[string]any{
+			"id": vgID, "type": "lvm_volgroup", "name": vg.Name, "devices": devices,
+		})
+		rendered++
+		for _, lv := range vg.Logvols {
+			lvID := fmt.Sprintf("lv-%s-%s", vg.Name, lv.Name)
+			lvEntry := map[string]any{
+				"id": lvID, "type": "lvm_partition", "name": lv.Name, "volgroup": vgID,
+			}
+			if !lv.Grow {
+				lvEntry["size"] = fmt.Sprintf("%dM", lv.SizeMB)
+			}
+			config = append(config, lvEntry)
+			fID := "fmt-" + lvID
+			config = append(config, map[string]any{
+				"id": fID, "type": "format", "volume": lvID, "fstype": lv.FS,
+			})
+			if lv.Mount != "" && lv.Mount != "swap" {
+				config = append(config, map[string]any{
+					"id": "mnt-" + lvID, "type": "mount", "path": lv.Mount, "device": fID,
 				})
 			}
 		}

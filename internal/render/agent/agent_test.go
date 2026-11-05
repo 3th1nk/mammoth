@@ -171,6 +171,11 @@ func TestRenderValidation(t *testing.T) {
 		{"raid", func(in *render.InstallInputs) {
 			in.Raid = []render.ResolvedRaid{{Name: "v0", Level: "1", Mode: "software", Members: []string{"vda"}}}
 		}, "RAID"},
+		{"lvm", func(in *render.InstallInputs) {
+			in.Lvm = []render.ResolvedVolgroup{{Name: "vg0",
+				PVs:     []render.ResolvedPV{{Device: "vda"}},
+				Logvols: []render.ResolvedLogvol{{Name: "root", FS: "ext4", Mount: "/"}}}}
+		}, "LVM"},
 		{"bond", func(in *render.InstallInputs) {
 			in.Network = []render.NetworkEntry{{Bond: &render.NetBond{Mode: "active-backup"}}}
 		}, "bond"},

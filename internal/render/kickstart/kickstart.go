@@ -122,6 +122,13 @@ func declaresSwap(in render.InstallInputs) bool {
 			}
 		}
 	}
+	for _, vg := range in.Lvm {
+		for _, lv := range vg.Logvols {
+			if lv.FS == "swap" || lv.Mount == "swap" {
+				return true
+			}
+		}
+	}
 	return false
 }
 func (d *Driver) SupportedArchs() []render.Arch {
@@ -337,6 +344,12 @@ clearpart --list={{.RemoveParts}}
 {{.}}
 {{- end}}
 {{- range .RaidLines}}
+{{.}}
+{{- end}}
+{{- range .VolgroupLines}}
+{{.}}
+{{- end}}
+{{- range .LogvolLines}}
 {{.}}
 {{- end}}
 
@@ -689,25 +702,40 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// "Unable to allocate requested partition scheme". Skipped when the spec
 	// declares its own swap; non-uniontechos drivers are untouched.
 	if d.distro == "uniontechos" && !declaresSwap(in) {
-		idx := -1
-		for i := range in.Disks {
-			if in.Disks[i].Wipe && in.Disks[i].Device == in.BootDrive {
-				idx = i
-				break
+		// LVM layouts: the swap rides the first fresh group as a logical
+		// volume — a bare extra `part swap` on a disk would compete with the
+		// PV grow budget the same way the original bug did.
+		lvmInjected := false
+		for gi := range in.Lvm {
+			if in.Lvm[gi].KeepVG {
+				continue
 			}
+			in.Lvm[gi].Logvols = append(in.Lvm[gi].Logvols,
+				render.ResolvedLogvol{Name: "swap", FS: "swap", Mount: "swap", SizeMB: 2048})
+			lvmInjected = true
+			break
 		}
-		if idx < 0 {
+		if !lvmInjected {
+			idx := -1
 			for i := range in.Disks {
-				if in.Disks[i].Wipe {
+				if in.Disks[i].Wipe && in.Disks[i].Device == in.BootDrive {
 					idx = i
 					break
 				}
 			}
-		}
-		if idx >= 0 {
-			parts := append([]render.ResolvedPartition(nil), in.Disks[idx].Partitions...)
-			in.Disks[idx].Partitions = append(parts,
-				render.ResolvedPartition{Mount: "swap", FS: "swap", SizeMB: 2048})
+			if idx < 0 {
+				for i := range in.Disks {
+					if in.Disks[i].Wipe {
+						idx = i
+						break
+					}
+				}
+			}
+			if idx >= 0 {
+				parts := append([]render.ResolvedPartition(nil), in.Disks[idx].Partitions...)
+				in.Disks[idx].Partitions = append(parts,
+					render.ResolvedPartition{Mount: "swap", FS: "swap", SizeMB: 2048})
+			}
 		}
 	}
 	for _, disk := range in.Disks {
@@ -809,14 +837,24 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 
 	// software raid: per-member full-disk raid partitions + one md per volume.
 	// Constraint (documented): one mount per volume — anaconda raid lines map
-	// one md to one mount; multi-partition volumes need LVM (later).
+	// one md to one mount; multi-mount layouts ride LVM on top (storage.lvm).
+	// Volumes consumed as PVs are rendered by the LVM block below — their
+	// raid line becomes the PV itself.
+	raidAsPV := map[string]bool{}
+	for _, vg := range in.Lvm {
+		for _, pv := range vg.PVs {
+			if pv.RaidName != "" {
+				raidAsPV[pv.RaidName] = true
+			}
+		}
+	}
 	for _, r := range in.Raid {
-		if r.Mode != "software" {
+		if r.Mode != "software" || raidAsPV[r.Name] {
 			continue
 		}
 		if len(r.Partitions) != 1 {
 			return nil, render.BootParams{}, fmt.Errorf(
-				"%s: software raid volume %s supports exactly one partition (LVM arrives later)", d.distro, r.Name)
+				"%s: software raid volume %s supports exactly one partition; multi-mount layouts go through storage.lvm", d.distro, r.Name)
 		}
 		var tags []string
 		for mi, member := range r.Members {
@@ -837,6 +875,123 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		p := r.Partitions[0]
 		raidLines = append(raidLines, fmt.Sprintf("raid %s --fstype=%s --level=%s --device=%s %s",
 			p.Mount, p.FS, r.Level, r.Name, strings.Join(tags, " ")))
+	}
+
+	// LVM (docs/04-install-spec.md §5.1): fresh groups render PV partitions
+	// → volgroup → logvol (anaconda command semantics, in that order);
+	// keep:vg groups adopt the machine's existing group with --useexisting.
+	// PV part lines reuse the raid member idiom (--size=1 --grow ondisk) and
+	// its $Dn dynamic path for Redfish-claimed names.
+	rootOnLV := false
+	for _, vg := range in.Lvm {
+		for _, lv := range vg.Logvols {
+			if lv.Mount == "/" {
+				rootOnLV = true
+			}
+		}
+	}
+	if rootOnLV {
+		bootOutsideLVM := false
+		for _, disk := range in.Disks {
+			for _, p := range disk.Partitions {
+				if p.Mount == "/boot" {
+					bootOutsideLVM = true
+				}
+			}
+		}
+		for _, r := range in.Raid {
+			for _, p := range r.Partitions {
+				if p.Mount == "/boot" {
+					bootOutsideLVM = true
+				}
+			}
+		}
+		if !bootOutsideLVM {
+			return nil, render.BootParams{}, fmt.Errorf(
+				"%s: / on a logical volume requires a separate /boot partition outside LVM (anaconda cannot boot from it)", d.distro)
+		}
+	}
+	var volgroupLines []string
+	var logvolLines []string
+	for _, vg := range in.Lvm {
+		if vg.KeepVG {
+			volgroupLines = append(volgroupLines,
+				fmt.Sprintf("volgroup %s --noformat --useexisting", vg.Name))
+			for _, p := range vg.Preserved {
+				logvolLines = append(logvolLines,
+					fmt.Sprintf("logvol %s --vgname=%s --name=%s --noformat --useexisting",
+						p.Mount, vg.Name, p.Name))
+			}
+			continue
+		}
+		var pvTags []string
+		for pi, pv := range vg.PVs {
+			tag := fmt.Sprintf("pv.%s-%d", vg.Name, pi)
+			pvLine := func(device string) {
+				line := fmt.Sprintf("part %s --size=1 --grow --ondisk=%s", tag, device)
+				if _, dyn := dynPH(device); dyn {
+					dynMemberLines = append(dynMemberLines, line)
+				} else {
+					raidMemberLines = append(raidMemberLines, line)
+				}
+			}
+			switch {
+			case pv.RaidName != "" && pv.RaidMode == "software":
+				// The array itself is the PV: the raid line carries the pv
+				// tag instead of a mount (anaconda maps md → PV directly).
+				var memberTags []string
+				for mi, member := range pv.RaidMembers {
+					memberTag := fmt.Sprintf("raid.%s-%d", pv.RaidName, mi)
+					if ph, ok := dynPH(member); ok {
+						dynMemberLines = append(dynMemberLines,
+							fmt.Sprintf("part %s --size=1 --grow --ondisk=%s", memberTag, ph))
+					} else {
+						raidMemberLines = append(raidMemberLines,
+							fmt.Sprintf("part %s --size=1 --grow --ondisk=%s", memberTag, member))
+					}
+					memberTags = append(memberTags, memberTag)
+				}
+				raidLines = append(raidLines, fmt.Sprintf("raid %s --level=%s --device=%s %s",
+					tag, pv.RaidLevel, pv.RaidName, strings.Join(memberTags, " ")))
+			case pv.RaidName != "" && pv.RaidMode == "hardware":
+				device := pv.RaidBoundDevice
+				if device == "" {
+					return nil, render.BootParams{}, fmt.Errorf(
+						"%s: volume group %s rides hardware raid volume %s, which configure_raid did not bind", d.distro, vg.Name, pv.RaidName)
+				}
+				if _, isDyn := dynPH(device); !render.IsKernelDeviceName(device) && !isDyn {
+					return nil, render.BootParams{}, fmt.Errorf(
+						"%s: hardware raid volume %s bound to non-kernel name %s with no dynamic resolution path", d.distro, pv.RaidName, device)
+				}
+				pvLine(device)
+			default:
+				_, isDyn := dynPH(pv.Device)
+				if !render.IsKernelDeviceName(pv.Device) && !isDyn {
+					// Redfish-claimed PV disk: register its own dynamic slot.
+					dyn = append(dyn, dynDisk{idx: len(dyn), ph: fmt.Sprintf("$D%d", len(dyn)),
+						device: pv.Device, sizeBytes: pv.SizeBytes, serial: pv.Serial})
+				} else if render.IsKernelDeviceName(pv.Device) {
+					// Consumed whole like a raid member: clearpart claims it.
+					wipe = append(wipe, pv.Device)
+				}
+				pvLine(pv.Device)
+			}
+			pvTags = append(pvTags, tag)
+		}
+		volgroupLines = append(volgroupLines,
+			fmt.Sprintf("volgroup %s %s", vg.Name, strings.Join(pvTags, " ")))
+		for _, lv := range vg.Logvols {
+			mnt := lv.Mount
+			if mnt == "" || mnt == "swap" {
+				mnt = "swap"
+			}
+			size := fmt.Sprintf("--size=%d", lv.SizeMB)
+			if lv.Grow {
+				size = "--size=1 --grow"
+			}
+			logvolLines = append(logvolLines, fmt.Sprintf("logvol %s --vgname=%s --name=%s --fstype=%s %s",
+				mnt, vg.Name, lv.Name, lv.FS, size))
+		}
 	}
 
 	var preScripts, postScripts []string
@@ -965,6 +1120,8 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		"PartLines":             partLines,
 		"RaidMemberLines":       raidMemberLines,
 		"RaidLines":             raidLines,
+		"VolgroupLines":         volgroupLines,
+		"LogvolLines":           logvolLines,
 		"DriftScript":           drift,
 		"NetworkPre":            netPre != "",
 		"NetworkShell":          netPre,

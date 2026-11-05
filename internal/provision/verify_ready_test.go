@@ -123,3 +123,60 @@ func TestVerifyBonds(t *testing.T) {
 		t.Fatalf("arp-monitored bond must verify without miimon: %v", err)
 	}
 }
+
+// verifyLvm holds the installed system's volume groups against the declared
+// contract (docs/04-install-spec.md §5.1 — the same post-install check bond
+// health runs): fresh groups exist with their LVs, kept groups survived with
+// their declared mounts mounted. Undeclared groups are never asserted.
+func TestVerifyLvm(t *testing.T) {
+	checks := []lvmExpectation{
+		{Name: "vg0", LVs: []lvmLVExpectation{{Name: "root"}}},
+		{Name: "vgdata", Keep: true, LVs: []lvmLVExpectation{{Name: "lvdata", Mount: "/data"}}},
+	}
+	res := &inbandssh.Result{
+		Lvm: []inbandssh.VgFacts{
+			{Name: "vg0", PVCount: 1, LVs: []inbandssh.LvFacts{{Name: "root"}}},
+			{Name: "vgdata", PVCount: 1, LVs: []inbandssh.LvFacts{{Name: "lvdata", Mount: "/data"}}},
+			// an undeclared group the operator left alone — outside the contract
+			{Name: "vgother", LVs: []inbandssh.LvFacts{{Name: "x"}}},
+		},
+	}
+	if err := verifyLvm(res, checks); err != nil {
+		t.Fatalf("matching groups must verify: %v", err)
+	}
+
+	// kept group wiped (its PV disks were grabbed by a selector): fail
+	res.Lvm = append(res.Lvm[:1], res.Lvm[2:]...)
+	if err := verifyLvm(res, checks); err == nil || !strings.Contains(err.Error(), "kept group missing") {
+		t.Errorf("wiped kept group must fail, got %v", err)
+	}
+
+	// kept group survived but the declared mount is missing (LV unmounted or
+	// mounted elsewhere — a broken fstab intent)
+	res.Lvm = append(res.Lvm, inbandssh.VgFacts{Name: "vgdata",
+		LVs: []inbandssh.LvFacts{{Name: "lvdata"}}})
+	checks[1].LVs[0].Mount = "/data"
+	if err := verifyLvm(res, checks); err == nil || !strings.Contains(err.Error(), "mounted at") {
+		t.Errorf("missing mount must fail, got %v", err)
+	}
+	// facts carry the mount again: verify passes
+	res.Lvm[2].LVs[0].Mount = "/data"
+	if err := verifyLvm(res, checks); err != nil {
+		t.Fatalf("restored mount must verify: %v", err)
+	}
+
+	// fresh group's LV silently missing
+	res.Lvm = []inbandssh.VgFacts{
+		{Name: "vg0", LVs: []inbandssh.LvFacts{}},
+		{Name: "vgdata", LVs: []inbandssh.LvFacts{{Name: "lvdata", Mount: "/data"}}},
+	}
+	if err := verifyLvm(res, checks); err == nil || !strings.Contains(err.Error(), "logical volume root missing") {
+		t.Errorf("missing LV must fail, got %v", err)
+	}
+
+	// fresh group absent entirely
+	res.Lvm = nil
+	if err := verifyLvm(res, checks); err == nil || !strings.Contains(err.Error(), "not present") {
+		t.Errorf("missing group must fail, got %v", err)
+	}
+}

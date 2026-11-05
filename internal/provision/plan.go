@@ -17,6 +17,7 @@ package provision
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"syscall"
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
@@ -56,13 +57,40 @@ func PlanInstall(ctx context.Context, specJSON json.RawMessage, hw *bmc.Hardware
 	if err != nil {
 		return nil, err
 	}
+	claimed := map[string]string{}
+	for _, rd := range resolved {
+		claimed[rd.Device] = "disks"
+	}
+
+	// LVM PVs resolve against the same inventory with the same selector
+	// semantics (the dry-run mirror of verify_layout). keep:vg groups bind
+	// to the machine's layout snapshot in the executor, not in the API
+	// process — the plan reads as LAYOUT_SNAPSHOT_REQUIRED, same as
+	// keep:partitions does.
+	resolvedLvm, err := planResolveLvm(spec.Storage.Lvm, spec.Storage.Raid, spec.minDeviceSizeGB(), hw, claimed)
+	if err != nil {
+		return nil, err
+	}
 
 	// Boot drive: the disk holding the root partition (same rule the real
-	// pipeline uses at prepare_media).
+	// pipeline uses at prepare_media). When / lives on a logical volume the
+	// non-LVM /boot holder is the bootloader target instead.
+	rootOnLV := false
+	for _, vg := range resolvedLvm {
+		for _, lv := range vg.Logvols {
+			if lv.Mount == "/" {
+				rootOnLV = true
+			}
+		}
+	}
+	rootMount, bootMount := "/", "/"
+	if rootOnLV {
+		rootMount, bootMount = "/boot", "/boot"
+	}
 	bootDrive := ""
 	for _, rd := range resolved {
 		for _, p := range rd.Partitions {
-			if p.Mount == "/" {
+			if p.Mount == rootMount || (rootOnLV && p.Mount == bootMount) {
 				bootDrive = rd.Device
 			}
 		}
@@ -117,6 +145,7 @@ func PlanInstall(ctx context.Context, specJSON json.RawMessage, hw *bmc.Hardware
 		}
 		inputs.Raid = append(inputs.Raid, rr)
 	}
+	inputs.Lvm = resolvedLvm
 	// Hardware rides along: dialects resolve controller-assigned disk names
 	// (LogicalDriveN) against the inventory by capacity during render
 	// validation — an empty MachineView made debian13 RAID-volume machines
@@ -238,6 +267,83 @@ func planResolveDisks(disks []storageDiskView, minSizeGB *int, hw *bmc.HardwareV
 
 func boolPtr(b bool) *bool { return &b }
 func intPtr(i int) *int    { return &i }
+
+// planResolveLvm mirrors verify_layout's LVM resolution for the plan view
+// (same selector semantics, same error codes). claimed carries the devices
+// disks[] already resolved to (device → claimer) so PV overlap surfaces here
+// exactly as the real pipeline reports it. keep:vg groups always fail with
+// LAYOUT_SNAPSHOT_REQUIRED: snapshot binding needs the executor context.
+func planResolveLvm(vgs []volumeGroupView, raids []raidSpecView, minSizeGB *int, hw *bmc.HardwareView, claimed map[string]string) ([]render.ResolvedVolgroup, error) {
+	resolved := make([]render.ResolvedVolgroup, 0, len(vgs))
+	raidByName := map[string]raidSpecView{}
+	for _, r := range raids {
+		raidByName[r.Name] = r
+	}
+	for i, vg := range vgs {
+		if vg.Keep == "vg" {
+			return nil, classifiedErr("LAYOUT_SNAPSHOT_REQUIRED", false,
+				"lvm[%d]: keep:vg binds to the machine's layout snapshot, which the plan endpoint cannot read — submit the install to verify against the machine", i)
+		}
+		rg := render.ResolvedVolgroup{Name: vg.Name}
+		for j, pv := range vg.PVs {
+			switch {
+			case pv.Match != nil:
+				match := *pv.Match
+				var pool []bmc.DiskView
+				for _, hd := range hw.Disks {
+					if !diskMatchesSelector(match, minSizeGB, hd) {
+						continue
+					}
+					pool = append(pool, hd)
+				}
+				var candidates []bmc.DiskView
+				if match.Size != "" && len(pool) > 0 {
+					candidates = append(candidates, *bestDiskBySize(pool, match.Size))
+				} else {
+					candidates = pool
+				}
+				switch {
+				case len(candidates) == 0:
+					return nil, classifiedErr("LAYOUT_DISK_NOT_FOUND", false,
+						"lvm[%d].pvs[%d]: selector matches no disk", i, j)
+				case len(candidates) > 1:
+					return nil, classifiedErr("SELECT_AMBIGUOUS", false,
+						"lvm[%d].pvs[%d]: selector matches %d disks; refine the match", i, j, len(candidates))
+				}
+				device := candidates[0].Name
+				if prev, dup := claimed[device]; dup {
+					return nil, classifiedErr("SCHEMA_INVALID_STORAGE", false,
+						"lvm[%d].pvs[%d] resolves to %s, already claimed by %s", i, j, device, prev)
+				}
+				claimed[device] = fmt.Sprintf("lvm[%d]", i)
+				rg.PVs = append(rg.PVs, render.ResolvedPV{
+					Device: device, Serial: candidates[0].Serial, SizeBytes: candidates[0].SizeBytes,
+				})
+			case pv.Raid != "":
+				rr := raidByName[pv.Raid] // validateLvmShape guarantees presence
+				rg.PVs = append(rg.PVs, render.ResolvedPV{
+					RaidName: rr.Name, RaidMode: rr.Mode, RaidLevel: rr.Level,
+				})
+			}
+		}
+		for _, lv := range vg.Logvols {
+			rl := render.ResolvedLogvol{Name: lv.Name, FS: lv.FS, Mount: lv.Mount, Flags: lv.Flags}
+			if lv.Size == "rest" {
+				rl.Grow = true
+			} else {
+				mb, err := sizeToMB(lv.Size)
+				if err != nil {
+					return nil, classifiedErr("SCHEMA_INVALID_STORAGE", false,
+						"lvm[%d].logvols: %s", i, err.Error())
+				}
+				rl.SizeMB = mb
+			}
+			rg.Logvols = append(rg.Logvols, rl)
+		}
+		resolved = append(resolved, rg)
+	}
+	return resolved, nil
+}
 
 // freeMB reports the available space (MB) on the filesystem holding path.
 // ok=false when the platform stat is unavailable (best-effort precheck).

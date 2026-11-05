@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -58,6 +59,15 @@ for d in /sys/class/net/*; do
   [ -d "$d/bonding" ] || continue
   printf '%s|mode=%s|miimon=%s|slaves=%s|active=%s\n' "${d##*/}" "$(cat "$d/bonding/mode" 2>/dev/null)" "$(cat "$d/bonding/miimon" 2>/dev/null)" "$(cat "$d/bonding/slaves" 2>/dev/null)" "$(cat "$d/bonding/active_slave" 2>/dev/null)"
 done 2>/dev/null || true
+echo '===LVM==='
+if command -v vgs >/dev/null 2>&1; then
+  echo '---VGS---'
+  vgs --noheadings --units b --separator , -o vg_name,pv_count,vg_size 2>/dev/null || true
+  echo '---PVS---'
+  pvs --noheadings --units b --separator , -o pv_name,vg_name,pv_size 2>/dev/null || true
+  echo '---LVS---'
+  lvs --noheadings --units b --separator , -o vg_name,lv_name,lv_size,lv_dm_path 2>/dev/null || true
+fi
 echo '===ENV==='
 for m in /run/anaconda /run/subiquity /run/debian-installer /lib/debian-installer; do [ -e "$m" ] && echo "$m"; done 2>/dev/null || true`
 
@@ -67,6 +77,7 @@ const (
 	secBLKID = "===LINK==="
 	secLINK  = "===PARTS==="
 	secBOND  = "===BOND==="
+	secLVM   = "===LVM==="
 	secENV   = "===ENV==="
 )
 
@@ -85,6 +96,12 @@ type Result struct {
 	// fixtures predating it): that reads as "facts unavailable", NOT as
 	// "no bonds", and verify_ready degrades instead of failing on it.
 	Bonds []BondFacts
+	// Lvm carries the live volume group facts when the target ran a
+	// collector with the LVM section and lvm2 was present — nil otherwise
+	// ("facts unavailable", NOT "no volume groups"; same degrade semantics
+	// as Bonds). The same facts ride the Layout snapshot for keep:vg
+	// bindings and the fresh-group name-collision precheck.
+	Lvm []VgFacts
 	// InstallerEnv reports that the session landed in a running installer
 	// environment (anaconda/subiquity/d-i markers present) rather than a
 	// regular system. verify_ready refuses to verify against it; discovery
@@ -97,6 +114,10 @@ type Layout struct {
 	CapturedAt time.Time    `json:"captured_at"`
 	Source     string       `json:"source"`
 	Disks      []LayoutDisk `json:"disks"`
+	// Lvm is the machine's volume group view at capture time — the binding
+	// source for storage.lvm keep:vg entries and the fresh-name collision
+	// precheck. Absent in snapshots predating the section.
+	Lvm []VgFacts `json:"lvm,omitempty"`
 }
 
 // LayoutDisk is one physical/RAID device with its partitions.
@@ -134,6 +155,35 @@ type BondFacts struct {
 	MIImon int      `json:"miimon"`         // 0 = link monitoring off
 	Slaves []string `json:"slaves"`         // member link names
 	Active string   `json:"active,omitempty"`
+}
+
+// VgFacts is one volume group as the installed system reports it
+// (===LVM=== section): the post-install verification view AND the snapshot
+// binding view for storage.lvm keep:vg (docs/04-install-spec.md §5.1).
+type VgFacts struct {
+	Name      string    `json:"name"`
+	PVCount   int       `json:"pv_count"`
+	SizeBytes int64     `json:"size_bytes"`
+	PVs       []PvFacts `json:"pvs,omitempty"`
+	LVs       []LvFacts `json:"lvs,omitempty"`
+}
+
+// PvFacts is one physical volume: kernel basename (sda2, nvme0n1p2, md0) —
+// partition-level, like pvs reports it.
+type PvFacts struct {
+	Name      string `json:"name"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+}
+
+// LvFacts is one logical volume. Mount/FSType come from the lsblk tree join
+// (the lvs columns do not carry them): Mount is the live mountpoint — empty
+// means the LV exists but is not mounted.
+type LvFacts struct {
+	Name      string `json:"name"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+	DMPath    string `json:"dm_path,omitempty"`
+	Mount     string `json:"mount,omitempty"`
+	FSType    string `json:"fstype,omitempty"`
 }
 
 // Error is the classified probe failure. Code uses the registry vocabulary:
@@ -196,14 +246,15 @@ type lsblkDisk struct {
 }
 
 type lsblkChild struct {
-	Name       string  `json:"name"`
-	Path       string  `json:"path"`
-	Size       int64   `json:"size"`
-	Type       string  `json:"type"`
-	FSType     string  `json:"fstype"`
-	Mountpoint *string `json:"mountpoint"`
-	PartLabel  string  `json:"partlabel"`
-	PartUUID   string  `json:"partuuid"`
+	Name       string       `json:"name"`
+	Path       string       `json:"path"`
+	Size       int64        `json:"size"`
+	Type       string       `json:"type"`
+	FSType     string       `json:"fstype"`
+	Mountpoint *string      `json:"mountpoint"`
+	PartLabel  string       `json:"partlabel"`
+	PartUUID   string       `json:"partuuid"`
+	Children   []lsblkChild `json:"children"`
 }
 
 type blkidDev struct {
@@ -214,7 +265,7 @@ type blkidDev struct {
 
 // parse converts the combined script output. Exported for tests.
 func parse(out string) (*Result, error) {
-	lsblkOut, blkidOut, linkOut, partsOut, bondOut, envOut, err := splitSections(out)
+	lsblkOut, blkidOut, linkOut, partsOut, bondOut, lvmOut, envOut, err := splitSections(out)
 	if err != nil {
 		return nil, err
 	}
@@ -224,6 +275,7 @@ func parse(out string) (*Result, error) {
 	}
 	blkid := parseBlkid(blkidOut)
 	starts := parseStarts(partsOut)
+	lvmNodes := harvestLVMNodes(disks)
 
 	layout := Layout{Disks: []LayoutDisk{}}
 	for _, d := range disks {
@@ -271,39 +323,59 @@ func parse(out string) (*Result, error) {
 		// parse outcome but keep the snapshot.
 		nics = nil
 	}
-	return &Result{Layout: layout, NICs: nics, Bonds: parseBonds(bondOut), InstallerEnv: strings.TrimSpace(envOut) != ""}, nil
+	lvm := parseLvm(lvmOut, lvmNodes)
+	layout.Lvm = lvm
+	return &Result{
+		Layout:       layout,
+		NICs:         nics,
+		Bonds:        parseBonds(bondOut),
+		Lvm:          lvm,
+		InstallerEnv: strings.TrimSpace(envOut) != "",
+	}, nil
 }
 
-func splitSections(out string) (lsblk, blkid, link, parts, bond, env string, err error) {
+func splitSections(out string) (lsblk, blkid, link, parts, bond, lvm, env string, err error) {
 	i1 := strings.Index(out, secLSBLK)
 	i2 := strings.Index(out, secBLKID)
 	i3 := strings.Index(out, secLINK)
 	if i1 < 0 || i2 < 0 || i3 < 0 {
-		return "", "", "", "", "", "", fmt.Errorf("output missing section markers (lsblk=%v blkid=%v link=%v)", i1 >= 0, i2 >= 0, i3 >= 0)
+		return "", "", "", "", "", "", "", fmt.Errorf("output missing section markers (lsblk=%v blkid=%v link=%v)", i1 >= 0, i2 >= 0, i3 >= 0)
 	}
 	lsblk = out[:i1]
 	blkid = out[i1+len(secLSBLK) : i2]
 	link = out[i2+len(secBLKID) : i3]
 	tail := out[i3+len(secLINK):]
-	// The bond and installer-marker sections are optional: recorded fixtures
-	// and older collected outputs may not carry them. Bond absence reads as
-	// "facts unavailable" (nil, NOT "no bonds") — verify_ready degrades on
-	// it; env absence reads as "not an installer".
+	// The bond, LVM and installer-marker sections are optional: recorded
+	// fixtures and older collected outputs may not carry them. Bond/LVM
+	// absence reads as "facts unavailable" (nil, NOT "no bonds"/"no VGs") —
+	// verify_ready degrades on it; env absence reads as "not an installer".
+	parts = tail
 	if i4 := strings.Index(tail, secBOND); i4 >= 0 {
 		parts = tail[:i4]
 		bond = tail[i4+len(secBOND):]
-		if i5 := strings.Index(bond, secENV); i5 >= 0 {
+		if i5 := strings.Index(bond, secLVM); i5 >= 0 {
+			lvm = bond[i5+len(secLVM):]
+			bond = bond[:i5]
+			if i6 := strings.Index(lvm, secENV); i6 >= 0 {
+				env = lvm[i6+len(secENV):]
+				lvm = lvm[:i6]
+			}
+		} else if i5 := strings.Index(bond, secENV); i5 >= 0 {
 			env = bond[i5+len(secENV):]
 			bond = bond[:i5]
 		}
-	} else {
-		parts = tail
-		if i5 := strings.Index(tail, secENV); i5 >= 0 {
-			env = tail[i5+len(secENV):]
-			parts = tail[:i5]
+	} else if i4 := strings.Index(tail, secLVM); i4 >= 0 {
+		parts = tail[:i4]
+		lvm = tail[i4+len(secLVM):]
+		if i5 := strings.Index(lvm, secENV); i5 >= 0 {
+			env = lvm[i5+len(secENV):]
+			lvm = lvm[:i5]
 		}
+	} else if i4 := strings.Index(tail, secENV); i4 >= 0 {
+		env = tail[i4+len(secENV):]
+		parts = tail[:i4]
 	}
-	return lsblk, blkid, link, parts, bond, env, nil
+	return lsblk, blkid, link, parts, bond, lvm, env, nil
 }
 
 // parseBonds reads the ===BOND=== section — one line per bond:
@@ -349,6 +421,130 @@ func parseBonds(out string) []BondFacts {
 		bonds = append(bonds, f)
 	}
 	return bonds
+}
+
+// harvestLVMNodes walks the full lsblk tree collecting type=lvm nodes (they
+// nest under the partitions that hold their PVs). Key is the lsblk NAME —
+// the device-mapper name (vg0-root); the ===LVM=== lvs output joins on
+// vg_name-lv_name, unambiguous because mammoth's contract bans dashes in
+// VG/LV names.
+func harvestLVMNodes(disks []lsblkDisk) map[string]lsblkChild {
+	out := map[string]lsblkChild{}
+	var walk func(children []lsblkChild)
+	walk = func(children []lsblkChild) {
+		for _, ch := range children {
+			if ch.Type == "lvm" {
+				out[ch.Name] = ch
+			}
+			if len(ch.Children) > 0 {
+				walk(ch.Children)
+			}
+		}
+	}
+	for _, d := range disks {
+		walk(d.Children)
+	}
+	return out
+}
+
+// parseLvm reads the ===LVM=== section — three sub-sections the script only
+// emits when lvm2 is present (command -v vgs gate):
+//
+//	---VGS---  vg0,2,21474836480B
+//	---PVS---  /dev/sda2,vg0,10736369664B
+//	---LVS---  vg0,root,10726316544B,/dev/dm-0
+//
+// Returns nil when the section is absent or lvm2 produced nothing (facts
+// unavailable, NOT "no volume groups" — the verify_ready degrade path owns
+// that distinction). A machine with lvm2 and no groups reads as an empty,
+// non-nil slice.
+func parseLvm(out string, lvmNodes map[string]lsblkChild) []VgFacts {
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return nil
+	}
+	var vgsBlock, pvsBlock, lvsBlock string
+	rest := out
+	if i := strings.Index(rest, "---VGS---"); i >= 0 {
+		rest = rest[i+len("---VGS---"):]
+		if j := strings.Index(rest, "---PVS---"); j >= 0 {
+			vgsBlock, rest = rest[:j], rest[j+len("---PVS---"):]
+			if k := strings.Index(rest, "---LVS---"); k >= 0 {
+				pvsBlock, rest = rest[:k], rest[k+len("---LVS---"):]
+				lvsBlock = rest
+			} else {
+				pvsBlock = rest
+			}
+		} else {
+			vgsBlock = rest
+		}
+	} else {
+		return nil // markers absent: lvm2 missing entirely
+	}
+
+	byName := map[string]*VgFacts{}
+	var order []string
+	for _, line := range strings.Split(vgsBlock, "\n") {
+		f := strings.Split(strings.TrimSpace(line), ",")
+		if len(f) < 3 || f[0] == "" {
+			continue
+		}
+		vg := &VgFacts{Name: strings.TrimSpace(f[0]), PVs: []PvFacts{}, LVs: []LvFacts{}}
+		vg.PVCount, _ = strconv.Atoi(strings.TrimSpace(f[1]))
+		vg.SizeBytes = parseLvmSize(f[2])
+		byName[vg.Name] = vg
+		order = append(order, vg.Name)
+	}
+	for _, line := range strings.Split(pvsBlock, "\n") {
+		f := strings.Split(strings.TrimSpace(line), ",")
+		if len(f) < 3 || f[1] == "" {
+			continue
+		}
+		vg, ok := byName[strings.TrimSpace(f[1])]
+		if !ok {
+			continue // PV orphaned from its VG row — not a verification target
+		}
+		pv := PvFacts{Name: path.Base(strings.TrimSpace(f[0]))}
+		if len(f) > 2 {
+			pv.SizeBytes = parseLvmSize(f[2])
+		}
+		vg.PVs = append(vg.PVs, pv)
+	}
+	for _, line := range strings.Split(lvsBlock, "\n") {
+		f := strings.Split(strings.TrimSpace(line), ",")
+		if len(f) < 4 || f[0] == "" || f[1] == "" {
+			continue
+		}
+		vg, ok := byName[strings.TrimSpace(f[0])]
+		if !ok {
+			continue
+		}
+		lv := LvFacts{Name: strings.TrimSpace(f[1]), DMPath: strings.TrimSpace(f[3])}
+		lv.SizeBytes = parseLvmSize(f[2])
+		if node, ok := lvmNodes[vg.Name+"-"+lv.Name]; ok {
+			lv.Mount = deref(node.Mountpoint)
+			lv.FSType = node.FSType
+		}
+		vg.LVs = append(vg.LVs, lv)
+	}
+
+	out2 := make([]VgFacts, 0, len(order))
+	for _, name := range order {
+		out2 = append(out2, *byName[name])
+	}
+	return out2
+}
+
+// parseLvmSize reads an lvm2 --units b size token ("10726316544B", possibly
+// with thousands separators) into bytes; 0 when unreadable.
+func parseLvmSize(tok string) int64 {
+	tok = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(tok), "B"))
+	tok = strings.ReplaceAll(tok, ",", "")
+	n, err := strconv.ParseInt(tok, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 func parseLSBLK(out string) ([]lsblkDisk, error) {

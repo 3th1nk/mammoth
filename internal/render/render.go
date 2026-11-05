@@ -647,6 +647,13 @@ type InstallInputs struct {
 	// by the configure_raid stage.
 	Raid []ResolvedRaid `json:"raid,omitempty"`
 
+	// Lvm carries declarative LVM volume groups (docs/04-install-spec.md
+	// §5.1): fresh groups build at install time (anaconda volgroup/logvol,
+	// curtin lvm_volgroup/lvm_partition, partman lvm recipe — the BMC has no
+	// LVM concept, so no configure_raid stage); keep:vg groups adopt the
+	// machine's existing one (--useexisting / preserve flags).
+	Lvm []ResolvedVolgroup `json:"lvm,omitempty"`
+
 	// DriftCheck enables the %pre layout drift guard (policy.verify_layout,
 	// default true; docs/09-roadmap.md M4).
 	DriftCheck bool
@@ -702,6 +709,63 @@ type ResolvedRaid struct {
 	// in-band snapshot — curtin (ubuntu) identifies drives by serial.
 	VolumeSerial string              `json:"volume_serial,omitempty"`
 	Partitions   []ResolvedPartition `json:"partitions,omitempty"`
+}
+
+// ResolvedVolgroup is one declarative LVM volume group with resolved PV
+// devices (docs/04-install-spec.md §5.1). KeepVG marks the keep:vg mode: the
+// machine's existing group is adopted as-is, Logvols is empty, and Preserved
+// carries the declared mount intents (empty = protect-only adoption).
+type ResolvedVolgroup struct {
+	Name      string               `json:"name"`
+	KeepVG    bool                 `json:"keep_vg,omitempty"`
+	PVs       []ResolvedPV         `json:"pvs,omitempty"`
+	Logvols   []ResolvedLogvol     `json:"logvols,omitempty"`
+	Preserved []ResolvedPreserveLV `json:"preserved,omitempty"`
+}
+
+// ResolvedPV is one physical volume: a whole disk resolved by selector, a
+// partition on one (keep:vg snapshot facts carry the partition number), or a
+// declarative raid[] volume consumed whole (software arrays render as the PV
+// themselves; hardware volumes bind to their discovered logical drive like
+// partition targets do).
+type ResolvedPV struct {
+	// Disk-backed PV (empty Device when raid-backed).
+	Device    string `json:"device,omitempty"`
+	Serial    string `json:"serial,omitempty"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+	// PartitionNumber: the PV partition on the holding disk (keep:vg
+	// snapshot fact); 0 = the PV is the whole device.
+	PartitionNumber int `json:"partition_number,omitempty"`
+	// Raid-backed PV — the array the PV rides on.
+	RaidName         string   `json:"raid_name,omitempty"`
+	RaidMode         string   `json:"raid_mode,omitempty"` // software | hardware
+	RaidLevel        string   `json:"raid_level,omitempty"`
+	RaidMembers      []string `json:"raid_members,omitempty"`
+	RaidBoundDevice  string   `json:"raid_bound_device,omitempty"`
+	RaidVolumeSerial string   `json:"raid_volume_serial,omitempty"`
+	RaidSizeBytes    int64    `json:"raid_size_bytes,omitempty"`
+}
+
+// ResolvedLogvol is one logical volume of a fresh group. Grow (size "rest")
+// fills the VG's remaining space — anaconda --grow, curtin omits size,
+// partman clamps to the max.
+type ResolvedLogvol struct {
+	Name   string   `json:"name"`
+	SizeMB int      `json:"size_mb,omitempty"`
+	Grow   bool     `json:"grow,omitempty"`
+	FS     string   `json:"fs"`
+	Mount  string   `json:"mount,omitempty"`
+	Flags  []string `json:"flags,omitempty"`
+}
+
+// ResolvedPreserveLV is one declared mount intent on an existing logical
+// volume (keep:vg). SizeBytes carries the snapshot fact — curtin's
+// lvm_partition preserve verification compares it.
+type ResolvedPreserveLV struct {
+	Name      string `json:"name"`
+	Mount     string `json:"mount"`
+	FS        string `json:"fs,omitempty"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
 }
 
 // MachineView is the machine context a renderer may consult (hardware facts

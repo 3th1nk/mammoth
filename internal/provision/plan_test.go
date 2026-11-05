@@ -14,6 +14,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/bmc"
 	"github.com/3th1nk/mammoth/internal/render"
+	"github.com/3th1nk/mammoth/internal/render/kickstart"
 	"github.com/3th1nk/mammoth/internal/render/windows"
 )
 
@@ -176,5 +177,90 @@ func TestPlanInstallRootDeviceHintsAndAlignment(t *testing.T) {
 	}
 	if plan.BootDrive != "sdc" {
 		t.Fatalf("boot_drive = %q, want sdc", plan.BootDrive)
+	}
+}
+
+// storage.lvm (docs/04-install-spec.md §5.1): the dry-run resolves PV
+// selectors with the same semantics as verify_layout — overlap, ambiguity
+// and structural shape surface with the same classified codes; / on a
+// logical volume moves the boot drive to the /boot holder.
+func TestPlanInstallLvm(t *testing.T) {
+	reg := render.NewRegistry()
+	if err := reg.Register(kickstart.New("rocky9")); err != nil {
+		t.Fatal(err)
+	}
+	hw := &bmc.HardwareView{Disks: []bmc.DiskView{
+		{Name: "sda", Protocol: "sas", SizeBytes: 480 << 30},
+		{Name: "sdb", Protocol: "sas", SizeBytes: 960 << 30},
+	}}
+	spec := func(storage string) json.RawMessage {
+		return json.RawMessage(`{
+		  "image": {"source": "file:///x/os.iso", "distro": "rocky9"},
+		  "storage": {` + storage + `},
+		  "identity": {"hostname_pattern": "n1"},
+		  "boot": {"strategy": "virtual_media"}
+		}`)
+	}
+	disks := `"disks": [{"select": {"match": {"size": "smallest"}}, "wipe": true, "partitions": [
+	  {"size": "1024M", "fs": "xfs", "mount": "/boot"}]}], `
+	freshVG := `"lvm": [{"name": "vg0", "pvs": [{"match": {"size": "largest"}}],
+	  "logvols": [{"name": "root", "size": "rest", "fs": "xfs", "mount": "/"}]}]`
+	codeOf := func(t *testing.T, err error) string {
+		t.Helper()
+		ci, ok := AsClassified(err)
+		if !ok {
+			t.Fatalf("rejection is not classified: %v (%T)", err, err)
+		}
+		return ci.Code
+	}
+
+	// happy path: root rides the LV — the boot drive falls to the /boot holder
+	plan, err := PlanInstall(context.Background(), spec(disks+freshVG), hw, reg)
+	if err != nil {
+		t.Fatalf("lvm plan: %v", err)
+	}
+	if plan.BootDrive != "sda" {
+		t.Fatalf("boot_drive = %q, want sda (the /boot holder; / lives on the LV)", plan.BootDrive)
+	}
+
+	// PV selector grabbing a disk[] claim: consumed devices are exclusive
+	_, err = PlanInstall(context.Background(), spec(disks+
+		`"lvm": [{"name": "vg0", "pvs": [{"match": {"size": "smallest"}}],
+		  "logvols": [{"name": "root", "size": "rest", "fs": "xfs", "mount": "/"}]}]`), hw, reg)
+	if codeOf(t, err) != "SCHEMA_INVALID_STORAGE" {
+		t.Fatalf("PV overlap code = %v, want SCHEMA_INVALID_STORAGE", err)
+	}
+
+	// ambiguous PV selector (both SAS disks, no size pick)
+	_, err = PlanInstall(context.Background(), spec(disks+
+		`"lvm": [{"name": "vg0", "pvs": [{"match": {"protocol": "sas"}}],
+		  "logvols": [{"name": "root", "size": "rest", "fs": "xfs", "mount": "/"}]}]`), hw, reg)
+	if codeOf(t, err) != "SELECT_AMBIGUOUS" {
+		t.Fatalf("ambiguous PV code = %v, want SELECT_AMBIGUOUS", err)
+	}
+
+	// structural: only one rest per volume group
+	_, err = PlanInstall(context.Background(), spec(disks+
+		`"lvm": [{"name": "vg0", "pvs": [{"match": {"size": "largest"}}],
+		  "logvols": [{"name": "root", "size": "rest", "fs": "xfs", "mount": "/"},
+		              {"name": "data", "size": "rest", "fs": "xfs", "mount": "/data"}]}]`), hw, reg)
+	if codeOf(t, err) != "SCHEMA_INVALID_STORAGE" {
+		t.Fatalf("double-rest code = %v, want SCHEMA_INVALID_STORAGE", err)
+	}
+
+	// keep:vg binds to the executor's layout snapshot — the API-side plan
+	// reads LAYOUT_SNAPSHOT_REQUIRED (same semantics as keep:partitions)
+	_, err = PlanInstall(context.Background(), spec(disks+
+		`"lvm": [{"name": "vgdata", "keep": "vg"}]`), hw, reg)
+	if codeOf(t, err) != "LAYOUT_SNAPSHOT_REQUIRED" {
+		t.Fatalf("keep:vg plan code = %v, want LAYOUT_SNAPSHOT_REQUIRED", err)
+	}
+
+	// unknown distro + lvm still hits the structural validation first — the
+	// shape errors are distro-independent
+	_, err = PlanInstall(context.Background(), spec(disks+
+		`"lvm": [{"name": "vg0", "pvs": [], "logvols": [{"name": "root", "size": "10G", "fs": "xfs", "mount": "/"}]}]`), hw, reg)
+	if codeOf(t, err) != "SCHEMA_INVALID_STORAGE" {
+		t.Fatalf("pv-less group code = %v, want SCHEMA_INVALID_STORAGE", err)
 	}
 }

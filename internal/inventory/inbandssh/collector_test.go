@@ -257,3 +257,115 @@ bond0|mode=802.3ad 4|miimon=100|slaves=eno1 eno2|active=eno1
 		t.Errorf("empty BOND section must read as no bonds (non-nil), got %v", res.Bonds)
 	}
 }
+
+// The LVM section carries the live volume group view (docs/04-install-spec.md
+// §5.1): post-install health check AND the keep:vg binding source. Absence
+// (recorded fixtures, or a target without lvm2) reads as "facts unavailable"
+// (nil) — NOT as "no volume groups"; vgs-with-no-groups reads as authoritative
+// empty. LV mount facts join from the lsblk tree (type=lvm nodes).
+func TestCollectLvm(t *testing.T) {
+	// absence: nil, distinguishable from empty
+	res, err := parse(fixture)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if res.Lvm != nil || res.Layout.Lvm != nil {
+		t.Errorf("fixture without LVM section must yield nil Lvm facts, got %+v", res.Lvm)
+	}
+
+	lvmLSBLK := `{
+  "blockdevices": [
+    {"name": "sda", "path": "/dev/sda", "size": 960197124096, "type": "disk", "serial": "SER-A",
+     "children": [
+       {"name": "sda1", "path": "/dev/sda1", "size": 1073741824, "type": "part"},
+       {"name": "sda2", "path": "/dev/sda2", "size": 959123392512, "type": "part",
+        "children": [
+          {"name": "vg0-root", "path": "/dev/mapper/vg0-root", "size": 21474836480,
+           "type": "lvm", "fstype": "ext4", "mountpoint": "/"}
+        ]}
+     ]}
+  ]
+}
+`
+	full := lvmLSBLK + `===BLKID===
+===LINK===
+[{"link":"eth0"}]
+===PARTS===
+/sys/block/sda/sda2/start 1048576
+===BOND===
+===LVM===
+---VGS---
+vg0,1,107263365120B
+---PVS---
+/dev/sda2,vg0,107263365120B
+---LVS---
+vg0,root,21474836480B,/dev/dm-0
+vg0,swap,4294967296B,/dev/dm-1
+===ENV===
+`
+	res, err = parse(full)
+	if err != nil {
+		t.Fatalf("parse lvm fixture: %v", err)
+	}
+	if res.Lvm == nil || len(res.Lvm) != 1 {
+		t.Fatalf("one volume group expected, got %+v", res.Lvm)
+	}
+	if res.Layout.Lvm == nil {
+		t.Errorf("layout must carry the LVM facts (snapshot persistence)")
+	}
+	vg := res.Lvm[0]
+	if vg.Name != "vg0" || vg.PVCount != 1 || vg.SizeBytes != 107263365120 {
+		t.Errorf("vg facts wrong: %+v", vg)
+	}
+	if len(vg.PVs) != 1 || vg.PVs[0].Name != "sda2" || vg.PVs[0].SizeBytes != 107263365120 {
+		t.Errorf("pv facts wrong: %+v", vg.PVs)
+	}
+	if len(vg.LVs) != 2 {
+		t.Fatalf("two LVs expected, got %+v", vg.LVs)
+	}
+	root := vg.LVs[0]
+	if root.Name != "root" || root.DMPath != "/dev/dm-0" {
+		t.Errorf("root lv facts wrong: %+v", root)
+	}
+	if root.Mount != "/" || root.FSType != "ext4" {
+		t.Errorf("lsblk join (mount/fstype) wrong: %+v", root)
+	}
+	if vg.LVs[1].Mount != "" || vg.LVs[1].Name != "swap" {
+		t.Errorf("unmounted LV must carry no mount fact: %+v", vg.LVs[1])
+	}
+
+	// lvm2 present but no volume groups: authoritative empty (non-nil)
+	empty := lvmLSBLK + `===BLKID===
+===LINK===
+[]
+===PARTS===
+===LVM===
+---VGS---
+---PVS---
+---LVS---
+`
+	res, err = parse(empty)
+	if err != nil {
+		t.Fatalf("parse empty-lvm fixture: %v", err)
+	}
+	if res.Lvm == nil || len(res.Lvm) != 0 {
+		t.Errorf("empty LVM section must read as no volume groups (non-nil), got %v", res.Lvm)
+	}
+
+	// lvm2 missing: the script emits no sub-markers — facts unavailable
+	missing := lvmLSBLK + `===BLKID===
+===LINK===
+[]
+===PARTS===
+===LVM===
+===ENV===
+/run/anaconda
+`
+	res, err = parse(missing)
+	if err != nil {
+		t.Fatalf("parse lvm2-missing fixture: %v", err)
+	}
+	if res.Lvm != nil {
+		t.Errorf("LVM section without sub-markers must read as facts unavailable, got %+v", res.Lvm)
+	}
+}

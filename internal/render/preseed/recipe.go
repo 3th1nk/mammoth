@@ -15,6 +15,11 @@ type target struct {
 	device     string // kernel name; partman-auto/disk accepts that form only
 	sizeBytes  int64
 	partitions []render.ResolvedPartition
+	// vgName non-empty switches the recipe to LVM: the PV unit plus the
+	// volume group's logical volumes ride the same single-target recipe
+	// (partman-auto has no multi-disk shape — docs/compat/distros.md debian).
+	vgName  string
+	logvols []render.ResolvedLogvol
 	// dynamic marks a controller-named hardware-RAID volume (LogicalDrive0,
 	// not a kernel name): the preseed leaves partman-auto/disk and
 	// grub-installer/bootdev unset and the early_command hook resolves the
@@ -37,6 +42,14 @@ func installTarget(distro string, in render.InstallInputs, m render.MachineView)
 	// came from configure_raid's re-inventory). Software RAID is not
 	// reachable: partman md recipes are a different dialect.
 	candidates := []target{}
+	raidPVNames := map[string]bool{}
+	for _, vg := range in.Lvm {
+		for _, pv := range vg.PVs {
+			if pv.RaidName != "" && pv.RaidMode == "hardware" {
+				raidPVNames[pv.RaidName] = true
+			}
+		}
+	}
 	for _, r := range in.Raid {
 		if r.Mode != "hardware" {
 			return target{}, fmt.Errorf("%ssoftware RAID is not supported by the debian-installer preseed driver; use plain disks or a hardware RAID volume (bound device)", prefix)
@@ -54,6 +67,24 @@ func installTarget(distro string, in render.InstallInputs, m render.MachineView)
 			return target{}, fmt.Errorf("%skeep: partitions is not supported on this distro (partial); submit without preserve", prefix)
 		}
 		candidates = append(candidates, target{device: disk.Device, sizeBytes: diskSizeOf(m, disk.Device), partitions: disk.Partitions})
+	}
+	// A fresh volume group's PV holder joins the candidate pool when the
+	// operator declared no partitions on it — the natural error then names
+	// the missing recipe partitions instead of "storage config is empty".
+	for _, vg := range in.Lvm {
+		if vg.KeepVG || len(vg.PVs) != 1 || vg.PVs[0].Device == "" {
+			continue
+		}
+		pv := vg.PVs[0]
+		known := false
+		for _, c := range candidates {
+			if c.device == pv.Device {
+				known = true
+			}
+		}
+		if !known {
+			candidates = append(candidates, target{device: pv.Device, sizeBytes: pv.SizeBytes})
+		}
 	}
 
 	if len(candidates) == 0 {
@@ -97,7 +128,64 @@ func installTarget(distro string, in render.InstallInputs, m render.MachineView)
 	if growCount > 1 {
 		return target{}, fmt.Errorf("%sonly one grow partition per disk is supported (partman assigns free space to one partition)", prefix)
 	}
+
+	// LVM (docs/compat/distros.md debian): partman-auto sees one install
+	// target, so the dialect's shape is one volume group with exactly one
+	// PV on that target. keep:vg cannot work at all — the recipe mechanism
+	// has no way to adopt an existing group.
+	if len(in.Lvm) > 0 {
+		vg, err := lvmForTarget(distro, in, t)
+		if err != nil {
+			return target{}, err
+		}
+		t.vgName = vg.Name
+		t.logvols = vg.Logvols
+	}
 	return t, nil
+}
+
+// lvmForTarget resolves the debian dialect's LVM shape against the single
+// install target: exactly one fresh volume group, exactly one PV, and that
+// PV must BE the target (partman's expert_recipe carries the PV unit and the
+// LV units on one device; a VG spanning other disks is not expressible).
+func lvmForTarget(distro string, in render.InstallInputs, t target) (render.ResolvedVolgroup, error) {
+	prefix := distro + ": "
+	if len(in.Lvm) > 1 {
+		return render.ResolvedVolgroup{}, fmt.Errorf("%sonly one volume group is supported (partman-auto works on a single recipe)", prefix)
+	}
+	vg := in.Lvm[0]
+	if vg.KeepVG {
+		return render.ResolvedVolgroup{}, fmt.Errorf(
+			"%skeeping the existing volume group %s is not supported by the debian-installer (partman cannot adopt an existing group); reinstall its data separately", prefix, vg.Name)
+	}
+	if len(vg.PVs) != 1 {
+		return render.ResolvedVolgroup{}, fmt.Errorf(
+			"%svolume group %s needs exactly one pv (partman-auto sees one install target); got %d", prefix, vg.Name, len(vg.PVs))
+	}
+	pv := vg.PVs[0]
+	holder := pv.Device
+	if pv.RaidName != "" {
+		if pv.RaidMode != "hardware" {
+			return render.ResolvedVolgroup{}, fmt.Errorf(
+				"%ssoftware RAID is not supported by the debian-installer preseed driver", prefix)
+		}
+		holder = pv.RaidBoundDevice
+	}
+	if holder != t.device {
+		return render.ResolvedVolgroup{}, fmt.Errorf(
+			"%svolume group %s PV holder (%s) must be the single install target (%s); partman-auto has no multi-disk recipe", prefix, vg.Name, holder, t.device)
+	}
+	for _, lv := range vg.Logvols {
+		if lv.FS != "swap" && !supportedFS(lv.FS) {
+			return render.ResolvedVolgroup{}, fmt.Errorf(
+				"%sfilesystem %s is not available in the netinst installer; use ext4 (or vfat/swap)", prefix, lv.FS)
+		}
+		if lv.FS != "swap" && lv.Mount != "swap" && lv.Mount == "" {
+			return render.ResolvedVolgroup{}, fmt.Errorf(
+				"%slogical volume %s needs a mountpoint (or fs swap)", prefix, lv.Name)
+		}
+	}
+	return vg, nil
 }
 
 // expertRecipe renders the partman-auto/expert_recipe body: one unit per
@@ -133,6 +221,30 @@ func expertRecipe(t target) (string, error) {
 			unit = fmt.Sprintf("      %d %d %d %s \\\n        $primary{ } \\\n        method{ format } format{ } \\\n        use_filesystem{ } filesystem{ %s } \\\n        mountpoint{ %s } \\\n      . \\\n", minMB, minMB, maxMB, p.FS, p.FS, p.Mount)
 		}
 		b.WriteString(unit)
+	}
+	// LVM recipe tail: the PV unit turns the target's remaining space into
+	// the group's physical volume; the LV units then live inside it
+	// ($lvmok{ } resolves to VG free space, the official partman-auto-lvm
+	// recipe shape). A grow LV takes the same max clamp as a grow partition.
+	if t.vgName != "" {
+		b.WriteString(fmt.Sprintf("      1 1 %d free \\\n        $primary{ } \\\n        method{ lvm } vg_name{ %s } \\\n      . \\\n", growMaxMB, t.vgName))
+		for _, lv := range t.logvols {
+			minMB := lv.SizeMB
+			if minMB <= 0 {
+				minMB = 1
+			}
+			maxMB := minMB
+			if lv.Grow {
+				maxMB = growMaxMB
+			}
+			unit := ""
+			if lv.FS == "swap" || lv.Mount == "swap" {
+				unit = fmt.Sprintf("      %d %d %d linux-swap \\\n        $lvmok{ } \\\n        in_vg { %s } lv_name{ %s } \\\n        method{ swap } format{ } \\\n      . \\\n", minMB, minMB, maxMB, t.vgName, lv.Name)
+			} else {
+				unit = fmt.Sprintf("      %d %d %d %s \\\n        $lvmok{ } \\\n        in_vg { %s } lv_name{ %s } \\\n        method{ format } format{ } \\\n        use_filesystem{ } filesystem{ %s } \\\n        mountpoint{ %s } \\\n      . \\\n", minMB, minMB, maxMB, lv.FS, t.vgName, lv.Name, lv.FS, lv.Mount)
+			}
+			b.WriteString(unit)
+		}
 	}
 	out := b.String()
 	// The last unit terminates the value — drop its continuation so the

@@ -263,7 +263,15 @@ func (d *Driver) preseed(in render.InstallInputs, t target, recipe, net string, 
 	b.WriteString("d-i user-setup/allow-password-weak boolean true\n")
 	b.WriteString("d-i user-setup/encrypt-home boolean false\n\n")
 	b.WriteString("#### partitioning: expert recipe on the single install target\n")
-	b.WriteString("d-i partman-auto/method string regular\n")
+	if t.vgName != "" {
+		// LVM recipe (docs/04-install-spec.md §5.1): partman-auto creates the
+		// PV (method{ lvm } unit) and the LVs ($lvmok units) in the recipe;
+		// new_vg_name seeds the VG name for partman-auto-lvm.
+		b.WriteString("d-i partman-auto/method string lvm\n")
+		fmt.Fprintf(&b, "d-i partman-auto-lvm/new_vg_name string %s\n", t.vgName)
+	} else {
+		b.WriteString("d-i partman-auto/method string regular\n")
+	}
 	b.WriteString("d-i partman-partitioning/default_label string gpt\n")
 	if t.dynamic {
 		// Controller-named volume: partman-auto/disk and grub-installer/bootdev

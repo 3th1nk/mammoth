@@ -147,6 +147,9 @@ func validate(in render.InstallInputs) error {
 	if len(in.Raid) > 0 {
 		return fmt.Errorf("declarative RAID is not supported by the agent path yet (pilot scope: plain disks)")
 	}
+	if len(in.Lvm) > 0 {
+		return fmt.Errorf("declarative LVM is not supported by the agent path yet (pilot scope: plain disks)")
+	}
 	hasRoot := false
 	for _, dsk := range in.Disks {
 		for _, p := range dsk.Partitions {

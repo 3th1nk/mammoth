@@ -224,12 +224,41 @@ func TestPlanInstallLvm(t *testing.T) {
 		t.Fatalf("boot_drive = %q, want sda (the /boot holder; / lives on the LV)", plan.BootDrive)
 	}
 
-	// PV selector grabbing a disk[] claim: consumed devices are exclusive
-	_, err = PlanInstall(context.Background(), spec(disks+
+	// Partition-carve PV (docs/04-install-spec.md §5.1.1): a PV selector may
+	// land on a disks[]-claimed holder — the PV is the holder's remaining
+	// space as a trailing partition (the single-disk layout: ESP//boot + PV).
+	// Boot drive falls to the holder (its /boot partition).
+	plan, err = PlanInstall(context.Background(), spec(disks+
 		`"lvm": [{"name": "vg0", "pvs": [{"match": {"size": "smallest"}}],
 		  "logvols": [{"name": "root", "size": "rest", "fs": "xfs", "mount": "/"}]}]`), hw, nil, reg)
+	if err != nil {
+		t.Fatalf("partition-carve PV plan: %v", err)
+	}
+	if plan.BootDrive != "sda" {
+		t.Fatalf("boot_drive = %q, want sda (the holder; its /boot is outside LVM)", plan.BootDrive)
+	}
+
+	// ...but a holder declaring its own rest partition conflicts — the
+	// remaining space belongs to the PV, two growers cannot share it.
+	_, err = PlanInstall(context.Background(), spec(
+		`"disks": [{"select": {"match": {"size": "smallest"}}, "wipe": true, "partitions": [
+	  {"size": "1024M", "fs": "xfs", "mount": "/boot"},
+	  {"size": "rest", "fs": "xfs", "mount": "/data"}]}], `+
+			`"lvm": [{"name": "vg0", "pvs": [{"match": {"size": "smallest"}}],
+		  "logvols": [{"name": "root", "size": "rest", "fs": "xfs", "mount": "/"}]}]`), hw, nil, reg)
 	if codeOf(t, err) != "SCHEMA_INVALID_STORAGE" {
-		t.Fatalf("PV overlap code = %v, want SCHEMA_INVALID_STORAGE", err)
+		t.Fatalf("holder-grow code = %v, want SCHEMA_INVALID_STORAGE", err)
+	}
+
+	// Two fresh groups competing for the same disk: the first consumes it
+	// whole (no disks[] claim to carve after) — the second conflicts.
+	_, err = PlanInstall(context.Background(), spec(disks+
+		`"lvm": [{"name": "vg0", "pvs": [{"match": {"size": "largest"}}],
+		  "logvols": [{"name": "data", "size": "10G", "fs": "xfs", "mount": "/data"}]},
+		 {"name": "vg1", "pvs": [{"match": {"size": "largest"}}],
+		  "logvols": [{"name": "data2", "size": "10G", "fs": "xfs", "mount": "/data2"}]}]`), hw, nil, reg)
+	if codeOf(t, err) != "SCHEMA_INVALID_STORAGE" {
+		t.Fatalf("PV-vs-PV code = %v, want SCHEMA_INVALID_STORAGE", err)
 	}
 
 	// ambiguous PV selector (both SAS disks, no size pick)

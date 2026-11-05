@@ -928,12 +928,16 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		for pi, pv := range vg.PVs {
 			tag := fmt.Sprintf("pv.%s-%d", vg.Name, pi)
 			pvLine := func(device string) {
-				line := fmt.Sprintf("part %s --size=1 --grow --ondisk=%s", tag, device)
-				if _, dyn := dynPH(device); dyn {
-					dynMemberLines = append(dynMemberLines, line)
-				} else {
-					raidMemberLines = append(raidMemberLines, line)
+				// Dynamic holders (controller names) pin the $Dn placeholder —
+				// the raw name does not exist in the installer environment,
+				// and the %pre include is where the placeholder expands.
+				if ph, ok := dynPH(device); ok {
+					dynMemberLines = append(dynMemberLines,
+						fmt.Sprintf("part %s --size=1 --grow --ondisk=%s", tag, ph))
+					return
 				}
+				raidMemberLines = append(raidMemberLines,
+					fmt.Sprintf("part %s --size=1 --grow --ondisk=%s", tag, device))
 			}
 			switch {
 			case pv.RaidName != "" && pv.RaidMode == "software":
@@ -964,6 +968,15 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 						"%s: hardware raid volume %s bound to non-kernel name %s with no dynamic resolution path", d.distro, pv.RaidName, device)
 				}
 				pvLine(device)
+			case pv.PartitionNumber > 0:
+				// Partition-carve PV (docs/04-install-spec.md §5.1.1): the
+				// holder disk is claimed and wiped by its disks[] row — the
+				// PV rides the holder's remaining space as a trailing
+				// partition, realized by this part line (--grow takes what's
+				// left after the declared ESP//boot/swap lines; --ondisk pins
+				// the holder, its $Dn placeholder expanding in the same %pre
+				// include the disks[] row registered).
+				pvLine(pv.Device)
 			default:
 				_, isDyn := dynPH(pv.Device)
 				if !render.IsKernelDeviceName(pv.Device) && !isDyn {

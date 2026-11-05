@@ -606,6 +606,13 @@ func TestNetbootDeclarations(t *testing.T) {
 func TestRenderLvm(t *testing.T) {
 	d := New("debian12")
 	in := wipeInputs()
+	// The LVM recipe tail (method{ lvm }) takes the target's remaining space
+	// for the PV — wipeInputs' /data grow and / partitions would compete
+	// with it (root rides the LV), so this layout declares ESP + swap only.
+	in.Disks[0].Partitions = []render.ResolvedPartition{
+		{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+		{Mount: "swap", FS: "swap", SizeMB: 4096},
+	}
 	in.Lvm = []render.ResolvedVolgroup{{
 		Name: "vg0",
 		PVs:  []render.ResolvedPV{{Device: "sda", SizeBytes: 960197124096}},

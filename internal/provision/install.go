@@ -492,6 +492,43 @@ func validateStorageExtras(spec *installSpecView) error {
 	return validateLvmShape(spec)
 }
 
+// partitionPV resolves a fresh-VG PV that lands on a disks[]-claimed disk:
+// the PV is the holder's remaining space as a trailing partition — the
+// classic single-disk layout (ESP + /boot + PV partition; docs/04-install-spec.md
+// §5.1.1). Only a disks[] claim qualifies ("prev" is the claim's audit tag):
+// whole-device claimants (another PV, a raid member, a kept group's disk)
+// stay hard conflicts. The holder must not declare a grow/rest partition —
+// the remaining space belongs to the PV.
+func partitionPV(dev string, resolved []render.ResolvedDisk, i, j int, prev string) (render.ResolvedPV, error) {
+	if prev != "disks" {
+		return render.ResolvedPV{}, classifiedErr("SCHEMA_INVALID_STORAGE", false,
+			"lvm[%d].pvs[%d]: %s already claimed by %s", i, j, dev, prev)
+	}
+	for _, rd := range resolved {
+		if rd.Device != dev {
+			continue
+		}
+		if len(rd.Partitions) == 0 {
+			// keep: disk or a partition-less row: the holder is untouched
+			// whole — no carve surface (docs/04-install-spec.md §5.1.1).
+			return render.ResolvedPV{}, classifiedErr("SCHEMA_INVALID_STORAGE", false,
+				"lvm[%d].pvs[%d]: %s is claimed whole by disks (no partitions to carve the PV after)", i, j, dev)
+		}
+		for _, p := range rd.Partitions {
+			if p.Grow {
+				return render.ResolvedPV{}, classifiedErr("SCHEMA_INVALID_STORAGE", false,
+					"lvm[%d].pvs[%d]: holder %s declares a rest partition — the remaining space belongs to the PV (docs/04-install-spec.md §5.1.1)", i, j, dev)
+			}
+		}
+		return render.ResolvedPV{
+			Device: dev, Serial: rd.Serial, SizeBytes: rd.SizeBytes,
+			PartitionNumber: len(rd.Partitions) + 1,
+		}, nil
+	}
+	return render.ResolvedPV{}, classifiedErr("SCHEMA_INVALID_STORAGE", false,
+		"lvm[%d].pvs[%d]: %s claimed by disks but absent from the resolved set", i, j, dev)
+}
+
 // lvmNameRe is the VG/LV name contract (docs/04-install-spec.md §5.1):
 // device-mapper double-encodes dashes under /dev/mapper, so names may carry
 // alphanumerics, underscore and dot only, must start with a letter.
@@ -952,6 +989,10 @@ func (e *Executor) verifyLayout(ctx context.Context, task *store.Task, job *stor
 	lvmChecks := make([]lvmExpectation, 0, len(spec.Storage.Lvm))
 	if len(spec.Storage.Lvm) > 0 {
 		raidByName := map[string]render.ResolvedRaid{}
+		// pvHolderVG guards one fresh VG per disks[]-claimed holder: a
+		// holder's remaining space backs exactly one group (docs/04
+		// §5.1.1 partition-carve PV).
+		pvHolderVG := map[string]string{}
 		for _, rr := range raids {
 			raidByName[rr.Name] = rr
 		}
@@ -1062,8 +1103,21 @@ func (e *Executor) verifyLayout(ctx context.Context, task *store.Task, job *stor
 							"lvm[%d].pvs[%d]: selector matches %d disks; refine the match", i, j, len(candidates))
 					}
 					if prev, dup := usedDevices[candidates[0].Name]; dup {
-						return classifiedErr("SCHEMA_INVALID_STORAGE", false,
-							"lvm[%d].pvs[%d]: %s already claimed by %s", i, j, candidates[0].Name, prev)
+						// A disks[]-claimed holder is legal: the PV rides the
+						// holder's remaining space as a trailing partition
+						// (docs/04-install-spec.md §5.1.1 single-disk layout).
+						pvp, perr := partitionPV(candidates[0].Name, resolved, i, j, prev)
+						if perr != nil {
+							return perr
+						}
+						if holderVG, taken := pvHolderVG[candidates[0].Name]; taken {
+							return classifiedErr("SCHEMA_INVALID_STORAGE", false,
+								"lvm[%d].pvs[%d]: holder %s remaining space already backs volume group %s",
+								i, j, candidates[0].Name, holderVG)
+						}
+						pvHolderVG[candidates[0].Name] = vg.Name
+						rg.PVs = append(rg.PVs, pvp)
+						continue
 					}
 					usedDevices[candidates[0].Name] = fmt.Sprintf("lvm[%d]", i)
 					rg.PVs = append(rg.PVs, render.ResolvedPV{
@@ -1328,6 +1382,19 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		}
 		if bootDrive == "" && !rootOnLV {
 			bootDrive = r.BoundDevice
+		}
+	}
+	// ubuntu/debian render no /boot with root on a LV (grub2 reads LVM
+	// natively): the ESP holder is the bootloader target then — the
+	// single-disk LVM layout (ESP + PV partition) boots from the same disk
+	// its VG lives on (docs/04-install-spec.md §5.1 boot rule).
+	if rootOnLV && bootDrive == "" {
+		for _, d := range ictx.Resolved.Disks {
+			for _, p := range d.Partitions {
+				if p.Mount == "/boot/efi" {
+					bootDrive = d.Device
+				}
+			}
 		}
 	}
 

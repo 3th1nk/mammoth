@@ -30,7 +30,7 @@ ARG COMMIT=""
 RUN VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo 0.1.0-dev)}" \
  && COMMIT="${COMMIT:-$(git rev-parse HEAD 2>/dev/null || echo none)}" \
  && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags "-s -w -X github.com/3th1nk/mammoth/internal/version.Version=${VERSION} -X github.com/3th1nk/mammoth/internal/version.Commit=${COMMIT}" \
+    go build -trimpath -buildvcs=false -ldflags "-s -w -X github.com/3th1nk/mammoth/internal/version.Version=${VERSION} -X github.com/3th1nk/mammoth/internal/version.Commit=${COMMIT}" \
     -o /out/mammoth ./cmd/mammoth
 
 FROM ${RUNTIME_IMAGE}

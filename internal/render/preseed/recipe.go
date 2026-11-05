@@ -140,6 +140,17 @@ func installTarget(distro string, in render.InstallInputs, m render.MachineView)
 		}
 		t.vgName = vg.Name
 		t.logvols = vg.Logvols
+		// The LVM recipe tail (method{ lvm } free unit) is itself a grow
+		// consumer — it takes the target's remaining space for the PV
+		// (docs/04-install-spec.md §5.1.1). A declared grow partition would
+		// compete for the same free space; partman's allocator would
+		// truncate one of them unpredictably.
+		for _, p := range t.partitions {
+			if p.Grow {
+				return target{}, fmt.Errorf(
+					"%svolume group %s's PV takes the target's remaining space — the recipe cannot also grow a declared partition (size it explicitly)", prefix, vg.Name)
+			}
+		}
 	}
 	return t, nil
 }

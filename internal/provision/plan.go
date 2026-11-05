@@ -72,9 +72,24 @@ func PlanInstall(ctx context.Context, specJSON json.RawMessage, hw *bmc.Hardware
 	// to the machine's layout snapshot in the executor, not in the API
 	// process — the plan reads as LAYOUT_SNAPSHOT_REQUIRED, same as
 	// keep:partitions does.
-	resolvedLvm, err := planResolveLvm(spec.Storage.Lvm, spec.Storage.Raid, spec.minDeviceSizeGB(), hw, snapLvm, claimed)
+	resolvedLvm, err := planResolveLvm(spec.Storage.Lvm, spec.Storage.Raid, spec.minDeviceSizeGB(), hw, snapLvm, claimed, resolved)
 	if err != nil {
 		return nil, err
+	}
+	// planResolveLvm returns holders claimed by disks[] as partition-carve
+	// PVs; the per-holder uniqueness guard mirrors verify_layout's
+	// pvHolderVG (one fresh VG per holder's remaining space).
+	pvHolderVG := map[string]string{}
+	for gi, vg := range resolvedLvm {
+		for _, pv := range vg.PVs {
+			if pv.PartitionNumber > 0 {
+				if _, taken := pvHolderVG[pv.Device]; taken {
+					return nil, classifiedErr("SCHEMA_INVALID_STORAGE", false,
+						"lvm[%d]: holder %s remaining space already backs another volume group", gi, pv.Device)
+				}
+				pvHolderVG[pv.Device] = vg.Name
+			}
+		}
 	}
 
 	// Boot drive: the disk holding the root partition (same rule the real
@@ -97,6 +112,18 @@ func PlanInstall(ctx context.Context, specJSON json.RawMessage, hw *bmc.Hardware
 		for _, p := range rd.Partitions {
 			if p.Mount == rootMount || (rootOnLV && p.Mount == bootMount) {
 				bootDrive = rd.Device
+			}
+		}
+	}
+	// ubuntu/debian render no /boot with root on a LV (grub2 reads LVM
+	// natively): the ESP holder is the bootloader target then — same rule
+	// the executor applies (docs/04-install-spec.md §5.1 boot rule).
+	if rootOnLV && bootDrive == "" {
+		for _, rd := range resolved {
+			for _, p := range rd.Partitions {
+				if p.Mount == "/boot/efi" {
+					bootDrive = rd.Device
+				}
 			}
 		}
 	}
@@ -280,7 +307,7 @@ func intPtr(i int) *int    { return &i }
 // LVM facts — keep:vg groups bind against it here (VG missing / snapshot
 // without an LVM section → LAYOUT_VG_NOT_FOUND, the same code the executor
 // raises), so the batch guard reads per-machine reality before submission.
-func planResolveLvm(vgs []volumeGroupView, raids []raidSpecView, minSizeGB *int, hw *bmc.HardwareView, snapLvm []inbandssh.VgFacts, claimed map[string]string) ([]render.ResolvedVolgroup, error) {
+func planResolveLvm(vgs []volumeGroupView, raids []raidSpecView, minSizeGB *int, hw *bmc.HardwareView, snapLvm []inbandssh.VgFacts, claimed map[string]string, resolvedDisks []render.ResolvedDisk) ([]render.ResolvedVolgroup, error) {
 	resolved := make([]render.ResolvedVolgroup, 0, len(vgs))
 	raidByName := map[string]raidSpecView{}
 	for _, r := range raids {
@@ -380,8 +407,15 @@ func planResolveLvm(vgs []volumeGroupView, raids []raidSpecView, minSizeGB *int,
 				}
 				device := candidates[0].Name
 				if prev, dup := claimed[device]; dup {
-					return nil, classifiedErr("SCHEMA_INVALID_STORAGE", false,
-						"lvm[%d].pvs[%d] resolves to %s, already claimed by %s", i, j, device, prev)
+					// A disks[]-claimed holder is legal: the PV rides the
+					// holder's remaining space as a trailing partition
+					// (docs/04-install-spec.md §5.1.1 single-disk layout).
+					pvp, perr := partitionPV(device, resolvedDisks, i, j, prev)
+					if perr != nil {
+						return nil, perr
+					}
+					rg.PVs = append(rg.PVs, pvp)
+					continue
 				}
 				claimed[device] = fmt.Sprintf("lvm[%d]", i)
 				rg.PVs = append(rg.PVs, render.ResolvedPV{

@@ -271,6 +271,12 @@ LVM 在**安装期**由安装器落地(anaconda `volgroup/logvol`、curtin
 - VG/LV 名 `^[A-Za-z][A-Za-z0-9_.]{0,63}$`(**禁 `-`**——/dev/mapper 会把 `-` 双写,下游工具全部遭殃);
 - 新建模式 `pvs`/`logvols` 必填;`keep: vg` 时两者必须为空,绑定事实来自 layout 快照
   (同 `keep: partitions` 依赖快照的契约):快照无 LVM 事实或 VG/LV 缺失 → `LAYOUT_VG_NOT_FOUND`;
+- **单盘布局(分区切出 PV)**:PV 选择器**允许**命中被 `disks[]` 声明(带分区)的盘——
+  此时 PV = 该盘声明分区之外的**剩余空间**(自动成为末位分区),VG 建在其上。典型形态:
+  `[ESP 1G] [+ /boot(kickstart 族)] [swap]` + PV 拿 rest,`/` 落 LV。约束:①holder 的
+  `disks[]` 声明**不得含 rest/grow 分区**(剩余空间归 PV)→ `SCHEMA_INVALID_STORAGE`;
+  ②holder 必须确有分区声明(keep: disk 整盘保留无切出面);③每个 holder 的剩余空间
+  只供一个 VG。未声明分区的 PV 盘维持**整盘消费**原语义(与 `disks[]` 互斥如旧);
 - **新建 VG 名不得与机器既有 VG 同名**(快照有 LVM 事实时预检)→ `LAYOUT_VG_EXISTS`
   ——否则 anaconda/curtin 会在安装几分钟内报「vg 已存在」而失败;
 - keep:vg 的 PV 盘(含分区级 PV 所在盘)在 verify_layout 登记消费表,`disks[]`/raid/

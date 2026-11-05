@@ -609,7 +609,10 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 	}
 	// Fresh volume groups: whole-disk PVs ride as wiped raw targets (the
 	// devices are consumed like raid members, so they never appear in
-	// disks[] — no id collision).
+	// disks[] — no id collision). Partition-carve PVs (docs/04-install-spec.md
+	// §5.1.1 single-disk layout) instead append a trailing raw partition to
+	// their holder's target — the holder is claimed (and wiped) by its
+	// disks[] row, and the VG rides the remaining space.
 	for _, vg := range in.Lvm {
 		if vg.KeepVG {
 			continue
@@ -617,6 +620,23 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 		for pi, pv := range vg.PVs {
 			if pv.RaidName != "" {
 				continue // hardware raid PV target already registered above
+			}
+			if pv.PartitionNumber > 0 {
+				hi := -1
+				for ti := range targets {
+					if targets[ti].device == pv.Device && !targets[ti].pvOnly {
+						hi = ti
+						break
+					}
+				}
+				if hi < 0 {
+					return nil, nil, fmt.Errorf(
+						"%s: volume group %s PV holder %s is not among the declared disks", d.distro, vg.Name, pv.Device)
+				}
+				targets[hi].partitions = append(targets[hi].partitions, render.ResolvedPartition{
+					Number: pv.PartitionNumber, Grow: true,
+				})
+				continue
 			}
 			targets = append(targets, diskTarget{id: fmt.Sprintf("pv-%s-%d", vg.Name, pi),
 				device: pv.Device, serial: pv.Serial, wipe: true,
@@ -731,6 +751,13 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 				config = append(config, part)
 				continue // raw partition: no filesystem, no mount
 			}
+			if p.FS == "" && p.Mount == "" {
+				// Partition-carve PV (docs/04-install-spec.md §5.1.1): a
+				// raw trailing partition — the volgroup below consumes its
+				// id; no filesystem, no mount, no format entry.
+				config = append(config, part)
+				continue
+			}
 			if hasFlag(p.Flags, "esp") {
 				// subiquity's bootloader check requires the ESP partition to
 				// carry the boot flag AND be marked as the grub device — a
@@ -826,9 +853,15 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 			continue
 		}
 		for pi, pv := range vg.PVs {
-			if pv.RaidName != "" {
+			switch {
+			case pv.RaidName != "":
 				devices = append(devices, "raid-"+pv.RaidName)
-			} else {
+			case pv.PartitionNumber > 0:
+				// Partition-carve PV: the raw trailing partition on the
+				// holder target — id pattern mirrors the partition loop
+				// ("part-" + disk.id + "-" + number, disk.id = "disk-" + device).
+				devices = append(devices, fmt.Sprintf("part-disk-%s-%d", pv.Device, pv.PartitionNumber))
+			default:
 				devices = append(devices, fmt.Sprintf("pv-%s-%d", vg.Name, pi))
 			}
 		}

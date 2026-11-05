@@ -176,6 +176,27 @@ func TestNormalizeMAC(t *testing.T) {
 	}
 }
 
+// HeadlessMAC validates strictly (12 hex digits — registration keys a
+// machine row on the result), unlike the lookup-tolerant normalizeMAC.
+func TestHeadlessMAC(t *testing.T) {
+	cases := map[string]string{
+		"none://aa:bb:cc:dd:ee:01": "aa:bb:cc:dd:ee:01",
+		"none://AA-BB-CC-DD-EE-01": "aa:bb:cc:dd:ee:01",
+		"none://aabbccddeeff":      "aa:bb:cc:dd:ee:ff",
+		"none://":                  "",
+		"none://hello":             "",
+		"none://zz:bb:cc:dd:ee:01": "",
+		"none://aa:bb:cc:dd:ee":    "",
+		"https://bmc.example.com":  "",
+		"aa:bb:cc:dd:ee:01":        "",
+	}
+	for in, want := range cases {
+		if got := HeadlessMAC(in); got != want {
+			t.Errorf("HeadlessMAC(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // TestReplyGolden pins the wire format of the two reply flavors: a plain
 // PXE ROM gets NBP name + TFTP server; iPXE gets the HTTP script URL.
 // Firmware interop is unforgiving about these bytes, so they are pinned.

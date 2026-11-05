@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
+	"github.com/3th1nk/mammoth/internal/bmc"
 	"github.com/3th1nk/mammoth/internal/netboot"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/store"
@@ -92,6 +93,55 @@ func (s *Server) FetchNetbootEnrollFile(ctx context.Context, request gen.FetchNe
 	}, nil
 }
 
+// hardwareFromReport projects an enrollment probe's /sys scan onto the
+// machine's hardware view. Tolerant by design: a report without nics (old
+// probes) still projects its disks; malformed JSON or an empty scan yields
+// nil and the claim simply skips the projection (the layout snapshot keeps
+// the verbatim report either way).
+func hardwareFromReport(report json.RawMessage) *bmc.HardwareView {
+	var probe struct {
+		Disks []struct {
+			Device    string `json:"device"`
+			SizeBytes int64  `json:"size_bytes"`
+			Serial    string `json:"serial"`
+			Model     string `json:"model"`
+		} `json:"disks"`
+		NICs []struct {
+			Name   string `json:"name"`
+			MAC    string `json:"mac"`
+			LinkUp *bool  `json:"link_up"`
+		} `json:"nics"`
+	}
+	if json.Unmarshal(report, &probe) != nil {
+		return nil
+	}
+	if len(probe.Disks) == 0 && len(probe.NICs) == 0 {
+		return nil
+	}
+	hw := &bmc.HardwareView{Coverage: bmc.CoveragePartial,
+		CoverageNotes: []string{"facts from the enrollment probe's /sys scan; controller-only fields absent (headless machine)"}}
+	for _, d := range probe.Disks {
+		if d.Device == "" {
+			continue
+		}
+		hw.Disks = append(hw.Disks, bmc.DiskView{
+			Name: d.Device, Serial: d.Serial, SizeBytes: d.SizeBytes,
+		})
+	}
+	for _, n := range probe.NICs {
+		mac := netboot.NormalizeMAC(n.MAC)
+		if len(mac) != 17 {
+			continue
+		}
+		nic := bmc.NICView{Name: n.Name, MAC: mac}
+		if n.LinkUp != nil {
+			nic.LinkUp = *n.LinkUp
+		}
+		hw.NICs = append(hw.NICs, nic)
+	}
+	return hw
+}
+
 // pendingToGen maps the store row to the contract shape.
 func pendingToGen(m *store.PendingMachine) gen.PendingMachine {
 	out := gen.PendingMachine{
@@ -162,6 +212,19 @@ func (s *Server) ClaimPendingMachine(ctx context.Context, request gen.ClaimPendi
 	if err != nil {
 		return nil, err
 	}
+	// Headless claim (docs/13-headless-design.md §3.1): the claim body
+	// must explicitly carry bmc.protocol=none — the sighting tells you
+	// WHICH machine this is, and promoting it to a BMC-less registration
+	// is an operator decision, never an accident of an omitted field.
+	// The identity MAC is the pending row's (the machine booted PXE with
+	// it): the body address is rewritten onto none://<mac> so the claim
+	// lands on the same machine the room announced, however the request
+	// spelled the address. Controller claims (redfish/ipmi/auto) keep the
+	// plain POST /machines path untouched.
+	if request.Body != nil &&
+		request.Body.Bmc.Protocol != nil && *request.Body.Bmc.Protocol == gen.BMCProtocolNone {
+		request.Body.Bmc.Address = netboot.HeadlessMACPrefix + mac
+	}
 	m, err := s.registerMachine(ctx, request.Body)
 	if err != nil {
 		// A bmc_address conflict surfaces here (409) — the sighting stays
@@ -175,6 +238,22 @@ func (s *Server) ClaimPendingMachine(ctx context.Context, request gen.ClaimPendi
 		}
 	}
 	if len(pending.Report) > 0 {
+		// Project the probe's own facts onto the machine's hardware view
+		// (docs/13-headless-design.md §3.1): disks and NICs with
+		// coverage=partial — the controller-only fields stay empty, no
+		// conclusions invented. For a headless machine this view is
+		// load-bearing: PXE observation (ObservePXE matches
+		// hardware->'nics') and netboot MAC arming (macsFor) key on it,
+		// and it doubles as the spec view's disk inventory.
+		if hw := hardwareFromReport(pending.Report); hw != nil {
+			raw, merr := json.Marshal(hw)
+			if merr == nil {
+				if err := s.Machines.SetHardware(ctx, m.ID, raw); err != nil {
+					obs.FromContext(ctx).WarnContext(ctx, "claim: hardware projection failed",
+						obs.FieldMachineID, m.ID, "err", err.Error())
+				}
+			}
+		}
 		if _, err := s.Machines.SaveLayout(ctx, m.ID, "ramdisk", pending.Report, 0); err != nil {
 			obs.FromContext(ctx).WarnContext(ctx, "claim: probe report migration failed",
 				obs.FieldMachineID, m.ID, "err", err.Error())

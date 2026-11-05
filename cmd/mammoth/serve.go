@@ -535,6 +535,10 @@ func serve(args []string) error {
 			Netboot:                   netbootRepo,
 			BootTreeDir:               filepath.Join(cfg.MediaDir, "netboot"),
 			BootStrategyDefault:       cfg.BootStrategyDefault,
+			Pending:                   pendingRepo,
+		}
+		if wol := wakeOnLANFunc(cfg); wol != nil {
+			exec.WakeOnLAN = wol
 		}
 		if dhcpPool != nil {
 			// DHCP-carrier installs (ubuntu PXE) move the machine off any

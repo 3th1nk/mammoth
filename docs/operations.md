@@ -559,6 +559,63 @@ BMC 虚拟介质华为实锤不兼容(上文);casper nfsroot 与 anaconda 的 NF
 明确拒绝(读 Redfish Task 的 Messages,对照 huawei.md §6 的抓包画像
 tcpdump 看 portmapper/NFS 握手走到哪一步)。
 
+## 4.8 无带外机器(headless,protocol=none)的部署
+
+无 BMC 的 x86_64 机器(工控机/信创桌面/blade 特殊机型)走既有六阶段装机
+流水线:身份 = NIC MAC(`bmc.protocol = none`,docs/13-headless-design.md)。
+
+**注册(两通路)**:
+
+```bash
+# 通路 A · enroll 零注册 → claim(推荐,MAMMOTH_PXE_ENROLL=true 时)
+# 1) 未知 MAC 的 PXE 客户端收到共享探针(alpine),扫 /sys + SMART + NIC
+#    后报告进 pending_machines(含每口 MAC/link_up);
+# 2) claim 必须显式携带 protocol=none(防误升级),身份 MAC 以台账为准:
+curl -X POST "$API/pending-machines/aa:bb:cc:dd:ee:01/claim" \
+  -d '{"bmc":{"protocol":"none","address":"none://aa:bb:cc:dd:ee:01","credential_id":""},
+       "ssh":{"address":"192.168.1.50"}}'
+# claim 把探针报告固化为首份 layout 快照(source=ramdisk)与 hardware 视图
+# (coverage=partial)——PXE 观测与 netboot 按 MAC 武装都以它为键。
+
+# 通路 B · 手工注册(兜底;POC fake 变通即本通路的临时实现)
+curl -X POST "$API/machines" \
+  -d '{"bmc":{"protocol":"none","address":"none://aa:bb:cc:dd:ee:01","credential_id":""}}'
+# MAC 必填(装机 spec 的 network[].match.mac 与 netboot_entries 都按它;
+# 地址必须 none://<mac> 形态,12 位 hex 严格校验,大小写/分隔符归一)。
+# 手工注册的磁盘事实:装机 spec 的盘 selector 按容量/序列匹配,
+# 安装器现场 size±1% 解析(容量错位即解析失败——工控机 POC 的
+# MAMMOTH_FAKE_DISK_GBYTES 即为过渡期的同型开关)。
+```
+
+none 机器注册**不触发自动盘查**(无 BMC 可探;事实来自 enroll 报告或
+带内探针);`power_state` 恒 `unknown`;控制器动作面(power/boot-device/
+media/BIOS/擦盘)与同步 BMC 读(console/BIOS 表/drives/health/SEL)一律
+422 `HEADLESS_UNSUPPORTED`——诚实降级。提交期门禁:boot.strategy 必须
+`pxe`(无 BMC 挂介质)、hardware RAID 拒绝(任务级预失败,不阻塞同批)。
+
+**boot 阶段(证据驱动)**:netboot 武装(prepare)后,boot 不做电源序列,
+改为:①装好的机器(SSH 可达)带内优雅重启;②WoL magic packet;③等待
+引导证据(arm 后的 PXE sighting);④窗口(boot.evidence_wait_seconds,
+默认 600s)无证据 → WARN + `task.boot_manual_required` 事件 → **继续等**
+(人工上电即自愈),任务超时为总上限。
+
+**WoL 配置(二选一或组合)**:
+
+```bash
+# 引擎在机器网段时:直发定向广播
+MAMMOTH_PXE_WOL_BROADCAST=192.168.1.255
+# 跨网段时:由 pxe-proxy 代发(代理本就在机器段;pg 13 §5)
+#   代理侧:--wol-listen ":9100" [--wol-token <t>] [--wol-broadcast 192.168.1.255]
+MAMMOTH_PXE_WOL_PROXY_URL=http://192.168.1.5:9100
+MAMMOTH_PXE_WOL_PROXY_TOKEN=<t>        # 与代理 --wol-token 同值(入脱敏表)
+```
+
+**BIOS 前提**(客户确认清单 B2/B3 的硬前提):机器每次上电自动 PXE;
+不可用时无解(退路 U 盘人工装机/带 BMC 机型)。BIOS 一次性 PXE 残留
+(Pxe/Once)无害——引导项释放后无条目即回固件引导序。
+
+
+
 ## 5. 升级
 
 1. 备份数据库(§2);

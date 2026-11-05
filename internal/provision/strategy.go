@@ -214,6 +214,15 @@ type netbootRecord struct {
 	MACs  []string `json:"macs"`  // registered NICs (diagnostics; release is by task)
 }
 
+// ArmedMACs is nil-safe access for the armed MACs (cleanup and evidence
+// paths run against contexts that may predate a prepare).
+func (r *netbootRecord) ArmedMACs() []string {
+	if r == nil {
+		return nil
+	}
+	return r.MACs
+}
+
 // parseInstallContext decodes a task context tolerantly (cleanup paths must
 // never fail on a corrupt context — they run inside error handlers).
 func parseInstallContext(task *store.Task) *installTaskContext {

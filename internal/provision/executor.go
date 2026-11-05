@@ -151,6 +151,24 @@ type Executor struct {
 	// static ip= kernel argument (the casper initramfs's boot-time DHCP is
 	// racy on real hardware). Nil disables the reservation (DHCP-only args).
 	DHCPReserveFor func(mac string) (ip, router net.IP, mask net.IPMask)
+
+	// Pending is the zero-registration sightings ledger — the headless boot
+	// stage's evidence source for external-PXE deployments (the proxy's
+	// sighting feed lands here; builtin mode reads machines.pxe_last_seen_at
+	// instead). Nil skips that source.
+	Pending *store.PendingRepo
+	// BootEvidence deadlines the headless boot wait (docs/
+	// 13-headless-design.md §4). Zero applies the default (10m).
+	HeadlessBootWait time.Duration
+	// WakeOnLAN, when configured, wakes a headless machine with magic
+	// packets (engine direct-send today, the pxe-proxy relay in the
+	// cross-segment shape). Nil = WoL unavailable; the manual power-on
+	// fallback stays.
+	WakeOnLAN func(mac string) error
+
+	// evidenceTick paces the headless evidence poll (tests shorten it; the
+	// production default is bootEvidenceTick).
+	evidenceTick time.Duration
 }
 
 // ExecuteStage runs stage seq of the task's flow.

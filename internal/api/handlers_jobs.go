@@ -36,6 +36,14 @@ func (s *Server) PerformMachineAction(ctx context.Context, request gen.PerformMa
 	if err != nil {
 		return nil, err
 	}
+	// Headless machines (docs/13-headless-design.md §2): every
+	// controller-backed action is unavailable by construction — there is
+	// no BMC behind the none:// address. The explicit in-band probe is the
+	// one discover flavor that stays (it drives from ssh, not the BMC);
+	// verify/installs/PXE boots are not actions on this endpoint.
+	if verr := s.headlessActionGate(ctx, machine, request.Body); verr != nil {
+		return nil, verr
+	}
 	body := request.Body
 	if body == nil {
 		return nil, verr("SCHEMA_INVALID_ACTION", "action body required")
@@ -465,6 +473,13 @@ func (s *Server) createJobRecord(ctx context.Context, in createJobRecord) (*gen.
 					Message:   verr.Error(),
 					Retryable: false,
 				}
+			} else if verr := s.validateHeadlessShape(ctx, mid, effective); verr != nil {
+				init.State = "failed"
+				init.Error = &store.ErrorInfo{
+					Code:      appErrCode(verr),
+					Message:   verr.Error(),
+					Retryable: false,
+				}
 			} else if verr := s.validateFirmwareMatch(ctx, mid, effective); verr != nil {
 				init.State = "failed"
 				init.Error = &store.ErrorInfo{
@@ -582,6 +597,28 @@ func encodeAction(body *gen.ActionRequest) (json.RawMessage, string, error) {
 	default:
 		return nil, "", verr("SCHEMA_INVALID_ACTION", "unknown action type %q", probe.Type)
 	}
+}
+
+// headlessActionGate rejects controller-backed actions on protocol=none
+// machines with an explicit 422 (docs/13-headless-design.md §2): honest
+// degradation beats a job that dies at the first BMC call with
+// CREDENTIAL_UNAVAILABLE. The in-band discover probe (probe=inband_ssh)
+// is the one flavor that stays — it drives from ssh, not the BMC.
+func (s *Server) headlessActionGate(ctx context.Context, machine *store.Machine, body *gen.ActionRequest) error {
+	if machine.BMCProtocol != "none" || body == nil {
+		return nil
+	}
+	raw, _ := json.Marshal(body)
+	var probe struct {
+		Type  string `json:"type"`
+		Probe string `json:"probe"`
+	}
+	_ = json.Unmarshal(raw, &probe)
+	if probe.Type == "discover" && probe.Probe == "inband_ssh" {
+		return nil
+	}
+	return verrStatus(http.StatusUnprocessableEntity, "HEADLESS_UNSUPPORTED",
+		"protocol none machines have no BMC — action %q is unavailable (in-band probe: {\"type\":\"discover\",\"probe\":\"inband_ssh\"}; installs via boot.strategy=pxe)", probe.Type)
 }
 
 // validateBiosConfirm is the two-stage contract's API half (docs/07-bmc.md
@@ -1053,6 +1090,48 @@ func (s *Server) validateBootStrategy(specRaw json.RawMessage) error {
 		return verr("SCHEMA_WINDOWS_SMB_SHARE_REQUIRED",
 			"distro %s boots PXE through the wimboot carrier, which needs the deployment SMB export (set MAMMOTH_WINDOWS_INSTALL_SMB_UNC)",
 			spec.Image.Distro)
+	}
+	return nil
+}
+
+// validateHeadlessShape gates submissions for protocol=none machines
+// (docs/13-headless-design.md §2/§4): their only boot carrier is PXE —
+// there is no BMC to mount virtual media on — and hardware RAID needs the
+// Redfish VolumeCreator on the controller they do not have. Violations
+// pre-fail the machine's task without blocking the batch (the same
+// contract as the firmware gate). Non-headless machines are not this
+// gate's subject.
+func (s *Server) validateHeadlessShape(ctx context.Context, machineID string, specRaw json.RawMessage) error {
+	m, err := s.Machines.Get(ctx, machineID)
+	if err != nil || m.BMCProtocol != "none" {
+		return nil
+	}
+	var spec struct {
+		Boot *struct {
+			Strategy string `json:"strategy"`
+		} `json:"boot"`
+		Storage struct {
+			Raid []struct {
+				Mode string `json:"mode"`
+			} `json:"raid"`
+		} `json:"storage"`
+	}
+	if err := json.Unmarshal(specRaw, &spec); err != nil {
+		return nil // structural errors surface via the schema validation path
+	}
+	strategy := s.BootStrategyDefault
+	if spec.Boot != nil && spec.Boot.Strategy != "" {
+		strategy = spec.Boot.Strategy
+	}
+	if strategy != "pxe" {
+		return verr("SCHEMA_UNSUPPORTED_BOOT_STRATEGY",
+			"protocol none machines boot PXE only — virtual media needs a BMC to mount it on")
+	}
+	for i, r := range spec.Storage.Raid {
+		if r.Mode == "hardware" {
+			return verr("SCHEMA_INVALID_STORAGE",
+				"raid[%d]: hardware mode needs a RAID controller with Redfish volume creation — protocol none machines have no BMC", i)
+		}
 	}
 	return nil
 }

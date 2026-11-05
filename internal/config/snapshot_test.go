@@ -17,6 +17,7 @@ func TestSnapshotRedactedKeysAlwaysPresentAndMasked(t *testing.T) {
 		APIToken:                  "dev-console-token",
 		MasterKey:                 "mFTyjwdarDNJecnW5IgRhBKqWaGSJZwx/njReRFyVfc=",
 		PXEEnrollToken:            "enroll-secret",
+		PXEWoLProxyToken:          "relay-secret",
 		WindowsInstallSMBUNC:      `\\192.168.1.10\os_iso`,
 		WindowsInstallSMBUser:     "mammoth-smb",
 		WindowsInstallSMBPassword: "smb-pass",
@@ -27,7 +28,7 @@ func TestSnapshotRedactedKeysAlwaysPresentAndMasked(t *testing.T) {
 	}
 	snap := cfg.Snapshot()
 
-	leaked := []string{"dev-console-token", "hunter2", "mFTyjwdarDNJecnW5IgRhBKqWaGSJZwx", "enroll-secret", "smb-pass", "relay-pass"}
+	leaked := []string{"dev-console-token", "hunter2", "mFTyjwdarDNJecnW5IgRhBKqWaGSJZwx", "enroll-secret", "relay-secret", "smb-pass", "relay-pass"}
 	for _, s := range leaked {
 		for k, v := range snap {
 			if vs, ok := v.(string); ok && vs == s {

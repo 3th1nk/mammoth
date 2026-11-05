@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -58,6 +59,18 @@ func (s *Server) GetNetbootScript(ctx context.Context, request gen.GetNetbootScr
 	s.Events.Append(ctx, "task", e.TaskID, "task.netboot_script_served", map[string]any{
 		"mac": mac, "kind": e.Kind,
 	})
+	// The script fetch IS the machine talking from its boot address: on
+	// site-DHCP shapes (external engine, proxy DHCP, or a DHCP-only spec)
+	// this is the only moment the engine learns which address the machine
+	// boots from — the one fact the syslog sink's IP attribution needs (the
+	// lease-reverse chain exists only on the builtin pool). TTL is generous:
+	// the terminal release forgets the task's registrations earlier, and a
+	// retried task re-fetches and re-registers anyway.
+	if s.IPRegistry != nil && e.TaskID != "" {
+		if ip := ClientIPFromContext(ctx); ip != "" {
+			s.IPRegistry.Register(e.TaskID, []string{ip}, 12*time.Hour)
+		}
+	}
 	obs.FromContext(ctx).InfoContext(ctx, "netboot script served",
 		obs.FieldTaskID, e.TaskID, "mac", mac, "kind", e.Kind)
 	return gen.GetNetbootScript200TextResponse(netboot.RenderScript(e, s.ExternalURL)), nil

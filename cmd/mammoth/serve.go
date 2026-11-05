@@ -406,6 +406,7 @@ func serve(args []string) error {
 
 		Netboot:               nbResolver,
 		NetbootRepo:           netbootRepo,
+		IPRegistry:            syslogIPs,
 		Pending:               pendingRepo,
 		Enroll:                enroll,
 		MediaDir:              cfg.MediaDir,

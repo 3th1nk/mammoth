@@ -43,6 +43,13 @@ type Deps struct {
 	Netboot netboot.Resolver
 	// NetbootRepo is the direct registry access for the file endpoint.
 	NetbootRepo *store.NetbootRepo
+	// IPRegistry attributes machine-face syslogs to tasks (the netboot
+	// sink's TaskForIP chain): the script endpoint registers the fetching
+	// machine's peer address — on site-DHCP shapes that fetch is the only
+	// moment the engine learns which address the machine boots from (the
+	// lease-reverse chain only exists on the builtin pool). Nil-safe: the
+	// endpoint just skips the registration.
+	IPRegistry *netboot.IPRegistry
 	// Pending feeds the zero-registration sightings surface (nil-safe: the
 	// endpoints degrade to empty/404).
 	Pending *store.PendingRepo

@@ -61,7 +61,7 @@ jobs:
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Build images (amd64+arm64)
-        uses: docker/bake-action@v5
+        uses: docker/bake-action@v6
         with:
           files: docker-bake.hcl
           # docker-bake.hcl group "default" = [mammoth, mammoth-builder]; a

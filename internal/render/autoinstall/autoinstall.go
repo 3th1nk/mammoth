@@ -143,6 +143,27 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("echo root:"+quoteSh(rootpwCrypt)+" | chpasswd -e")))
 	}
 	late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh("mkdir -p /etc/ssh/sshd_config.d && echo 'PermitRootLogin yes' > /etc/ssh/sshd_config.d/60-mammoth.conf")))
+	// boot.installed_kernel_args (docs/04-install-spec.md §5.4): persisted
+	// into GRUB_CMDLINE_LINUX (all entries, recovery included — _DEFAULT
+	// only reaches the linux default) before update-grub regenerates
+	// grub.cfg. The sed/append split handles both the distro's empty
+	// default and a pre-populated line. Runs inside late-commands (the
+	// installer env), which curtin schedules after its own grub install —
+	// the same mount namespace where the target root IS / (see the apt
+	// cleanup above: literal /target paths write into the wrong tree).
+	// update-grub here re-runs what curthooks already ran; deterministic.
+	// The declared tokens carry no quotes/whitespace (parse-validated), so
+	// the single-quoted sh embedding is injection-safe.
+	if in.InstalledKernelArgs != "" {
+		grubScript := fmt.Sprintf(`f=/etc/default/grub
+if grep -q '^GRUB_CMDLINE_LINUX=' $f; then
+  sed -i "s|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"%s\"|" $f
+else
+  echo "GRUB_CMDLINE_LINUX=\"%s\"" >> $f
+fi
+update-grub`, in.InstalledKernelArgs, in.InstalledKernelArgs)
+		late = append(late, fmt.Sprintf("curtin in-target -- sh -c %s", quoteSh(grubScript)))
+	}
 	// The target's own cloud-init generates the host keys on first boot and
 	// prints the PRIVATE keys to the console by default — the autoinstall
 	// ssh section does not reach it (the seed is gone by then), so the
@@ -388,6 +409,10 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if host := render.SyslogHost(in.AnswerBaseURL); host != "" {
 		boot.KernelArgs += " syslog=" + render.SyslogTarget(host, in.SyslogPort)
 	}
+	// boot.kernel_args (docs/04-install-spec.md §5.4): appended to both
+	// carriers' lines — casper honors nomodeset/module_blacklist the same
+	// offline or NFS-rooted.
+	boot.KernelArgs = render.WithExtraArgs(boot.KernelArgs, in.ExtraKernelArgs)
 	// PXE: casper mounts the pool tree at /cdrom and moves that mount into
 	// the live root, so the tree-root seed files ARE visible — but the seed
 	// cannot ride a file:///cdrom/ seedfrom here: cloud-init 24.2's
@@ -472,6 +497,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		if bootif != "" {
 			boot.NetbootKernelArgs += " BOOTIF=" + bootif
 		}
+		// boot.kernel_args rides the netboot line too (the ISO line above
+		// is unused on this carrier — NetbootKernelArgs overrides).
+		boot.NetbootKernelArgs = render.WithExtraArgs(boot.NetbootKernelArgs, in.ExtraKernelArgs)
 	}
 	return answers, boot, nil
 }

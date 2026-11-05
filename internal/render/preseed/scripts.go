@@ -182,6 +182,23 @@ ln -sf /etc/systemd/system/mammoth-hostname.service /target/etc/systemd/system/m
 			b.WriteString("wget -q -T 10 -O /target/usr/share/keyrings/mammoth-" + r.Name + ".asc " + quoteSh(r.GPGKey) + "\n")
 		}
 	}
+	// boot.installed_kernel_args (docs/04-install-spec.md §5.4): persisted
+	// into the target's GRUB_CMDLINE_LINUX, then the update-grub re-run
+	// below regenerates grub.cfg with them — the same rerun that repairs
+	// the grub-installer stall, so persistence costs no extra regeneration.
+	// GRUB_CMDLINE_LINUX (not _DEFAULT) covers every entry incl. recovery;
+	// the sed/append split handles the distro's empty default and a
+	// pre-populated line alike. Tokens carry no quotes/whitespace
+	// (parse-validated) — the quoted embeddings are injection-safe.
+	if in.InstalledKernelArgs != "" {
+		args := in.InstalledKernelArgs
+		b.WriteString("f=/target/etc/default/grub\n")
+		b.WriteString("if grep -q '^GRUB_CMDLINE_LINUX=' $f; then\n")
+		b.WriteString("  sed -i \"s|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\\\"" + args + "\\\"|\" $f\n")
+		b.WriteString("else\n")
+		b.WriteString("  echo \"GRUB_CMDLINE_LINUX=\\\"" + args + "\\\"\" >> $f\n")
+		b.WriteString("fi\n")
+	}
 	// grub-installer's update-grub is observed to die between writing
 	// grub.cfg.new and its rename on the LSI hardware-RAID volume
 	// (real-hardware 2288H: the install "succeeded", yet the box dropped to

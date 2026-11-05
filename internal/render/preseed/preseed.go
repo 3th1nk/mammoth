@@ -141,6 +141,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	// Two seed carriers, one body: the netboot variant differs only in its
 	// install-source section (HTTP pool mirror instead of the CD mount).
 	vmediaArgs := offlineKernelArgs(in.AnswerBaseURL, in.SyslogPort)
+	// boot.kernel_args (docs/04-install-spec.md §5.4): appended to both
+	// carriers' lines before the netboot shape re-seats bootArgs below.
+	vmediaArgs = render.WithExtraArgs(vmediaArgs, in.ExtraKernelArgs)
 	seedName, bootArgs := "preseed.cfg", vmediaArgs
 	// The archive codename the pool sources carry (d-i mirror/suite and the
 	// post-install signed-by rewrite use the same value).
@@ -150,7 +153,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			return nil, render.BootParams{}, fmt.Errorf("%s: %w", d.distro, err)
 		}
 		seedName = "preseed-netboot.cfg"
-		bootArgs = netbootKernelArgs(in.AnswerBaseURL, seedName, in.Network, in.Hostname, in.SyslogPort)
+		bootArgs = render.WithExtraArgs(
+			netbootKernelArgs(in.AnswerBaseURL, seedName, in.Network, in.Hostname, in.SyslogPort),
+			in.ExtraKernelArgs)
 	}
 
 	answers := []render.AnswerFile{

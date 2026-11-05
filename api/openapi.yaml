@@ -2892,6 +2892,37 @@ components:
             13-headless-design.md §4). The wait itself continues — a manual
             power-on after the window self-heals the flow — up to the task
             timeout. BMC-carried strategies ignore it.
+        kernel_args:
+          type: string
+          description: |
+            Extra installer-environment kernel arguments (docs/04-install-spec.md
+            §5.4), appended to the boot line the engine composes for the
+            installer kernel (both carriers: the repacked ISO's isolinux/grub
+            configs and the PXE netboot entry). The escape hatch for
+            hardware-specific boot failures no human can fix by pressing `e`
+            on an unattended machine — the canonical case: a GPU the
+            installer's nouveau driver hangs on
+            (`nomodeset modprobe.blacklist=nouveau`). Tokens are
+            whitespace-separated; each must match ^[A-Za-z0-9._,:%/+=@^~-]+$
+            (no quoting, redirection or ; — the same string is interpolated
+            into iPXE and GRUB boot lines), and keys the pipeline owns
+            (BOOTIF, ip, console, inst.ks, inst.repo, inst.syslog, auto, ds,
+            file, priority, preseed/url, seedfrom, modloop, alpine_repo,
+            apkovl, mammoth_base, modules, quiet) are rejected — their
+            engine-owned twins exist (MAMMOTH_INSTALL_CONSOLE for console).
+            windows distros reject the field (WinPE boots a BCD store, not a
+            kernel command line).
+        installed_kernel_args:
+          type: string
+          description: |
+            Kernel arguments persisted into the INSTALLED system's bootloader
+            (docs/04-install-spec.md §5.4): GRUB_CMDLINE_LINUX via
+            update-grub (autoinstall/preseed), bootloader --append
+            (kickstart), the agent's grub.cfg line. Needed alongside
+            kernel_args when the broken hardware misbehaves in the installed
+            system too — a nouveau-hostile GPU hangs the first boot exactly
+            like the installer until the vendor driver lands. Same token
+            rules and reserved keys as kernel_args; same windows rejection.
 
 
     Policy:

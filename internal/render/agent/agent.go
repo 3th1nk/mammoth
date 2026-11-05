@@ -97,9 +97,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			{Name: answerSH, Content: sh},
 		}, render.BootParams{
 			AnswerURL:           base + "/" + answerSH,
-			KernelArgs:          isoKernelArgs,
+			KernelArgs:          render.WithExtraArgs(isoKernelArgs, in.ExtraKernelArgs),
 			InstallerAutoReboot: true,
-			NetbootKernelArgs:   netbootKernelArgs(in),
+			NetbootKernelArgs:   render.WithExtraArgs(netbootKernelArgs(in), in.ExtraKernelArgs),
 		}, nil
 }
 
@@ -304,6 +304,10 @@ func renderSH(in render.InstallInputs) string {
 	fmt.Fprintf(&b, "MAMMOTH_LOG_URL=%s\n", shQuote(in.AgentLogURL))
 	fmt.Fprintf(&b, "MAMMOTH_PACKAGES=%s\n", shQuote("alpine-base linux-lts openssh"))
 	fmt.Fprintf(&b, "MAMMOTH_SSH_KEYS=%s\n", shQuote(strings.Join(sshKeys(in.SSHPublicKeys), "\n")))
+	// boot.installed_kernel_args (docs/04-install-spec.md §5.4): the runtime
+	// appends it to the installed system's grub.cfg menu line (empty = the
+	// param-expansion no-ops).
+	fmt.Fprintf(&b, "MAMMOTH_INSTALLED_KERNEL_ARGS=%s\n", shQuote(in.InstalledKernelArgs))
 
 	// disks: mammoth_disk <device> <size_bytes|-> — controller-named volumes
 	// (Redfish LogicalDriveN) have no kernel node; the runtime resolves them

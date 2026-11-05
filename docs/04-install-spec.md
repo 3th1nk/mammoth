@@ -335,11 +335,43 @@ spec 是发行版无关的声明;方言不能落地的项在**渲染期显式拒
 {
   "boot": {
     "strategy": "pxe",       // virtual_media | pxe(缺省 = 部署默认,capabilities.boot_strategy_default)
-    "installer": "agent"     // setup | agent(缺省 = setup)。windows 专用;其他发行版提交即拒
+    "installer": "agent",    // setup | agent(缺省 = setup)。windows 专用;其他发行版提交即拒
+    "kernel_args": "nomodeset modprobe.blacklist=nouveau",
+    "installed_kernel_args": "modprobe.blacklist=nouveau"
   }  // boot.installer 可选:setup|agent|auto(缺省 setup;auto=按部署
   // 事实判定——SMB 导出已配置走 setup,未配置走 agent apply)
 }
 ```
+
+`kernel_args` / `installed_kernel_args` — **内核参数逃生口**(无人值守装机的
+"GRUB 按 e"替代)。真实场景:浪潮 NF5280M6 + Tesla T4 级 GPU,安装器内核的
+nouveau 驱动初始化不兼容 GPU 即挂死;有人值守可按 `e` 手敲
+`nomodeset modprobe.blacklist=nouveau`,无人值守只能任务静默超时。两字段的
+生命周期:
+
+| 字段 | 生效范围 | 落点 |
+|------|---------|------|
+| `kernel_args` | 仅安装器环境 | 引擎拼的引导行末尾(ISO 的 isolinux/grub 与 PXE netboot 项两条) |
+| `installed_kernel_args` | 装好的系统 | kickstart `bootloader --append`;autoinstall/preseed 写 `GRUB_CMDLINE_LINUX` + update-grub;agent 通路的 grub.cfg 行 |
+
+GPU 类问题两段都要:`kernel_args` 解安装阶段,`installed_kernel_args` 解
+装好后的首启(nouveau 敌对 GPU 装完照样挂,直到装上厂商驱动)。
+
+契约约束(提交即拒,`SCHEMA_INVALID_BOOT`):
+
+- token 按空白切分,每个须匹配 `^[A-Za-z0-9._,:%/+=@^~-]+$`——同一字符串
+  原样进 iPXE `kernel` 行与 GRUB `linux` 行,引号/`;`/`$` 一律不入;
+- 管道自有 key 拒绝(`BOOTIF` `ip` `console` `modules` `inst.ks` `inst.repo`
+  `inst.syslog` `inst.text` `auto` `priority` `preseed/file` `seedfrom` `ds`
+  `file` `modloop` `alpine_repo` `apkovl` `mammoth_base`)——引擎已拼,
+  重复只会遮蔽语义(console 走 `MAMMOTH_INSTALL_CONSOLE`);
+- windows 两字段均拒:WinPE 引导的是 BCD store,没有内核命令行可挂。
+
+排障:安装期参数已随引导行进 `/proc/cmdline`,autoinstall early-commands
+会快照回传 task_logs(9abe7c8);装后参数写进 `/etc/default/grub` 与
+grub.cfg,`cat /proc/cmdline` 可验。
+
+
 
 `installer` 选择 **windows 安装通路**(docs/compat/distros.md §windows 通路路线):
 

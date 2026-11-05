@@ -43,6 +43,9 @@ func PlanInstall(ctx context.Context, specJSON json.RawMessage, hw *bmc.Hardware
 	if err := validateStorageExtras(&spec); err != nil {
 		return nil, err
 	}
+	if err := validateBootExtras(&spec); err != nil {
+		return nil, err
+	}
 
 	var warnings []string
 	if hw == nil || len(hw.Disks) == 0 {
@@ -80,6 +83,11 @@ func PlanInstall(ctx context.Context, specJSON json.RawMessage, hw *bmc.Hardware
 		AnswerBaseURL: "http://plan/render/plan",
 		CompleteURL:   "http://plan/render/plan/complete",
 		AgentLogURL:   "http://plan/render/plan/agentlog",
+		// The declared kernel arguments ride along so dialect gates (the
+		// windows rejection) fire in the dry-run exactly as they will in
+		// the real render.
+		ExtraKernelArgs:     spec.Boot.KernelArgs,
+		InstalledKernelArgs: spec.Boot.InstalledKernelArgs,
 	}
 	for _, n := range spec.Network {
 		inputs.Network = append(inputs.Network, n.toRender())

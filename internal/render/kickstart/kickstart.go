@@ -321,7 +321,7 @@ sh /run/install/mammoth/storage.sh > /run/install/mammoth/90-storage.ks
 {{.}}
 {{- end}}
 {{- if not .StoragePre}}
-bootloader{{if .BootDrive}} --boot-drive={{.BootDrive}}{{end}}
+bootloader{{if .BootDrive}} --boot-drive={{.BootDrive}}{{end}}{{if .BootloaderAppend}} --append="{{.BootloaderAppend}}"{{end}}
 {{- if .WipeDrives}}
 zerombr
 clearpart --drives={{.WipeDrives}} --initlabel --all
@@ -883,7 +883,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	storageShellText := ""
 	bootDrive := in.BootDrive
 	if len(dyn) > 0 {
-		storageShellText = storageShell(dyn, wipe, dynMemberLines, bootDrive)
+		storageShellText = storageShell(dyn, wipe, dynMemberLines, bootDrive, in.InstalledKernelArgs)
 		bootDrive = "" // the bootloader line moves into the include
 		wipe = nil     // clearpart is emitted by the include for all disks
 	}
@@ -959,6 +959,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		"SSHPublicKeys":         in.SSHPublicKeys,
 		"ImageSource":           in.ImageSource,
 		"BootDrive":             bootDrive,
+		"BootloaderAppend":      in.InstalledKernelArgs,
 		"WipeDrives":            strings.Join(wipe, ","),
 		"RemoveParts":           strings.Join(removeList, ","),
 		"PartLines":             partLines,
@@ -1055,6 +1056,9 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	if host := render.SyslogHost(in.AnswerBaseURL); host != "" {
 		kernelArgs += " inst.syslog=" + render.SyslogTarget(host, in.SyslogPort)
 	}
+	// boot.kernel_args (docs/04-install-spec.md §5.4): the user's escape
+	// hatch lands last on the line (last console=/verbose knobs win).
+	kernelArgs = render.WithExtraArgs(kernelArgs, in.ExtraKernelArgs)
 	boot := render.BootParams{
 		AnswerURL:           primaryURL,
 		KernelArgs:          kernelArgs,
@@ -1063,12 +1067,25 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	return answers, boot, nil
 }
 
+// bootloaderAppend renders the bootloader directive's --append clause: the
+// installed system's persistent kernel arguments (boot.installed_kernel_args,
+// docs/04-install-spec.md §5.4) land in the target's GRUB_CMDLINE_LINUX at
+// anaconda's bootloader write. Tokens are charset-validated at parse
+// (no quotes, no whitespace inside a token), so the double-quoted clause
+// needs no further escaping. Empty declared set → empty clause.
+func bootloaderAppend(installedKernelArgs string) string {
+	if installedKernelArgs == "" {
+		return ""
+	}
+	return ` --append="` + installedKernelArgs + `"`
+}
+
 // storageShell emits the sh snippet executed in %pre: claimed disks are
 // re-identified by size (+serial when known) among the installer's block
 // devices, and the wipe/part/bootloader stanzas land in a dynamic %include.
 // The tolerance is 1% (min 64MiB) — Redfish and kernel capacities agree to
 // within controller rounding, and real disks never sit that close.
-func storageShell(dyn []dynDisk, wipeStatic []string, dynMemberLines []string, bootDrive string) string {
+func storageShell(dyn []dynDisk, wipeStatic []string, dynMemberLines []string, bootDrive, installedKernelArgs string) string {
 	var b strings.Builder
 	b.WriteString("# size/serial-resolved storage stanzas, produced by mammoth\n")
 	b.WriteString("resolve() {\n")
@@ -1122,9 +1139,9 @@ func storageShell(dyn []dynDisk, wipeStatic []string, dynMemberLines []string, b
 				ph = "$D" + fmt.Sprint(d.idx)
 			}
 		}
-		fmt.Fprintf(&b, "bootloader --boot-drive=%s\n", ph)
+		fmt.Fprintf(&b, "bootloader --boot-drive=%s%s\n", ph, bootloaderAppend(installedKernelArgs))
 	} else {
-		b.WriteString("bootloader\n")
+		b.WriteString("bootloader" + bootloaderAppend(installedKernelArgs) + "\n")
 	}
 	b.WriteString("MAMMOTH_STORAGE_KS\n")
 	return b.String()

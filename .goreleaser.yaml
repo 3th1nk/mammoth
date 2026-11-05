@@ -26,8 +26,22 @@ checksum:
 
 changelog:
   sort: asc
+  groups:
+    - title: 新特性
+      regexp: '^feat[(:]'
+      order: 0
+    - title: 修复
+      regexp: '^fix[(:]'
+      order: 1
+    - title: 其他
+      order: 999
   filters:
+    # 仓库提交带 scope(docs(03-api):/chore(deps):),裸 ^docs: 匹配不到——
+    # 必须 [(:] 双收(v1.3.0 发布体 384 行的另一根因)。
     exclude:
-      - "^docs:"
-      - "^chore:"
-      - Merge pull request
+      - "^docs[(:]"
+      - "^chore[(:]"
+      - "^ci[(:]"
+      - "^test[(:]"
+      - "^build[(:]"
+      - "^Merge pull request"

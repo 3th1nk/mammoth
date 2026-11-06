@@ -20,10 +20,11 @@ COPY .git .git
 ARG TARGETOS TARGETARCH
 # VERSION/COMMIT: auto-detected from git (describe --tags --always --dirty)
 # when the context carries .git; explicit --build-arg overrides for CI and
-# tarball builds. Empty default = auto.
+# tarball builds. Empty default = auto. Explicit values keep the tag's
+# leading v (v1.3.0) like describe does — see internal/version.
 ARG VERSION=""
 ARG COMMIT=""
-RUN VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo 0.1.0-dev)}" \
+RUN VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo v0.1.0-dev)}" \
  && COMMIT="${COMMIT:-$(git rev-parse HEAD 2>/dev/null || echo none)}" \
  && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -buildvcs=false -ldflags "-s -w -X github.com/3th1nk/mammoth/internal/version.Version=${VERSION} -X github.com/3th1nk/mammoth/internal/version.Commit=${COMMIT}" \

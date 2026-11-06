@@ -14,7 +14,9 @@ builds:
     goos: [linux, darwin]
     goarch: [amd64, arm64]
     ldflags:
-      - -s -w -X github.com/3th1nk/mammoth/internal/version.Version={{.Version}}
+      # {{.Version}} 剥掉了 tag 的 v(1.3.0),补回与 Docker git describe 同形(v1.3.0)。
+      # 不用 {{.Tag}}:snapshot 时它停在上一个正式 tag,快照二进制会冒充正式版。
+      - -s -w -X github.com/3th1nk/mammoth/internal/version.Version=v{{.Version}}
         -X github.com/3th1nk/mammoth/internal/version.Commit={{.Commit}}
 
 archives:

@@ -120,7 +120,7 @@ func agentScript() string {
 # any failing command would kill the whole runtime silently (no report, no
 # shell). This runtime handles its own errors: strip the -e and re-exec. The
 # child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
-SCRIPT_VERSION="ab-v16"
+SCRIPT_VERSION="ab-v17"
 case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
 log "agent runtime $SCRIPT_VERSION starting"
 
@@ -612,14 +612,17 @@ seed_partition() { # NoCloud seed onto a CIDATA partition (slice 2)
     # Append a 16MiB vfat partition in the trailing free space (the image
     # ends well before the disk; sfdisk rewrites the table with the backup
     # GPT header at the real disk end).
-    echo 'type=0c, size=32768' | sfdisk --append "$dev" >>/tmp/mammoth-seed.err 2>&1 || { echo "sfdisk append failed" >> /tmp/mammoth-seed.err; return 1; }
+    echo 'type=0c, size=32768' | sfdisk --append "$dev" >>/tmp/mammoth-seed.err 2>&1 || { echo "sfdisk append failed (rc=$?)" >> /tmp/mammoth-seed.err; return 1; }
+    # Diagnostic anchor: what the kernel actually created on the device.
+    sfdisk -d "$dev" >>/tmp/mammoth-seed.err 2>&1
+    ls "$dev"?* >>/tmp/mammoth-seed.err 2>&1
     # -a ADDS the new partition's node (a bare -u only resizes existing ones,
     # so the appended seed partition never materialized on real hardware —
     # 2288H LogicalDrive0, the container smoke's sfdisk-file path could not
     # have caught this).
     partx -a "$dev" >>/tmp/mammoth-seed.err 2>&1 || partx -u "$dev" >>/tmp/mammoth-seed.err 2>&1
     part=$(sfdisk -d "$dev" 2>/dev/null | grep -E '^/dev/' | tail -1 | cut -d: -f1 | tr -d ' ')
-    [ -b "$part" ] || { echo "seed partition node not found ($part)" >> /tmp/mammoth-seed.err; return 1; }
+    [ -b "$part" ] || { echo "seed partition node not found (part=$part, dev=$dev)" >> /tmp/mammoth-seed.err; return 1; }
     mkfs.vfat -n CIDATA "$part" >>/tmp/mammoth-seed.err 2>&1 || return 1
     mkdir -p /tmp/seedmnt && mount -t vfat "$part" /tmp/seedmnt || { echo "seed mount failed" >> /tmp/mammoth-seed.err; return 1; }
     echo "$MAMMOTH_SEED_META_DATA" | base64 -d > /tmp/seedmnt/meta-data
@@ -822,7 +825,7 @@ if [ "$MAMMOTH_DD_MODE" = "1" ]; then
     dd_image || bail dd "image write failed: $(tail -c 220 /tmp/mammoth-dd.err 2>/dev/null | tr '\n' ' ' | tr -d '"\\')"
     sync
     if [ "$MAMMOTH_SEED" = "1" ]; then
-        seed_partition || bail seed "seed injection failed: $(tail -c 220 /tmp/mammoth-seed.err 2>/dev/null | tr '\n' ' ' | tr -d '"\\')"
+        seed_partition || bail seed "seed injection failed: $(tail -c 600 /tmp/mammoth-seed.err 2>/dev/null | tr '\n' ' ' | tr -d '"\\')"
     fi
     if report applied "image written and verified ($MAMMOTH_DD_FORMAT) — first boot pending"; then
         log "rebooting into the image's first boot"

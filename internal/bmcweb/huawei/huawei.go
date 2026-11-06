@@ -46,6 +46,22 @@ func (Driver) Matches(m *store.Machine) bool {
 // this browser.
 func (Driver) BootScript(*store.Machine) string {
 	return `
+    // slot hygiene: closing a tab is NOT a logout — the previous console
+    // run's web session lingers server-side until the BMC's timeout, and
+    // repeated clicks pile up zombie slots against the small session cap
+    // (~8; real run 2026-11-07: table full from a morning of test clicks).
+    // The previous run's session id rides localStorage (shared across the
+    // launcher's tabs) — retire it before minting a new one so repeated
+    // clicks stay self-cleaning.
+    const prevSid = localStorage.getItem('mammoth_sid');
+    if (prevSid) {
+      try {
+        const dr = await fetch('/redfish/v1/SessionService/Sessions/' + prevSid, {
+          method: 'DELETE', headers: { From: 'WebUI', 'X-Requested-With': 'XMLHttpRequest' },
+        });
+        log('清理上次会话 ' + prevSid.slice(0, 8) + '…: HTTP ' + dr.status);
+      } catch (_) {}
+    }
     log('登录 BMC (' + BOOT.vendor + ') …');
     const lr = await fetch('/redfish/v1/SessionService/Sessions/', {
       method: 'POST',
@@ -79,6 +95,7 @@ func (Driver) BootScript(*store.Machine) string {
     if (!localStorage.getItem('manufacturer')) localStorage.setItem('manufacturer', 'Huawei');
     if (!localStorage.getItem('softwareName')) localStorage.setItem('softwareName', 'iBMC');
     sessionStorage.setItem('sessionid', lbody.Id || '');
+    localStorage.setItem('mammoth_sid', lbody.Id || ''); // next click retires this one
 
     // session activation — the vendor SPA does this on every page load and
     // before launching the console; the ticket path expects it.

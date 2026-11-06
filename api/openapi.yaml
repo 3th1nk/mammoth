@@ -1222,6 +1222,38 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /api/v1/images/{id}/file:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: fetchImageFile
+      tags: [images]
+      security: []
+      summary: Fetch the cached image file (machine face)
+      description: |
+        Machine-facing endpoint for the dd pathway (docs/09「镜像直写通路」):
+        the streaming machine pulls the cached whole-disk image over HTTP —
+        the same trust model as /netboot/files (the provisioning L2 is the
+        boundary; the path carries no bearer token). Range requests are
+        honored (206 with Content-Range, Accept-Ranges: bytes), same
+        resumable-fetch semantics as the netboot trees.
+      responses:
+        '200':
+          description: The image file bytes.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The image is not in the ready state (still fetching or failed).
+
   /api/v1/webhooks:
     post:
       operationId: createWebhook

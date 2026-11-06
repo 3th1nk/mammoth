@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -173,12 +174,69 @@ func (s *Server) resolveImageRefs(ctx context.Context, specRaw json.RawMessage) 
 	if img == nil {
 		return specRaw, nil
 	}
-	img["source"] = im.FilePath
 	img["checksum"] = "sha256:" + im.SHA256
 	delete(img, "id")
+	// The dd pathway (docs/09「镜像直写通路」) streams from the MACHINE, not
+	// the engine: source must be an http(s) URL the machine can reach — this
+	// route. Every other consumer (installers, media assembly) reads the
+	// engine-local cache path.
+	if d, _ := img["distro"].(string); d == "dd" {
+		base := strings.TrimSuffix(s.ExternalURL, "/")
+		img["source"] = base + "/api/v1/images/" + probe.Image.Id + "/file"
+	} else {
+		img["source"] = im.FilePath
+	}
 	out, merr := json.Marshal(spec)
 	if merr != nil {
 		return nil, verr("SCHEMA_INVALID_SPEC", "spec re-serialization failed: %v", merr)
 	}
 	return out, nil
+}
+
+// FetchImageFile serves the cached image file to the STREAMING MACHINE
+// (docs/09「镜像直写通路」): the dd pathway's runtime pulls the whole-disk
+// image over HTTP from this engine — the resolveImageRefs dd branch rewrites
+// spec.image.source to this route's URL. Same trust model as the netboot
+// file trees (the provisioning L2 is the boundary; no bearer token), same
+// Range semantics (a multi-gigabyte image resuming after a dropped link
+// continues at the last byte). state=ready is the gate: a fetching or
+// failed row has no trustworthy bytes to serve.
+func (s *Server) FetchImageFile(ctx context.Context, request gen.FetchImageFileRequestObject) (gen.FetchImageFileResponseObject, error) {
+	im, err := s.Images.Get(ctx, request.Id)
+	if err != nil {
+		return nil, verrStatus(http.StatusNotFound, "SCHEMA_NOT_FOUND",
+			"image %q not found in the library", request.Id)
+	}
+	if im.State != "ready" || im.FilePath == "" {
+		return nil, verrStatus(http.StatusConflict, "IMAGE_NOT_READY",
+			"image %q is not ready (state=%s) — poll GET /images/%s until state=ready",
+			request.Id, im.State, request.Id)
+	}
+	f, err := os.Open(im.FilePath)
+	if err != nil {
+		return nil, verrStatus(http.StatusNotFound, "SCHEMA_NOT_FOUND",
+			"cached file missing for image %q", request.Id)
+	}
+	// Range fetches answer straight on the gin writer and return a nil
+	// response: the strict contract has no 206 shape (the same shape the
+	// netboot file endpoint uses — see there for the full story).
+	if gc := rangeFetch(ctx); gc != nil {
+		st, serr := f.Stat()
+		if serr != nil {
+			f.Close()
+			return nil, verrStatus(http.StatusInternalServerError, "IMAGE_STAT_FAILED", "stat failed: %s", serr.Error())
+		}
+		serveRangeAware(gc, f, st)
+		f.Close()
+		return nil, nil
+	}
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, verrStatus(http.StatusInternalServerError, "IMAGE_STAT_FAILED", "stat failed: %s", err.Error())
+	}
+	return gen.FetchImageFile200ApplicationoctetStreamResponse{
+		Body:          f,
+		ContentLength: st.Size(),
+	}, nil
 }

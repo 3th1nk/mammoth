@@ -105,18 +105,22 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 			// from the extended alpine pool (the same tools the windows
 			// agent apply path consumes).
 			apksISO = ""
+			needsPool := b.Spec.Image.Format == "raw.xz" // apk xz decompression
 			for _, a := range b.Answers {
 				if strings.Contains(a.Content, "MAMMOTH_SEED=1") {
-					if e.WindowsApplyAlpineISO == "" {
-						return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,
-							"dd seed injection (identity/network/access intent) needs the alpine extended ISO pool (set MAMMOTH_WINDOWS_APPLY_ALPINE_ISO) — sfdisk/dosfstools are absent from the busybox runtime")
-					}
-					apksISO, terr = builder.EnsureISO(ctx, e.WindowsApplyAlpineISO, e.MediaWorkDir)
-					if terr != nil {
-						return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
-							"dd seed tools pool fetch failed: %s", terr.Error())
-					}
+					needsPool = true
 					break
+				}
+			}
+			if needsPool {
+				if e.WindowsApplyAlpineISO == "" {
+					return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,
+						"dd pathway needs the alpine extended ISO pool (set MAMMOTH_WINDOWS_APPLY_ALPINE_ISO) — the seed injection (sfdisk/dosfstools) or raw.xz decompression (apk xz) is absent from the busybox runtime")
+				}
+				apksISO, terr = builder.EnsureISO(ctx, e.WindowsApplyAlpineISO, e.MediaWorkDir)
+				if terr != nil {
+					return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+						"dd tools pool fetch failed: %s", terr.Error())
 				}
 			}
 		case render.FamilyOf(driver) == "windows":

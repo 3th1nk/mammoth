@@ -579,8 +579,14 @@ subiquity 的镜像探测在**安装器环境无网/探测失败**时会回落�
    平面接口(MAC 匹配,bond/vlan 诚实拒);口令 crypt SHA512(复用 autoinstall
    导出);prepare 在 seed 意图时才挂扩展池(alpine_repo 条件进 boot 行);
    verify_ready 维持完成报告=验证面(镜像首启是镜像自己的事);
-   ③raw.gz 默认化 + raw.xz(apks 携带)+ 签名校验(cosign/minisign,
-   镜像工件面硬化项联动)。
+   ③~~raw.xz(apks 携带)~~ **✅ 代码落地(2026-11-06)**——format 三档
+   收齐(raw/raw.gz/raw.xz;raw.gz 为推荐交付,raw 未压缩是零依赖底座);
+   raw.xz 在运行时 apk add xz(boot 行 alpine_repo= 条件同 seed,prepare
+   按 format/seed 双动因挂扩展池)。**签名校验 = 镜像工件面硬化项,不入 dd
+   通路**——dd 的写盘流校验已覆盖完整性(流上 sha256 对比 spec 声明,API
+   信任模型承载意图真实性);发布者真实性(谁构建的镜像)属镜像库注册期
+   验证(引擎持文件可跑 minisign,纯 Go ed25519 可实现),随 imaging
+   工作流立项,见「长期方向」。
 
 ## 已评估并排除的方向(决策记录,避免重新论证)
 

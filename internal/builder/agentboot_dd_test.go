@@ -29,6 +29,8 @@ func TestRuntimeDDDispatchAndStream(t *testing.T) {
 		`wget -q -O - "$MAMMOTH_DD_URL" | $decomp | tee "$MAMMOTH_DD_TARGET" | sha256sum`,
 		"set -o pipefail",
 		`raw.gz) decomp="gunzip -c" ;;`,
+		`raw.xz) decomp="xz -dc" ;;`,
+		"apk add --no-cache xz",
 		`reboot -f`,
 	} {
 		if !strings.Contains(script, want) {

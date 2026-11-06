@@ -2904,14 +2904,17 @@ components:
                 intent, honest 422 otherwise).
             format:
               type: string
-              enum: [raw, raw.gz]
+              enum: [raw, raw.gz, raw.xz]
               default: raw
               description: |-
                 dd pathway only: the image's compression. raw = uncompressed;
                 raw.gz = gzip (busybox gunzip inline — the runtime decompresses
-                on the fly while streaming to disk). The checksum is always the
-                UNCOMPRESSED image's sha256 (the stream that hits the disk is
-                verified byte-for-byte). Other distros reject the field.
+                on the fly while streaming to disk; the RECOMMENDED delivery —
+                zero extra dependencies); raw.xz = xz (needs the alpine
+                extended pool staged for the apk xz package — the engine gates
+                it at prepare). The checksum is always the UNCOMPRESSED
+                image's sha256 (the stream that hits the disk is verified
+                byte-for-byte). Other distros reject the field.
             windows_image_name:
               type: string
               description: |-

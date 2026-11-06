@@ -513,10 +513,10 @@ func validateDD(spec *installSpecView) error {
 			"image.checksum is required for the dd pathway — the write is verified by sha256 of the stream that hit the disk (uncompressed-image hash)")
 	}
 	switch spec.Image.Format {
-	case "", "raw", "raw.gz":
+	case "", "raw", "raw.gz", "raw.xz":
 	default:
 		return classifiedErr("SCHEMA_INVALID_SPEC", false,
-			"image.format %q: must be raw or raw.gz (busybox-native decompression; raw.xz lands later)", spec.Image.Format)
+			"image.format %q: must be raw, raw.gz or raw.xz", spec.Image.Format)
 	}
 	if len(spec.Storage.Disks) != 1 {
 		return classifiedErr("SCHEMA_INVALID_SPEC", false,

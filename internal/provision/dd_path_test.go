@@ -60,6 +60,13 @@ func TestPlanInstallDD(t *testing.T) {
 	  "boot": {"strategy": "pxe"}}`), hw, nil, reg); err != nil {
 		t.Fatalf("dd plan with seed intent: %v", err)
 	}
+	// raw.xz passes the format gate (pool gating is prepare-time)
+	if _, err = PlanInstall(context.Background(), json.RawMessage(`{
+	  "image": {"source": "http://x/i.img.xz", "checksum": "sha256:ab", "distro": "dd", "format": "raw.xz"},
+	  "storage": {"disks": [{"select": {"match": {}}, "wipe": true}]},
+	  "boot": {"strategy": "pxe"}}`), hw, nil, reg); err != nil {
+		t.Fatalf("dd plan raw.xz: %v", err)
+	}
 	// bond intent stays an honest reject (the seed carries plain interfaces)
 	_, err = PlanInstall(context.Background(), json.RawMessage(`{
 	  "image": {"source": "http://x/i.img", "checksum": "sha256:ab", "distro": "dd"},

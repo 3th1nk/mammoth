@@ -637,8 +637,14 @@ dd_image() { # image direct-write (roadmap「镜像直写通路」slice 1)
     # 1.26+), and gzip's own CRC catches decompression corruption.
     case "$MAMMOTH_DD_FORMAT" in
         raw.gz) decomp="gunzip -c" ;;
+        raw.xz) decomp="xz -dc" ;;
         *)      decomp="cat" ;;
     esac
+    if [ "$decomp" = "xz -dc" ]; then
+        # busybox has no xz — the extended pool's apk package (the boot line
+        # carries alpine_repo= exactly when the pool is staged).
+        apk add --no-cache xz >>/tmp/mammoth-dd.err 2>&1 || { echo "apk xz failed" >> /tmp/mammoth-dd.err; return 1; }
+    fi
     log "streaming $MAMMOTH_DD_FORMAT image to $MAMMOTH_DD_TARGET"
     set -o pipefail
     wget -q -O - "$MAMMOTH_DD_URL" | $decomp | tee "$MAMMOTH_DD_TARGET" | sha256sum > /tmp/mammoth-dd.sha 2>>/tmp/mammoth-dd.err

@@ -42,9 +42,13 @@ func BearerAuth(token string) gin.HandlerFunc {
 			c.Next()
 			return
 		case strings.HasPrefix(c.FullPath(), "/render/"),
-			strings.HasPrefix(c.FullPath(), "/netboot/"):
+			strings.HasPrefix(c.FullPath(), "/netboot/"),
+			c.FullPath() == "/api/v1/images/:id/file":
 			// Machine-facing surface: the task token in the path is the
-			// credential (docs/06-install-pipeline.md §2.1, §3.3).
+			// credential (docs/06-install-pipeline.md §2.1, §3.3). The dd
+			// image file route (docs/09「镜像直写通路」) joins the same trust
+			// model — the provisioning L2 is the boundary, and the image id
+			// in the spec snapshot is what names the bytes.
 			c.Next()
 			return
 		}

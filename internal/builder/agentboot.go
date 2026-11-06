@@ -120,7 +120,7 @@ func agentScript() string {
 # any failing command would kill the whole runtime silently (no report, no
 # shell). This runtime handles its own errors: strip the -e and re-exec. The
 # child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
-SCRIPT_VERSION="ab-v25"
+SCRIPT_VERSION="ab-v26"
 case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
 log "agent runtime $SCRIPT_VERSION starting"
 
@@ -612,7 +612,10 @@ seed_partition() { # NoCloud seed onto the image's CIDATA slot (封装契约)
     # alpine's sfdisk 2.40 append deterministically fails on large MegaRAID
     # volumes (libfdisk EINVAL, 2288H) and kernel partition notification has
     # the same quirk, so the slot is created at IMAGE BUILD time.
-    apk add --no-cache dosfstools util-linux >/dev/console 2>&1 || { echo "apk tools failed" >> /tmp/mammoth-seed.err; return 1; }
+    # sfdisk lives in util-linux-MISC on alpine (the base util-linux package
+    # ships only the core tools) — a missing -misc is exactly how the PATH
+    # falls back to the busybox applet that cannot read GPT (ab-v25 round).
+    apk add --no-cache dosfstools util-linux util-linux-misc >/dev/console 2>&1 || { echo "apk tools failed" >> /tmp/mammoth-seed.err; return 1; }
     dev="$MAMMOTH_DD_TARGET"
     # /usr/sbin/sfdisk = util-linux's REAL sfdisk: PATH's /bin/sfdisk is the
     # busybox applet, which does not speak GPT — it answered "does not

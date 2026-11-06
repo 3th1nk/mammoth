@@ -24,11 +24,13 @@ func TestRuntimeDDDispatchAndStream(t *testing.T) {
 	for _, want := range []string{
 		`seed_partition || bail seed`,
 		`echo "$MAMMOTH_SEED_USER_DATA" | base64 -d > /tmp/seedmnt/user-data`,
-		"mkfs.vfat -n CIDATA",
+		"$MKFS_V -n CIDATA",
 		`dd_image || bail dd`,
 		// conv=fsync write + READ-BACK verification: the stream hash cannot
 		// see what the disk holds (the 2288H lesson — a "verified" tee write
-		// read back as no-partition-table on LSI write-back cache).
+		// read back as no-partition-table on LSI write-back cache). The
+		// partition tools are absolute util-linux/dosfstools binaries: the
+		// PATH-first busybox sfdisk does not speak GPT (same lesson).
 		`dd of="$MAMMOTH_DD_TARGET" bs=1M conv=fsync`,
 		"blockdev --flushbufs",
 		`dd if="$MAMMOTH_DD_TARGET" bs=1M count=$blocks 2>/dev/null | head -c "$MAMMOTH_DD_IMAGE_BYTES" | sha256sum`,
@@ -37,6 +39,7 @@ func TestRuntimeDDDispatchAndStream(t *testing.T) {
 		`raw.gz) decomp="gunzip -c" ;;`,
 		`raw.xz) decomp="xz -dc" ;;`,
 		"apk add --no-cache xz",
+		"SFDISK=/usr/sbin/sfdisk",
 		`reboot -f`,
 	} {
 		if !strings.Contains(script, want) {

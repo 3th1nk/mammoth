@@ -14,6 +14,10 @@ import (
 // faithful pure-Go implementation; the spec's published vector pins it.
 
 // cryptSHA512 renders "$6$<salt>$<hash>" (5000 rounds), salt ≤16 chars.
+// CryptSHA512 is the exported form for sibling dialects that also need a
+// shadow-safe hash (the dd pathway's cloud-init chpasswd list).
+func CryptSHA512(password, salt string) string { return cryptSHA512(password, salt) }
+
 func cryptSHA512(password, salt string) string {
 	c := sha512_crypt.New()
 	out, err := c.Generate([]byte(password), []byte("$6$"+salt))

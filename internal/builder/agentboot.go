@@ -604,6 +604,30 @@ EOF
     log "bootloader installed ($([ "$uefi" = 1 ] && echo "grub-efi $ESP_MOUNT" || echo "grub-bios MBR /dev/$MAMMOTH_BOOT_DRIVE"))"
 }
 
+seed_partition() { # NoCloud seed onto a CIDATA partition (slice 2)
+    # Tools from the extended alpine pool (alpine_repo= rides the boot line
+    # exactly when the plan carries the seed).
+    apk add --no-cache sfdisk dosfstools partx >/dev/console 2>&1 || { echo "apk tools failed" >> /tmp/mammoth-seed.err; return 1; }
+    dev="$MAMMOTH_DD_TARGET"
+    # Append a 16MiB vfat partition in the trailing free space (the image
+    # ends well before the disk; sfdisk rewrites the table with the backup
+    # GPT header at the real disk end).
+    echo 'type=0c, size=32768' | sfdisk --append "$dev" >>/tmp/mammoth-seed.err 2>&1 || { echo "sfdisk append failed" >> /tmp/mammoth-seed.err; return 1; }
+    partx -u "$dev" >>/tmp/mammoth-seed.err 2>&1
+    part=$(sfdisk -d "$dev" 2>/dev/null | grep -E '^/dev/' | tail -1 | cut -d: -f1 | tr -d ' ')
+    [ -b "$part" ] || { echo "seed partition node not found ($part)" >> /tmp/mammoth-seed.err; return 1; }
+    mkfs.vfat -n CIDATA "$part" >>/tmp/mammoth-seed.err 2>&1 || return 1
+    mkdir -p /tmp/seedmnt && mount -t vfat "$part" /tmp/seedmnt || { echo "seed mount failed" >> /tmp/mammoth-seed.err; return 1; }
+    echo "$MAMMOTH_SEED_META_DATA" | base64 -d > /tmp/seedmnt/meta-data
+    echo "$MAMMOTH_SEED_USER_DATA" | base64 -d > /tmp/seedmnt/user-data
+    if [ -n "$MAMMOTH_SEED_NETWORK_CONFIG" ]; then
+        echo "$MAMMOTH_SEED_NETWORK_CONFIG" | base64 -d > /tmp/seedmnt/network-config
+    fi
+    umount /tmp/seedmnt
+    sync
+    log "nocloud seed written to $part (CIDATA)"
+}
+
 dd_image() { # image direct-write (roadmap「镜像直写通路」slice 1)
     [ -n "$MAMMOTH_DD_URL" ] || { echo "plan carries no DD_URL" >> /tmp/mammoth-dd.err; return 1; }
     [ -n "$MAMMOTH_DD_TARGET" ] || { echo "plan carries no DD_TARGET" >> /tmp/mammoth-dd.err; return 1; }
@@ -787,6 +811,9 @@ if [ "$MAMMOTH_DD_MODE" = "1" ]; then
     log "image direct-write flow (dd)"
     dd_image || bail dd "image write failed: $(tail -c 220 /tmp/mammoth-dd.err 2>/dev/null | tr '\n' ' ' | tr -d '"\\')"
     sync
+    if [ "$MAMMOTH_SEED" = "1" ]; then
+        seed_partition || bail seed "seed injection failed: $(tail -c 220 /tmp/mammoth-seed.err 2>/dev/null | tr '\n' ' ' | tr -d '"\\')"
+    fi
     if report applied "image written and verified ($MAMMOTH_DD_FORMAT) — first boot pending"; then
         log "rebooting into the image's first boot"
         reboot -f

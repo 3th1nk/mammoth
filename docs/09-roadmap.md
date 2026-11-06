@@ -572,8 +572,13 @@ subiquity 的镜像探测在**安装器环境无网/探测失败**时会回落�
    prepare 跳过 ISO 解析(distro=dd 无介质,机器直连源 URL)+ 无 apks 子树
    (busybox-only)+ verify_ready 家族短路(完成报告=验证面,同 windows);
    qemu 冒烟待窗口(小镜像 + HTTP 源);
-   ②NoCloud seed 注入 + verify_ready 对齐(dd 的 verify 面 = 带内读
-   /etc/cloud + blkid,与方言通路同型);
+   ②~~NoCloud seed 注入 + verify_ready 对齐~~ **✅ 代码落地(2026-11-06,
+   0c331cd 后续)**——identity/network/access 意图随 CIDATA 分区生效:运行时
+   写后追加 16MiB vfat(sfdisk --append,扩展池 apk 工具),seed 三件
+   (meta-data/user-data/network-config)base64 内嵌 plan;网络 = netplan-v2
+   平面接口(MAC 匹配,bond/vlan 诚实拒);口令 crypt SHA512(复用 autoinstall
+   导出);prepare 在 seed 意图时才挂扩展池(alpine_repo 条件进 boot 行);
+   verify_ready 维持完成报告=验证面(镜像首启是镜像自己的事);
    ③raw.gz 默认化 + raw.xz(apks 携带)+ 签名校验(cosign/minisign,
    镜像工件面硬化项联动)。
 

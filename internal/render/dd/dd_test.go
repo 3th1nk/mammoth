@@ -56,6 +56,40 @@ func TestRenderDDPlan(t *testing.T) {
 	}
 }
 
+func TestRenderDDSeed(t *testing.T) {
+	d := New("dd")
+	in := ddInputs()
+	in.Hostname = "thor-edge-1"
+	in.RootPassword = "s3cret-xy"
+	in.SSHPublicKeys = []string{"ssh-ed25519 AAA k@h"}
+	in.Network = []render.NetworkEntry{{
+		Match:     &render.NetMatch{MAC: "AA:BB:CC:DD:EE:01"},
+		Addresses: []string{"192.168.1.221/24"},
+		Routes:    []render.NetRoute{{To: "default", Via: "192.168.1.1"}},
+	}}
+	answers, boot, err := d.RenderAnswers(in, render.MachineView{})
+	if err != nil {
+		t.Fatalf("render with seed: %v", err)
+	}
+	sh := answers[0].Content
+	for _, want := range []string{
+		"MAMMOTH_SEED=1",
+		"MAMMOTH_SEED_USER_DATA=",
+		"MAMMOTH_SEED_META_DATA=",
+		"MAMMOTH_SEED_NETWORK_CONFIG=",
+		"alpine_repo=", // tools pool rides exactly when the seed rides
+	} {
+		if !strings.Contains(sh, want) && !strings.Contains(boot.NetbootKernelArgs, want) {
+			t.Errorf("seed plan/netboot args missing %q", want)
+		}
+	}
+	// bond intent → render-time reject
+	in.Network[0].Bond = &render.NetBond{Mode: "active-backup"}
+	if _, _, err := d.RenderAnswers(in, render.MachineView{}); err == nil || !strings.Contains(err.Error(), "bond") {
+		t.Fatalf("bond err = %v, want bond reject", err)
+	}
+}
+
 func TestRenderDDRejects(t *testing.T) {
 	d := New("dd")
 	cases := []struct {

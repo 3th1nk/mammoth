@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/3th1nk/mammoth/internal/render"
 	"github.com/3th1nk/mammoth/internal/bmc"
+	"github.com/3th1nk/mammoth/internal/render"
 	"github.com/3th1nk/mammoth/internal/render/dd"
 )
 
@@ -50,14 +50,24 @@ func TestPlanInstallDD(t *testing.T) {
 		}
 		return ci.Code
 	}
-	// intent blocks are honest 422s until the NoCloud seed lands (slice 2)
-	_, err = PlanInstall(context.Background(), json.RawMessage(`{
+	// identity/network/access intent rides the NoCloud seed (slice 2)
+	if _, err = PlanInstall(context.Background(), json.RawMessage(`{
 	  "image": {"source": "http://x/i.img", "checksum": "sha256:ab", "distro": "dd"},
 	  "storage": {"disks": [{"select": {"match": {}}, "wipe": true}]},
 	  "identity": {"hostname_pattern": "n1"},
+	  "access": {"root_password": "s3cret-xy"},
+	  "network": [{"match": {"mac": "aa:bb:cc:dd:ee:01"}, "addresses": ["192.168.1.9/24"]}],
+	  "boot": {"strategy": "pxe"}}`), hw, nil, reg); err != nil {
+		t.Fatalf("dd plan with seed intent: %v", err)
+	}
+	// bond intent stays an honest reject (the seed carries plain interfaces)
+	_, err = PlanInstall(context.Background(), json.RawMessage(`{
+	  "image": {"source": "http://x/i.img", "checksum": "sha256:ab", "distro": "dd"},
+	  "storage": {"disks": [{"select": {"match": {}}, "wipe": true}]},
+	  "network": [{"bond": {"interfaces": [{"match": {"mac": "aa:bb:cc:dd:ee:01"}, "match": {"mac": "aa:bb:cc:dd:ee:02"}}], "mode": "active-backup"}}],
 	  "boot": {"strategy": "pxe"}}`), hw, nil, reg)
 	if codeOf(t, err) != "SCHEMA_INVALID_SPEC" {
-		t.Fatalf("identity-intent code = %v, want SCHEMA_INVALID_SPEC", err)
+		t.Fatalf("bond code = %v, want SCHEMA_INVALID_SPEC", err)
 	}
 	// checksum is mandatory (the write verification compares the stream)
 	_, err = PlanInstall(context.Background(), json.RawMessage(`{

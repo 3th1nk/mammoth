@@ -535,13 +535,14 @@ func validateDD(spec *installSpecView) error {
 		return classifiedErr("SCHEMA_INVALID_SPEC", false,
 			"storage.lvm/raid are not expressible in the dd pathway (the image owns the layout)")
 	}
-	if len(spec.Network) > 0 || spec.Identity.HostnamePattern != "" {
-		return classifiedErr("SCHEMA_INVALID_SPEC", false,
-			"identity/network intent is not carried yet (NoCloud seed lands in slice 2) — the image must be self-sufficient for now")
-	}
-	if spec.Access.RootPassword != "" || len(spec.Access.SSHKeys) > 0 || len(spec.Access.Capabilities) > 0 {
-		return classifiedErr("SCHEMA_INVALID_SPEC", false,
-			"access intent is not carried yet (NoCloud seed lands in slice 2) — bake credentials into the image for now")
+	// identity/network/access intent RIDE the NoCloud seed since slice 2
+	// (CIDATA partition appended post-write); bond/vlan stays an honest
+	// reject — the seed's network-config carries plain interfaces only.
+	for _, n := range spec.Network {
+		if n.Bond != nil || n.VLAN != nil {
+			return classifiedErr("SCHEMA_INVALID_SPEC", false,
+				"dd pathway carries plain interfaces only — bond/vlan intent lands with a later slice")
+		}
 	}
 	if len(spec.Scripts) > 0 || len(spec.PackageSource.Repos) > 0 {
 		return classifiedErr("SCHEMA_INVALID_SPEC", false,

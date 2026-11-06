@@ -12,6 +12,8 @@
 package dd
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -64,7 +66,11 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	}
 	base := strings.TrimSuffix(in.AnswerBaseURL, "/")
 
-	sh := renderSH(in)
+	seed, err := seedPlanVars(in)
+	if err != nil {
+		return nil, render.BootParams{}, err
+	}
+	sh := renderSH(in) + seed
 	return []render.AnswerFile{
 			{Name: planName, Content: sh},
 		}, render.BootParams{
@@ -73,7 +79,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			// PXE-only (slice 1): the vMedia carrier would need an agent ISO
 			// assembly — NetbootKernelArgs carries the boot on the netboot
 			// tree alone.
-			NetbootKernelArgs: render.WithExtraArgs(netbootKernelArgs(in), in.ExtraKernelArgs),
+			NetbootKernelArgs: render.WithExtraArgs(netbootKernelArgs(in, seed != ""), in.ExtraKernelArgs),
 		}, nil
 }
 
@@ -83,8 +89,11 @@ const isoKernelArgs = "modules=loop,squashfs,sd-mod,usb-storage,ext4,vfat consol
 
 // netbootKernelArgs boots the agent over PXE: early DHCP, the network
 // modloop, the apkovl overlay and the plan base — the agent carrier's URL
-// derivation, minus alpine_repo (busybox-only runtime: no apks subtree).
-func netbootKernelArgs(in render.InstallInputs) string {
+// derivation. alpine_repo rides ONLY with seed intent (the CIDATA partition
+// needs sfdisk/mkfs.vfat from the extended alpine pool, which prepare stages
+// into the tree's apks subtree exactly then); without it the runtime is
+// busybox-only and the tree has no apks.
+func netbootKernelArgs(in render.InstallInputs, withSeed bool) string {
 	base := strings.TrimSuffix(in.AnswerBaseURL, "/")
 	ext := strings.TrimSuffix(base, "/render/"+in.TaskToken)
 	files := ext + "/netboot/files/" + in.TaskToken
@@ -92,6 +101,9 @@ func netbootKernelArgs(in render.InstallInputs) string {
 	args += " modloop=" + files + "/modloop"
 	args += " apkovl=" + files + "/agent.apkovl.tar.gz"
 	args += " mammoth_base=" + base
+	if withSeed {
+		args += " alpine_repo=" + files + "/apks"
+	}
 	return args
 }
 
@@ -116,6 +128,9 @@ func validate(in render.InstallInputs) error {
 	if len(d.Partitions) > 0 {
 		return fmt.Errorf("dd writes the whole disk — the image carries its own partition table; declare no partitions on the target")
 	}
+	if _, err := seedFiles(in); err != nil {
+		return err // seed surface gates: bond/vlan/MAC-match, at render time
+	}
 	if in.Netboot == nil {
 		return fmt.Errorf("dd installs are PXE-only (boot.strategy=pxe) — the alpine netboot carrier has no vMedia assembly")
 	}
@@ -135,6 +150,15 @@ func renderSH(in render.InstallInputs) string {
 	fmt.Fprintf(&b, "MAMMOTH_COMPLETE_URL=%s\n", shQuote(in.CompleteURL))
 	fmt.Fprintf(&b, "MAMMOTH_LOG_URL=%s\n", shQuote(in.AgentLogURL))
 	return b.String()
+}
+
+// randomSalt is the crypt hash salt source (8 random bytes, hex form).
+func randomSalt() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "mammoth0" // deterministic fallback — worst case a weaker salt
+	}
+	return hex.EncodeToString(b)
 }
 
 func shQuote(s string) string {

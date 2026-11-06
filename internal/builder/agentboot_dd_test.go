@@ -22,6 +22,9 @@ func TestRuntimeDDDispatchAndStream(t *testing.T) {
 		t.Errorf("dd dispatch must run before bootstrap_tools")
 	}
 	for _, want := range []string{
+		`seed_partition || bail seed`,
+		`echo "$MAMMOTH_SEED_USER_DATA" | base64 -d > /tmp/seedmnt/user-data`,
+		"mkfs.vfat -n CIDATA",
 		`dd_image || bail dd`,
 		`wget -q -O - "$MAMMOTH_DD_URL" | $decomp | tee "$MAMMOTH_DD_TARGET" | sha256sum`,
 		"set -o pipefail",

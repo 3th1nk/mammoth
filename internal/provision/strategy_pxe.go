@@ -100,8 +100,25 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 		switch {
 		case isDD:
 			// busybox-only runtime (dd/wget/gunzip/tee/sha256sum are
-			// built-ins): no apks subtree at all.
+			// built-ins): no apks subtree — UNLESS the plan carries the
+			// NoCloud seed, whose partition surgery needs sfdisk/dosfstools
+			// from the extended alpine pool (the same tools the windows
+			// agent apply path consumes).
 			apksISO = ""
+			for _, a := range b.Answers {
+				if strings.Contains(a.Content, "MAMMOTH_SEED=1") {
+					if e.WindowsApplyAlpineISO == "" {
+						return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,
+							"dd seed injection (identity/network/access intent) needs the alpine extended ISO pool (set MAMMOTH_WINDOWS_APPLY_ALPINE_ISO) — sfdisk/dosfstools are absent from the busybox runtime")
+					}
+					apksISO, terr = builder.EnsureISO(ctx, e.WindowsApplyAlpineISO, e.MediaWorkDir)
+					if terr != nil {
+						return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+							"dd seed tools pool fetch failed: %s", terr.Error())
+					}
+					break
+				}
+			}
 		case render.FamilyOf(driver) == "windows":
 			if e.WindowsApplyAlpineISO == "" {
 				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,

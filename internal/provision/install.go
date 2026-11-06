@@ -550,10 +550,6 @@ func validateDD(spec *installSpecView) error {
 		return classifiedErr("SCHEMA_INVALID_SPEC", false,
 			"scripts/package_source are not supported by the dd pathway (no package manager runs — the image is pre-built)")
 	}
-	if spec.Boot.Strategy == "virtual_media" {
-		return classifiedErr("SCHEMA_INVALID_SPEC", false,
-			"dd installs are PXE-only (boot.strategy=pxe) — the alpine netboot carrier has no vMedia assembly")
-	}
 	return nil
 }
 

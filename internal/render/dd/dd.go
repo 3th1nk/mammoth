@@ -71,14 +71,18 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 		return nil, render.BootParams{}, err
 	}
 	sh := renderSH(in) + seed
+	// Both carriers rely on the engine-staged tool pool (alpine_repo) for
+	// the seed partition surgery / xz: on PXE it rides the netboot tree, on
+	// vMedia the virtualmedia strategy stages the same subtree under the
+	// task's netboot path (the ISO boot line points there). The agent plan
+	// and the apkovl overlay ride the ISO root on vMedia (find_plan scans
+	// the media root) — booting is offline, only the tool pool is remote.
+	isoArgs := isoKernelArgs + " alpine_repo=" + strings.TrimSuffix(base, "/render/"+in.TaskToken) + "/netboot/files/" + in.TaskToken + "/apks"
 	return []render.AnswerFile{
 			{Name: planName, Content: sh},
 		}, render.BootParams{
 			AnswerURL:  base + "/" + planName,
-			KernelArgs: render.WithExtraArgs(isoKernelArgs, in.ExtraKernelArgs),
-			// PXE-only (slice 1): the vMedia carrier would need an agent ISO
-			// assembly — NetbootKernelArgs carries the boot on the netboot
-			// tree alone.
+			KernelArgs: render.WithExtraArgs(isoArgs, in.ExtraKernelArgs),
 			NetbootKernelArgs: render.WithExtraArgs(netbootKernelArgs(in, seed != ""), in.ExtraKernelArgs),
 		}, nil
 }
@@ -130,9 +134,6 @@ func validate(in render.InstallInputs) error {
 	}
 	if _, err := seedFiles(in); err != nil {
 		return err // seed surface gates: bond/vlan/MAC-match, at render time
-	}
-	if in.Netboot == nil {
-		return fmt.Errorf("dd installs are PXE-only (boot.strategy=pxe) — the alpine netboot carrier has no vMedia assembly")
 	}
 	return nil
 }

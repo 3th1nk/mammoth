@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/3th1nk/mammoth/internal/bmc"
@@ -33,10 +34,32 @@ func (s *virtualMediaStrategy) prepare(ctx context.Context, b *bootSession) erro
 	// can never shadow a boot image).
 	mediaFile := filepath.Join("boot", fmt.Sprintf("boot-%s.iso", ictx.Token))
 	mediaURI := mediaURIFor(e.MediaBaseURI, mediaFile)
-	distroISO, err := builder.EnsureISOVerified(ctx, b.Spec.Image.Source, b.Spec.Image.Checksum, e.MediaDir)
-	if err != nil {
-		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
-			"distro ISO fetch failed: %s", err.Error())
+	// The dd pathway (docs/09「镜像直写通路」) has no distro ISO to repack: the
+	// boot ISO is the ALPINE STANDARD media + the agent overlay + the plan
+	// (the machine boots the agent initramfs from the BMC-mounted CD and
+	// streams the whole-disk image from the engine's HTTP face). The tool
+	// pool (extended ISO /apks → sfdisk/dosfstools for the seed surgery, xz
+	// for raw.xz) is staged under the task's netboot path — the ISO boot
+	// line's alpine_repo points there over HTTP.
+	isDD := b.Spec.Image.Distro == "dd"
+	var err error
+	distroISO := ""
+	if isDD {
+		if e.ProbeAlpineISO == "" {
+			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,
+				"dd pathway on virtual_media needs the alpine standard ISO (set MAMMOTH_PROBE_ALPINE_ISO) — it is the boot media the BMC mounts")
+		}
+		distroISO, err = builder.EnsureISO(ctx, e.ProbeAlpineISO, e.MediaDir)
+		if err != nil {
+			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+				"alpine boot ISO fetch failed: %s", err.Error())
+		}
+	} else {
+		distroISO, err = builder.EnsureISOVerified(ctx, b.Spec.Image.Source, b.Spec.Image.Checksum, e.MediaDir)
+		if err != nil {
+			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+				"distro ISO fetch failed: %s", err.Error())
+		}
 	}
 	seed := map[string]string{}
 	for _, a := range b.Answers {
@@ -84,6 +107,37 @@ func (s *virtualMediaStrategy) prepare(ctx context.Context, b *bootSession) erro
 	if berr := buildBootISO(ctx, distroISO, outputPath, b.Boot.KernelArgs, seed, buildWork, e.MediaDir); berr != nil {
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 			"boot media build failed: %s", berr.Error())
+	}
+	// dd: stage the tool pool under the task's netboot path — the boot line's
+	// alpine_repo points here (the agent apk-installs sfdisk/dosfstools/xz
+	// from it for the seed surgery / raw.xz). Extended ISO is a deployment
+	// prerequisite for dd-with-seed (operations §4.5-10); without the pool
+	// configured and seed intent present this task cannot inject the seed.
+	if isDD {
+		needPool := b.Spec.Image.Format == "raw.xz"
+		for _, a := range b.Answers {
+			if strings.Contains(a.Content, "MAMMOTH_SEED=1") {
+				needPool = true
+				break
+			}
+		}
+		if needPool {
+			if e.WindowsApplyAlpineISO == "" {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,
+					"dd pathway needs the alpine extended ISO pool (set MAMMOTH_WINDOWS_APPLY_ALPINE_ISO) — the seed injection (sfdisk/dosfstools) or raw.xz decompression (apk xz) is absent from the busybox runtime")
+			}
+			extISO, terr := builder.EnsureISO(ctx, e.WindowsApplyAlpineISO, e.MediaDir)
+			if terr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+					"dd tools pool fetch failed: %s", terr.Error())
+			}
+			apksDir := filepath.Join(e.BootTreeDir, ictx.Token, "apks")
+			// xorriso: PATH lookup (the same default BuildBootISO uses).
+			if xerr := builder.ExtractIsoApks(ctx, "", extISO, apksDir); xerr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+					"dd tools pool staging failed: %s", xerr.Error())
+			}
+		}
 	}
 	if buildWork != "" {
 		if merr := moveFile(outputPath, repoPath); merr != nil {

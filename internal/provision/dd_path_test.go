@@ -91,12 +91,13 @@ func TestPlanInstallDD(t *testing.T) {
 	if codeOf(t, err) != "SCHEMA_INVALID_SPEC" {
 		t.Fatalf("partitions code = %v, want SCHEMA_INVALID_SPEC", err)
 	}
-	// vMedia is rejected — the alpine netboot carrier has no ISO assembly
-	_, err = PlanInstall(context.Background(), json.RawMessage(`{
+	// vMedia is a supported carrier since the dual-carrier round (the alpine
+	// standard ISO boots the agent; the machine streams the image) — the
+	// plan renders it without error.
+	if _, err = PlanInstall(context.Background(), json.RawMessage(`{
 	  "image": {"source": "http://x/i.img", "checksum": "sha256:ab", "distro": "dd"},
 	  "storage": {"disks": [{"select": {"match": {}}, "wipe": true}]},
-	  "boot": {"strategy": "virtual_media"}}`), hw, nil, reg)
-	if codeOf(t, err) != "SCHEMA_INVALID_SPEC" {
-		t.Fatalf("vmedia code = %v, want SCHEMA_INVALID_SPEC", err)
+	  "boot": {"strategy": "virtual_media"}}`), hw, nil, reg); err != nil {
+		t.Fatalf("dd plan vMedia: %v", err)
 	}
 }

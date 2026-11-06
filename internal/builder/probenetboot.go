@@ -145,6 +145,13 @@ func BuildProbeNetboot(ctx context.Context, opt ProbeNetbootOptions) (BootTree, 
 // extractIsoDir copies a directory subtree out of an ISO with xorriso's
 // user-space osirrox (recursive, no mounts, no root) — used for the probe
 // netboot's apks repository.
+// ExtractIsoApks stages an ISO's /apks package pool into destDir — the dd
+// pathway's virtual_media carrier tool pool (the ISO boot line's alpine_repo
+// points here over the task's netboot HTTP path; operations §4.5-10).
+func ExtractIsoApks(ctx context.Context, xorrisoPath, isoPath, destDir string) error {
+	return extractIsoDir(ctx, xorrisoPath, isoPath, "apks", destDir)
+}
+
 func extractIsoDir(ctx context.Context, xorrisoPath, isoPath, isoDir, destDir string) error {
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return err

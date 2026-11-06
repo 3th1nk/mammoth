@@ -150,6 +150,10 @@ func renderSH(in render.InstallInputs) string {
 	fmt.Fprintf(&b, "MAMMOTH_DD_SHA256=%s\n", shQuote(strings.ToLower(strings.TrimPrefix(in.ImageChecksum, "sha256:"))))
 	fmt.Fprintf(&b, "MAMMOTH_DD_FORMAT=%s\n", shQuote(in.ImageFormat))
 	fmt.Fprintf(&b, "MAMMOTH_DD_TARGET=%s\n", shQuote(in.Disks[0].Device))
+	// SizeBytes feeds the runtime's kernel-name resolution: controller names
+	// (LogicalDriveN) exist only in the inventory — the kernel name is a
+	// machine-side fact (docs/compat/huawei.md 鸿沟, the resolver idiom).
+	fmt.Fprintf(&b, "MAMMOTH_DD_SIZE_BYTES=%s\n", fmt.Sprintf("%d", in.Disks[0].SizeBytes))
 	fmt.Fprintf(&b, "MAMMOTH_COMPLETE_URL=%s\n", shQuote(in.CompleteURL))
 	fmt.Fprintf(&b, "MAMMOTH_LOG_URL=%s\n", shQuote(in.AgentLogURL))
 	return b.String()

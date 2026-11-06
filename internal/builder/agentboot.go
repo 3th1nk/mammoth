@@ -120,7 +120,7 @@ func agentScript() string {
 # any failing command would kill the whole runtime silently (no report, no
 # shell). This runtime handles its own errors: strip the -e and re-exec. The
 # child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
-SCRIPT_VERSION="ab-v17"
+SCRIPT_VERSION="ab-v18"
 case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
 log "agent runtime $SCRIPT_VERSION starting"
 
@@ -638,6 +638,23 @@ seed_partition() { # NoCloud seed onto a CIDATA partition (slice 2)
 dd_image() { # image direct-write (roadmap「镜像直写通路」slice 1)
     [ -n "$MAMMOTH_DD_URL" ] || { echo "plan carries no DD_URL" >> /tmp/mammoth-dd.err; return 1; }
     [ -n "$MAMMOTH_DD_TARGET" ] || { echo "plan carries no DD_TARGET" >> /tmp/mammoth-dd.err; return 1; }
+    # Controller-named targets resolve to the kernel device here: the Redfish
+    # name (LogicalDriveN) is inventory-speak, the kernel name is a
+    # machine-side fact (2288H: tee created a 16MB regular FILE named
+    # LogicalDrive0 and the sha256 verified happily — resolving by size,
+    # the same ±1% tolerance the disk resolvers use, is the only ground
+    # truth available on the machine).
+    case "$MAMMOTH_DD_TARGET" in
+        /dev/*) ;;
+        *)
+            [ -n "$MAMMOTH_DD_SIZE_BYTES" ] || { echo "controller target $MAMMOTH_DD_TARGET with no size hint to resolve by" >> /tmp/mammoth-dd.err; return 1; }
+            resolved=$(lsblk -dn -b -o NAME,SIZE $(lsblk -dn -o NAME | grep -vE "^(loop|ram|sr|fd|zd|dm-)" | sed "s|^|/dev/|") 2>/dev/null | awk -v want="$MAMMOTH_DD_SIZE_BYTES" '{ d=$1; s=$2; diff=s-want; if (diff<0) diff=-diff; tol=(want/100); if (tol<67108864) tol=67108864; if (best=="" || diff<bestdiff) { best=d; bestdiff=diff; besttol=tol } } END { if (best!="" && bestdiff<=besttol) print best }')
+            [ -b "$resolved" ] || { echo "no block device matches size=$MAMMOTH_DD_SIZE_BYTES (controller name $MAMMOTH_DD_TARGET unresolved)" >> /tmp/mammoth-dd.err; return 1; }
+            log "target $MAMMOTH_DD_TARGET resolved to $resolved (by size)"
+            export MAMMOTH_DD_TARGET=$resolved
+            export MAMMOTH_DD_TARGET_BASENAME=${resolved#/dev/}
+            ;;
+    esac
     # Single pass, fully verified: the stream flows wget → gunzip → tee
     # (the disk) → sha256sum, so the checksum compares the bytes that hit
     # the disk — pipefail makes every upstream failure fatal (busybox ash

@@ -2935,8 +2935,10 @@ components:
                 The special key `dd` selects the image-direct-write pathway
                 (docs/09「镜像直写通路」): the spec's image is a pre-built
                 whole-disk image streamed onto exactly one target disk by the
-                agent initramfs — PXE-only; checksum required; the image owns
-                the partition table, so partitions/lvm/raid/identity/network
+                agent initramfs — both boot carriers (virtual_media via the
+                alpine standard ISO mounted by the BMC, and PXE via the
+                netboot tarball); checksum required; the image owns the
+                partition table, so partitions/lvm/raid/identity/network
                 intent is honestly rejected with 422.
             size_bytes:
               type: integer

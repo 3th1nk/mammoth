@@ -590,6 +590,13 @@ subiquity 的镜像探测在**安装器环境无网/探测失败**时会回落�
    对真实 HTTP 源),写盘字节哈希断言通过;seed 分区手术不进容器冒烟
    (alpine sfdisk 对普通文件确定性 EINVAL,loop 节点分配是 Docker 工件),
    归 qemu 全链轮(真内核/真块设备,语义与生产一致);
+   **✅ 2288H 真机全链打通(2026-11-06,六轮迭代)**——镜像库引用→file
+   端点拉流→写入→**读回哈希验证**→CIDATA seed 注入→applied 回调,全绿。
+   真机收敛五项修复:plan 哈希剥 sha256: 前缀、busybox lsblk 无 -b/-o
+   (改 /proc/partitions 整盘名正则)、控制器名 size 解析内核设备、写入
+   conv=fsync + blockdev --flushbufs(LSI write-back 下紧随读拿到旧盘
+   内容)、seed 弃 sfdisk(alpine apk 包不识 GPT)改 CIDATA 槽契约
+   (镜像最后一个分区即槽,内核自解析 + partx -a + mkfs 覆盖);
    ②~~NoCloud seed 注入 + verify_ready 对齐~~ **✅ 代码落地(2026-11-06,
    0c331cd 后续)**——identity/network/access 意图随 CIDATA 分区生效:运行时
    写后追加 16MiB vfat(sfdisk --append,扩展池 apk 工具),seed 三件
@@ -605,6 +612,13 @@ subiquity 的镜像探测在**安装器环境无网/探测失败**时会回落�
    信任模型承载意图真实性);发布者真实性(谁构建的镜像)属镜像库注册期
    验证(引擎持文件可跑 minisign,纯 Go ed25519 可实现),随 imaging
    工作流立项,见「长期方向」。
+   **双载体补全(2026-11-06 真机后修订)**:vMedia 载体落地——alpine
+   standard ISO 挂 BMC 引导 agent(引导离线,plan/overlay 在介质根),
+   工具池 extended ISO /apks 提取到任务 netboot 路径迷你池(boot 行
+   alpine_repo 指向);PXE-only 边界解除,覆盖矩阵 = {有/无带外} ×
+   {有/无 PXE} 中除「无带外×vMedia」(语义矛盾)外全通。**遗留**:
+   测试镜像无可引导系统的重试误路径(重试轮走 windows wimboot extract)
+   待追;真实可引导镜像端到端待镜像到场。
 
 ## 已评估并排除的方向(决策记录,避免重新论证)
 

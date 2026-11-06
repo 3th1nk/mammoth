@@ -205,7 +205,11 @@ iPXE 脚本),默认关闭。启用清单:
      `v3.22/releases/x86_64/alpine-extended-3.22.5-x86_64.iso`(~1.2G)。
    - **镜像直写(dd)专属**:CIDATA 槽契约要求镜像封装时自带分区表 +
      ≥16MiB 的尾部槽分区(最后一个分区,agent 运行时 mkfs.vfat 覆盖写入
-     NoCloud seed)——见 docs/09「镜像直写通路」封装规范。
+     NoCloud seed)——见 docs/09「镜像直写通路」封装规范。dd 走 **vMedia
+     载体时**还要 `MAMMOTH_PROBE_ALPINE_ISO`(alpine standard ISO 作引导
+     介质挂 BMC),且工具池为必配(seed 注入 / raw.xz 都出自它)——双载体
+     (虚拟介质 / PXE)均依赖 extended 池,无池部署时 dd 仅在「无 seed
+     意图且 format=raw/raw.gz」组合下可用。
 
 ### 4.5.0 PXE 寻址:DHCP 决策框架
 

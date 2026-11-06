@@ -120,7 +120,7 @@ func agentScript() string {
 # any failing command would kill the whole runtime silently (no report, no
 # shell). This runtime handles its own errors: strip the -e and re-exec. The
 # child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
-SCRIPT_VERSION="ab-v22"
+SCRIPT_VERSION="ab-v23"
 case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
 log "agent runtime $SCRIPT_VERSION starting"
 
@@ -680,6 +680,14 @@ dd_image() { # image direct-write (roadmap「镜像直写通路」slice 1)
         echo "sha mismatch: got $got want $MAMMOTH_DD_SHA256 — disk content untrustworthy, re-run the task" >> /tmp/mammoth-dd.err
         return 1
     fi
+    # Force the controller's write-back cache to disk: sync only drains the
+    # kernel's page cache, and a read that follows (the seed partition scan)
+    # can hit stale controller cache and see the PREVIOUS disk content —
+    # 2288H LSI: "does not contain a recognized partition table" right after
+    # a verified write, gone once flushed (real-hardware, 2026-11-06).
+    sync
+    blockdev --flushbufs "$MAMMOTH_DD_TARGET" >>/tmp/mammoth-dd.err 2>&1 || true
+    sync
     log "image written and verified ($got)"
 }
 

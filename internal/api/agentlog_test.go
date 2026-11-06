@@ -58,7 +58,7 @@ func agentLogSuite(t *testing.T) (*gin.Engine, *sql.DB, string, string) {
 	}
 	if _, err := db.Exec(`
 		INSERT INTO tasks (id, job_id, machine_id, flow_name, state, stage_index, context)
-		VALUES ($1, $2, $3, 'install', 'running', 0, jsonb_build_object('token', $4))`,
+		VALUES ($1, $2, $3, 'install', 'running', 0, jsonb_build_object('token', $4::text))`,
 		task, job, machine, token); err != nil {
 		t.Fatalf("seed task: %v", err)
 	}

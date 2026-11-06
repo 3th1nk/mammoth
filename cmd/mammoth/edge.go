@@ -32,26 +32,11 @@ import (
 // provisioning VLAN replaces a hand-tuned dnsmasq for cross-subnet
 // deployments.
 func edgeCobraCommand() *cobra.Command {
-	// Container-friendly: every flag has an env override
-	// (MAMMOTH_EDGE_*; 旧 MAMMOTH_PXEPROXY_* 仍兼容读取), so compose files pass configuration without
-	// editing the command line.
-	// legacyEnv maps a MAMMOTH_EDGE_* key to its pre-rename
-	// MAMMOTH_PXEPROXY_* twin: existing deployments (edge.env, systemd
-	// units) keep working across the rename until their assets migrate.
-	legacyEnv := func(key string) string {
-		if rest, ok := strings.CutPrefix(key, "MAMMOTH_EDGE_"); ok {
-			return "MAMMOTH_PXEPROXY_" + rest
-		}
-		return ""
-	}
+	// Container-friendly: every flag has an env override (MAMMOTH_EDGE_*),
+	// so compose files pass configuration without editing the command line.
 	envOr := func(key, def string) string {
 		if v := os.Getenv(key); v != "" {
 			return v
-		}
-		if legacy := legacyEnv(key); legacy != "" {
-			if v := os.Getenv(legacy); v != "" {
-				return v
-			}
 		}
 		return def
 	}
@@ -61,20 +46,12 @@ func edgeCobraCommand() *cobra.Command {
 				return n
 			}
 		}
-		if legacy := legacyEnv(key); legacy != "" {
-			if v := os.Getenv(legacy); v != "" {
-				if n, err := strconv.Atoi(v); err == nil {
-					return n
-				}
-			}
-		}
 		return def
 	}
 	var o edgeOptions
 	cmd := &cobra.Command{
-		Use:     "edge",
-		Aliases: []string{"pxe-proxy"}, // 旧名别名:现役部署资产迁移期保留
-		Short:   "Run the provisioning-VLAN edge service (proxyDHCP + TFTP + kit sync + WoL relay + sightings)",
+		Use:   "edge",
+		Short: "Run the provisioning-VLAN edge service (proxyDHCP + TFTP + kit sync + WoL relay + sightings)",
 		Long: `Run the provisioning-VLAN PXE first hop on any host in the machine
 segment: proxyDHCP answers (67/4011) hand out the boot chain, TFTP (69)
 serves the exported external kit (NBP binaries + trampoline). All install
@@ -83,9 +60,6 @@ engine's per-MAC script over HTTP. One binary per provisioning VLAN
 replaces a hand-tuned dnsmasq; the kit is exported by the engine
 (MediaDir/netboot/external-tftp) and copied here.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if cmd.CalledAs() != "edge" {
-				cmd.Printf("edge: %q is the deprecated alias of this command (mammoth edge) — update the unit/compose before the next release\n", cmd.CalledAs())
-			}
 			return runEdge(o)
 		},
 	}

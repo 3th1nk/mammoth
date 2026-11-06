@@ -120,7 +120,7 @@ func agentScript() string {
 # any failing command would kill the whole runtime silently (no report, no
 # shell). This runtime handles its own errors: strip the -e and re-exec. The
 # child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
-SCRIPT_VERSION="ab-v20"
+SCRIPT_VERSION="ab-v21"
 case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
 log "agent runtime $SCRIPT_VERSION starting"
 
@@ -604,27 +604,18 @@ EOF
     log "bootloader installed ($([ "$uefi" = 1 ] && echo "grub-efi $ESP_MOUNT" || echo "grub-bios MBR /dev/$MAMMOTH_BOOT_DRIVE"))"
 }
 
-seed_partition() { # NoCloud seed onto a CIDATA partition (slice 2)
-    # Tools from the extended alpine pool (alpine_repo= rides the boot line
-    # exactly when the plan carries the seed).
-    apk add --no-cache sfdisk dosfstools partx >/dev/console 2>&1 || { echo "apk tools failed" >> /tmp/mammoth-seed.err; return 1; }
+seed_partition() { # NoCloud seed onto the image's CIDATA slot (封装契约)
+    # Contract (docs/09「镜像直写通路」封装规范): the image's LAST partition
+    # is a ≥16MiB slot reserved for firstboot intent (GPT type 0700, content
+    # irrelevant — it gets a fresh vfat here). The image's own GPT/ESP and
+    # system partitions are untouched: no table edits on the machine side —
+    # alpine's sfdisk 2.40 append deterministically fails on large MegaRAID
+    # volumes (libfdisk EINVAL, 2288H) and kernel partition notification has
+    # the same quirk, so the slot is created at IMAGE BUILD time.
+    apk add --no-cache dosfstools util-linux >/dev/console 2>&1 || { echo "apk tools failed" >> /tmp/mammoth-seed.err; return 1; }
     dev="$MAMMOTH_DD_TARGET"
-    # Append a 16MiB vfat partition in the trailing free space (the image
-    # ends well before the disk; sfdisk rewrites the table with the backup
-    # GPT header at the real disk end).
-    # sfdisk writes the TABLE first, then notifies the kernel (BLKPG) — on
-    # LSI MegaRAID volumes the notification EINVALs even though the on-disk
-    # table was updated (2288H: "Failed to add #2 partition" yet sfdisk -d
-    # showed the entry). So append's rc is advisory: the table state and a
-    # forced partx scan decide whether the node exists.
-    echo 'type=0c, size=32768' | sfdisk --append "$dev" >>/tmp/mammoth-seed.err 2>&1 || echo "sfdisk append rc=$? (advisory; verifying the table)" >> /tmp/mammoth-seed.err
-    sfdisk -d "$dev" 2>/dev/null | grep -q "p2 :\|${dev}2" || { echo "no p2 in the on-disk table — append genuinely failed" >> /tmp/mammoth-seed.err; return 1; }
     part=$(sfdisk -d "$dev" 2>/dev/null | grep -E '^/dev/' | tail -1 | cut -d: -f1 | tr -d ' ')
-    # -a ADDS the new partition's node (a bare -u only resizes existing
-    # ones). On the LSI the node never self-appears — the forced scan is
-    # the recovery path for the failed kernel notification above.
-    partx -a "$dev" >>/tmp/mammoth-seed.err 2>&1 || partx -u "$dev" >>/tmp/mammoth-seed.err 2>&1
-    [ -b "$part" ] || { echo "seed partition node not found (part=$part, dev=$dev)" >> /tmp/mammoth-seed.err; return 1; }
+    [ -b "$part" ] || { echo "CIDATA slot not found (last partition of $dev; sfdisk -d output in this file)" >> /tmp/mammoth-seed.err; return 1; }
     mkfs.vfat -n CIDATA "$part" >>/tmp/mammoth-seed.err 2>&1 || return 1
     mkdir -p /tmp/seedmnt && mount -t vfat "$part" /tmp/seedmnt || { echo "seed mount failed" >> /tmp/mammoth-seed.err; return 1; }
     echo "$MAMMOTH_SEED_META_DATA" | base64 -d > /tmp/seedmnt/meta-data
@@ -634,7 +625,7 @@ seed_partition() { # NoCloud seed onto a CIDATA partition (slice 2)
     fi
     umount /tmp/seedmnt
     sync
-    log "nocloud seed written to $part (CIDATA)"
+    log "nocloud seed written to $part (CIDATA slot)"
 }
 
 dd_image() { # image direct-write (roadmap「镜像直写通路」slice 1)

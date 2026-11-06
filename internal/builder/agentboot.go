@@ -613,7 +613,11 @@ seed_partition() { # NoCloud seed onto a CIDATA partition (slice 2)
     # ends well before the disk; sfdisk rewrites the table with the backup
     # GPT header at the real disk end).
     echo 'type=0c, size=32768' | sfdisk --append "$dev" >>/tmp/mammoth-seed.err 2>&1 || { echo "sfdisk append failed" >> /tmp/mammoth-seed.err; return 1; }
-    partx -u "$dev" >>/tmp/mammoth-seed.err 2>&1
+    # -a ADDS the new partition's node (a bare -u only resizes existing ones,
+    # so the appended seed partition never materialized on real hardware —
+    # 2288H LogicalDrive0, the container smoke's sfdisk-file path could not
+    # have caught this).
+    partx -a "$dev" >>/tmp/mammoth-seed.err 2>&1 || partx -u "$dev" >>/tmp/mammoth-seed.err 2>&1
     part=$(sfdisk -d "$dev" 2>/dev/null | grep -E '^/dev/' | tail -1 | cut -d: -f1 | tr -d ' ')
     [ -b "$part" ] || { echo "seed partition node not found ($part)" >> /tmp/mammoth-seed.err; return 1; }
     mkfs.vfat -n CIDATA "$part" >>/tmp/mammoth-seed.err 2>&1 || return 1

@@ -118,7 +118,7 @@ func (c Config) Snapshot() map[string]any {
 	str("MAMMOTH_PXE_UEFI_NBP", c.PXEUEFINBP)
 	num("MAMMOTH_PXE_DHCP_PORT", c.PXEDHCPPort)
 	num("MAMMOTH_PXE_TFTP_PORT", c.PXETFTPPort)
-	num("MAMMOTH_PXE_PROXY_PORT", c.PXEProxyPort)
+	num("MAMMOTH_PXE_BOOTSRV_PORT", c.PXEBootSrvPort)
 	num("MAMMOTH_PXE_SYSLOG_PORT", c.PXESyslogPort)
 	str("MAMMOTH_PXE_DHCP_POOL", c.PXEDHCPPool)
 	str("MAMMOTH_PXE_DHCP_ROUTER", c.PXEDHCPRouter)

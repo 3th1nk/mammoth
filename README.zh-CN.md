@@ -154,14 +154,14 @@ flowchart TD
 ### 跨网段部署 —— 一个引擎,多个网段代理
 
 生产机房是跨网段的:引擎在管理网,每个装机网段都需要自己网线上的 PXE
-第一跳。`mammoth pxe-proxy` 就是这个第一跳的单二进制实现——proxyDHCP
+第一跳。`mammoth edge(原 edge)` 就是这个第一跳的单二进制实现——proxyDHCP
 应答、TFTP 引导链、PXE sightings 回传引擎——配置只有引擎地址一项。它
 替代了逐网段手工调教的 dnsmasq(配置漂移与 kit 手工同步正是它要消灭
 的故障形态)。
 
 两种寻址形态覆盖所有机房。**无站点 DHCP** → POOL 模式:引擎 builtin 的
 DHCP 只对已登记装机任务的机器从声明池发地址。**有站点 DHCP** → PROXY 模式:
-站点继续分配地址,`pxe-proxy`(或外置 dnsmasq)只在代理层的 L2 上补
+站点继续分配地址,`edge`(或外置 dnsmasq)只在代理层的 L2 上补
 PXE 引导选项。跨 VLAN 机房部署 DHCP relay(ip helper),TFTP/HTTP 路由
 到引擎——详见 [docs/operations.md](docs/operations.md) §4.5.0。
 
@@ -169,11 +169,11 @@ PXE 引导选项。跨 VLAN 机房部署 DHCP relay(ip helper),TFTP/HTTP 路由
 flowchart TD
     eng["mammoth 引擎<br/>(管理网)"]
     subgraph V1["装机网段 1"]
-        a1["pxe-proxy<br/>proxyDHCP + TFTP<br/>(sightings 回传引擎)"]
+        a1["edge<br/>proxyDHCP + TFTP<br/>(sightings 回传引擎)"]
         m1["裸金属机器"]
     end
     subgraph VN["装机网段 N"]
-        aN["pxe-proxy<br/>proxyDHCP + TFTP<br/>(sightings 回传引擎)"]
+        aN["edge<br/>proxyDHCP + TFTP<br/>(sightings 回传引擎)"]
         mN["裸金属机器"]
     end
     eng -->|kit 同步 + 观测回传| a1
@@ -183,7 +183,7 @@ flowchart TD
 ```
 
 部署 = 一个二进制 + 每网段代理一行
-(`mammoth pxe-proxy --base-url …`);kit 自动同步,sightings 进引擎的
+(`mammoth edge --base-url …`);kit 自动同步,sightings 进引擎的
 pending_machines 台账。防火墙:代理放行 UDP 67/69/4011,装机网段须可
 达引擎 TCP 8080。完整实施手册——含 Secure Boot 与装机段占址注意事项
 ——见 [docs/operations.md](docs/operations.md) §4.5.0。

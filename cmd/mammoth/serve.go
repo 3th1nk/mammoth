@@ -296,7 +296,7 @@ func serve(args []string) error {
 		nb, nerr := netboot.Start(ctx, netboot.Options{
 			ExternalOnly: cfg.PXEMode == "external",
 			DHCPPort:     cfg.PXEDHCPPort,
-			ProxyPort:    cfg.PXEProxyPort,
+			ProxyPort:    cfg.PXEBootSrvPort,
 			TFTPPort:     cfg.PXETFTPPort,
 			SyslogPort:   cfg.PXESyslogPort,
 			NextServer:   nextServer,

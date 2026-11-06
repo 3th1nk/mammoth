@@ -176,10 +176,10 @@ type Config struct {
 	// dnsmasq owns DHCP+TFTP, mammoth serves HTTP only; the static kit is
 	// exported to MediaDir/netboot/external-tftp at startup,
 	// docs/operations.md §pxe-external).
-	PXEMode      string
-	PXEDHCPPort  int // proxyDHCP listen (default 67)
-	PXETFTPPort  int // NBP transfer (default 69)
-	PXEProxyPort int // PXE boot-server discovery (default 4011)
+	PXEMode        string
+	PXEDHCPPort    int // proxyDHCP listen (default 67)
+	PXETFTPPort    int // NBP transfer (default 69)
+	PXEBootSrvPort int // PXE boot-server discovery (default 4011; renamed from MAMMOTH_PXE_PROXY_PORT)
 	// PXESyslogPort is the installer-log sink port (MAMMOTH_PXE_SYSLOG_PORT,
 	// default 514): d-i forwards its ramfs syslog here via the syslog= kernel
 	// argument, and lines that resolve to an armed task land in task_logs —
@@ -296,7 +296,7 @@ func FromEnv() (Config, error) {
 		ExternalURL:           "http://127.0.0.1:8080",
 		PXEDHCPPort:           67,
 		PXETFTPPort:           69,
-		PXEProxyPort:          4011,
+		PXEBootSrvPort:        4011,
 	}
 
 	var errs []error
@@ -336,7 +336,11 @@ func FromEnv() (Config, error) {
 	applyInt(&c.ProbePrefix, "MAMMOTH_PROBE_PREFIX", &errs)
 	applyInt(&c.PXEDHCPPort, "MAMMOTH_PXE_DHCP_PORT", &errs)
 	applyInt(&c.PXETFTPPort, "MAMMOTH_PXE_TFTP_PORT", &errs)
-	applyInt(&c.PXEProxyPort, "MAMMOTH_PXE_PROXY_PORT", &errs)
+	applyInt(&c.PXEBootSrvPort, "MAMMOTH_PXE_BOOTSRV_PORT", &errs)
+	// 旧 env 名兜底(edge 改名波及:组件名 pxe-proxy 消失后 PROXY 字样易误读)
+	if c.PXEBootSrvPort == 4011 {
+		applyInt(&c.PXEBootSrvPort, "MAMMOTH_PXE_PROXY_PORT", &errs)
+	}
 	applyInt(&c.PXESyslogPort, "MAMMOTH_PXE_SYSLOG_PORT", &errs)
 
 	applyDuration(&c.HeartbeatInterval, "MAMMOTH_HEARTBEAT_INTERVAL", &errs)

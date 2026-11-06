@@ -199,7 +199,7 @@ SSH probe with the provisioned key. See
 
 Production rooms are cross-subnet: the engine lives in the management
 network, and every provisioning VLAN needs a PXE first hop on its own wire.
-`mammoth pxe-proxy` is that first hop as a single static binary — proxyDHCP
+`mammoth edge(原 edge)` is that first hop as a single static binary — proxyDHCP
 answers, TFTP for the boot chain, PXE sightings reported back — configured
 with just the engine URL. It replaces a hand-tuned per-VLAN dnsmasq
 (config drift and kit-sync copy-paste were the failure modes it exists to
@@ -208,20 +208,20 @@ remove).
 Two addressing modes cover every room. **No site DHCP** → POOL mode: the
 engine's built-in DHCP hands out addresses from a declared pool, only to
 machines with an armed install. **Site DHCP present** → PROXY mode: the
-site keeps assigning addresses, and `pxe-proxy` (or an external dnsmasq)
+site keeps assigning addresses, and `edge` (or an external dnsmasq)
 adds only the PXE boot options on the agent's L2. Cross-VLAN rooms deploy
 a DHCP relay (ip helper) and route TFTP/HTTP to the engine — details in
-[docs/operations.md](docs/operations.md) §pxe-proxy.
+[docs/operations.md](docs/operations.md) §edge.
 
 ```mermaid
 flowchart TD
     eng["mammoth engine<br/>(management network)"]
     subgraph V1["provisioning VLAN 1"]
-        a1["pxe-proxy<br/>proxyDHCP + TFTP<br/>(sightings → engine)"]
+        a1["edge<br/>proxyDHCP + TFTP<br/>(sightings → engine)"]
         m1["bare-metal machines"]
     end
     subgraph V2["provisioning VLAN N"]
-        aN["pxe-proxy<br/>proxyDHCP + TFTP<br/>(sightings → engine)"]
+        aN["edge<br/>proxyDHCP + TFTP<br/>(sightings → engine)"]
         mN["bare-metal machines"]
     end
     eng -->|kit sync + observe POST| a1
@@ -231,11 +231,11 @@ flowchart TD
 ```
 
 Setup is one binary plus one line per VLAN proxy
-(`mammoth pxe-proxy --base-url …`); the kit syncs itself and sightings feed
+(`mammoth edge --base-url …`); the kit syncs itself and sightings feed
 the engine's pending_machines ledger. Firewall: UDP 67/69/4011 open on the
 agent, TCP <engine>:8080 reachable from the VLAN. Full runbook — including
 the Secure Boot and address-squatting notes — lives in
-[docs/operations.md](docs/operations.md) §pxe-proxy.
+[docs/operations.md](docs/operations.md) §edge.
 
 ## Quick start (all-in-one)
 

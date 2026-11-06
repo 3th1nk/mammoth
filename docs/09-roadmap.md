@@ -562,8 +562,22 @@ subiquity 的镜像探测在**安装器环境无网/探测失败**时会回落�
 4. **运行时复用面**(= docs/12 agent-initramfs 第三使用者,换 payload):
    netboot 树 + apkovl + plan 变量 + bail 哨兵 + syslog 归因(2026-11-06
    刚修好的 script 抓取注册链)+ HTTP Range 断点续传(大镜像断点重拉)+
-   NIST 800-88 清洗前置(已有 DriveEraser)+ 写后 sha256 校验。
-5. **切片**(qemu 全程可验,不占真机窗口):
+   NIST 800-88 清洗前置(已有 DriveEraser)+ **读回哈希验证**(conv=fsync
+   写入 + 从盘读回逐字节比对——流哈希看不见盘上真字节,LSI write-back
+   cache 教训;IMAGE_BYTES 由镜像库 resolution 携带)。**强依赖:机器侧
+   工具池 = alpine-extended ISO**(MAMMOTH_WINDOWS_APPLY_ALPINE_ISO;seed
+   注入的 dosfstools、raw.xz 的 xz 都出自它;standard ISO 的 /apks 为空,
+   见 operations §4.5 第 10 项)。
+5. **镜像封装规范(CIDATA 槽契约,2026-11-06 2288H 真机定案)**:dd 镜像
+   须自带分区表与引导器,且**最后一个分区为 ≥16MiB 的 CIDATA 槽**(GPT
+   type=0700 即可,内容不重要——agent 运行时 mkfs.vfat 覆盖后写入 NoCloud
+   seed 三件)。机器侧**不做任何分区表操作**:alpine 的 sfdisk 包对大
+   MegaRAID 卷 append 确定性 EINVAL、且 apk 包版连自建 GPT 都读不出
+   (ab-v22..26 六轮实证),内核自解析 GPT(partx -a 强扫)+ /proc/partitions
+   取槽是唯一可靠路径。示例构建(parted,任意宿主):
+   `parted -s img.img mklabel gpt mkpart system 1MiB 31MiB mkpart CIDATA
+   31MiB 47MiB`。无槽镜像 + seed 意图 = 任务失败(错误点名契约)。
+6. **切片**(qemu 全程可验,不占真机窗口):
    ①~~agent dd payload + `image.kind/format` 契约 + 写后校验(raw 起步)~~
    **✅ 代码落地(2026-11-06,f41e2b4 后续)**——契约定案微调:通路开关=
    `image.distro: "dd"`(驱动注册表分发,免新增 kind 字段)+ `image.format`

@@ -625,7 +625,7 @@ seed_partition() { # NoCloud seed onto the image's CIDATA slot (封装契约)
     partx -a "$dev" >>/tmp/mammoth-seed.err 2>&1 || partx -u "$dev" >>/tmp/mammoth-seed.err 2>&1
     base=${dev#/dev/}
     part=$(awk -v base="$base" '$4 ~ base { if ($4 != base) last=$4 } END { if (last != "") print "/dev/" last }' /proc/partitions)
-    [ -b "$part" ] || { echo "CIDATA slot not found (last partition of $base after scan; /proc/partitions tail in this file)" >> /tmp/mammoth-seed.err; return 1; }
+    [ -b "$part" ] || { echo "CIDATA slot not found (last partition of $base after scan) — the dd image contract requires a >=16MiB trailing slot partition and the extended-alpine pool for tools (docs/09 封装规范 / operations 4.5-10)" >> /tmp/mammoth-seed.err; return 1; }
     # mkfs.vfat is dosfstools' binary (no busybox applet).
     MKFS_V=/sbin/mkfs.vfat
     [ -x "$MKFS_V" ] || MKFS_V=mkfs.vfat

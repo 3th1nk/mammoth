@@ -187,6 +187,25 @@ iPXE 脚本),默认关闭。启用清单:
    见上)。排查机器停在 PXE 提示符:先确认 `GET /api/v1` 的
    `netboot_enabled` 与任务事件的 `task.netboot_registered`,再抓 DHCP
    (DISCOVER 是否到达、OFFER 是否回出)。
+10. **alpine 介质族强依赖(部署前必配,2026-11-06 dd 真机定案)**:凡走
+   agent initramfs 的通路(alpine 装机、windows agent apply、镜像直写 dd)
+   都需要**两个不同角色**的 alpine 介质,缺一会在 prepare/机器侧失败:
+   - **netboot tarball**(`MAMMOTH_PROBE_ALPINE_NETBOOT`,standard ISO 内含):
+     引导载体(initrd+kernel+modloop);
+   - **alpine-extended ISO**(`MAMMOTH_WINDOWS_APPLY_ALPINE_ISO` 与
+     `MAMMOTH_PROBE_ALPINE_ISO` 指同一文件):机器侧工具池(/apks)。
+     **standard ISO 不可替代**:3.22 standard 介质的 /apks 目录为空
+     (介质不含包仓库),机器侧 `apk add` 必失败——真实坑案:dd 通路 seed
+     注入需要 sfdisk(util-linux-misc)/dosfstools/partx,standard 下全部
+     装不上(2026-11-06,2288H 六轮实测定案)。extended ISO 的 /apks 含
+     main 仓库子集(util-linux-misc/dosfstools/partx/python3 等齐备)。
+     注意 alpine 3.22 起 **sfdisk 在 util-linux-misc 子包**(基础
+     util-linux 包不含),整包安装 `util-linux` 也不会带上——extended 的
+     池里是全的。下载:任一 alpine 镜像的
+     `v3.22/releases/x86_64/alpine-extended-3.22.5-x86_64.iso`(~1.2G)。
+   - **镜像直写(dd)专属**:CIDATA 槽契约要求镜像封装时自带分区表 +
+     ≥16MiB 的尾部槽分区(最后一个分区,agent 运行时 mkfs.vfat 覆盖写入
+     NoCloud seed)——见 docs/09「镜像直写通路」封装规范。
 
 ### 4.5.0 PXE 寻址:DHCP 决策框架
 

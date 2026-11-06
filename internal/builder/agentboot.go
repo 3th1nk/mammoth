@@ -120,7 +120,7 @@ func agentScript() string {
 # any failing command would kill the whole runtime silently (no report, no
 # shell). This runtime handles its own errors: strip the -e and re-exec. The
 # child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
-SCRIPT_VERSION="ab-v21"
+SCRIPT_VERSION="ab-v22"
 case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
 log "agent runtime $SCRIPT_VERSION starting"
 
@@ -614,8 +614,11 @@ seed_partition() { # NoCloud seed onto the image's CIDATA slot (封装契约)
     # the same quirk, so the slot is created at IMAGE BUILD time.
     apk add --no-cache dosfstools util-linux >/dev/console 2>&1 || { echo "apk tools failed" >> /tmp/mammoth-seed.err; return 1; }
     dev="$MAMMOTH_DD_TARGET"
-    part=$(sfdisk -d "$dev" 2>/dev/null | grep -E '^/dev/' | tail -1 | cut -d: -f1 | tr -d ' ')
-    [ -b "$part" ] || { echo "CIDATA slot not found (last partition of $dev; sfdisk -d output in this file)" >> /tmp/mammoth-seed.err; return 1; }
+    # Full dump lands in the err file first — the grep's view of the device
+    # is the evidence bail carries home.
+    sfdisk -d "$dev" >>/tmp/mammoth-seed.err 2>&1
+    part=$(grep -E '^/dev/' /tmp/mammoth-seed.err | tail -1 | cut -d: -f1 | tr -d ' ')
+    [ -b "$part" ] || { echo "CIDATA slot not found (part=$part from the dump above, dev=$dev)" >> /tmp/mammoth-seed.err; return 1; }
     mkfs.vfat -n CIDATA "$part" >>/tmp/mammoth-seed.err 2>&1 || return 1
     mkdir -p /tmp/seedmnt && mount -t vfat "$part" /tmp/seedmnt || { echo "seed mount failed" >> /tmp/mammoth-seed.err; return 1; }
     echo "$MAMMOTH_SEED_META_DATA" | base64 -d > /tmp/seedmnt/meta-data
@@ -839,7 +842,7 @@ if [ "$MAMMOTH_DD_MODE" = "1" ]; then
     dd_image || bail dd "image write failed: $(tail -c 220 /tmp/mammoth-dd.err 2>/dev/null | tr '\n' ' ' | tr -d '"\\')"
     sync
     if [ "$MAMMOTH_SEED" = "1" ]; then
-        seed_partition || bail seed "seed injection failed: $(tail -c 600 /tmp/mammoth-seed.err 2>/dev/null | tr '\n' ' ' | tr -d '"\\')"
+        seed_partition || bail seed "seed injection failed: $(tail -c 2000 /tmp/mammoth-seed.err 2>/dev/null | tr '\n' ' ' | tr -d '"\\')"
     fi
     if report applied "image written and verified ($MAMMOTH_DD_FORMAT) — first boot pending"; then
         log "rebooting into the image's first boot"

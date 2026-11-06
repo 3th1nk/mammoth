@@ -129,7 +129,7 @@ func TestAgentFailureDiagnostics(t *testing.T) {
 		"config: shadow rewrite failed",
 		"mammoth-config.err",
 		`tr -d '\000-\037\177'`,
-		"ab-v26",
+		"ab-v27",
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("agent script missing failure diagnostic %q", want)

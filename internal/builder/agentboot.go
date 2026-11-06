@@ -120,7 +120,7 @@ func agentScript() string {
 # any failing command would kill the whole runtime silently (no report, no
 # shell). This runtime handles its own errors: strip the -e and re-exec. The
 # child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
-SCRIPT_VERSION="ab-v26"
+SCRIPT_VERSION="ab-v27"
 case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
 log "agent runtime $SCRIPT_VERSION starting"
 
@@ -617,19 +617,16 @@ seed_partition() { # NoCloud seed onto the image's CIDATA slot (封装契约)
     # falls back to the busybox applet that cannot read GPT (ab-v25 round).
     apk add --no-cache dosfstools util-linux util-linux-misc >/dev/console 2>&1 || { echo "apk tools failed" >> /tmp/mammoth-seed.err; return 1; }
     dev="$MAMMOTH_DD_TARGET"
-    # /usr/sbin/sfdisk = util-linux's REAL sfdisk: PATH's /bin/sfdisk is the
-    # busybox applet, which does not speak GPT — it answered "does not
-    # contain a recognized partition table" on a verified-GPT disk (2288H,
-    # ab-v22..v23 rounds; the read-back-verified write proved the table was
-    # on disk all along).
-    SFDISK=/usr/sbin/sfdisk
-    [ -x "$SFDISK" ] || SFDISK=sfdisk
-    # Full dump lands in the err file first — the grep's view of the device
-    # is the evidence bail carries home.
-    "$SFDISK" -d "$dev" >>/tmp/mammoth-seed.err 2>&1
-    part=$(grep -E '^/dev/' /tmp/mammoth-seed.err | tail -1 | cut -d: -f1 | tr -d ' ')
-    [ -b "$part" ] || { echo "CIDATA slot not found (part=$part from the dump above, dev=$dev)" >> /tmp/mammoth-seed.err; return 1; }
-    # mkfs.vfat is likewise dosfstools' binary (no busybox applet).
+    # The KERNEL parses the image's GPT (its support is complete) — alpine's
+    # sfdisk package was tried and retired (ab-v22..26: it cannot even read
+    # back a table it just wrote; the apk build is not viable for GPT). A
+    # forced partx scan makes the kernel materialize the partition nodes,
+    # and /proc/partitions names the last one (the CIDATA slot, 封装契约).
+    partx -a "$dev" >>/tmp/mammoth-seed.err 2>&1 || partx -u "$dev" >>/tmp/mammoth-seed.err 2>&1
+    base=${dev#/dev/}
+    part=$(awk -v base="$base" '$4 ~ base { if ($4 != base) last=$4 } END { if (last != "") print "/dev/" last }' /proc/partitions)
+    [ -b "$part" ] || { echo "CIDATA slot not found (last partition of $base after scan; /proc/partitions tail in this file)" >> /tmp/mammoth-seed.err; return 1; }
+    # mkfs.vfat is dosfstools' binary (no busybox applet).
     MKFS_V=/sbin/mkfs.vfat
     [ -x "$MKFS_V" ] || MKFS_V=mkfs.vfat
     $MKFS_V -n CIDATA "$part" >>/tmp/mammoth-seed.err 2>&1 || return 1

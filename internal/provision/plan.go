@@ -52,6 +52,9 @@ func PlanInstall(ctx context.Context, specJSON json.RawMessage, hw *bmc.Hardware
 	if err := validateBootExtras(&spec); err != nil {
 		return nil, err
 	}
+	if err := validateDD(&spec); err != nil {
+		return nil, err
+	}
 
 	var warnings []string
 	if hw == nil || len(hw.Disks) == 0 {
@@ -148,6 +151,14 @@ func PlanInstall(ctx context.Context, specJSON json.RawMessage, hw *bmc.Hardware
 		// the real render.
 		ExtraKernelArgs:     spec.Boot.KernelArgs,
 		InstalledKernelArgs: spec.Boot.InstalledKernelArgs,
+		ImageChecksum:       spec.Image.Checksum,
+		ImageFormat:         spec.Image.Format,
+	}
+	// The dd driver gates on Netboot != nil (PXE-only pathway): the dry-run
+	// mirrors the real pipeline's strategy resolution minimally — a scoped
+	// non-nil carrier marker, so other dialects' plan renders stay untouched.
+	if spec.Image.Distro == "dd" && spec.Boot.Strategy != "virtual_media" {
+		inputs.Netboot = &render.NetbootInputs{}
 	}
 	for _, n := range spec.Network {
 		inputs.Network = append(inputs.Network, n.toRender())

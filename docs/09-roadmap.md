@@ -564,7 +564,14 @@ subiquity 的镜像探测在**安装器环境无网/探测失败**时会回落�
    刚修好的 script 抓取注册链)+ HTTP Range 断点续传(大镜像断点重拉)+
    NIST 800-88 清洗前置(已有 DriveEraser)+ 写后 sha256 校验。
 5. **切片**(qemu 全程可验,不占真机窗口):
-   ①agent dd payload + `image.kind/format` 契约 + 写后校验(raw 起步);
+   ①~~agent dd payload + `image.kind/format` 契约 + 写后校验(raw 起步)~~
+   **✅ 代码落地(2026-11-06,f41e2b4 后续)**——契约定案微调:通路开关=
+   `image.distro: "dd"`(驱动注册表分发,免新增 kind 字段)+ `image.format`
+   (raw|raw.gz,openapi 已收);单遍流 `wget→gunzip→tee(盘)→sha256sum`
+   替代两遍方案(tee 直写 + 流式哈希 = 单趟全量校验,pipefail 兜上游);
+   prepare 跳过 ISO 解析(distro=dd 无介质,机器直连源 URL)+ 无 apks 子树
+   (busybox-only)+ verify_ready 家族短路(完成报告=验证面,同 windows);
+   qemu 冒烟待窗口(小镜像 + HTTP 源);
    ②NoCloud seed 注入 + verify_ready 对齐(dd 的 verify 面 = 带内读
    /etc/cloud + blkid,与方言通路同型);
    ③raw.gz 默认化 + raw.xz(apks 携带)+ 签名校验(cosign/minisign,

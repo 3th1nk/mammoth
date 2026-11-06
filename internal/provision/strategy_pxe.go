@@ -42,10 +42,18 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 	if err := requireDiskHeadroom(e.BootTreeDir, 3<<30); err != nil {
 		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false, "%s", err.Error())
 	}
-	distroISO, err := builder.EnsureISOVerified(ctx, b.Spec.Image.Source, b.Spec.Image.Checksum, e.MediaDir)
-	if err != nil {
-		return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
-			"distro ISO fetch failed: %s", err.Error())
+	// The dd pathway (docs/09「镜像直写通路」) has no distro ISO: the spec's
+	// image.source is the whole-disk image URL and the MACHINE streams it
+	// directly (checksum verified on the written stream) — the engine only
+	// stages the alpine netboot carrier tree.
+	isDD := b.Spec.Image.Distro == "dd"
+	distroISO := ""
+	if !isDD {
+		distroISO, err = builder.EnsureISOVerified(ctx, b.Spec.Image.Source, b.Spec.Image.Checksum, e.MediaDir)
+		if err != nil {
+			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+				"distro ISO fetch failed: %s", err.Error())
+		}
 	}
 	treeDir := filepath.Join(e.BootTreeDir, ictx.Token)
 	var tree builder.BootTree
@@ -89,7 +97,12 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 		// (MAMMOTH_WINDOWS_APPLY_ALPINE_ISO: sfdisk/partx/dosfstools/
 		// python3 — the BCD pre-bake runs on python3).
 		apksISO := distroISO
-		if render.FamilyOf(driver) == "windows" {
+		switch {
+		case isDD:
+			// busybox-only runtime (dd/wget/gunzip/tee/sha256sum are
+			// built-ins): no apks subtree at all.
+			apksISO = ""
+		case render.FamilyOf(driver) == "windows":
 			if e.WindowsApplyAlpineISO == "" {
 				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,
 					"windows agent apply needs the alpine extended ISO pool (set MAMMOTH_WINDOWS_APPLY_ALPINE_ISO) — python3/sfdisk/partx are absent from the windows media")

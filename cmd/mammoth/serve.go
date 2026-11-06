@@ -31,6 +31,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/render"
 	"github.com/3th1nk/mammoth/internal/render/agent"
 	"github.com/3th1nk/mammoth/internal/render/autoinstall"
+	"github.com/3th1nk/mammoth/internal/render/dd"
 	"github.com/3th1nk/mammoth/internal/render/kickstart"
 	"github.com/3th1nk/mammoth/internal/render/preseed"
 	"github.com/3th1nk/mammoth/internal/render/windows"
@@ -207,6 +208,10 @@ func serve(args []string) error {
 		// distro installer — the mammoth agent initramfs consumes the
 		// declarative spec directly and installs from the package pool.
 		agent.New("alpine"),
+		// The image-direct-write pathway (docs/09「镜像直写通路」slice 1):
+		// the same agent carrier streams a pre-built whole-disk image onto
+		// the target — the spec's distro key IS the pathway switch.
+		dd.New("dd"),
 	} {
 		if err := renderReg.Register(d); err != nil {
 			return err

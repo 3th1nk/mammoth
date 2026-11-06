@@ -2896,6 +2896,22 @@ components:
             distro:
               type: string
               description: Explicitly declared (no implicit detection), e.g. rocky9.
+                The special key `dd` selects the image-direct-write pathway
+                (docs/09「镜像直写通路」): the spec's image is a pre-built
+                whole-disk image streamed onto exactly one target disk by the
+                agent initramfs (PXE-only; checksum required; the image owns
+                the partition table — no partitions/lvm/raid/identity/network
+                intent, honest 422 otherwise).
+            format:
+              type: string
+              enum: [raw, raw.gz]
+              default: raw
+              description: |-
+                dd pathway only: the image's compression. raw = uncompressed;
+                raw.gz = gzip (busybox gunzip inline — the runtime decompresses
+                on the fly while streaming to disk). The checksum is always the
+                UNCOMPRESSED image's sha256 (the stream that hits the disk is
+                verified byte-for-byte). Other distros reject the field.
             windows_image_name:
               type: string
               description: |-

@@ -604,6 +604,31 @@ EOF
     log "bootloader installed ($([ "$uefi" = 1 ] && echo "grub-efi $ESP_MOUNT" || echo "grub-bios MBR /dev/$MAMMOTH_BOOT_DRIVE"))"
 }
 
+dd_image() { # image direct-write (roadmap「镜像直写通路」slice 1)
+    [ -n "$MAMMOTH_DD_URL" ] || { echo "plan carries no DD_URL" >> /tmp/mammoth-dd.err; return 1; }
+    [ -n "$MAMMOTH_DD_TARGET" ] || { echo "plan carries no DD_TARGET" >> /tmp/mammoth-dd.err; return 1; }
+    # Single pass, fully verified: the stream flows wget → gunzip → tee
+    # (the disk) → sha256sum, so the checksum compares the bytes that hit
+    # the disk — pipefail makes every upstream failure fatal (busybox ash
+    # 1.26+), and gzip's own CRC catches decompression corruption.
+    case "$MAMMOTH_DD_FORMAT" in
+        raw.gz) decomp="gunzip -c" ;;
+        *)      decomp="cat" ;;
+    esac
+    log "streaming $MAMMOTH_DD_FORMAT image to $MAMMOTH_DD_TARGET"
+    set -o pipefail
+    wget -q -O - "$MAMMOTH_DD_URL" | $decomp | tee "$MAMMOTH_DD_TARGET" | sha256sum > /tmp/mammoth-dd.sha 2>>/tmp/mammoth-dd.err
+    rc=$?
+    set +o pipefail
+    [ $rc -eq 0 ] || { echo "image stream failed (rc=$rc)" >> /tmp/mammoth-dd.err; return 1; }
+    got=$(awk '{print $1}' /tmp/mammoth-dd.sha)
+    if [ -n "$MAMMOTH_DD_SHA256" ] && [ "$got" != "$MAMMOTH_DD_SHA256" ]; then
+        echo "sha mismatch: got $got want $MAMMOTH_DD_SHA256 — disk content untrustworthy, re-run the task" >> /tmp/mammoth-dd.err
+        return 1
+    fi
+    log "image written and verified ($got)"
+}
+
 win_apply() { # windows apply-image phase one (boot.installer=agent, 方案 A)
     # Lay the image down, inject the first-boot config in-wim, then reboot.
     # The ESP stays EMPTY by design: the boot store is generated natively by
@@ -754,6 +779,16 @@ if [ "$MAMMOTH_WIN_MODE" = "apply" ]; then
     sync
     if report applied "windows image applied (agent apply-image) — first boot pending"; then
         log "rebooting into first boot"
+        reboot -f
+    fi
+    bail report "completion report could not be delivered"
+fi
+if [ "$MAMMOTH_DD_MODE" = "1" ]; then
+    log "image direct-write flow (dd)"
+    dd_image || bail dd "image write failed: $(tail -c 220 /tmp/mammoth-dd.err 2>/dev/null | tr '\n' ' ' | tr -d '"\\')"
+    sync
+    if report applied "image written and verified ($MAMMOTH_DD_FORMAT) — first boot pending"; then
+        log "rebooting into the image's first boot"
         reboot -f
     fi
     bail report "completion report could not be delivered"

@@ -582,10 +582,16 @@ func AptSuite(distro string) string {
 // storage selectors are concrete devices, the hostname is expanded, and the
 // image source is dereferenced.
 type InstallInputs struct {
-	TaskToken        string
-	MachineID        string
-	Hostname         string
-	ImageSource      string // installer image URL (distro ISO)
+	TaskToken   string
+	MachineID   string
+	Hostname    string
+	ImageSource string // installer image URL (distro ISO; dd: whole-disk image URL)
+	// ImageChecksum/ImageFormat carry the dd pathway's image facts
+	// (docs/09「镜像直写通路」): checksum is the UNCOMPRESSED image's sha256
+	// (the write verification compares the stream that hit the disk),
+	// format is raw | raw.gz (busybox gunzip inline). Empty for iso distros.
+	ImageChecksum    string
+	ImageFormat      string
 	WindowsImageName string // windows: explicit /IMAGE/NAME override (empty = driver default)
 	RootPassword     string // per-task random when spec asked for generate
 	SSHPublicKeys    []string

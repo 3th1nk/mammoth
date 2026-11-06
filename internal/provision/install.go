@@ -138,9 +138,12 @@ func installMediaProduced(stage string) bool {
 
 type installSpecView struct {
 	Image struct {
-		Source           string `json:"source"`
-		Checksum         string `json:"checksum"`
-		Distro           string `json:"distro"`
+		Source   string `json:"source"`
+		Checksum string `json:"checksum"`
+		Distro   string `json:"distro"`
+		// Format is the dd pathway's image compression (raw | raw.gz);
+		// empty = raw. Docs/09「镜像直写通路」.
+		Format           string `json:"format"`
 		WindowsImageName string `json:"windows_image_name"`
 	} `json:"image"`
 	Boot struct {
@@ -414,6 +417,9 @@ func (e *Executor) loadSpec(ctx context.Context, task *store.Task, job *store.Jo
 	if err := validateBootExtras(&spec); err != nil {
 		return nil, err
 	}
+	if err := validateDD(&spec); err != nil {
+		return nil, err
+	}
 	return &spec, nil
 }
 
@@ -490,6 +496,62 @@ func validateStorageExtras(spec *installSpecView) error {
 			"storage.root_device_hints.min_size_gb: must be > 0")
 	}
 	return validateLvmShape(spec)
+}
+
+// validateDD enforces the image-direct-write contract (docs/09「镜像直写通路」
+// slice 1): distro "dd" consumes one whole target disk with a pre-built
+// image, so every intent block that presumes an installer running on the
+// machine is an honest 422 — firstboot intent rides the NoCloud seed in
+// slice 2, and the transport gates (http(s) source, checksum, PXE-only)
+// live in the dd driver's render-time validate.
+func validateDD(spec *installSpecView) error {
+	if spec.Image.Distro != "dd" {
+		return nil
+	}
+	if spec.Image.Checksum == "" {
+		return classifiedErr("SCHEMA_INVALID_SPEC", false,
+			"image.checksum is required for the dd pathway — the write is verified by sha256 of the stream that hit the disk (uncompressed-image hash)")
+	}
+	switch spec.Image.Format {
+	case "", "raw", "raw.gz":
+	default:
+		return classifiedErr("SCHEMA_INVALID_SPEC", false,
+			"image.format %q: must be raw or raw.gz (busybox-native decompression; raw.xz lands later)", spec.Image.Format)
+	}
+	if len(spec.Storage.Disks) != 1 {
+		return classifiedErr("SCHEMA_INVALID_SPEC", false,
+			"dd takes exactly one target disk selector; got %d", len(spec.Storage.Disks))
+	}
+	d := spec.Storage.Disks[0]
+	if !d.Wipe {
+		return classifiedErr("SCHEMA_INVALID_SPEC", false,
+			"storage.disks[0]: dd consumes the whole disk — declare wipe: true")
+	}
+	if len(d.Partitions) > 0 {
+		return classifiedErr("SCHEMA_INVALID_SPEC", false,
+			"storage.disks[0]: dd writes the whole disk — the image carries its own partition table; declare no partitions")
+	}
+	if len(spec.Storage.Lvm) > 0 || len(spec.Storage.Raid) > 0 {
+		return classifiedErr("SCHEMA_INVALID_SPEC", false,
+			"storage.lvm/raid are not expressible in the dd pathway (the image owns the layout)")
+	}
+	if len(spec.Network) > 0 || spec.Identity.HostnamePattern != "" {
+		return classifiedErr("SCHEMA_INVALID_SPEC", false,
+			"identity/network intent is not carried yet (NoCloud seed lands in slice 2) — the image must be self-sufficient for now")
+	}
+	if spec.Access.RootPassword != "" || len(spec.Access.SSHKeys) > 0 || len(spec.Access.Capabilities) > 0 {
+		return classifiedErr("SCHEMA_INVALID_SPEC", false,
+			"access intent is not carried yet (NoCloud seed lands in slice 2) — bake credentials into the image for now")
+	}
+	if len(spec.Scripts) > 0 || len(spec.PackageSource.Repos) > 0 {
+		return classifiedErr("SCHEMA_INVALID_SPEC", false,
+			"scripts/package_source are not supported by the dd pathway (no package manager runs — the image is pre-built)")
+	}
+	if spec.Boot.Strategy == "virtual_media" {
+		return classifiedErr("SCHEMA_INVALID_SPEC", false,
+			"dd installs are PXE-only (boot.strategy=pxe) — the alpine netboot carrier has no vMedia assembly")
+	}
+	return nil
 }
 
 // partitionPV resolves a fresh-VG PV that lands on a disks[]-claimed disk:
@@ -1408,6 +1470,8 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		// 镜像契约): non-standard media (custom/cloud-exported) carries image
 		// names the driver default cannot match; empty = driver default.
 		WindowsImageName: spec.Image.WindowsImageName,
+		ImageChecksum:    spec.Image.Checksum,
+		ImageFormat:      spec.Image.Format,
 		RootPassword:     rootPassword,
 		SSHPublicKeys:    spec.Access.SSHKeys,
 		Capabilities:     spec.Access.Capabilities,
@@ -2543,7 +2607,7 @@ func (e *Executor) windowsInstall(ctx context.Context, task *store.Task, job *st
 	if err != nil {
 		return false
 	}
-	return render.FamilyOf(driver) == "windows"
+	return render.FamilyOf(driver) == "windows" || render.FamilyOf(driver) == "dd"
 }
 
 // waitForNewSystem polls the in-band probe until the freshly installed

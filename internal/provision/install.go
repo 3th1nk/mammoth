@@ -90,7 +90,16 @@ type installProgress struct {
 	// (the bcdboot WinPE re-arm — the boot store is generated natively, the
 	// agent left the ESP empty) but does NOT complete the task; the terminal
 	// completion is the first-boot callback (CompletedAt).
+	// Pathway split (docs/09 dd 重试误路径, 2026-11-06): the dd pathway has
+	// no first-boot callback to wait for — the image's first boot is the
+	// image's own business — so ITS applied marker IS the terminal fact
+	// (appliedTerminalDD below records CompletedAt off it); boot two runs
+	// only for the windows agent apply.
 	AppliedAt *time.Time `json:"applied_at,omitempty"`
+	// AppliedDetail is the applied report's own detail line (the agent's
+	// verdict on what was laid down) — carried into the terminal record when
+	// the applied marker completes the task.
+	AppliedDetail string `json:"applied_detail,omitempty"`
 	// Boot-two state machine, persisted so stage retries re-enter at the
 	// right step instead of replaying BMC/builder work.
 	BcdbootArmedAt *time.Time `json:"bcdboot_armed_at,omitempty"`
@@ -98,6 +107,24 @@ type installProgress struct {
 	CompletedAt    *time.Time `json:"completed_at,omitempty"`
 	Status         string     `json:"status,omitempty"` // ok | failed
 	Detail         string     `json:"detail,omitempty"`
+}
+
+// appliedTerminalDD reports whether the task's applied marker is the terminal
+// fact — i.e. the task runs the dd plan, whose runtime has no first-boot
+// callback (an arbitrary image can't carry one): the applied report completes
+// the task. The answers (the plan prepare persisted) are the ground truth of
+// the pathway that actually ran — MAMMOTH_DD_MODE is the dd plan's first
+// declaration (render/dd renderSH) and the same marker the agent runtime
+// dispatches on. Answers-based detection works for tasks prepared before this
+// gate existed, with no spec re-read in the polling loop (the same sniffing
+// idiom strategy_pxe uses for the seed intent).
+func appliedTerminalDD(ictx *installTaskContext) bool {
+	for _, a := range ictx.Answers {
+		if strings.Contains(a.Content, "MAMMOTH_DD_MODE=1") {
+			return true
+		}
+	}
+	return false
 }
 
 // runInstallStage dispatches the install flow stages
@@ -2004,7 +2031,37 @@ func (e *Executor) installOSStage(ctx context.Context, task *store.Task, job *st
 		// the ESP empty because a hand-made store never passes NT's
 		// BcdOpenStore. The state machine rides the persisted install
 		// record: armed → marker OK → released + cycled into first boot.
+		// The dd pathway reports the same marker but has NO second boot and
+		// NO first-boot callback: its applied report IS the terminal fact —
+		// branch there first, or the wimboot rebuild below runs against a
+		// whole-disk image and 7z rejects it (real run: every retry round
+		// died in the windows extract, 2026-11-06).
 		if ictx2.Install != nil && ictx2.Install.AppliedAt != nil && ictx2.Install.CompletedAt == nil {
+			if appliedTerminalDD(&ictx2) {
+				// The image's first boot is the image's own business (docs/09
+				// dd 切片②: completion report = verification surface). The
+				// agent already rebooted, so the payload must go NOW — the
+				// machine's next boot must fall through to disk (PXE rows
+				// released) and must not re-enter the boot media (vMedia
+				// ejects; the standard 3-minute release grace exists for
+				// installers still reading their medium, which dd doesn't
+				// have). Both steps idempotent: a retry re-enters here until
+				// the record lands.
+				e.releaseBootPayload(ctx, task, &ictx2, reasonCompleted)
+				detail := ictx2.Install.AppliedDetail
+				if detail == "" {
+					detail = "image applied (dd)"
+				}
+				if err := e.Jobs.RecordInstallComplete(ctx, task.ID, "ok", detail); err != nil {
+					return err
+				}
+				e.Events.Append(ctx, "task", task.ID, "task.install_reported", map[string]any{
+					"status": "ok", "detail": detail, "surface": "applied report (dd)",
+				})
+				obs.FromContext(ctx).InfoContext(ctx, "dd applied report recorded as terminal completion",
+					obs.FieldTaskID, task.ID)
+				continue
+			}
 			if ictx2.Install.BcdbootArmedAt == nil {
 				if err := e.armWindowsBcdbootStage(ctx, task, job, &ictx2); err != nil {
 					return err

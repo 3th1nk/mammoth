@@ -81,9 +81,13 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	return []render.AnswerFile{
 			{Name: planName, Content: sh},
 		}, render.BootParams{
-			AnswerURL:  base + "/" + planName,
-			KernelArgs: render.WithExtraArgs(isoArgs, in.ExtraKernelArgs),
-			NetbootKernelArgs: render.WithExtraArgs(netbootKernelArgs(in, seed != ""), in.ExtraKernelArgs),
+			AnswerURL: base + "/" + planName,
+			// The runtime reports applied and reboots by itself (the image's
+			// first boot needs no engine nudge) — the completion tail must
+			// not cycle a machine that is already booting its new image.
+			InstallerAutoReboot: true,
+			KernelArgs:          render.WithExtraArgs(isoArgs, in.ExtraKernelArgs),
+			NetbootKernelArgs:   render.WithExtraArgs(netbootKernelArgs(in, seed != ""), in.ExtraKernelArgs),
 		}, nil
 }
 

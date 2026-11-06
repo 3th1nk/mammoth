@@ -54,6 +54,12 @@ func TestRenderDDPlan(t *testing.T) {
 	if strings.Contains(nb, "alpine_repo") {
 		t.Errorf("dd boot line carries alpine_repo (no apks in the tree): %s", nb)
 	}
+	// The runtime self-reboots after the applied report (the image's first
+	// boot needs no engine nudge) — the completion tail must not cycle a
+	// machine that is already booting its new image.
+	if !boot.InstallerAutoReboot {
+		t.Errorf("InstallerAutoReboot = false, want true (the dd agent reboots itself)")
+	}
 }
 
 func TestRenderDDSeed(t *testing.T) {

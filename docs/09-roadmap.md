@@ -616,9 +616,19 @@ subiquity 的镜像探测在**安装器环境无网/探测失败**时会回落�
    standard ISO 挂 BMC 引导 agent(引导离线,plan/overlay 在介质根),
    工具池 extended ISO /apks 提取到任务 netboot 路径迷你池(boot 行
    alpine_repo 指向);PXE-only 边界解除,覆盖矩阵 = {有/无带外} ×
-   {有/无 PXE} 中除「无带外×vMedia」(语义矛盾)外全通。**遗留**:
-   测试镜像无可引导系统的重试误路径(重试轮走 windows wimboot extract)
-   待追;真实可引导镜像端到端待镜像到场。
+   {有/无 PXE} 中除「无带外×vMedia」(语义矛盾)外全通。
+   **~~重试误路径~~ ✅ 已修(2026-11-06)**——根因:install_os 的 applied
+   分支是 windows agent apply 专属的 boot-two 状态机,却不分通路;dd 的
+   applied 同样落进去,wimboot 重建拿整盘镜像跑 7z 提取必炸 UDF 报错,
+   重试轮重进同一分支直至尝试上限。定案修复:dd 的 applied 即终态
+   (切片②「完成报告=验证面」的落地)——install_os 按 prepare 持久化的
+   plan 内容判通路(MAMMOTH_DD_MODE,老任务同样命中),dd 分支同步
+   释放引导载荷(PXE 条目掉盘/vMedia 立即弹介质——机器已自重启,标准
+   3 分钟 grace 是给还要读介质的安装器的,dd 没有)+ 记录终态
+   completion(status ok,applied_detail 随行);dd 驱动补
+   InstallerAutoReboot(agent 报告后自重启的事实,完成尾不再 cycle 正在
+   首启的机器);windows apply 的 boot-two 原路径不动。**遗留**:
+   真实可引导镜像端到端待镜像到场。
 
 ## 已评估并排除的方向(决策记录,避免重新论证)
 

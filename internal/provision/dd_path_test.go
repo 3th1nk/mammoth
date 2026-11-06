@@ -101,3 +101,39 @@ func TestPlanInstallDD(t *testing.T) {
 		t.Fatalf("dd plan vMedia: %v", err)
 	}
 }
+
+// The applied marker's pathway gate (docs/09 dd 重试误路径): the dd plan's
+// applied report IS the terminal fact — the windows apply plan's is boot two.
+// The persisted answers are the ground truth, so the gate must key on the
+// plan content, not on a fresh spec read.
+func TestAppliedTerminalDD(t *testing.T) {
+	ddPlan := "MAMMOTH_DD_MODE=1\nMAMMOTH_DD_URL='http://x/i.img'\n"
+	winApplyPlan := "MAMMOTH_WIN_MODE=apply\nMAMMOTH_WIN_INDEX=2\n"
+	winSetupPlan := "MAMMOTH_UNATTEND=autounattend.xml\n"
+	cases := []struct {
+		name    string
+		answers []string
+		want    bool
+	}{
+		{"dd plan", []string{ddPlan}, true},
+		{"dd plan among others", []string{winSetupPlan, ddPlan}, true},
+		{"windows apply plan", []string{winApplyPlan}, false},
+		{"windows setup plan", []string{winSetupPlan}, false},
+		{"no answers", nil, false},
+		{"marker is a prefix of a longer token", []string{"MAMMOTH_DD_MODE=12"}, true},
+	}
+	for _, c := range cases {
+		ictx := &installTaskContext{}
+		for _, content := range c.answers {
+			ictx.Answers = append(ictx.Answers, render.AnswerFile{Name: "agent-plan.sh", Content: content})
+		}
+		if got := appliedTerminalDD(ictx); got != c.want {
+			t.Errorf("%s: appliedTerminalDD = %v, want %v", c.name, got, c.want)
+		}
+	}
+	// nil-safe: the gate reads the install record's context, which cleanup
+	// paths parse tolerantly and may leave empty.
+	if appliedTerminalDD(&installTaskContext{}) {
+		t.Errorf("empty context: appliedTerminalDD = true, want false")
+	}
+}

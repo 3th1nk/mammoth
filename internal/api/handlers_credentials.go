@@ -389,9 +389,19 @@ func (s *Server) GetMachineLayout(ctx context.Context, request gen.GetMachineLay
 	return gen.GetMachineLayout200JSONResponse(layout), nil
 }
 
-// GetMachineConsole is the one synchronous BMC touch in the API: a one-time
-// KVM URL fetch. Failures surface as 502 problems with BMC_* codes.
+// GetMachineConsole is the operator's console entry (统一入口, vendor-neutral
+// contract). Two shapes behind it: the bmcweb proxied console session for
+// machines with a registered vendor launcher (docs/compat/huawei.md §KVM
+// 集成方案 — the vendors' launch flow is origin-bound, a synthesized URL is
+// unusable), else the legacy one-time driver ConsoleURL fetch (fake drivers
+// and future OEM mappings). Failures surface as 502 problems with BMC_* codes.
 func (s *Server) GetMachineConsole(ctx context.Context, request gen.GetMachineConsoleRequestObject) (gen.GetMachineConsoleResponseObject, error) {
+	if s.BMCWeb != nil {
+		if m, err := s.Machines.Get(ctx, string(request.Id)); err == nil && s.BMCWeb.Supports(m) {
+			return gen.GetMachineConsole200JSONResponse(
+				gen.ConsoleURL{Url: s.BMCWeb.SessionURL(s.ExternalURL, string(request.Id))}), nil
+		}
+	}
 	cred, addr, proto, err := s.outOfBandFor(ctx, string(request.Id))
 	if err != nil {
 		return nil, err

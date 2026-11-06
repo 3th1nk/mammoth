@@ -700,55 +700,76 @@ else if (localStorage.kvmHtml5Info) { ... }             // 遗留兼容分支
   后重连——自研客户端需自带等价引导;
 - 断线重连上限 16 次;心跳 `C_CMD_HEARTBEAT (0x09)`。
 
-### 4. Web 会话模型(工程约束,console 集成必读)
+### 4. Web 会话模型(工程约束,console 集成必读;2026-11-06 E2E 修正定案)
 
+- **web 面端点的鉴权 = `SessionId` cookie + `From: WebUI` 头,两者缺一即
+  401 NoValidSession**(实测矩阵:cookie+From=200 / 仅 cookie=401 /
+  仅 From(无 cookie)=401 / 纯无=401)。**⚠ 排障陷阱**:401 NoValidSession
+  与"会话失效"不可区分——缺乏该头的调用(含标准 Redfish GET)全部如此,
+  与会话是否健康无关。2026-11-06 曾据 401 误判"引擎创建的会话是死会话",
+  复验(干净窗口下浏览器经代理的会话 + From 头全链 200)已翻案;
+- **From:WebUI 登录的响应凭证在 `Token` 头**(X-Auth-Token 只发给
+  Redfish 型登录);web 面调用可选携带 `Token: <登录响应 Token 值>`
+  (KVM 票据交换即此形态);
+- 登录请求带 `From: WebUI` 是 cookie(GUI 会话)的开关;Redfish 型
+  会话(无该头)只发 X-Auth-Token,不与 KVM 票据链兼容;
 - **绝对寿命 ~45 分钟**:实测 17:43 创建的 SPA 会话在 18:28 死亡
   (恰 45 分钟,期间 SPA 持续轮询保活、页面加载时调
   RefreshActivationState——均不延长);空闲更不是变量;
-- **并发限额小(实测 ~8)**:超限登录直接 `SessionLimitExceeded`;
-  **限额压力下的新登录产出"死会话"**——201 创建成功但一切请求立即
-  401 NoValidSession(含 X-Auth-Token 标准红鱼 GET,2026-11-06 多轮
-  实录)——**自动化不得连续登录**:一次登录建全链,用完即弃;撞限后
-  等待自然过期(≈绝对寿命),无管理通路(`ipmcget/set` 无 session 项,
-  DELETE /Sessions/{id} 对 WebUI 会话 401);
-- 登录请求带 `From: WebUI` 是 cookie(GUI 会话)的开关;Redfish 型
-  会话(无该头)只发 X-Auth-Token,不与 KVM 票据链兼容;
+- **并发限额小(实测 ~8)**:超限登录直接 `SessionLimitExceeded`,
+  等待自然过期(≈绝对寿命)即可,无管理通路(`ipmcget/set` 无 session
+  项,DELETE /Sessions/{id} 对 WebUI 会话 401);
 - `ipmcget -d ssoinfo` **在 6.41 不存在**(SSO 三选一之 CLI 通路关闭;
   IPMI 第 4 通路已在前案关闭)——SSO 直链只剩 Redfish OemHuawei 资源与
   Web 登录 API 两个候选,未验。
 
-### 5. console 集成方案(定案 2026-11-06:console 反代 + 浏览器持有会话)
+### 5. console 集成方案(✅ 已实现并通过真机 E2E 2026-11-06:引擎 bmcweb 反代 + 浏览器持有会话)
 
 服务侧合成 kvm_h5.html URL 的路线彻底关闭(状态载体是 BMC origin 的
-localStorage,跨域不可注入)。**引擎侧持有 Web 会话同样关闭**——三轮
-判别实验全部阴性:①请求头超集复刻(含全套 Sec-Fetch/UA/Origin)✗;
-②会话表干净窗口(无限额压力)新登录 ✗;③登录请求全套浏览器头复刻 ✗
-——curl(或任何非浏览器客户端)创建的 GUI 会话一律死会话(OEM 动作
-401 NoValidSession,连创建它的客户端自己也不认),而浏览器登录的会话
-全链可用;判别点在 BMC 对登录客户端的绑定,超出可复刻的请求面(同
-TLS 栈经代理、同头、同源 IP 均已排除),不再深追。
+localStorage,跨域不可注入)。引擎侧持有 Web 会话:技术上可行(§4 的
+cookie+From 对即可,先前"引擎创建的会话是死会话"的判断系缺 From 头的
+误判,已翻案),**产品上不取**——BMC 会话 ~45 分钟绝对寿命 + 小并发
+限额,引擎代持意味着生命周期管理与重登造;浏览器持有则天然零管理。
 
-**定案形态 = console 侧 BMC web 反代,会话由用户浏览器经代理建立**:
+**实现 = 引擎 `internal/bmcweb`(中性入口 + 厂商驱动,统一入口在
+`/machines/{id}/console` 收口)**:
 
-1. console 增加 BMC web 反代路由(如 `/bmcweb/{machine_id}/` →
-   `https://<bmc>/`;**upstream 改写 Host 为 BMC 真实地址**——jnlp 的
-   IPA/IPB 从请求 Host 头派生,不改写则 H5 客户端拿到不可路由目标,
-   2026-11-06 双向实测);用户浏览器经反代登录 BMC(即浏览器指纹创建
-   会话,绕开引擎侧死会话问题);
-2. console 的"打开控制台" = 打开反代登录页 + 从 mammoth 凭证库自动
-   填表提交(操作员无感)→ SPA 会话建立(浏览器侧,天然健康);
-3. 随后 console JS 在同 origin 执行首页同款启动序列:
-   `localStorage.H5ClientModel='Shared'` + `localH5KVMInfo=null` +
-   `window.open('/bmcweb/{id}/src/virtualControl/kvm_h5.html?' + Math.random())`,
-   经代理的 KVM 页自行完成票据交换(Export/GeneralDownload);
-4. WS 直连 `wss://<BMC IP>:2198/websocket`(不经反代;需用户浏览器可达
-   2198 + 接受自签证书,BMC H5 自带证书弹窗自愈路径
-   `_ResolveSecurityWarning`)。
+- `bmcweb.Proxy`:门禁 cookie(API token 换发,HMAC 签名)+ NoRoute
+  反代分支(BMC web 应用全部用绝对路径,前缀式代理关不住——门禁
+  cookie 而非路径命名机器,引擎自有路由优先匹配)+ **upstream Host
+  改写**(jnlp IPA/IPB 派生源,承重墙;实测改写后票据 IPA=BMC 真实
+  地址)+ Set-Cookie Secure 剥离(http 引擎源上 Secure cookie 会被
+  浏览器静默丢弃);
+- `bmcweb/huawei`:`Launcher` 驱动(Vendor contains "huawei" 匹配),
+  BootScript 复刻厂商首页启动序列(登录 → loginUerInfo/manufacturer
+  种子 → RefreshActivationState → H5ClientModel 一击标志 → window.open
+  kvm_h5.html);**登录会话由用户浏览器经代理建立**(cookie+From 对由
+  浏览器天然携带);`From:WebUI` 登录的凭证在响应 `Token` 头
+  (X-Auth-Token 只发给 Redfish 型登录);
+- 未注册厂商回退 generic 启动器(纯代理 + 手动登录);新厂商 =
+  实现 `Launcher` 三方法 + `api.New` 一行注册,入口/门禁/代理零改动;
+- `/machines/{id}/console`(契约不变):launcher 命中 → 返回
+  `/bmcweb/{id}/session?token=...`;否则回退驱动合成 URL(fake 驱动
+  与未来 OEM 映射照旧)。console 零改动;
+- launcher 页先发 `SessionId` 删除 cookie 再启动:cookies 按主机名
+  存储(不分端口),开发宿主上的陈旧会话 cookie 会把厂商登录顶成
+  400(2026-11-06 E2E 实录);票据交换的 ManagerId 必须是 BMC 管理器
+  id("1"),不能用 session id 顶替(→ 票据 URL 404 的静默失败,
+  E2E 实录)。
 
-不采用:引擎侧票据预取(死会话问题,见上)、SSO 直链(通路仅剩两个
-未验候选,且即便可用也无法跨域设置启动 localStorage)、自研 KVM
-客户端(协议已逆向备档 §3,BMC 自带 H5 客户端经代理可用,自研无增量
-价值,仅作 rescue 场景备选)。
+**E2E 实录(2026-11-06,本地引擎 + 隔离 PG + 2288H 真机)**:console
+入口 → launcher(门禁 cookie + 浏览器经代理登录 201)→ 厂商启动序列 →
+KVM 页经代理完成票据交换(Export=Base.1.0.Success,GeneralDownload 拿
+到 jnlp,**IPA=192.168.1.74** 即 Host 改写生效)→ H5 客户端直连
+`wss://192.168.1.74:2198` 并触发证书接受弹窗(`_ResolveSecurityWarning`
+自愈路径)。**遗留一步**:证书接受是操作员浏览器的一次性点击(真实
+浏览器点击后 postMessage "Certificate OK." 视频即流出;自动化浏览器
+无法点过 chrome-error 拦截页);WS 协议层已由 wsprobe 用活票据独立
+验证(§3)。
+
+不采用:SSO 直链(通路仅剩两个未验候选,且即便可用也无法跨域设置
+启动 localStorage)、自研 KVM 客户端(协议已逆向备档 §3,BMC 自带 H5
+客户端经代理可用,自研无增量价值,仅作 rescue 场景备选)。
 
 ## 官方文档推演:接口正典与盘符漂移(2026-09-23,文档级,待真机复核)
 

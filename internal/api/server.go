@@ -13,6 +13,8 @@ import (
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/bmc"
+	"github.com/3th1nk/mammoth/internal/bmcweb"
+	"github.com/3th1nk/mammoth/internal/bmcweb/huawei"
 	"github.com/3th1nk/mammoth/internal/netboot"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/provision"
@@ -62,6 +64,10 @@ type Deps struct {
 	MediaDir string
 	// ExternalURL is the base machines reach this server on (script URLs).
 	ExternalURL string
+	// BMCWeb is the operator-facing BMC web console proxy (internal/bmcweb;
+	// nil-safe: /machines/{id}/console then falls through to the driver's
+	// synthesized URL). Set by New when the repo deps are present.
+	BMCWeb *bmcweb.Proxy
 	// BootStrategyDefault / NetbootEnabled report the boot carrier surface
 	// in capabilities (empty/false when the netboot path is not configured).
 	BootStrategyDefault string
@@ -238,7 +244,28 @@ func New(d Deps, apiToken string) *gin.Engine {
 	})
 	gen.RegisterHandlers(router, strict)
 
+	// Operator-facing BMC web console (docs/compat/huawei.md §KVM 集成方案):
+	// the session route validates its own token (?token= for window.open,
+	// or the bearer header) and plants the gate cookie; everything else the
+	// vendor web app requests comes as engine-unowned absolute paths
+	// (/redfish, /src, /update, /theme, ...) answered by the NoRoute proxy
+	// branch below, keyed by the gate cookie rather than the path.
+	var bmcwebProxy *bmcweb.Proxy
+	if d.Machines != nil && d.Credentials != nil && d.Crypto != nil {
+		bmcwebProxy = bmcweb.New(d.Machines, d.Credentials, d.Crypto, apiToken)
+		// vendor launchers (统一入口,按机型 Vendor 解析;新厂商在此注册)
+		bmcwebProxy.Register(huawei.New())
+		router.GET("/bmcweb/:id/session", func(c *gin.Context) {
+			bmcwebProxy.Session(c, c.Param("id"))
+		})
+		d.BMCWeb = bmcwebProxy        // /machines/{id}/console neutral entry (统一入口)
+		srv.Deps.BMCWeb = bmcwebProxy // srv holds a Deps copy — patch it too
+	}
+
 	router.NoRoute(func(c *gin.Context) {
+		if bmcwebProxy != nil && bmcwebProxy.TryProxy(c.Writer, c.Request) {
+			return
+		}
 		notFound(c, "route")
 	})
 	return router

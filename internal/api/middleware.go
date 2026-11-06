@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/3th1nk/mammoth/internal/bmcweb"
 	"github.com/3th1nk/mammoth/internal/obs"
 )
 
@@ -43,12 +44,23 @@ func BearerAuth(token string) gin.HandlerFunc {
 			return
 		case strings.HasPrefix(c.FullPath(), "/render/"),
 			strings.HasPrefix(c.FullPath(), "/netboot/"),
+			c.FullPath() == "/bmcweb/:id/session",
 			c.FullPath() == "/api/v1/images/:id/file":
 			// Machine-facing surface: the task token in the path is the
 			// credential (docs/06-install-pipeline.md §2.1, §3.3). The dd
 			// image file route (docs/09「镜像直写通路」) joins the same trust
 			// model — the provisioning L2 is the boundary, and the image id
-			// in the spec snapshot is what names the bytes.
+			// in the spec snapshot is what names the bytes. The bmcweb
+			// session route validates its own token (?token= or bearer)
+			// before anything is served (internal/bmcweb).
+			c.Next()
+			return
+		case c.FullPath() == "" && cookiePresent(c, bmcweb.GateCookie):
+			// NoRoute territory claimed by the bmcweb console proxy: the
+			// vendor web app's absolute paths (/redfish, /src, ...) carry
+			// the gate cookie instead of the bearer header. Signature and
+			// machine binding are verified inside TryProxy before anything
+			// is served — presence here is routing, not authorization.
 			c.Next()
 			return
 		}
@@ -68,6 +80,13 @@ func BearerAuth(token string) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// cookiePresent reports whether the named cookie rode the request (presence
+// only — value verification belongs to the consumer).
+func cookiePresent(c *gin.Context, name string) bool {
+	_, err := c.Cookie(name)
+	return err == nil
 }
 
 // OTelSpan opens a boundary span per HTTP request with standard attributes.

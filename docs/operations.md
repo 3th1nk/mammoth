@@ -637,6 +637,32 @@ MAMMOTH_PXE_WOL_PROXY_TOKEN=<t>        # 与代理 --wol-token 同值(入脱敏�
 不可用时无解(退路 U 盘人工装机/带 BMC 机型)。BIOS 一次性 PXE 残留
 (Pxe/Once)无害——引导项释放后无条目即回固件引导序。
 
+## 4.9 虚拟控制台(BMC web 反代,2026-11-06)
+
+机器详情页「控制台」按钮的统一入口(`GET /machines/{id}/console`,
+契约中性):引擎按机型 Vendor 解析厂商启动器,命中即返回
+`/bmcweb/{id}/session?token=<api token>` 的代理会话链接;未注册厂商回退
+驱动合成 URL(多数 BMC 上不可用,见 compat/huawei.md——合成 URL 与
+引擎侧持会话两路均有定案记录)。
+
+- **形态**:浏览器 → 引擎(`/bmcweb/{id}/session` 种下短时门禁 cookie +
+  launcher 页)→ 厂商启动序列由**用户浏览器**经代理执行(登录、票据、
+  KVM 页全部同源)。引擎不对 BMC 代持 web 会话——BMC 侧对登录客户端有
+  绑定,引擎创建的会话不可用(compat/huawei.md §会话模型)。
+- **网络要求**:操作员浏览器需直连 BMC 的 **2198 端口**(KVM 视频流
+  wss,不经代理)并接受 BMC 自签证书(厂商 H5 客户端自带证书弹窗自愈);
+  引擎需可达 BMC 443(反代通路)。
+- **凭证**:launcher 页一次性内嵌 BMC 凭证(操作员本就可经凭证 API 读取
+  ——同信任域);浏览器不落盘,引擎侧不新增会话状态。
+- **Host 改写是承重墙**:代理 upstream 必须把 Host 改写为 BMC 真实地址
+  ——厂商票据文件的服务器地址字段从请求 Host 派生,不改写则 KVM 客户端
+  拿到不可路由目标(compat/huawei.md 双向实测)。
+- **限制**:同一浏览器同一时刻仅一个机型的控制台会话(门禁 cookie 单机
+  绑定,后开者覆盖);BMC web 会话有 ~45 分钟绝对寿命,到期重开即可。
+
+新厂商接入:`internal/bmcweb` 实现 `Launcher` 接口(Name/Matches/
+BootScript)并在 `api.New` 注册——入口、门禁、代理零改动。
+
 
 
 ## 5. 升级

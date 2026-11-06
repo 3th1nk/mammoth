@@ -715,7 +715,10 @@ func validateInstallSpec(spec *gen.InstallSpec) error {
 		if keepKind != "" && disk.Wipe != nil && *disk.Wipe {
 			return verr("SCHEMA_INVALID_STORAGE", "disks[%d]: keep and wipe are mutually exclusive", i)
 		}
-		if keepKind == "" && len(partitions) == 0 {
+		// The dd pathway (docs/09「镜像直写通路」) consumes the whole disk —
+		// the image carries its own partition table, so a bare wipe (no
+		// partitions, no keep) IS the declaration here.
+		if keepKind == "" && len(partitions) == 0 && spec.Image.Distro != "dd" {
 			return verr("SCHEMA_INVALID_STORAGE", "disks[%d]: declare partitions or keep", i)
 		}
 		for j, part := range partitions {

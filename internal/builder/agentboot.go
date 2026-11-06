@@ -120,7 +120,7 @@ func agentScript() string {
 # any failing command would kill the whole runtime silently (no report, no
 # shell). This runtime handles its own errors: strip the -e and re-exec. The
 # child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
-SCRIPT_VERSION="ab-v19"
+SCRIPT_VERSION="ab-v20"
 case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
 log "agent runtime $SCRIPT_VERSION starting"
 
@@ -612,16 +612,18 @@ seed_partition() { # NoCloud seed onto a CIDATA partition (slice 2)
     # Append a 16MiB vfat partition in the trailing free space (the image
     # ends well before the disk; sfdisk rewrites the table with the backup
     # GPT header at the real disk end).
-    echo 'type=0c, size=32768' | sfdisk --append "$dev" >>/tmp/mammoth-seed.err 2>&1 || { echo "sfdisk append failed (rc=$?)" >> /tmp/mammoth-seed.err; return 1; }
-    # Diagnostic anchor: what the kernel actually created on the device.
-    sfdisk -d "$dev" >>/tmp/mammoth-seed.err 2>&1
-    ls "$dev"?* >>/tmp/mammoth-seed.err 2>&1
-    # -a ADDS the new partition's node (a bare -u only resizes existing ones,
-    # so the appended seed partition never materialized on real hardware —
-    # 2288H LogicalDrive0, the container smoke's sfdisk-file path could not
-    # have caught this).
-    partx -a "$dev" >>/tmp/mammoth-seed.err 2>&1 || partx -u "$dev" >>/tmp/mammoth-seed.err 2>&1
+    # sfdisk writes the TABLE first, then notifies the kernel (BLKPG) — on
+    # LSI MegaRAID volumes the notification EINVALs even though the on-disk
+    # table was updated (2288H: "Failed to add #2 partition" yet sfdisk -d
+    # showed the entry). So append's rc is advisory: the table state and a
+    # forced partx scan decide whether the node exists.
+    echo 'type=0c, size=32768' | sfdisk --append "$dev" >>/tmp/mammoth-seed.err 2>&1 || echo "sfdisk append rc=$? (advisory; verifying the table)" >> /tmp/mammoth-seed.err
+    sfdisk -d "$dev" 2>/dev/null | grep -q "p2 :\|${dev}2" || { echo "no p2 in the on-disk table — append genuinely failed" >> /tmp/mammoth-seed.err; return 1; }
     part=$(sfdisk -d "$dev" 2>/dev/null | grep -E '^/dev/' | tail -1 | cut -d: -f1 | tr -d ' ')
+    # -a ADDS the new partition's node (a bare -u only resizes existing
+    # ones). On the LSI the node never self-appears — the forced scan is
+    # the recovery path for the failed kernel notification above.
+    partx -a "$dev" >>/tmp/mammoth-seed.err 2>&1 || partx -u "$dev" >>/tmp/mammoth-seed.err 2>&1
     [ -b "$part" ] || { echo "seed partition node not found (part=$part, dev=$dev)" >> /tmp/mammoth-seed.err; return 1; }
     mkfs.vfat -n CIDATA "$part" >>/tmp/mammoth-seed.err 2>&1 || return 1
     mkdir -p /tmp/seedmnt && mount -t vfat "$part" /tmp/seedmnt || { echo "seed mount failed" >> /tmp/mammoth-seed.err; return 1; }

@@ -571,7 +571,11 @@ subiquity 的镜像探测在**安装器环境无网/探测失败**时会回落�
    替代两遍方案(tee 直写 + 流式哈希 = 单趟全量校验,pipefail 兜上游);
    prepare 跳过 ISO 解析(distro=dd 无介质,机器直连源 URL)+ 无 apks 子树
    (busybox-only)+ verify_ready 家族短路(完成报告=验证面,同 windows);
-   qemu 冒烟待窗口(小镜像 + HTTP 源);
+   ~~qemu 冒烟待窗口~~ **✅ 容器冒烟通过(2026-11-06,dd_smoke_test.go,
+   MAMMOTH_DD_SMOKE=1)**——dd_image 真实运行(wget→gunzip→tee→sha256sum
+   对真实 HTTP 源),写盘字节哈希断言通过;seed 分区手术不进容器冒烟
+   (alpine sfdisk 对普通文件确定性 EINVAL,loop 节点分配是 Docker 工件),
+   归 qemu 全链轮(真内核/真块设备,语义与生产一致);
    ②~~NoCloud seed 注入 + verify_ready 对齐~~ **✅ 代码落地(2026-11-06,
    0c331cd 后续)**——identity/network/access 意图随 CIDATA 分区生效:运行时
    写后追加 16MiB vfat(sfdisk --append,扩展池 apk 工具),seed 三件

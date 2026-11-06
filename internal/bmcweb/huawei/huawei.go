@@ -52,7 +52,18 @@ func (Driver) BootScript(*store.Machine) string {
       headers: { 'Content-Type': 'application/json', 'From': 'WebUI' },
       body: JSON.stringify({ UserName: BOOT.user, Password: BOOT.password }),
     });
-    if (lr.status !== 201) { fail('登录失败: HTTP ' + lr.status); return; }
+    if (lr.status !== 201) {
+      let why = 'HTTP ' + lr.status;
+      try {
+        const eb = (await lr.json()).error['@Message.ExtendedInfo'][0];
+        if (eb.MessageId === 'Base.1.0.SessionLimitExceeded') {
+          why = 'BMC 会话数已达上限——关闭遗留的 KVM/控制台标签页(它们在轮询保活),' +
+                '等待约 45 分钟会话自然过期后重试;急用可复位 BMC 管理子系统(短暂断 BMC 面)。';
+        } else if (eb.Message) { why += ' — ' + eb.MessageId + ': ' + eb.Message; }
+      } catch (_) {}
+      fail('登录失败: ' + why);
+      return;
+    }
     // From:WebUI logins carry the credential in the 'Token' response header
     // (X-Auth-Token is only issued to Redfish-tagged logins).
     const token = lr.headers.get('Token') || lr.headers.get('X-Auth-Token') || '';

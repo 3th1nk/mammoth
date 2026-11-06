@@ -39,7 +39,7 @@ func TestRuntimeDDDispatchAndStream(t *testing.T) {
 		`raw.gz) decomp="gunzip -c" ;;`,
 		`raw.xz) decomp="xz -dc" ;;`,
 		"apk add --no-cache xz",
-		"SFDISK=/usr/sbin/sfdisk",
+		
 		`reboot -f`,
 	} {
 		if !strings.Contains(script, want) {

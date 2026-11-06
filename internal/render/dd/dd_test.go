@@ -107,7 +107,8 @@ func TestRenderDDRejects(t *testing.T) {
 			i.Disks = append(i.Disks, render.ResolvedDisk{Device: "nvme1n1", Wipe: true})
 			return i
 		}, "exactly one"},
-		{"vmedia", func(i render.InstallInputs) render.InstallInputs { i.Netboot = nil; return i }, "PXE-only"},
+		// vMedia is a supported carrier since the dual-carrier round — the
+		// "vmedia" rejection case was removed with it.
 	}
 	for _, c := range cases {
 		_, _, err := d.RenderAnswers(c.mut(ddInputs()), render.MachineView{})

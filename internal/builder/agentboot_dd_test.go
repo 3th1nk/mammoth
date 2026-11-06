@@ -26,7 +26,13 @@ func TestRuntimeDDDispatchAndStream(t *testing.T) {
 		`echo "$MAMMOTH_SEED_USER_DATA" | base64 -d > /tmp/seedmnt/user-data`,
 		"mkfs.vfat -n CIDATA",
 		`dd_image || bail dd`,
-		`wget -q -O - "$MAMMOTH_DD_URL" | $decomp | tee "$MAMMOTH_DD_TARGET" | sha256sum`,
+		// conv=fsync write + READ-BACK verification: the stream hash cannot
+		// see what the disk holds (the 2288H lesson — a "verified" tee write
+		// read back as no-partition-table on LSI write-back cache).
+		`dd of="$MAMMOTH_DD_TARGET" bs=1M conv=fsync`,
+		"blockdev --flushbufs",
+		`dd if="$MAMMOTH_DD_TARGET" bs=1M count=$blocks 2>/dev/null | head -c "$MAMMOTH_DD_IMAGE_BYTES" | sha256sum`,
+		"read-back sha mismatch",
 		"set -o pipefail",
 		`raw.gz) decomp="gunzip -c" ;;`,
 		`raw.xz) decomp="xz -dc" ;;`,

@@ -2938,6 +2938,16 @@ components:
                 agent initramfs — PXE-only; checksum required; the image owns
                 the partition table, so partitions/lvm/raid/identity/network
                 intent is honestly rejected with 422.
+            size_bytes:
+              type: integer
+              format: int64
+              description: |-
+                dd pathway only: the image's byte span (read-back verification
+                spans exactly these bytes after the write). The artifact-library
+                resolution carries it automatically from the registration;
+                bare-inline specs should declare it explicitly — without it the
+                runtime falls back to stream-hash-only verification. Other
+                distros reject the field.
             format:
               type: string
               enum: [raw, raw.gz, raw.xz]

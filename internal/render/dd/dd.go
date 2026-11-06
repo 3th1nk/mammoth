@@ -154,6 +154,11 @@ func renderSH(in render.InstallInputs) string {
 	// (LogicalDriveN) exist only in the inventory — the kernel name is a
 	// machine-side fact (docs/compat/huawei.md 鸿沟, the resolver idiom).
 	fmt.Fprintf(&b, "MAMMOTH_DD_SIZE_BYTES=%s\n", fmt.Sprintf("%d", in.Disks[0].SizeBytes))
+	// ImageBytes feeds the runtime's read-back verification (the write is
+	// only proven when the DISK hashes to the declared digest). Carried by
+	// the artifact-library resolution; bare-inline specs omit it and the
+	// stream hash stands alone.
+	fmt.Fprintf(&b, "MAMMOTH_DD_IMAGE_BYTES=%s\n", fmt.Sprintf("%d", in.ImageSizeBytes))
 	fmt.Fprintf(&b, "MAMMOTH_COMPLETE_URL=%s\n", shQuote(in.CompleteURL))
 	fmt.Fprintf(&b, "MAMMOTH_LOG_URL=%s\n", shQuote(in.AgentLogURL))
 	return b.String()

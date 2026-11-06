@@ -142,8 +142,10 @@ type installSpecView struct {
 		Checksum string `json:"checksum"`
 		Distro   string `json:"distro"`
 		// Format is the dd pathway's image compression (raw | raw.gz);
-		// empty = raw. Docs/09「镜像直写通路」.
+		// empty = raw. SizeBytes is the image's byte span (artifact-library
+		// resolution carries it) — the runtime's read-back span.
 		Format           string `json:"format"`
+		SizeBytes        int64  `json:"size_bytes,omitempty"`
 		WindowsImageName string `json:"windows_image_name"`
 	} `json:"image"`
 	Boot struct {
@@ -1473,6 +1475,7 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 		WindowsImageName: spec.Image.WindowsImageName,
 		ImageChecksum:    spec.Image.Checksum,
 		ImageFormat:      spec.Image.Format,
+		ImageSizeBytes:   spec.Image.SizeBytes,
 		RootPassword:     rootPassword,
 		SSHPublicKeys:    spec.Access.SSHKeys,
 		Capabilities:     spec.Access.Capabilities,

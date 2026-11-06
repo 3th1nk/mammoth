@@ -153,6 +153,7 @@ func PlanInstall(ctx context.Context, specJSON json.RawMessage, hw *bmc.Hardware
 		InstalledKernelArgs: spec.Boot.InstalledKernelArgs,
 		ImageChecksum:       spec.Image.Checksum,
 		ImageFormat:         spec.Image.Format,
+		ImageSizeBytes:      spec.Image.SizeBytes,
 	}
 	// The dd driver gates on Netboot != nil (PXE-only pathway): the dry-run
 	// mirrors the real pipeline's strategy resolution minimally — a scoped

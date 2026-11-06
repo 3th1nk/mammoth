@@ -590,8 +590,12 @@ type InstallInputs struct {
 	// (docs/09「镜像直写通路」): checksum is the UNCOMPRESSED image's sha256
 	// (the write verification compares the stream that hit the disk),
 	// format is raw | raw.gz (busybox gunzip inline). Empty for iso distros.
-	ImageChecksum    string
-	ImageFormat      string
+	ImageChecksum string
+	ImageFormat   string
+	// ImageSizeBytes is the dd pathway's image size (read-back verification
+	// span); carried by the artifact-library resolution (the registration's
+	// size_bytes), absent on bare-inline specs.
+	ImageSizeBytes   int64
 	WindowsImageName string // windows: explicit /IMAGE/NAME override (empty = driver default)
 	RootPassword     string // per-task random when spec asked for generate
 	SSHPublicKeys    []string

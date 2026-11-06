@@ -120,7 +120,7 @@ func agentScript() string {
 # any failing command would kill the whole runtime silently (no report, no
 # shell). This runtime handles its own errors: strip the -e and re-exec. The
 # child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
-SCRIPT_VERSION="ab-v23"
+SCRIPT_VERSION="ab-v24"
 case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
 log "agent runtime $SCRIPT_VERSION starting"
 
@@ -631,7 +631,7 @@ seed_partition() { # NoCloud seed onto the image's CIDATA slot (封装契约)
     log "nocloud seed written to $part (CIDATA slot)"
 }
 
-dd_image() { # image direct-write (roadmap「镜像直写通路」slice 1)
+dd_image() { # image direct-write (roadmap「镜像直写通路」)
     [ -n "$MAMMOTH_DD_URL" ] || { echo "plan carries no DD_URL" >> /tmp/mammoth-dd.err; return 1; }
     [ -n "$MAMMOTH_DD_TARGET" ] || { echo "plan carries no DD_TARGET" >> /tmp/mammoth-dd.err; return 1; }
     # Controller-named targets resolve to the kernel device here: the Redfish
@@ -652,13 +652,8 @@ dd_image() { # image direct-write (roadmap「镜像直写通路」slice 1)
             [ -b "$resolved" ] || { echo "no block device matches size=$MAMMOTH_DD_SIZE_BYTES (controller name $MAMMOTH_DD_TARGET unresolved; /proc/partitions: $(grep -vE "loop|ram" /proc/partitions | tail -n +3 | head -4 | tr '\n' ' '))" >> /tmp/mammoth-dd.err; return 1; }
             log "target $MAMMOTH_DD_TARGET resolved to $resolved (by size)"
             export MAMMOTH_DD_TARGET=$resolved
-            export MAMMOTH_DD_TARGET_BASENAME=${resolved#/dev/}
             ;;
     esac
-    # Single pass, fully verified: the stream flows wget → gunzip → tee
-    # (the disk) → sha256sum, so the checksum compares the bytes that hit
-    # the disk — pipefail makes every upstream failure fatal (busybox ash
-    # 1.26+), and gzip's own CRC catches decompression corruption.
     case "$MAMMOTH_DD_FORMAT" in
         raw.gz) decomp="gunzip -c" ;;
         raw.xz) decomp="xz -dc" ;;
@@ -670,25 +665,35 @@ dd_image() { # image direct-write (roadmap「镜像直写通路」slice 1)
         apk add --no-cache xz >>/tmp/mammoth-dd.err 2>&1 || { echo "apk xz failed" >> /tmp/mammoth-dd.err; return 1; }
     fi
     log "streaming $MAMMOTH_DD_FORMAT image to $MAMMOTH_DD_TARGET"
+    # conv=fsync forces the block device's flush on completion — sync only
+    # drains the kernel page cache, and on LSI write-back volumes a read
+    # that follows can hit stale controller cache and see the PREVIOUS disk
+    # content (2288H: a "verified" write read back as no-partition-table;
+    # real-hardware 2026-11-06). The write verification is the READ-BACK
+    # below — the stream hash cannot see what the disk actually holds.
     set -o pipefail
-    wget -q -O - "$MAMMOTH_DD_URL" | $decomp | tee "$MAMMOTH_DD_TARGET" | sha256sum > /tmp/mammoth-dd.sha 2>>/tmp/mammoth-dd.err
+    wget -q -O - "$MAMMOTH_DD_URL" | $decomp | dd of="$MAMMOTH_DD_TARGET" bs=1M conv=fsync 2>>/tmp/mammoth-dd.err
     rc=$?
     set +o pipefail
     [ $rc -eq 0 ] || { echo "image stream failed (rc=$rc)" >> /tmp/mammoth-dd.err; return 1; }
-    got=$(awk '{print $1}' /tmp/mammoth-dd.sha)
-    if [ -n "$MAMMOTH_DD_SHA256" ] && [ "$got" != "$MAMMOTH_DD_SHA256" ]; then
-        echo "sha mismatch: got $got want $MAMMOTH_DD_SHA256 — disk content untrustworthy, re-run the task" >> /tmp/mammoth-dd.err
-        return 1
-    fi
-    # Force the controller's write-back cache to disk: sync only drains the
-    # kernel's page cache, and a read that follows (the seed partition scan)
-    # can hit stale controller cache and see the PREVIOUS disk content —
-    # 2288H LSI: "does not contain a recognized partition table" right after
-    # a verified write, gone once flushed (real-hardware, 2026-11-06).
     sync
     blockdev --flushbufs "$MAMMOTH_DD_TARGET" >>/tmp/mammoth-dd.err 2>&1 || true
     sync
-    log "image written and verified ($got)"
+    # Read-back verification: hash what the DISK holds now. Requires the
+    # image size (MAMMOTH_DD_IMAGE_BYTES, carried by the artifact-library
+    # resolution; absent on bare-inline specs — the stream hash above is
+    # then the only check).
+    if [ -n "$MAMMOTH_DD_IMAGE_BYTES" ] && [ -n "$MAMMOTH_DD_SHA256" ]; then
+        blocks=$(( (MAMMOTH_DD_IMAGE_BYTES + 1048575) / 1048576 + 1 ))
+        got=$(dd if="$MAMMOTH_DD_TARGET" bs=1M count=$blocks 2>/dev/null | head -c "$MAMMOTH_DD_IMAGE_BYTES" | sha256sum | awk '{print $1}')
+        if [ "$got" != "$MAMMOTH_DD_SHA256" ]; then
+            echo "read-back sha mismatch: got $got want $MAMMOTH_DD_SHA256 — the write did not persist" >> /tmp/mammoth-dd.err
+            return 1
+        fi
+        log "image written; read-back verified ($got)"
+    else
+        log "image written (stream hash only — no size for read-back)"
+    fi
 }
 
 win_apply() { # windows apply-image phase one (boot.installer=agent, 方案 A)

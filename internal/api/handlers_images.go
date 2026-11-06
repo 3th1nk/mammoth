@@ -183,6 +183,9 @@ func (s *Server) resolveImageRefs(ctx context.Context, specRaw json.RawMessage) 
 	if d, _ := img["distro"].(string); d == "dd" {
 		base := strings.TrimSuffix(s.ExternalURL, "/")
 		img["source"] = base + "/api/v1/images/" + probe.Image.Id + "/file"
+		// The runtime's read-back verification spans exactly the registered
+		// image — the size rides the resolved spec.
+		img["size_bytes"] = im.SizeBytes
 	} else {
 		img["source"] = im.FilePath
 	}

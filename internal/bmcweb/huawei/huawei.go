@@ -63,8 +63,10 @@ func (Driver) BootScript(*store.Machine) string {
     // login token (loginUerInfo.token) and walks /Managers/<ManagerId> —
     // the iBMC manager id is always "1" (the session id is NOT the manager
     // id; seeding it there 404s the whole ticket path, 2026-11-06 E2E).
+    // softwareName feeds the KVM page's document.title (null → "null <host>").
     localStorage.setItem('loginUerInfo', JSON.stringify({ token: token, ManagerId: '1' }));
     if (!localStorage.getItem('manufacturer')) localStorage.setItem('manufacturer', 'Huawei');
+    if (!localStorage.getItem('softwareName')) localStorage.setItem('softwareName', 'iBMC');
     sessionStorage.setItem('sessionid', lbody.Id || '');
 
     // session activation — the vendor SPA does this on every page load and
@@ -76,10 +78,12 @@ func (Driver) BootScript(*store.Machine) string {
       body: JSON.stringify({ Mode: 'Activate' }),
     });
 
-    // arm the vendor one-shot launch flag and open the KVM page.
+    // arm the vendor one-shot launch flag and BECOME the KVM page: a same
+    // -origin navigation instead of window.open — the open ran after async
+    // fetches, outside the click's gesture window, so browsers blocked it
+    // as a popup (real run 2026-11-07); one tab total, nothing to allow.
     localStorage.setItem('H5ClientModel', 'Shared');
     localStorage.setItem('localH5KVMInfo', null);
-    log('打开 KVM 窗口 …', 'ok');
-    window.open('/src/virtualControl/kvm_h5.html?' + Math.random(), '_blank');
-    log('已打开。KVM 视频流由浏览器直连 BMC 的 2198 端口(wss),需可达且接受其自签证书。', 'ok');`
+    log('进入 KVM …(视频流由浏览器直连 BMC 的 2198 端口 wss)');
+    location.href = '/src/virtualControl/kvm_h5.html?' + Math.random();`
 }

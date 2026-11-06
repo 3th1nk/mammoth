@@ -443,7 +443,10 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
    - ~~**uniontechos**~~ **✅ 已闭环(2026-09-19 真机,见第 2 项)**;剩余
      1050u2a 复验与 PXE 复核随下一窗口顺带;
    - **共享二层地址治理**(邻机占址归属/装机段划段)——线下协调;复验与
-     relay 回归绑 runbooks/test-baselines.md 基线表滚动执行。
+     relay 回归绑 runbooks/test-baselines.md 基线表滚动执行;
+10. **镜像直写通路**——设计已定稿(见下方「镜像直写通路」节,2026-11-06):
+    dd 运行时 = agent initramfs 第三 payload,dd 优于 url=(内存墙),解压
+    契约按 busybox 能力分三档;qemu 全程可验,切片①③不占真机窗口。
 
 ## 长期方向(不承诺排期)
 
@@ -524,6 +527,48 @@ subiquity 的镜像探测在**安装器环境无网/探测失败**时会回落�
 签名的本地镜像(aptly/reprepro,自带 InRelease);若将来要让引擎把 pool
 树升格为一等 apt 源,需生成带签名的 apt 元数据(apt-ftparchive + 签名
 密钥管理),设计后再议。
+
+## 镜像直写通路(设计定稿,2026-11-06,待实施)
+
+> 镜像派(dd 直写)立项:业界主线(Ironic `direct` 默认 / Tinkerbell 流式 /
+> MAAS curtin 解包)全行业绕开安装器内联跑(related-work §1 同结论);
+> mammoth 的 agent initramfs 通路天然能 dd(related-work §6 预留的 v2 接入点,
+> 契约骨架不改),工控机 POC 评估 §八 已定案 dd 运行时选型。
+
+**定案(吸收 thor-pxe-demo 真机/qemu 实录 + 评估文档 §八)**:
+
+1. **dd 模式优于 url= 模式,产品化只做 dd**:url= casper 需把 live ISO
+   整体拉进 RAM(3.6G+,限大内存机,qemu slirp 实测拉不动 3.6G;真机也需
+   5-10 分钟才到 dd 点);alpine netboot 秒级到达 dd,~256-512MB 内存即可,
+   面对工控机/边缘设备全集不假设大内存。url= 仅保留在 thor-pxe-demo 作
+   Thor 类大内存机器的技术路线验证。
+2. **解压契约(busybox 无 xz,POC 实录的硬约束)**:`image.format`
+   三档,按依赖递增:
+   - `raw`(未压缩)——零依赖,Canonical/img 直写退路介质形态;
+   - `raw.gz`——**busybox gunzip 内建,推荐交付格式**,零依赖;
+   - `raw.xz`——需 `apk add xz`(agent 通路 alpine_repo/apks 由引擎池携带)
+     或 apkovl 预置 xz 二进制——可选增强,不进第一切片。
+   POC 实录佐证:demo 的 `xz -dc | dd of=nvme bs=4M conv=fsync` 管道在
+   casper live(ubuntu 带 xz)验证成立;alpine 侧同管道需先解决 xz 在位。
+   进度上报不用 dd status=progress(busybox 版本差异),按 (bytes/总量) 自算。
+3. **契约形态**(related-work §6 预留:agent 通路天然承载,不动契约骨架):
+   - `image.kind: "dd"`(缺省 iso = 现行方言通路)+ `image.format` 三档;
+   - `storage` 退化为**单目标盘选择器**(镜像自带 GPT/ESP,引擎不再声明
+     分区;`storage.lvm`/raid 与 dd 互斥,提交即拒);
+   - **firstboot = cloud-init NoCloud seed**:引擎把 spec 的
+     identity/network/access 现行意图块渲染成 seed 写入(独立小分区),
+     thor-pxe-demo 的 user-data runcmd 形态即已验证的注入模式——这是引擎
+     对裸 dd 的增量价值(网络/凭证意图不丢)。
+4. **运行时复用面**(= docs/12 agent-initramfs 第三使用者,换 payload):
+   netboot 树 + apkovl + plan 变量 + bail 哨兵 + syslog 归因(2026-11-06
+   刚修好的 script 抓取注册链)+ HTTP Range 断点续传(大镜像断点重拉)+
+   NIST 800-88 清洗前置(已有 DriveEraser)+ 写后 sha256 校验。
+5. **切片**(qemu 全程可验,不占真机窗口):
+   ①agent dd payload + `image.kind/format` 契约 + 写后校验(raw 起步);
+   ②NoCloud seed 注入 + verify_ready 对齐(dd 的 verify 面 = 带内读
+   /etc/cloud + blkid,与方言通路同型);
+   ③raw.gz 默认化 + raw.xz(apks 携带)+ 签名校验(cosign/minisign,
+   镜像工件面硬化项联动)。
 
 ## 已评估并排除的方向(决策记录,避免重新论证)
 

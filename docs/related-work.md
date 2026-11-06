@@ -190,7 +190,9 @@ ubuntu late-commands 同步补容忍清除(双方言对称);
 2. **镜像路线我们刻意不跟**:金镜像工厂与 mammoth"声明式意图 + 官方介质"的立约
    方式相悖,维护成本(每版本×每驱动集×每语言)不适合个人/小团队维护的引擎;
    若未来有大客户诉求,可在 v2 层以"整盘镜像投放"作为一个 install 动作形态接入
-   (agent 通路天然能 dd),不必改契约骨架。
+   (agent 通路天然能 dd),不必改契约骨架。——**该预留点已立项**(2026-11-06,
+   roadmap「镜像直写通路」设计定稿:工控机 POC 诉求落地 + 业界 direct deploy
+   主线对齐,dd 运行时 = agent initramfs 第三 payload)。
 3. **v1.x 的 Windows PXE 直接抄路线 B 的 wimboot 配方**:mammoth 已有 iPXE 二段链
    + netboot/files HTTP 树,wimboot 三件套(bootmgfw.efi/BCD/boot.wim)是纯文件
    服务,`windowsLayout` 家族扩展即可承载;BCD 的 MAC/架构差异化是主要工作量。

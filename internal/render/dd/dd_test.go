@@ -12,7 +12,7 @@ func ddInputs() render.InstallInputs {
 		TaskToken:     "tokDD",
 		MachineID:     "mch_dd",
 		ImageSource:   "http://10.0.0.9/images/thor.img.gz",
-		ImageChecksum: "ABCDEF0123456789",
+		ImageChecksum: "sha256:ABCDEF0123456789",
 		ImageFormat:   "raw.gz",
 		AnswerBaseURL: "http://10.0.0.1:8080/render/tokDD",
 		CompleteURL:   "http://10.0.0.1:8080/render/tokDD/complete",

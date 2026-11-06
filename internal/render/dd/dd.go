@@ -144,7 +144,10 @@ func renderSH(in render.InstallInputs) string {
 	fmt.Fprintf(&b, "# mammoth dd plan — task %s / machine %s\n", in.TaskToken, in.MachineID)
 	fmt.Fprintf(&b, "MAMMOTH_DD_MODE=1\n")
 	fmt.Fprintf(&b, "MAMMOTH_DD_URL=%s\n", shQuote(in.ImageSource))
-	fmt.Fprintf(&b, "MAMMOTH_DD_SHA256=%s\n", shQuote(strings.ToLower(in.ImageChecksum)))
+	// The checksum arrives in the contract form "sha256:<hex>" (the
+	// artifact-library resolution and the spec field share it) — the runtime
+	// compares against sha256sum's bare hex, so the prefix is stripped here.
+	fmt.Fprintf(&b, "MAMMOTH_DD_SHA256=%s\n", shQuote(strings.ToLower(strings.TrimPrefix(in.ImageChecksum, "sha256:"))))
 	fmt.Fprintf(&b, "MAMMOTH_DD_FORMAT=%s\n", shQuote(in.ImageFormat))
 	fmt.Fprintf(&b, "MAMMOTH_DD_TARGET=%s\n", shQuote(in.Disks[0].Device))
 	fmt.Fprintf(&b, "MAMMOTH_COMPLETE_URL=%s\n", shQuote(in.CompleteURL))

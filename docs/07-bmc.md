@@ -184,11 +184,13 @@ cycle);绕开装机单独下发 BIOS 的调用方,须自行跟进一次 `cycle` 
 
 - 驱动层不引入厂商 SDK 依赖,Redfish 走标准 HTTP + schema 文档,IPMI 走纯协议实现;
   厂商 OEM 扩展以可选接口(`OEMExtensions`)渐进加入;
-- **KVM URL 现状(2026-09-21)**:接口面已归一(`ConsoleURL` 驱动方法 + 同步端点,
+- **KVM URL 现状(2026-11-06 更新)**:接口面已归一(`ConsoleURL` 驱动方法 + 同步端点,
   fake 完整可用,acceptance 覆盖);Redfish 标准无 KVM 资源,OEM 映射未实装。
-  真机定案(2288H V5/iBMC 6.41):页面 URL 登录前后直开均黑屏,启动依赖 Web UI
-  流程,服务侧合成 URL 原理上不可行——正解为 SSO token 直链,待二期。真机
-  侦察实录见 compat/huawei.md;现统一返回 `BMC_UNSUPPORTED`,调用方按能力
-  缺失降级(设计内行为,非缺陷);
+  真机定案(2288H V5/iBMC 6.41):页面 URL 直开黑屏的机制级根因已解——启动
+  状态载体是 BMC origin 的 localStorage 一次性标志(H5ClientModel),不在
+  URL,服务侧合成 URL 与 SSO 直链两条路同灭;**正解 = console 侧反代 +
+  浏览器驱动启动序列**(engine 持凭证维护 GUI 会话,详见 compat/huawei.md
+  §KVM 集成方案)。现统一返回 `BMC_UNSUPPORTED`,调用方按能力缺失降级
+  (设计内行为,非缺陷);
 - BMC 弱固件是实践中的主要不稳定源:驱动层内置请求节流、响应校验和超时隔离,
   单台 BMC 的异常不得拖垮 runner(每 target 独立超时上下文)。

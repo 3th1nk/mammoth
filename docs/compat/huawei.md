@@ -597,35 +597,158 @@ runner 将 claim 时快照贯穿全部 stage,其余读 context 的 stage 均在
 池模式必须服务所有客户端(否则 dracut 无限期重试,装机卡死)——普通设备
 只给租约不给引导参数。BIOS 前置 + logicDrive 怪癖见上文两条。
 
-## KVM HTML5 集成远程控制台:URL 直开不可用(2026-09-21 实测定案)
+## KVM HTML5 集成远程控制台:启动机制全解与 console 集成方案(2026-11-06 实测定案)
 
-Web UI"HTML5 集成远程控制台(共享)"的页面 URL 形态(2288H V5 / iBMC 6.41,
-同一台机器档案):
+> 2026-09-21 曾定案"URL 直开不可用,差异在浏览器侧启动上下文,SSO 直链
+> 待二期"。2026-11-06 经浏览器自动化 + 本地反代全流程抓包 + 前端 JS 逆向,
+> 机制级根因、票据链、KVM 协议全部实证,黑屏之谜与集成路线就此闭合。
+> 样机:2288H V5 / iBMC 6.41(同一台机器档案)。
 
+### 1. 直开黑屏的机制级根因:localStorage 一次性启动门控
+
+页面 URL `https://<bmc>/src/virtualControl/kvm_h5.html?<Math.random()>`
+尾参确为 cache-buster 非凭证(前案结论保持)。**状态载体不在 URL,在
+localStorage**——首页"启动虚拟控制台"按钮(`dashboradCtrl.js`)实际执行:
+
+```js
+localStorage.setItem('H5ClientModel', opt.id===0 ? 'Private' : 'Shared'); // 启动标志
+localStorage.setItem('localH5KVMInfo', null);   // 作废旧票据
+POST /redfish/v1/SessionService/Sessions/<sid>/Oem/Huawei/Actions/
+     Session.RefreshActivationState  {"Mode":"Activate"}   // 会话激活/保活
+window.open('/src/virtualControl/kvm_h5.html?' + Math.random(), '_blank') // 裸 URL
 ```
-https://<bmc>/src/virtualControl/kvm_h5.html?<cache-buster>
+
+KVM 页加载(`virtualClientCtrl.js`)的启动分支**被 H5ClientModel 整体门控**:
+
+```js
+if (localStorage.H5ClientModel) {                       // ← 直开时缺失 → 整段跳过
+  if (localStorage.localH5KVMInfo) { OpenKvm(票据缓存快路径) }
+  else { ExportKvmStartupFile → GeneralDownload → loadXML(jnlp) → OpenKvm }
+  localStorage.removeItem('H5ClientModel')              // 一次性消费
+}
+else if (localStorage.kvmHtml5Info) { ... }             // 遗留兼容分支
+// 否则:什么都不做 —— 黑屏,状态条 IP:/SN: 全空
 ```
 
-- **尾参是 cache-buster 不是凭证**:前端 `Math.random()` 形态(如
-  `0.004009648068480476`),防缓存用;
-- **直开页面两种登录态均黑屏(浏览器实测定案)**:未登录直开——黑屏,
-  无登录提示、无跳转;**登录 iBMC Web 后新标签页直开——同样黑屏**,底部
-  状态条 `IP: SN: Recv:0 Send:0 Frame: 0`(客户端壳已渲染,KVM 会话从未
-  建立)。唯一可用通路是首页"虚拟控制台 → 启动虚拟控制台 → HTML5 集成
-  远程控制台(共享)"的启动流程(自动新开标签页)——而正常启动的 URL 与
-  裸路径形态完全相同(仅 cache-buster 尾参),差异全在浏览器侧启动上下文
-  (opener/启动前票据交换),**不在 URL 本身:服务侧合成 URL 原理上不可行**;
-  未登录时页面 GET 仍返回 200 + 页面壳(无登录墙)——**200 ≠ 可用**,
-  服务侧状态码核验防不了黑屏;
-- **正解 = SSO token 直链(待二期)**:官方机制 `https://<bmc>/sso?token=xxx`
-  (31 字符临时凭证,免登打开 Web 首页/**KVM**,iBMC 高级命令参考)——
-  token 获取路径三选一待真机定(Redfish OemHuawei 资源 > web 登录 API >
-  `ipmcget -d ssoinfo` CLI,最后者依赖 BMC SSH 尽量避开),深链形态待验;
-  ~~IPMI `Get auth token` 第 4 条通路~~ 已在 V5/6.41 实测不可用(见 IPMI
-  推演节 §2,机架 C2h 拒);
-- **v1 合成实现已试装并回退(2026-09-21)**:Oem.Huawei 识别 + 裸路径合成
-  + 页面 200 核验曾落地,登录态测试定案黑屏后回退为 `BMC_UNSUPPORTED`
-  ——发一个黑屏链接比干净的"不支持"降级更差;驱动桩注释携带本结论。
+浏览器对照实证:经按钮启动的 KVM 页状态条 `IP: 127.0.0.1 SN: 2102...`
+(值已填充),同登录态直开同 URL 的页 `IP:`/`SN:` 全空、`Frame/Send/Recv`
+恒 0——黑屏 = 启动分支未触发,**不是**网络或凭证失败。未登录直开返回
+200 + 页面壳的前案结论保持(200 ≠ 可用)。
+
+### 2. KVM 票据链(kvm.jnlp)与独立服务端口
+
+- **Web 登录 = Redfish 会话**:`POST /redfish/v1/SessionService/Sessions`
+  (登录体 UserName/Password)→ 201 + `X-Auth-Token` + `Set-Cookie:
+  SessionId`(HttpOnly)。**请求带 `From: WebUI` 头时**响应才含
+  Set-Cookie 且会话 `UserTag: "GUI"`;无该头会话为 `UserTag: "Redfish"`
+  且无 cookie。后续 Web 面 API 只认 **cookie 会话**(X-Auth-Token 对
+  KvmService OEM 动作一律 401 NoValidSession;对标准 Redfish GET 有效)。
+- **RefreshActivationState {"Mode":"Activate"}** 是 Web 会话的激活/保活
+  动作(SPA 每次页面加载与 KVM 启动都调),非 KVM 专属。
+- **票据获取两步**(KVM 页自己执行,Token 头取 localStorage
+  `loginUerInfo.token`,即登录响应的 `Token` 头):
+  1. `POST .../KvmService/Actions/KvmService.ExportKvmStartupFile`
+      `{"Type":"URI","Content":"/tmp/web/kvm.jnlp","Mode":"Shared|Private"}`
+  2. `POST .../Managers/1/Actions/Oem/Huawei/Manager.GeneralDownload`
+      `{"TransferProtocol":"HTTPS","Path":"/tmp/web/kvm.jnlp"}` → **响应体
+      即 kvm.jnlp 原文**。
+- **kvm.jnlp 结构**(Java JNLP 复用,H5 客户端 `loadXML` 按
+  `<param name value>` 解析;实录 2026-11-06):
+
+  ```xml
+  <jnlp spec="1.0+" codebase="https://192.168.1.74">
+    <title>Remote Virtual Console IP :<IPA> SN:<SN></title>
+    <jar href="/bmc/pages/jar/vconsole*.jar?authParam=<verifyValue>"/>
+    <param name="verifyValue" value="996000952"/>   <!-- KVM tag id(4B,逐包携带) -->
+    <param name="mmVerifyValue" value="996000952"/>
+    <param name="decrykey" value="<64hex>"/>        <!-- 前 32hex=协商 key,后 32hex=iv -->
+    <param name="verifyValueExt" value="<32hex>"/>  <!-- 扩展 tag(PBKDF2 口令,优先于 tag id) -->
+    <param name="port" value="2198"/>               <!-- KVM WebSocket 独立端口 -->
+    <param name="vmmPort" value="8208"/>            <!-- vMedia 独立端口 -->
+    <param name="privilege" value="4"/>
+    <param name="IPA" value="192.168.1.74"/>        <!-- ⚠ 从请求 Host 头派生 -->
+    <param name="IPB" value="..."/>                 <!-- 同上(双口) -->
+    <param name="compress" value="1"/> <param name="vmm_compress" value="0"/>
+    <param name="bladesize" value="1"/> <param name="local" value="zh"/>
+  </jnlp>
+  ```
+
+  **IPA/IPB 跟随请求 Host 头**:直连(Host=BMC IP)时 jnlp 携带真实地址;
+  经反代(Host=代理地址)时 jnlp 携带代理地址——**代理形态必须在
+  upstream 请求上改写 Host 为 BMC 真实地址**,否则 H5 客户端拿到不可路由
+  的 WS 目标(2026-11-06 双向实测)。
+- **2198(KVM WS)/ 8208(vMedia)为 BMC 独立 TCP 服务**,TLS 与 443 同
+  证书(自签,Huawei IT Product CA);`wss://<IPA>:2198/websocket` 由
+  H5 客户端直连(不经 Web 会话,见下)。
+
+### 3. KVM WS 协议(逆向自 H5 客户端 JS,wsprobe 实测验证)
+
+- **帧格式**:`FE F6 <len_hi=00> <len_lo> <tag_id 4B BE> <00 00> <payload>`
+  (客户端→服务端;服务端→客户端同头,客户端解析状态机扫 `FE F6 00`
+  魔数后取 1 字节长度 + 跳 2 字节 + payload);
+- **通道协商**(连接即发,`_CreatConnection` onopen):`C_CMD_GET_SUITE
+  (0x42)` → 服务端 `RSP_SUITE (0x43)` 列出 {hmac=1(SHA1,5000 轮), 2,
+  3(SHA256,10000 轮)},客户端**只选 hmac=3** 回 `SET_SUITE (0x44)`;
+- **认证在 CONNECT 不在握手**:WS 升级(/websocket,无任何 cookie/凭证)
+  与 GetSuite 均**不鉴权**(假 tag_id 同样拿到套件表,2026-11-06 wsprobe
+  对照实测);凭证门在 `C_CMD_CONNECT (0x06)`:AuthCode =
+  PBKDF2(verifyValueExt,协商 iv,24 字节派生)→ AES 加密载荷;服务端回
+  `H_CMD_REPORT_KVMKEY (0x40)`(重连钥)/ `H_CMD_CONNECT_STATE (0x08)`
+  (3=INVALID_USER 等),之后 `H_CMD_IMAGE (0x02)` 视频帧流;
+- **证书黑屏自愈路径**:`_ResolveSecurityWarning` 开
+  `https://<IPA>:2198` 弹窗让用户接受证书,postMessage "Certificate OK."
+  后重连——自研客户端需自带等价引导;
+- 断线重连上限 16 次;心跳 `C_CMD_HEARTBEAT (0x09)`。
+
+### 4. Web 会话模型(工程约束,console 集成必读)
+
+- **绝对寿命 ~45 分钟**:实测 17:43 创建的 SPA 会话在 18:28 死亡
+  (恰 45 分钟,期间 SPA 持续轮询保活、页面加载时调
+  RefreshActivationState——均不延长);空闲更不是变量;
+- **并发限额小(实测 ~8)**:超限登录直接 `SessionLimitExceeded`;
+  **限额压力下的新登录产出"死会话"**——201 创建成功但一切请求立即
+  401 NoValidSession(含 X-Auth-Token 标准红鱼 GET,2026-11-06 多轮
+  实录)——**自动化不得连续登录**:一次登录建全链,用完即弃;撞限后
+  等待自然过期(≈绝对寿命),无管理通路(`ipmcget/set` 无 session 项,
+  DELETE /Sessions/{id} 对 WebUI 会话 401);
+- 登录请求带 `From: WebUI` 是 cookie(GUI 会话)的开关;Redfish 型
+  会话(无该头)只发 X-Auth-Token,不与 KVM 票据链兼容;
+- `ipmcget -d ssoinfo` **在 6.41 不存在**(SSO 三选一之 CLI 通路关闭;
+  IPMI 第 4 通路已在前案关闭)——SSO 直链只剩 Redfish OemHuawei 资源与
+  Web 登录 API 两个候选,未验。
+
+### 5. console 集成方案(定案 2026-11-06:console 反代 + 浏览器持有会话)
+
+服务侧合成 kvm_h5.html URL 的路线彻底关闭(状态载体是 BMC origin 的
+localStorage,跨域不可注入)。**引擎侧持有 Web 会话同样关闭**——三轮
+判别实验全部阴性:①请求头超集复刻(含全套 Sec-Fetch/UA/Origin)✗;
+②会话表干净窗口(无限额压力)新登录 ✗;③登录请求全套浏览器头复刻 ✗
+——curl(或任何非浏览器客户端)创建的 GUI 会话一律死会话(OEM 动作
+401 NoValidSession,连创建它的客户端自己也不认),而浏览器登录的会话
+全链可用;判别点在 BMC 对登录客户端的绑定,超出可复刻的请求面(同
+TLS 栈经代理、同头、同源 IP 均已排除),不再深追。
+
+**定案形态 = console 侧 BMC web 反代,会话由用户浏览器经代理建立**:
+
+1. console 增加 BMC web 反代路由(如 `/bmcweb/{machine_id}/` →
+   `https://<bmc>/`;**upstream 改写 Host 为 BMC 真实地址**——jnlp 的
+   IPA/IPB 从请求 Host 头派生,不改写则 H5 客户端拿到不可路由目标,
+   2026-11-06 双向实测);用户浏览器经反代登录 BMC(即浏览器指纹创建
+   会话,绕开引擎侧死会话问题);
+2. console 的"打开控制台" = 打开反代登录页 + 从 mammoth 凭证库自动
+   填表提交(操作员无感)→ SPA 会话建立(浏览器侧,天然健康);
+3. 随后 console JS 在同 origin 执行首页同款启动序列:
+   `localStorage.H5ClientModel='Shared'` + `localH5KVMInfo=null` +
+   `window.open('/bmcweb/{id}/src/virtualControl/kvm_h5.html?' + Math.random())`,
+   经代理的 KVM 页自行完成票据交换(Export/GeneralDownload);
+4. WS 直连 `wss://<BMC IP>:2198/websocket`(不经反代;需用户浏览器可达
+   2198 + 接受自签证书,BMC H5 自带证书弹窗自愈路径
+   `_ResolveSecurityWarning`)。
+
+不采用:引擎侧票据预取(死会话问题,见上)、SSO 直链(通路仅剩两个
+未验候选,且即便可用也无法跨域设置启动 localStorage)、自研 KVM
+客户端(协议已逆向备档 §3,BMC 自带 H5 客户端经代理可用,自研无增量
+价值,仅作 rescue 场景备选)。
 
 ## 官方文档推演:接口正典与盘符漂移(2026-09-23,文档级,待真机复核)
 

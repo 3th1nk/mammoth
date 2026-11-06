@@ -120,7 +120,7 @@ func agentScript() string {
 # any failing command would kill the whole runtime silently (no report, no
 # shell). This runtime handles its own errors: strip the -e and re-exec. The
 # child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
-SCRIPT_VERSION="ab-v18"
+SCRIPT_VERSION="ab-v19"
 case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
 log "agent runtime $SCRIPT_VERSION starting"
 
@@ -648,8 +648,12 @@ dd_image() { # image direct-write (roadmap「镜像直写通路」slice 1)
         /dev/*) ;;
         *)
             [ -n "$MAMMOTH_DD_SIZE_BYTES" ] || { echo "controller target $MAMMOTH_DD_TARGET with no size hint to resolve by" >> /tmp/mammoth-dd.err; return 1; }
-            resolved=$(lsblk -dn -b -o NAME,SIZE $(lsblk -dn -o NAME | grep -vE "^(loop|ram|sr|fd|zd|dm-)" | sed "s|^|/dev/|") 2>/dev/null | awk -v want="$MAMMOTH_DD_SIZE_BYTES" '{ d=$1; s=$2; diff=s-want; if (diff<0) diff=-diff; tol=(want/100); if (tol<67108864) tol=67108864; if (best=="" || diff<bestdiff) { best=d; bestdiff=diff; besttol=tol } } END { if (best!="" && bestdiff<=besttol) print best }')
-            [ -b "$resolved" ] || { echo "no block device matches size=$MAMMOTH_DD_SIZE_BYTES (controller name $MAMMOTH_DD_TARGET unresolved)" >> /tmp/mammoth-dd.err; return 1; }
+            # /proc/partitions, not lsblk: the dd branch runs BEFORE any tool
+            # bootstrap (no pool dependency is the pathway's contract), and
+            # busybox lsblk lacks the -b/-o flags. Whole-disk names only
+            # (partitions carry their parent's name + a digit suffix).
+            resolved=$(awk -v want="$MAMMOTH_DD_SIZE_BYTES" '$4 !~ /^(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+|hd[a-z]+)$/ { next } { bytes=$3*1024; diff=bytes-want; if (diff<0) diff=-diff; tol=(want/100); if (tol<67108864) tol=67108864; if (diff<=tol) { print "/dev/" $4; exit } }' /proc/partitions)
+            [ -b "$resolved" ] || { echo "no block device matches size=$MAMMOTH_DD_SIZE_BYTES (controller name $MAMMOTH_DD_TARGET unresolved; /proc/partitions: $(grep -vE "loop|ram" /proc/partitions | tail -n +3 | head -4 | tr '\n' ' '))" >> /tmp/mammoth-dd.err; return 1; }
             log "target $MAMMOTH_DD_TARGET resolved to $resolved (by size)"
             export MAMMOTH_DD_TARGET=$resolved
             export MAMMOTH_DD_TARGET_BASENAME=${resolved#/dev/}

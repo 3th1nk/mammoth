@@ -42,7 +42,7 @@ type Options struct {
 	// ipxe-arm64.efi) as the UEFI NBP instead of the shim→grubnet Secure
 	// Boot chain. The reason is an upstream defect: grub2 does not handle
 	// Proxy DHCP messages in UEFI mode, so behind a proxyDHCP responder
-	// (mammoth or a pxe-proxy beside an unmodifiable site DHCP) the grubnet
+	// (mammoth or an edge beside an unmodifiable site DHCP) the grubnet
 	// stage cannot consume the split address/boot offers and strands at the
 	// GRUB prompt — shim+grub TFTP transfers succeed, then silence (no
 	// grub.cfg request, no HTTP script fetch; RackN KB-00043, RH Bugzilla

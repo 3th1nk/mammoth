@@ -397,25 +397,25 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
      ③安装器驱动盘注入(anaconda inst.dd / dracut DD 进 initrd,装前
      生效,prepare 阶段构建)。触发器:真实机型因驱动缺失装机失败且
      载体切换不可行,届时从①起步逐档评估;
-   - **启动时 DHCP 探测自检(候选,2026-11-03 立项)**——netboot/pxe-proxy
+   - **启动时 DHCP 探测自检(候选,2026-11-03 立项)**——netboot/edge(原 edge)
      启动时主动发探测 DISCOVER,按应答分类本网段地址服务形态(站点 DHCP
      有/无/多个、应答是否携带引导选项),据此校验模式配置并给出可操作告警:
      池模式撞站点 DHCP = 双地址权威租约打架;proxy 模式无站点 DHCP = 客户端
      必然拿不到引导信息(PXE-E53 类引导即死)。与"装机网段地址服务可观测"
      (本文件独立定稿节)互补:那节管运行时 per-MAC 观测,本项管启动时配置
-     自检(NBpxeserver 同类能力佐证价值)。触发:随 pxe-proxy 跨网段真机
+     自检(NBpxeserver 同类能力佐证价值)。触发:随 edge 跨网段真机
      回归(relay 回归)窗口顺带;
    - **proxy 模式 UEFI NBP 链选择**——**✅ 已落地(2026-11-03,单测全绿,
-     真机回归随 pxe-proxy 窗口)**——上游硬边界:grub2 不处理 UEFI 模式的
+     真机回归随 edge 窗口)**——上游硬边界:grub2 不处理 UEFI 模式的
      Proxy DHCP 消息(RackN KB-00043、RH Bugzilla #1809246),shim→grubnet
-     链在"pxe-proxy + 不可控站点 DHCP"拓扑下必然落 GRUB 提示符(失败
+     链在"edge + 不可控站点 DHCP"拓扑下必然落 GRUB 提示符(失败
      签名:shim/grub TFTP 成功 → 静默)。新增 `MAMMOTH_PXE_UEFI_NBP=
-     shim|ipxe`(builtin)与 `pxe-proxy --uefi-nbp`(默认 shim):ipxe =
+     shim|ipxe`(builtin)与 `edge --uefi-nbp`(默认 shim):ipxe =
      未签名裸 iPXE(ipxe-amd64/arm64.efi,external kit 同步补导出 arm64
      件),绕开 grub2 缺陷,SB 须关;SB-on + 不可控站点 DHCP = 行业无解
      (走 vMedia/UefiHttp 或谈判站点 DHCP option 66/67,部署边界与谈判
      配置落 docs/operations.md §站点 DHCP 共存节,验证矩阵落
-     runbooks/pxe-proxy-validation.md);全 DHCP 形态(池/external)永不
+     runbooks/edge-validation.md);全 DHCP 形态(池/external)永不
      命中该缺陷,保持签名链默认;
    - **iPXE sanboot/httpdisk 直挂 ISO(候选,2026-11-03 立项)**——HTTP 直挂
      原盘 ISO 引导(iPXE sanboot http://…),免任务级重打包;硬前提 =
@@ -427,7 +427,7 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
      度未验证且 SB 链不可用(裸 iPXE,wimboot 同款例外)。触发:真实需求
      (rescue 场景或 vMedia 死路机型复现)再排;
    - **agent PXE 载体 modloop 加载缺口(2026-11-04 真机暴露,✅ 代码落地,
-     复验待窗口)**——pxe-proxy 跨网段真机首次把 agent PXE 载体跑到
+     复验待窗口)**——edge 跨网段真机首次把 agent PXE 载体跑到
      storage 即四连 identical 失败(看不到盘):NETBOOT initramfs 精简
      features(无 HBA 驱动),modloop 后置加载依赖 openrc hwdrivers
      coldplug,coldplug 却跑得比 modloop 挂载早(qemu megasas 复现定案;
@@ -437,7 +437,7 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
      自包含诊断行随 bail log 回传(commit 4b75b7b)。**同窗口ubuntu26
      载体 subiquity 确认门未定案**(autoinstall 数据已加载、early_commands
      在跑,门仍弹;待装机环境 /proc/cmdline 实证,已排除 DHCP 因素);
-     复验 = pxe-proxy 拓扑重跑 alpine(装后 .221)+ ubuntu26;
+     复验 = edge 拓扑重跑 alpine(装后 .221)+ ubuntu26;
    - **真机 relay 回归**——等网络设备配 ip helper 的协调窗口(giaddr 应答
      已有单测,见 11-pxe-walkthrough §4);
    - ~~**uniontechos**~~ **✅ 已闭环(2026-09-19 真机,见第 2 项)**;剩余
@@ -493,7 +493,7 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
    - 内建无池(proxy 语义):install_os 期间 per-MAC 反复 DISCOVER 而无
      地址后续(无选择站点服务器的 option-50 REQUEST)→ 任务日志根因行
      ("网段无 DHCP 应答"),把 90 分钟超时才发现的排障压缩到第 3 分钟。
-2. **pxe-proxy(external 多 VLAN)**:per-MAC DISCOVER/地址 REQUEST 状态机
+2. **edge(external 多 VLAN)**:per-MAC DISCOVER/地址 REQUEST 状态机
    (复用 handle() 现有解析),DISCOVER≥N 次无地址 REQUEST → 饥饿
    sighting 上报引擎;`REQUEST 选择站点服务器并携带 option 50` = 健康
    对照信号。
@@ -501,7 +501,7 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
    时附非阻塞警告(概率性提示,运行时检测为主力)。
 
 **边缘地址服务实时门控(设计讨论定稿,替代"定时同步允许列表")**:
-pxe-proxy 架构下引擎本就是引导链的硬依赖(trampoline 实时按 MAC 拉配置),
+edge 架构下引擎本就是引导链的硬依赖(trampoline 实时按 MAC 拉配置),
 对"是否发租约"加实时引擎查询不引入新的可用性依赖——比定时同步更优(无
 陈旧窗口)。设计要点:查询预算 1-2s(DHCP 客户端 4s/8s 重试容忍);
 引擎超时 fail-closed + 短 TTL 负缓存(防外部客户端重试风暴);判定武装后

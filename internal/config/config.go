@@ -222,9 +222,9 @@ type Config struct {
 	// the L2 broadcast address of the machine segment ("192.168.1.255").
 	// Only useful when the ENGINE itself sits on the machine segment; the
 	// cross-segment shape points PXEWoLProxyURL at the segment's
-	// pxe-proxy relay instead. Empty = no direct send.
+	// edge relay instead. Empty = no direct send.
 	PXEWoLBroadcast string
-	// PXEWoLProxyURL (optional, MAMMOTH_PXE_WOL_PROXY_URL) is the pxe-proxy
+	// PXEWoLProxyURL (optional, MAMMOTH_PXE_WOL_PROXY_URL) is the edge
 	// relay endpoint (http://<proxy>:9100 — the proxy started with
 	// --wol-listen) for headless boots on a segment the engine is not on.
 	// Tried after the direct send fails or is unconfigured.

@@ -4,7 +4,7 @@
 > (2026-11-04;触发记录见 09-roadmap "办公/无 BMC 批量装机分场景重审
 > 定案")。切片一/二/三的主体已按本稿落地(实施映射见 §8),剩余:
 > 工控机真机端到端(注册→claim→PXE 装机→WoL 唤醒)与 qemu 验证轮。
-> 首个用例:工控机 POC(x86_64,Ubuntu 24.04,单网段,pxe-proxy/池
+> 首个用例:工控机 POC(x86_64,Ubuntu 24.04,单网段,edge(原 edge)/池
 > 双兼容)。
 
 ## 1. 目标与非目标
@@ -15,7 +15,7 @@
 **非目标**:
 - Windows/应用镜像克隆(imaging 范式,维持排除,见 09-roadmap 重审定案);
 - 消费硬件 WinPE 驱动注入;
-- 跨网段无带外(WoL 是 L2 广播,代理机须与机器同段——与 pxe-proxy
+- 跨网段无带外(WoL 是 L2 广播,代理机须与机器同段——与 edge
   落点原则一致);
 - 机房级电源编排(配电/PDU 层面)。
 
@@ -70,7 +70,7 @@ arm(none):
   2. 若机器离线(最近 sighting 超 N 分钟):发 WoL magic packet
      (UDP 广播至装机网段 ×重复 3 次;目标 MAC = 机器身份 MAC)
   3. 进入等待:install_os 以「引导证据」推进而非电源回调——
-     证据源 = DHCP 池租约反查 / enroll sighting / pxe-proxy
+     证据源 = DHCP 池租约反查 / enroll sighting / edge
      sightings(三者皆既有);收到即认为引导已发生
   4. 超时兜底:引导等待窗口(默认 10 分钟,spec 可调)无证据 →
      任务日志 WARNING("请人工重启机器")→ 继续等(人工重启后
@@ -88,7 +88,7 @@ arm(none):
 - enroll token 必配(既有);claim 是控制面操作(Bearer token 既有);
 - none 机器的 netboot 文件面沿用 allowlist + token(不变);
 - **新增面**:WoL 发包地址 = 装机网段广播——引擎须在机器 L2(单网段)
-  或由 pxe-proxy 代发(跨网段:边缘代理增 WoL 转发端点,代理本就在
+  或由 edge 代发(跨网段:边缘代理增 WoL 转发端点,代理本就在
   机器 L2;切片二);
 - 身份伪造:MAC 可伪造(装机 L2 内攻击者已有该能力,威胁模型不变,
   docs/security-baseline "装机 L2 内"前提)。
@@ -98,7 +98,7 @@ arm(none):
 | 切片 | 内容 | 估时 |
 |---|---|---|
 | 一(核心) | protocol=none 契约 + enroll→claim 报告固化 + 手工注册容量通路 + boot none 语义(等待引导证据/人工兜底) + 工控机真机验证 | 2 周 |
-| 二(WoL+跨网段) | WoL 发包(引擎直发)+ pxe-proxy 代发端点 + 跨网段真机回归 | 1 周 |
+| 二(WoL+跨网段) | WoL 发包(引擎直发)+ edge 代发端点 + 跨网段真机回归 | 1 周 |
 | 三(打磨) | capabilities 降级面/文档/runbook/验收套件 | 1 周 |
 
 依赖:无新外部组件;alpine 探针/resolve 双通路/sightings 全为既有设施。
@@ -155,7 +155,7 @@ Intel 专项:vPro/AMT 平台**不属于 headless 场景**(ME 固件自带带外�
 | 一 | protocol=none 契约(迁移 00011 / BMCProtocol 枚举 / none://<mac> 身份 / claim 显式确认) | b9891ca |
 | 一 | enroll 探针 NIC 采集 + claim 固化 hardware 视图(coverage=partial;PXE 观测与 netboot 武装的承重墙) | 952f245 |
 | 一 | boot none 语义(headlessArm:证据驱动 / 带内优雅重启 / 人工兜底自愈 / BOOT_EVIDENCE_TIMEOUT);顺带修迁移遗漏的 scanMachine NULL 扫描 | 0fb6130 |
-| 二 | WoL 全链:AMD magic packet(golden)+ 引擎直发(MAMMOTH_PXE_WOL_BROADCAST)+ pxe-proxy 代发端点(--wol-listen,跨网段) | f2ba497 |
+| 二 | WoL 全链:AMD magic packet(golden)+ 引擎直发(MAMMOTH_PXE_WOL_BROADCAST)+ edge 代发端点(--wol-listen,跨网段) | f2ba497 |
 | 三 | 能力降级门禁:控制器动作/同步 BMC 读 422 HEADLESS_UNSUPPORTED;提交期 PXE-only 与 hardware-RAID 拒绝(任务级预失败,不阻塞同批) | cce0293 |
 
 证据语义(§4.3 的实现形态):**arm 水位后的 PXE sighting**——builtin 模式

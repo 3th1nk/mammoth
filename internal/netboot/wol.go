@@ -10,7 +10,7 @@ import (
 // Wake-on-LAN (docs/13-headless-design.md §4-5): the AMD magic packet —
 // six 0xFF bytes followed by the target MAC sixteen times — broadcast on
 // the machine's L2. The headless boot stage uses it as the powered-off
-// path's wake-up before falling back to a manual power-on; the pxe-proxy
+// path's wake-up before falling back to a manual power-on; the edge
 // relays the same packet for cross-segment deployments (the engine is not
 // on the machine's L2, the proxy is).
 const (
@@ -79,7 +79,7 @@ func SendWoL(bcast, mac string) error {
 	return nil
 }
 
-// WoLRequest is the pxe-proxy relay endpoint's body.
+// WoLRequest is the edge relay endpoint's body.
 type WoLRequest struct {
 	MAC string `json:"mac"`
 }

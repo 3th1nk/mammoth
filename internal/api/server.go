@@ -189,7 +189,7 @@ func New(d Deps, apiToken string) *gin.Engine {
 			writeError(c, err)
 		}
 	})
-	// The external kit as a single download: pxe-proxy instances on the
+	// The external kit as a single download: edge(原 edge) instances on the
 	// provisioning VLANs sync their TFTP root from here (same public
 	// machine-face credentialing as the other /netboot routes). Streamed
 	// tar of the exported kit directory; 404 when the engine never
@@ -197,7 +197,7 @@ func New(d Deps, apiToken string) *gin.Engine {
 	router.GET("/netboot/external-kit.tar", func(c *gin.Context) {
 		srv.serveExternalKit(c)
 	})
-	// PXE sightings reported by pxe-proxy instances on the provisioning
+	// PXE sightings reported by edge instances on the provisioning
 	// VLANs: the external deployment's observation feed into
 	// pending_machines (mirrors the builtin mode's OnObserve hook). Public
 	// like the other /netboot machine-face routes.

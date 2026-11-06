@@ -196,19 +196,19 @@ iPXE 脚本),默认关闭。启用清单:
   从声明池(如 .120-.129)只对已登记装机任务的 MAC 发租约——地址分配权威在
   mammoth,陌生客户端不耗池。
 - **PROXY 模式(有站点 DHCP)**:站点 DHCP 继续分配地址;mammoth(或
-  网段代理 pxe-proxy / 外置 dnsmasq)只补 PXE 引导选项(67/4011),
+  网段代理 edge(原 edge) / 外置 dnsmasq)只补 PXE 引导选项(67/4011),
   真机在 spec 里声明静态地址(routes 形态 netplan)。
 - **站点 DHCP 可谈判时的第一选择**:引导信息直接配进站点 DHCP 的
   scope/策略(option 66 = TFTP server,option 67 = bootfile;dnsmasq 即
   一行 `dhcp-boot`)——这是"已有站点 DHCP 的网段"上唯一支持 UEFI
   Secure Boot 的 PXE 形态(proxyDHCP 下 grub2 不处理 UEFI Proxy DHCP
-  消息,边界与谈判配置见 §pxe-proxy 的共存节)。
+  消息,边界与谈判配置见 §edge 的共存节)。
 - **跨 VLAN 装机**:站点交换机对装机 VLAN 配 DHCP relay(ip helper),
   应答按 giaddr(RFC 2131)回程;TFTP/HTTP 是单播——NextServer 与
   介质/API 的地址必须从装机 VLAN 可路由。
 
 决策树(POOL/PROXY/跨网段 relay 的完整形态)与外部 dnsmasq 部署见
-4.5.1;pxe-proxy(每装机 VLAN 一个 Go 原生网段代理)见 §pxe-proxy。
+4.5.1;edge(每装机 VLAN 一个 Go 原生网段代理)见 §edge。
 
 ### 4.5.1 外部 DHCP+TFTP 逃生门(MAMMOTH_PXE_MODE=external)
 
@@ -263,21 +263,21 @@ OVMF 取 secboot 变体——**签名 shim 链在 Secure Boot 开启下走通**,
 "全 DHCP 单服务器形态不受 grub2 proxyDHCP 缺陷影响"的实证)
 见 `scripts/pxe-dev/external-e2e.sh`。
 
-### pxe-proxy — Go 原生网段代理(dnsmasq 的替代形态,2026-10-29)
+### edge — Go 原生网段代理(dnsmasq 的替代形态,2026-10-29)
 
 跨网段生产部署的标准形态是 **一个 mammoth(承载网)+ 每个装机 VLAN 一个
-pxe-proxy(单二进制)**:proxyDHCP 应答(67/4011)+ TFTP(69,服务引擎
+edge(单二进制)**:proxyDHCP 应答(67/4011)+ TFTP(69,服务引擎
 导出的 external kit)+ PXE sightings 回传(POST /netboot/observe →
 pending_machines 台账,external 模式的观测盲区由 agent 补上)。
 
 ```sh
 # kit 由引擎导出(MediaDir/netboot/external-tftp),拷到网段主机后:
-MAMMOTH_PXEPROXY_BASE_URL=http://<engine>:8080 mammoth pxe-proxy --tftp-root /var/lib/mammoth/tftp
+MAMMOTH_EDGE_BASE_URL=http://<engine>:8080 mammoth edge --tftp-root /var/lib/mammoth/tftp
 ```
 
 - `--next-server` 可选:未指定时从首个 PXE 请求的到达接口自动学习本机
   IPv4(IP_PKTINFO),多网卡/容器免配置;显式指定优先。
-- `--uefi-nbp=shim|ipxe`(默认 shim,env `MAMMOTH_PXEPROXY_UEFI_NBP`):
+- `--uefi-nbp=shim|ipxe`(默认 shim,env `MAMMOTH_EDGE_UEFI_NBP`):
   UEFI NBP 链选择——`ipxe` = 未签名裸 iPXE,绕开"grub2 不处理 UEFI
   Proxy DHCP 消息"的上游缺陷(RackN KB-00043 / RH #1809246),本拓扑
   (站点 DHCP 不可控)下 UEFI 机型的开关,SB 须关;取舍与边界见下方
@@ -293,14 +293,14 @@ MAMMOTH_PXEPROXY_BASE_URL=http://<engine>:8080 mammoth pxe-proxy --tftp-root /va
   的 TFTP 形态问题(见下方共存节)。
 - 观测回传:proxyDHCP 应答时把 sightings(MAC/固件)POST 到
   `/netboot/observe` → pending_machines 台账;10 分钟同客户端去重窗。
-- compose:`deploy/compose.pxe-proxy.yml`(host 网络,tftp-root 卷挂载);
-  env 模板:`deploy/pxe-proxy.env.example`。
+- compose:`deploy/compose.edge.yml`(host 网络,tftp-root 卷挂载);
+  env 模板:`deploy/edge.env.example`。
 - 逐项说明:防火墙放行 67/69/4011(UDP)与 8080(TCP,引擎机器面——kit 同步与 sightings 回传);UEFI 机型
   的 Secure Boot 边界见下方共存节(默认 shim 链签名有效,proxy 拓扑受
   grub2 上游缺陷约束);装机段地址避开占址设备(先 ARP/ping 探测)。
 
 外置 dnsmasq 形态仍受支持(示例配置在 kit 的 dnsmasq.conf.example),
-pxe-proxy 是它的免配置替代。qemu 同型验证(网桥 + dnsmasq + UEFI guest 经此链完成 alpine agent 全装)
+edge 是它的免配置替代。qemu 同型验证(网桥 + dnsmasq + UEFI guest 经此链完成 alpine agent 全装)
 见 `scripts/pxe-dev/external-e2e.sh`。
 
 **Windows 机器(wimboot 载体)的额外一步**:按 MAC 把目标机钉到未签名
@@ -326,7 +326,7 @@ windows 全链 rig 见 `scripts/windows-dev/external-win-e2e.sh`。
 硬边界(见下),必须按机型固件分型对待。
 
 **第一推荐仍是谈判**:在站点 DHCP 的 scope/策略上加两条选项——
-option 66(TFTP server = pxe-proxy/引擎的装机网地址)+ option 67
+option 66(TFTP server = edge/引擎的装机网地址)+ option 67
 (bootfile = 对应架构 NBP)。这是"已有站点 DHCP 的网段"上唯一支持
 UEFI Secure Boot 的 PXE 形态(单服务器完整 ACK,grub 不受下述缺陷影响),
 谈判成本通常低于预期(两条选项,不动地址池)。各家形态:
@@ -361,23 +361,23 @@ shimx64/grubx64 成功 → 静默(无 grub.cfg RRQ、无 HTTP 脚本 fetch)。
   此类机型走虚拟介质载体 / UefiHttp,或回到谈判路径;不要在该组合上
   反复消耗排障时间。
 
-**多网段 pxe-proxy 部署的局限与最佳实践**(跨网段生产的标准形态:一个
-mammoth(承载网)+ 每装机 VLAN 一个 pxe-proxy):
+**多网段 edge 部署的局限与最佳实践**(跨网段生产的标准形态:一个
+mammoth(承载网)+ 每装机 VLAN 一个 edge):
 
 - **落点原则**:DHCP 广播不跨段,proxyDHCP 必须驻留在机器 L2 内——每个
-  装机 VLAN 一个 pxe-proxy,不要试图让一个中央 proxy 服务多段。跨段
-  仅在"ip helper 把 DISCOVER 转发给 pxe-proxy + giaddr 回程"形态下成立:
-  helper 列表逐点核对(漏配即 pxe-proxy 全盲,客户端 PXE-E53),giaddr
+  装机 VLAN 一个 edge,不要试图让一个中央 proxy 服务多段。跨段
+  仅在"ip helper 把 DISCOVER 转发给 edge + giaddr 回程"形态下成立:
+  helper 列表逐点核对(漏配即 edge 全盲,客户端 PXE-E53),giaddr
   分支已实现、relay 真机回归未完成(docs/11-pxe-walkthrough.md §4,
   roadmap 挂账项)。TFTP(69)/HTTP 是单播可路由,防火墙放行
   67/69/4011(UDP)与 8080(TCP)。
-- **kit 自动同步即资产分发**:引擎刷新引导资产后,各 VLAN pxe-proxy 按
+- **kit 自动同步即资产分发**:引擎刷新引导资产后,各 VLAN edge 按
   5 分钟周期(ETag 协商,内容未变零下载)自动跟进,免手工逐段拷贝;
   `--uefi-nbp` 是部署级决策,各 VLAN 口径一致。
 - **排障第一检查点 = sighting 有无**:每次 proxyDHCP 应答都会回传
   sightings(POST /netboot/observe → pending_machines 台账),引擎侧
   machines.pxe_firmware 沉淀 (MAC, arch) 观测。无 sighting = DISCOVER
-  根本没到 pxe-proxy(helper 列表 / L2 归属 / 端口绑定冲突,与站点 DHCP
+  根本没到 edge(helper 列表 / L2 归属 / 端口绑定冲突,与站点 DHCP
   同机会撞 UDP 67);有 sighting 而引导失败 = 下游问题(TFTP 可达性 /
   grub2 边界 / 蹦床 HTTP 可达性),按下面的判别表走。
 - **站点 DHCP 的 siaddr 默认自指**(ISC dhcpd/dnsmasq 同行为,changelog
@@ -385,7 +385,7 @@ mammoth(承载网)+ 每装机 VLAN 一个 pxe-proxy):
   粗心的 ROM 可能据此拿错 TFTP 目标(FOG 社区常见 "client pulls from
   the wrong IP")。判别:抓包对比两份 OFFER 的 siaddr 与客户端实际 RRQ
   的目标 IP;完整四看清单见 docs/11-pxe-walkthrough.md §4。
-- **验证矩阵与失败形态判别表**:docs/runbooks/pxe-proxy-validation.md
+- **验证矩阵与失败形态判别表**:docs/runbooks/edge-validation.md
   (BIOS → UEFI SB-off → UEFI SB-on 边界定案 → relay 的四步序列)。
 
 **站点 DHCP 模拟/小池的运维实践(2026-11-04 真机实验实录)**:模拟
@@ -604,7 +604,7 @@ media/BIOS/擦盘)与同步 BMC 读(console/BIOS 表/drives/health/SEL)一律
 ```bash
 # 引擎在机器网段时:直发定向广播
 MAMMOTH_PXE_WOL_BROADCAST=192.168.1.255
-# 跨网段时:由 pxe-proxy 代发(代理本就在机器段;pg 13 §5)
+# 跨网段时:由 edge 代发(代理本就在机器段;pg 13 §5)
 #   代理侧:--wol-listen ":9100" [--wol-token <t>] [--wol-broadcast 192.168.1.255]
 MAMMOTH_PXE_WOL_PROXY_URL=http://192.168.1.5:9100
 MAMMOTH_PXE_WOL_PROXY_TOKEN=<t>        # 与代理 --wol-token 同值(入脱敏表)

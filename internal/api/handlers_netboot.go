@@ -275,7 +275,7 @@ func (s *Server) fetchPoolStoreFile(c *gin.Context, sha, rest string) error {
 }
 
 // serveExternalKit streams the exported external PXE kit
-// (MediaDir/netboot/external-tftp) as a tar archive: pxe-proxy instances on
+// (MediaDir/netboot/external-tftp) as a tar archive: edge(原 edge) instances on
 // the provisioning VLANs sync their TFTP root from here, so a kit refresh on
 // the engine reaches every VLAN agent without a manual copy. Public like the
 // other /netboot machine-face routes (the kit holds public NBP binaries and
@@ -376,7 +376,7 @@ func kitFingerprint(root string) (string, error) {
 }
 
 // ObservePXEClient records a PXE sighting reported by a provisioning-VLAN
-// agent (pxe-proxy): the agent sees every PXE DISCOVER on its L2, while the
+// agent (edge): the agent sees every PXE DISCOVER on its L2, while the
 // engine in external mode is blind to the wire — this endpoint is the
 // external deployment's observation feed into pending_machines (mirrors the
 // builtin mode's OnObserve hook). Public like the other /netboot
@@ -401,9 +401,9 @@ func (s *Server) ObservePXEClient(c *gin.Context) {
 		return
 	}
 	s.Events.Append(c.Request.Context(), "pending", mac, "pending.sighted", map[string]any{
-		"firmware": body.Firmware, "source": "pxe-proxy",
+		"firmware": body.Firmware, "source": "edge",
 	})
 	obs.FromContext(c.Request.Context()).InfoContext(c.Request.Context(),
-		"pxe-proxy sighting recorded", "mac", mac, "firmware", body.Firmware)
+		"edge sighting recorded", "mac", mac, "firmware", body.Firmware)
 	c.Status(http.StatusNoContent)
 }

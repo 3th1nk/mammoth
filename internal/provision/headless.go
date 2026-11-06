@@ -19,7 +19,7 @@ import (
 //  1. a graceful in-band reboot when the machine has an installed system
 //     with the mammoth SSH credential (the reinstall path);
 //  2. Wake-on-LAN magic packets otherwise (engine direct-send, or the
-//     pxe-proxy relay in the cross-segment shape);
+//     edge(原 edge) relay in the cross-segment shape);
 //  3. a wait for boot evidence — the machine's PXE sighting after arm time
 //     (builtin mode: the proxyDHCP observation columns; external mode: the
 //     proxy's sighting feed into pending_machines);

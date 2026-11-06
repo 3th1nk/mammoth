@@ -859,7 +859,7 @@ resource from iMana),不再依赖人开 KVM。诊断增强候选,不值得单独
 
 ## Insyde UEFI PXE 栈的 TFTP 形态(tsize 必答、blksize 不可协商,2026-11-04 真机定案)
 
-pxe-proxy + 不可控站点 DHCP 拓扑(dnsmasq 模拟,192.168.1.x)真机两阶段定位,
+edge(原 edge) + 不可控站点 DHCP 拓扑(dnsmasq 模拟,192.168.1.x)真机两阶段定位,
 2288H V5 的 Insyde UEFI PXE 固件栈(与 Huawei X722 NIC shim 的"不 ACK OACK"
 同族、更重):
 
@@ -883,16 +883,16 @@ per-MAC 配置拉取与引擎归因正常。KB-00043 的失败签名(TFTP 成功
 会话死亡**(grub 收到的是空/半配置),与 grub2 上游缺陷无关。proxyDHCP
 下 grubnet 链在此机型上**完整可用**。
 
-## pxe-proxy 跨网段实验实录(2026-11-03/04,192.168.1.x)
+## edge 跨网段实验实录(2026-11-03/04,192.168.1.x)
 
-拓扑:引擎 .250(external)+ pxe-proxy .5 + 模拟站点 DHCP .107(仅地址池,
+拓扑:引擎 .250(external)+ edge .5 + 模拟站点 DHCP .107(仅地址池,
 零引导信息)+ 真机 .74(UEFI/SB-off)。
 
 - **两服务器合并真机走通**:客户端从站点 DHCP 拿地址(.172),向 proxy 的
   4011 发 boot-server 请求、接受 proxy 的 NBP 文件名——proxyDHCP 模型
-  在真机上成立(此前"pxe-proxy 不工作"的全部根因都在下游:grub.cfg
+  在真机上成立(此前"edge 不工作"的全部根因都在下游:grub.cfg
   蹦床的 TFTP 协商死亡,见上节);
-- **蹦床不可被 kit 周期同步覆盖实验**:pxe-proxy 的 kit 自动同步整树替换
+- **蹦床不可被 kit 周期同步覆盖实验**:edge 的 kit 自动同步整树替换
   TFTP root,人工改动的蹦床 5 分钟内被覆盖——联调期临时改动须
   `--sync-interval 0` 后再改;
 - **模拟站点 DHCP 的池会被外来客户端抽干**:清完租约 5-10 分钟内外来
@@ -904,7 +904,7 @@ per-MAC 配置拉取与引擎归因正常。KB-00043 的失败签名(TFTP 成功
 - **装后静态地址不得落在 DHCP 池段内**:池段地址随时被外来客户端租走
   (实验中 .175 即被一台 VMware 虚机租用)——与 04-install-spec
   "池地址是引导期临时身份,不得渲染进目标 netplan"的定案互证;
-- **agent PXE 载体深缺口(已修,复验待窗口)**:alpine agent 经 pxe-proxy
+- **agent PXE 载体深缺口(已修,复验待窗口)**:alpine agent 经 edge
   载体四连 identical 失败"cannot resolve LogicalDrive0"——NETBOOT
   initramfs 精简 features(无 HBA 驱动),modloop 后置加载依赖 openrc
   hwdrivers coldplug,而 coldplug 跑得比 modloop 挂载早;engine 修复 =

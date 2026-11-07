@@ -489,6 +489,14 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
     (落档 + 事件)。与 verify_ready 的关系:verify_ready 是装中门禁
     (探针快照),本项是装后终验;ubuntu26 确认门这类悬案可借同一采集面
     读 /proc/cmdline 定案。验收:qemu + 真机各一轮。
+    **✅ 代码落地(2026-11-07)**——采集器 `===SYS===` 段(host/kernel/
+    cmdline/timezone/os/uptime,splitSections 重构为位置扫描,任意可选段
+    鲁棒)+ 迁移 00013(acceptance_reports,滚动窗口 10)+ verify_ready
+    同采集出报告(不增加第二轮 SSH)/ 判定 pass|degraded|fail(mismatch
+    fail,unavailable degraded,**永不门禁**)/ 读面
+    `GET /machines/{id}/acceptance`(无报告 = `{"report": null}`)+
+    `task.acceptance_reported` 事件 / docs/06 §5 落档。单测(SYS 采集/
+    报告构建四态)+ PG 套件(repo/端点)全绿;qemu/真机轮随窗口。
 13. **BIOS 基线模板 + 漂移巡检**(P1,2026-11-07 立项;Metal3
     HostFirmwareSettings 企业形态)——BiosSetter 单机写之上:①机器档案
     存基线 profile(声明式 BIOS 属性集);②巡检动作对照活读 BiosView 与

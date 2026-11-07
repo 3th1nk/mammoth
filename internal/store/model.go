@@ -92,6 +92,28 @@ type Machine struct {
 	PXELastSeenAt *time.Time
 }
 
+// AcceptanceReport is the post-install validation record
+// (docs/06-install-pipeline.md §5): the freshly installed system's collected
+// facts held against the declared intent. Evidence, never a gate — a
+// mismatched check degrades the verdict; the task outcome stays verify_ready's
+// business (bond/LVM gates already live there).
+type AcceptanceReport struct {
+	ID         string
+	MachineID  string
+	TaskID     string
+	Verdict    string // pass | degraded | fail
+	Checks     []AcceptanceCheck
+	System     json.RawMessage // the captured SystemFacts (inbandssh)
+	CapturedAt time.Time
+}
+
+// AcceptanceCheck is one named comparison in the report.
+type AcceptanceCheck struct {
+	Name   string `json:"name"`   // system_facts | hostname | storage_mounts | boot_cmdline
+	Status string `json:"status"` // ok | mismatch | unavailable
+	Detail string `json:"detail,omitempty"`
+}
+
 // FlowName maps a job type to the state-machine definition executed per task
 // (docs/02-architecture.md §2: stage sequence declared by exactly one flow).
 func (j *Job) FlowName() string {

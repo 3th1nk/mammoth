@@ -369,3 +369,56 @@ vg0,swap,4294967296B,/dev/dm-1
 		t.Errorf("LVM section without sub-markers must read as facts unavailable, got %+v", res.Lvm)
 	}
 }
+
+// The ===SYS=== section carries the acceptance-report facts
+// (docs/06-install-pipeline.md §5): key=value lines, best-effort per line.
+// Absence (recorded fixtures, older collectors) reads nil — facts
+// unavailable, never empty facts.
+func TestCollectSystemFacts(t *testing.T) {
+	res, err := parse(fixture)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if res.System != nil {
+		t.Errorf("fixture without SYS section must yield nil System, got %+v", res.System)
+	}
+
+	withSys := fixture + `===SYS===
+hostname=node-1
+kernel=6.12.4-linuxkit
+cmdline=BOOT_IMAGE=/vmlinuz root=/dev/nvme0n1p2 quiet
+timezone=Asia/Shanghai
+os=Ubuntu 24.04.3 LTS
+uptime=42.5
+`
+	res, err = parse(withSys)
+	if err != nil {
+		t.Fatalf("parse sys fixture: %v", err)
+	}
+	sys := res.System
+	if sys == nil {
+		t.Fatal("SYS section must parse into SystemFacts")
+	}
+	if sys.Hostname != "node-1" || sys.Kernel != "6.12.4-linuxkit" ||
+		sys.Timezone != "Asia/Shanghai" || sys.OS != "Ubuntu 24.04.3 LTS" {
+		t.Errorf("system facts wrong: %+v", sys)
+	}
+	if sys.Cmdline != "BOOT_IMAGE=/vmlinuz root=/dev/nvme0n1p2 quiet" {
+		t.Errorf("cmdline (trailing-newline join) wrong: %q", sys.Cmdline)
+	}
+	if sys.Uptime != "42.5" {
+		t.Errorf("uptime wrong: %q", sys.Uptime)
+	}
+
+	// present but empty: a machine whose facts all failed to read — nil,
+	// not an empty struct (facts unavailable)
+	empty := fixture + `===SYS===
+`
+	res, err = parse(empty)
+	if err != nil {
+		t.Fatalf("parse empty-sys fixture: %v", err)
+	}
+	if res.System != nil {
+		t.Errorf("empty SYS section must yield nil (facts unavailable), got %+v", res.System)
+	}
+}

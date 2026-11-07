@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/3th1nk/mammoth/internal/inventory/inbandssh"
+	"github.com/3th1nk/mammoth/internal/render"
 	"github.com/3th1nk/mammoth/internal/store"
 )
 
@@ -75,5 +77,62 @@ func TestRescueCarrierFor(t *testing.T) {
 		if got != c.want {
 			t.Errorf("(%s,%s): got %q, want %q", c.protocol, c.boot, got, c.want)
 		}
+	}
+}
+
+// The acceptance report builder (docs/06-install-pipeline.md §5): checks
+// fire only where intent exists; facts unavailable degrade, mismatch fails,
+// and the verdict never gates — the bond/LVM checks above it own that.
+func TestBuildAcceptanceReport(t *testing.T) {
+	mk := func(sys *inbandssh.SystemFacts, hostname string, disks []render.ResolvedDisk, layoutDisks []inbandssh.LayoutDisk) *inbandssh.Result {
+		return &inbandssh.Result{System: sys, Layout: inbandssh.Layout{Disks: layoutDisks}}
+	}
+
+	// pass: all facts present, intents matched
+	res := mk(&inbandssh.SystemFacts{Hostname: "node-1", Kernel: "6.12", OS: "Ubuntu",
+		Cmdline: "BOOT_IMAGE=/vmlinuz"}, "node-1",
+		[]render.ResolvedDisk{{Partitions: []render.ResolvedPartition{
+			{Mount: "/"}, {Mount: "/boot/efi"}}}},
+		[]inbandssh.LayoutDisk{{Partitions: []inbandssh.LayoutPartition{
+			{Mountpoint: "/"}, {Mountpoint: "/boot/efi"}}}})
+	ictx := &installTaskContext{Hostname: "node-1"}
+	ictx.Resolved.Disks = []render.ResolvedDisk{{Partitions: []render.ResolvedPartition{
+		{Mount: "/"}, {Mount: "/boot/efi"}}}}
+	rep := buildAcceptanceReport(res, ictx)
+	if rep.Verdict != "pass" {
+		t.Fatalf("verdict = %s, want pass (%+v)", rep.Verdict, rep.Checks)
+	}
+	for _, c := range rep.Checks {
+		if c.Status != "ok" {
+			t.Errorf("check %s = %s, want ok", c.Name, c.Status)
+		}
+	}
+
+	// mismatch: hostname drift → fail (evidence face only — never gates)
+	res.System.Hostname = "wrong-host"
+	rep = buildAcceptanceReport(res, ictx)
+	if rep.Verdict != "fail" {
+		t.Fatalf("mismatch verdict = %s, want fail", rep.Verdict)
+	}
+
+	// degraded: no SYS section (recorded fixture), declared mounts missing from facts
+	res2 := mk(nil, "", nil, []inbandssh.LayoutDisk{{Partitions: []inbandssh.LayoutPartition{}}})
+	rep = buildAcceptanceReport(res2, ictx)
+	if rep.Verdict != "degraded" {
+		t.Fatalf("facts-unavailable verdict = %s, want degraded (%+v)", rep.Verdict, rep.Checks)
+	}
+
+	// no declared intents (dd pathway / zero-identity): checks shrink, facts carry
+	ictx2 := &installTaskContext{}
+	rep = buildAcceptanceReport(res, ictx2) // res has hostname intent? none declared → hostname check absent
+	names := map[string]bool{}
+	for _, c := range rep.Checks {
+		names[c.Name] = true
+	}
+	if names["hostname"] || names["storage_mounts"] {
+		t.Errorf("undeclared intents must not produce checks: %+v", rep.Checks)
+	}
+	if !names["system_facts"] {
+		t.Errorf("system_facts always fires when collected: %+v", rep.Checks)
 	}
 }

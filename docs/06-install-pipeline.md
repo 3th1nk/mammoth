@@ -185,6 +185,19 @@ iPXE    ──HTTP GET /netboot/files/<token>/…──▶ kernel/initrd(+modloo
   keep 组被擦(其 PV 盘被抢占)或挂载点不符 → `INSTALL_LVM_MISMATCH`(可重试);
   无 lvm2/采集缺 LVM 段 → `task.verify_ready_degraded` 降级;未声明的既有 VG
   不在核对范围(合同外);
+- **装后验收报告(acceptance report,roadmap 下一阶段 12)**:同一次带内采集
+  的结果对照声明意图出验收报告——**证据面,永不门禁**(任务成败仍是上面
+  bond/LVM 核验的事)。检查项只在"有声明"时产出(不发明证据):
+  `system_facts`(采集 `===SYS===` 段:host/kernel//proc/cmdline/timezone/
+  os/uptime,旧采集形态缺席 = unavailable)、`hostname`(identity 解析名
+  对照活系统自报)、`storage_mounts`(声明的文件系统挂载点在活布局中全部
+  在位——"声明的挂载起来了"的地板线)、`boot_cmdline`(/proc/cmdline
+  在场 = 引导链把引擎的 boot 行带过去了;ubuntu26 确认门取证读的正是它)。
+  判定:有 mismatch = fail,有 unavailable = degraded,否则 pass;报告落档
+  (acceptance_reports,滚动窗口 10 条)+ `task.acceptance_reported` 事件;
+  读面 `GET /machines/{id}/acceptance`(无报告 = `{"report": null}`,持久化
+  读,不是 404)。带内不可达的安装不出报告(完成上报即验证面,同现有
+  降级语义——报告的缺席本身就是诚实信号);
 - 恢复引导顺序。
 
 ## 6. 发行版驱动(OS Driver)

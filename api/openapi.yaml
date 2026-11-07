@@ -433,6 +433,33 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
 
+  /api/v1/machines/{id}/acceptance:
+    get:
+      operationId: getMachineAcceptance
+      tags: [machines]
+      summary: Latest post-install acceptance report
+      description: |
+        The newest post-install acceptance report (docs/06-install-pipeline.md
+        §5, docs/09-roadmap.md 下一阶段 12): the freshly installed system's
+        collected facts held against the declared intent — hostname, declared
+        mounts, system identity (kernel / os / /proc/cmdline). Evidence,
+        never a gate: verdict pass | degraded | fail degrades on facts
+        unavailable; the install outcome is verify_ready's business. null
+        until the machine's first in-band-verified install.
+      parameters:
+        - $ref: '#/components/parameters/machineId'
+      responses:
+        '200':
+          description: >
+            The latest acceptance report, or {"report": null} when the
+            machine has none yet.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptanceView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /api/v1/machines/{id}/health:
     get:
       operationId: getMachineHealth
@@ -2159,6 +2186,53 @@ components:
           type: string
           description: ssd | hdd | unknown.
         protocol:
+          type: string
+
+    AcceptanceView:
+      type: object
+      description: Wrapper — the machine's latest acceptance report (null when none).
+      properties:
+        report:
+          nullable: true
+          $ref: '#/components/schemas/AcceptanceReport'
+
+    AcceptanceReport:
+      type: object
+      description: |
+        The post-install validation record (docs/06-install-pipeline.md §5):
+        collected facts held against the declared intent. Evidence, never a
+        gate.
+      required: [task_id, verdict, checks, captured_at]
+      properties:
+        task_id:
+          type: string
+        verdict:
+          type: string
+          enum: [pass, degraded, fail]
+        checks:
+          type: array
+          items:
+            $ref: '#/components/schemas/AcceptanceCheck'
+        system:
+          nullable: true
+          type: object
+          description: Captured system facts (hostname / kernel / cmdline / timezone / os / uptime).
+          additionalProperties: true
+        captured_at:
+          type: string
+          format: date-time
+
+    AcceptanceCheck:
+      type: object
+      required: [name, status]
+      properties:
+        name:
+          type: string
+          enum: [system_facts, hostname, storage_mounts, boot_cmdline]
+        status:
+          type: string
+          enum: [ok, mismatch, unavailable]
+        detail:
           type: string
 
     HealthView:

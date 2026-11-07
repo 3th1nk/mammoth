@@ -2504,6 +2504,22 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 									"machine", task.MachineID, "volume_groups", len(ictx.LvmChecks))
 							}
 						}
+						// Post-install acceptance report (docs/06-install-pipeline.md
+						// §5, docs/09-roadmap.md 下一阶段 12): the collected facts held
+						// against the declared intent — the pipeline's evidence face.
+						// NEVER a gate: a mismatch degrades the verdict, the task
+						// outcome stays the bond/LVM checks' business above.
+						rep := buildAcceptanceReport(res, &ictx)
+						rep.MachineID, rep.TaskID = task.MachineID, task.ID
+						if serr := e.Machines.SaveAcceptance(ctx, rep); serr != nil {
+							obs.FromContext(ctx).WarnContext(ctx, "acceptance report save failed (continuing)",
+								"err", serr.Error())
+						}
+						e.Events.Append(ctx, "task", task.ID, "task.acceptance_reported", map[string]any{
+							"verdict": rep.Verdict, "checks": len(rep.Checks),
+						})
+						obs.FromContext(ctx).InfoContext(ctx, "acceptance report recorded",
+							"machine", task.MachineID, "verdict", rep.Verdict, "checks", len(rep.Checks))
 					}
 				}
 			}

@@ -493,6 +493,74 @@ func (r *MachineRepo) SaveLayout(ctx context.Context, machineID, source string, 
 	return id, tx.Commit()
 }
 
+// SaveAcceptance persists an acceptance report and prunes the machine's
+// history to a rolling window (layout_snapshots' discipline — evidence
+// accumulates, the volume must not).
+func (r *MachineRepo) SaveAcceptance(ctx context.Context, rep *AcceptanceReport) error {
+	if rep.ID == "" {
+		rep.ID = NewID("acc_")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	content := map[string]any{"checks": rep.Checks, "system": rep.System}
+	raw, err := json.Marshal(content)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO acceptance_reports (id, machine_id, task_id, verdict, content, captured_at)
+		VALUES ($1, $2, $3, $4, $5, now())`,
+		rep.ID, rep.MachineID, rep.TaskID, rep.Verdict, raw); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM acceptance_reports
+		WHERE machine_id = $1 AND id NOT IN (
+		  SELECT id FROM acceptance_reports WHERE machine_id = $1
+		  ORDER BY captured_at DESC, id DESC LIMIT 10
+		)`, rep.MachineID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// LatestAcceptanceByMachine returns the machine's newest acceptance report
+// (the read face's backing query; ErrNotFound when none exists yet).
+func (r *MachineRepo) LatestAcceptanceByMachine(ctx context.Context, machineID string) (*AcceptanceReport, error) {
+	var row struct {
+		ID         string
+		TaskID     string
+		Verdict    string
+		Content    []byte
+		CapturedAt time.Time
+	}
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, task_id, verdict, content, captured_at FROM acceptance_reports
+		WHERE machine_id = $1
+		ORDER BY captured_at DESC, id DESC LIMIT 1`, machineID).
+		Scan(&row.ID, &row.TaskID, &row.Verdict, &row.Content, &row.CapturedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	var content struct {
+		Checks []AcceptanceCheck `json:"checks"`
+		System json.RawMessage   `json:"system"`
+	}
+	_ = json.Unmarshal(row.Content, &content)
+	return &AcceptanceReport{
+		ID: row.ID, MachineID: machineID, TaskID: row.TaskID,
+		Verdict: row.Verdict, Checks: content.Checks, System: content.System,
+		CapturedAt: row.CapturedAt,
+	}, nil
+}
+
 // SetHardware replaces the stored hardware view (used by in-band link
 // refresh, which merges NIC facts into the redfish-collected view).
 func (r *MachineRepo) SetHardware(ctx context.Context, id string, hardware json.RawMessage) error {

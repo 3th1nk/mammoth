@@ -589,3 +589,40 @@ func (s *Server) outOfBandFor(ctx context.Context, machineID string) (bmc.Creden
 	return bmc.Credentials{Username: secret.Username, Password: secret.Password},
 		m.BMCAddress, bmc.Protocol(m.BMCProtocol), nil
 }
+
+// GetMachineAcceptance returns the machine's latest post-install acceptance
+// report (docs/06-install-pipeline.md §5) — a persisted read, not a BMC
+// call: machines without a report answer {"report": null}, not 404.
+func (s *Server) GetMachineAcceptance(ctx context.Context, request gen.GetMachineAcceptanceRequestObject) (gen.GetMachineAcceptanceResponseObject, error) {
+	if _, err := s.Machines.Get(ctx, string(request.Id)); err != nil {
+		return nil, err
+	}
+	rep, err := s.Machines.LatestAcceptanceByMachine(ctx, string(request.Id))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return gen.GetMachineAcceptance200JSONResponse(gen.AcceptanceView{}), nil
+		}
+		return nil, err
+	}
+	out := gen.AcceptanceReport{
+		TaskId:     rep.TaskID,
+		Verdict:    gen.AcceptanceReportVerdict(rep.Verdict),
+		Checks:     make([]gen.AcceptanceCheck, 0, len(rep.Checks)),
+		CapturedAt: rep.CapturedAt,
+	}
+	for _, c := range rep.Checks {
+		chk := gen.AcceptanceCheck{
+			Name:   gen.AcceptanceCheckName(c.Name),
+			Status: gen.AcceptanceCheckStatus(c.Status),
+			Detail: &c.Detail,
+		}
+		out.Checks = append(out.Checks, chk)
+	}
+	if len(rep.System) > 0 && string(rep.System) != "null" {
+		sys := map[string]any{}
+		if json.Unmarshal(rep.System, &sys) == nil {
+			out.System = &sys
+		}
+	}
+	return gen.GetMachineAcceptance200JSONResponse(gen.AcceptanceView{Report: &out}), nil
+}

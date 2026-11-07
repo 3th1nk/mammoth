@@ -69,7 +69,14 @@ if command -v vgs >/dev/null 2>&1; then
   lvs --noheadings --units b --separator , -o vg_name,lv_name,lv_size,lv_dm_path 2>/dev/null || true
 fi
 echo '===ENV==='
-for m in /run/anaconda /run/subiquity /run/debian-installer /lib/debian-installer; do [ -e "$m" ] && echo "$m"; done 2>/dev/null || true`
+for m in /run/anaconda /run/subiquity /run/debian-installer /lib/debian-installer; do [ -e "$m" ] && echo "$m"; done 2>/dev/null || true
+echo '===SYS==='
+printf 'hostname=%s\n' "$(hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || true)"
+printf 'kernel=%s\n' "$(uname -r 2>/dev/null || true)"
+printf 'cmdline=%s\n' "$(cat /proc/cmdline 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+printf 'timezone=%s\n' "$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || true)"
+printf 'os=%s\n' "$(grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"')"
+printf 'uptime=%s\n' "$(cat /proc/uptime 2>/dev/null | cut -d' ' -f1)"`
 
 // Sections split the combined output.
 const (
@@ -79,6 +86,7 @@ const (
 	secBOND  = "===BOND==="
 	secLVM   = "===LVM==="
 	secENV   = "===ENV==="
+	secSYS   = "===SYS==="
 )
 
 // Collector turns one Runner invocation into a layout snapshot plus refreshed
@@ -102,11 +110,69 @@ type Result struct {
 	// as Bonds). The same facts ride the Layout snapshot for keep:vg
 	// bindings and the fresh-group name-collision precheck.
 	Lvm []VgFacts
+	// System carries the acceptance-report facts (hostname / kernel /
+	// /proc/cmdline / timezone / os-release / uptime — the ===SYS=== section)
+	// when the collector ran it. nil reads "facts unavailable" (recorded
+	// fixtures and older outputs predate the section) — the acceptance
+	// report degrades on it, never fails (docs/06-install-pipeline.md §5).
+	System *SystemFacts
+
 	// InstallerEnv reports that the session landed in a running installer
 	// environment (anaconda/subiquity/d-i markers present) rather than a
 	// regular system. verify_ready refuses to verify against it; discovery
 	// treats it as informational.
 	InstallerEnv bool `json:"installer_env"`
+}
+
+// SystemFacts are the acceptance-report facts (===SYS=== section): the
+// freshly installed system's identity face — read-only, one connection,
+// best-effort per line (a missing fact renders empty, never invented).
+type SystemFacts struct {
+	Hostname string `json:"hostname,omitempty"`
+	Kernel   string `json:"kernel,omitempty"`
+	// Cmdline is /proc/cmdline — the boot chain's own words (ubuntu26
+	// confirmation-gate forensics read this; docs/09-roadmap.md 下一阶段 12).
+	Cmdline  string `json:"cmdline,omitempty"`
+	Timezone string `json:"timezone,omitempty"`
+	OS       string `json:"os,omitempty"`
+	// Uptime is /proc/uptime's seconds field (raw string — precision is
+	// the kernel's business).
+	Uptime string `json:"uptime,omitempty"`
+}
+
+// parseSystem reads the ===SYS=== key=value lines. nil = section absent
+// (facts unavailable, not empty facts).
+func parseSystem(out string) *SystemFacts {
+	if out == "" {
+		return nil
+	}
+	f := &SystemFacts{}
+	have := false
+	for _, ln := range strings.Split(out, "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(ln), "=")
+		if !ok || v == "" {
+			continue
+		}
+		have = true
+		switch k {
+		case "hostname":
+			f.Hostname = v
+		case "kernel":
+			f.Kernel = v
+		case "cmdline":
+			f.Cmdline = v
+		case "timezone":
+			f.Timezone = v
+		case "os":
+			f.OS = v
+		case "uptime":
+			f.Uptime = v
+		}
+	}
+	if !have {
+		return nil
+	}
+	return f
 }
 
 // Layout is the snapshot contract shape (docs/04-install-spec.md §3).
@@ -265,7 +331,7 @@ type blkidDev struct {
 
 // parse converts the combined script output. Exported for tests.
 func parse(out string) (*Result, error) {
-	lsblkOut, blkidOut, linkOut, partsOut, bondOut, lvmOut, envOut, err := splitSections(out)
+	lsblkOut, blkidOut, linkOut, partsOut, bondOut, lvmOut, envOut, sysOut, err := splitSections(out)
 	if err != nil {
 		return nil, err
 	}
@@ -330,52 +396,54 @@ func parse(out string) (*Result, error) {
 		NICs:         nics,
 		Bonds:        parseBonds(bondOut),
 		Lvm:          lvm,
+		System:       parseSystem(sysOut),
 		InstallerEnv: strings.TrimSpace(envOut) != "",
 	}, nil
 }
 
-func splitSections(out string) (lsblk, blkid, link, parts, bond, lvm, env string, err error) {
-	i1 := strings.Index(out, secLSBLK)
-	i2 := strings.Index(out, secBLKID)
-	i3 := strings.Index(out, secLINK)
-	if i1 < 0 || i2 < 0 || i3 < 0 {
-		return "", "", "", "", "", "", "", fmt.Errorf("output missing section markers (lsblk=%v blkid=%v link=%v)", i1 >= 0, i2 >= 0, i3 >= 0)
+// splitSections slices the combined output by section markers. Section
+// presence is OPTIONAL after the first three (recorded fixtures and older
+// collected outputs predate bond/LVM/env/sys): each marker found owns the
+// bytes up to the next found marker (position-sorted, order-independent —
+// a missing middle section hands its span to the previous one's follower,
+// same reading as the chained form it replaced). Bond/LVM/System absence
+// reads as "facts unavailable" (nil, NOT empty) — verify_ready and the
+// acceptance report degrade on it; env absence reads as "not an installer".
+func splitSections(out string) (lsblk, blkid, link, parts, bond, lvm, env, sys string, err error) {
+	type section struct {
+		tag   string
+		start int
+		dst   *string
 	}
-	lsblk = out[:i1]
-	blkid = out[i1+len(secLSBLK) : i2]
-	link = out[i2+len(secBLKID) : i3]
-	tail := out[i3+len(secLINK):]
-	// The bond, LVM and installer-marker sections are optional: recorded
-	// fixtures and older collected outputs may not carry them. Bond/LVM
-	// absence reads as "facts unavailable" (nil, NOT "no bonds"/"no VGs") —
-	// verify_ready degrades on it; env absence reads as "not an installer".
-	parts = tail
-	if i4 := strings.Index(tail, secBOND); i4 >= 0 {
-		parts = tail[:i4]
-		bond = tail[i4+len(secBOND):]
-		if i5 := strings.Index(bond, secLVM); i5 >= 0 {
-			lvm = bond[i5+len(secLVM):]
-			bond = bond[:i5]
-			if i6 := strings.Index(lvm, secENV); i6 >= 0 {
-				env = lvm[i6+len(secENV):]
-				lvm = lvm[:i6]
-			}
-		} else if i5 := strings.Index(bond, secENV); i5 >= 0 {
-			env = bond[i5+len(secENV):]
-			bond = bond[:i5]
-		}
-	} else if i4 := strings.Index(tail, secLVM); i4 >= 0 {
-		parts = tail[:i4]
-		lvm = tail[i4+len(secLVM):]
-		if i5 := strings.Index(lvm, secENV); i5 >= 0 {
-			env = lvm[i5+len(secENV):]
-			lvm = lvm[:i5]
-		}
-	} else if i4 := strings.Index(tail, secENV); i4 >= 0 {
-		env = tail[i4+len(secENV):]
-		parts = tail[:i4]
+	secs := []section{
+		{secLSBLK, strings.Index(out, secLSBLK), &blkid},
+		{secBLKID, strings.Index(out, secBLKID), &link},
+		{secLINK, strings.Index(out, secLINK), &parts},
+		{secBOND, strings.Index(out, secBOND), &bond},
+		{secLVM, strings.Index(out, secLVM), &lvm},
+		{secENV, strings.Index(out, secENV), &env},
+		{secSYS, strings.Index(out, secSYS), &sys},
 	}
-	return lsblk, blkid, link, parts, bond, lvm, env, nil
+	if secs[0].start < 0 || secs[1].start < 0 || secs[2].start < 0 {
+		return "", "", "", "", "", "", "", "", fmt.Errorf(
+			"output missing section markers (lsblk=%v blkid=%v link=%v)",
+			secs[0].start >= 0, secs[1].start >= 0, secs[2].start >= 0)
+	}
+	found := secs[:0]
+	for _, sec := range secs {
+		if sec.start >= 0 {
+			found = append(found, sec)
+		}
+	}
+	lsblk = out[:found[0].start]
+	for i, sec := range found {
+		end := len(out)
+		if i+1 < len(found) {
+			end = found[i+1].start
+		}
+		*sec.dst = out[sec.start+len(sec.tag) : end]
+	}
+	return lsblk, blkid, link, parts, bond, lvm, env, sys, nil
 }
 
 // parseBonds reads the ===BOND=== section — one line per bond:

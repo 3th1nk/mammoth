@@ -364,6 +364,16 @@ func (e *Executor) runRescueStage(ctx context.Context, task *store.Task, job *st
 				"no rescue-ready report within %s — carrier released%s", wait.String(),
 				map[bool]string{true: "", false: ", machine powered off"}[headless])
 		case <-tick.C:
+			// Cooperative cancel: the runner's cancel check lives at stage
+			// boundaries, which this long wait never reaches (real-hardware:
+			// a cancel request sat unanswered through the full 10-minute
+			// budget). Same in-loop check the install_os wait runs — the
+			// ErrCanceled return makes the runner's finish path run the
+			// release/compensation.
+			if cancelReq, cerr := e.Jobs.IsCancelRequested(ctx, task.ID); cerr == nil && cancelReq {
+				e.releaseRescueFresh(context.WithoutCancel(ctx), task, "canceled")
+				return ErrCanceled
+			}
 			fresh, ferr := e.Jobs.GetTask(ctx, task.ID)
 			if ferr != nil {
 				continue // transient read failure — the next tick retries

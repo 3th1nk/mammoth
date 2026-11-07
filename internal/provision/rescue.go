@@ -34,6 +34,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/bmc"
 	"github.com/3th1nk/mammoth/internal/builder"
 	"github.com/3th1nk/mammoth/internal/obs"
+	"github.com/3th1nk/mammoth/internal/render"
 	rescuerender "github.com/3th1nk/mammoth/internal/render/rescue"
 	"github.com/3th1nk/mammoth/internal/store"
 )
@@ -297,6 +298,8 @@ func (e *Executor) runRescueStage(ctx context.Context, task *store.Task, job *st
 		ictx.MediaURI = mediaURIFor(e.MediaBaseURI, mediaFile)
 		rctx.MediaURI = ictx.MediaURI
 	}
+
+	ictx.Answers = []render.AnswerFile{{Name: rescuePlanName, Content: plan}}
 
 	// One context patch carries every fact the machine face and the shared
 	// paths need: token / boot_strategy / media_uri / netboot / answers

@@ -120,7 +120,7 @@ func agentScript() string {
 # any failing command would kill the whole runtime silently (no report, no
 # shell). This runtime handles its own errors: strip the -e and re-exec. The
 # child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
-SCRIPT_VERSION="ab-v29"
+SCRIPT_VERSION="ab-v30"
 case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
 log "agent runtime $SCRIPT_VERSION starting"
 
@@ -251,9 +251,16 @@ find_plan() {
 }
 
 bootstrap_tools() {
+    # The openrc local service's PATH lacks /usr/sbin on some boots (2288H
+    # 2026-11-08: modprobe "not found" for every module) — pin it before
+    # anything cares.
+    export PATH="/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+    log "bootstrap: apk pool start"
     # The agent bootstraps its own toolchain from the pool — the same repo
     # the base system installs from (boot media apks or alpine_repo= URL).
-    apk add --no-cache sfdisk util-linux e2fsprogs dosfstools openssl >/dev/console 2>&1
+    apk add --no-cache sfdisk util-linux e2fsprogs dosfstools openssl >/dev/console 2>&1 \
+        || { log "bootstrap: apk add FAILED (pool unreachable?)"; return 1; }
+    log "bootstrap: apk add ok"
     # Storage/HBA drivers live in modloop: the NETBOOT initramfs carries
     # only the scsi mid-layer, and the sysinit hwdrivers coldplug runs
     # before modloop is mounted — its pass over an empty /lib/modules
@@ -269,10 +276,9 @@ bootstrap_tools() {
     for m in megaraid_sas hpsa aacraid mpt3sas cciss nvme_core nvme; do
         modprobe "$m" >/dev/console 2>&1
     done
-    log "bootstrap: hwdrivers=$? modloop_mount=$(grep -i modloop /proc/mounts | head -1 | cut -d\" \" -f2) \
-disks=[$(lsblk -ndo NAME,TYPE 2>/dev/null | tr \"\n\" \" \")] \
-loaded=[$(grep -oE \"megaraid_sas|hpsa|aacraid|nvme\" /proc/modules | tr \"\n\" \" \")] \
-dmesg_sas=$(dmesg 2>/dev/null | grep -ci -E \"megaraid|mfi\")"
+    disks_line=$(awk '$4 ~ /^(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+|hd[a-z]+)$/ { printf "%s ", $4 }' /proc/partitions)
+    loaded_line=$(grep -oE "megaraid_sas|hpsa|aacraid|nvme" /proc/modules | tr "\n" " " 2>/dev/null)
+    log "bootstrap: disks=[$disks_line] loaded=[$loaded_line] modloop_mount=$(grep -i modloop /proc/mounts | head -1 | awk '{print $2}')"
     # filesystem modules for the target mounts (ext4 usually auto-loads via
     # modprobe, but the modloop lookup is not worth racing)
     modprobe ext4 >/dev/console 2>&1
@@ -933,7 +939,9 @@ if [ "$MAMMOTH_RESCUE" = "1" ]; then
     # sshd from the pool (alpine_repo= boot line or media apks — the rescue
     # carrier stages the extended pool the same way dd does). Missing pool
     # degrades to console-only rescue: an honest warning, not a failure.
+    log "rescue: apk add openssh (pool)"
     if apk add --no-cache openssh >/dev/console 2>&1; then
+        log "rescue: openssh installed"
         mkdir -p /root/.ssh && chmod 700 /root/.ssh
         : > /root/.ssh/authorized_keys
         while IFS= read -r k; do
@@ -967,9 +975,11 @@ fi
 log "plan loaded: $(cat "$DISKS" | tr '\n' ' ')"
 bootstrap_tools || bail tools "agent tooling install failed"
 run_stage pre_install || bail pre_install "script failed"
+log "apply_storage start"
 if ! apply_storage 2>>/tmp/mammoth-storage.err; then
     bail storage "partition/format/mount failed: $(tail -c 220 /tmp/mammoth-storage.err 2>/dev/null | tr '\n' ' ' | tr -d '"\\')"
 fi
+log "storage done, installing base"
 install_base || bail packages "base install from pool failed"
 configure_target || bail config "system configuration failed"
 install_bootloader || bail bootloader "bootloader install failed"

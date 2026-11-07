@@ -54,20 +54,27 @@ func (Driver) BootScript(*store.Machine) string {
     // launcher's tabs) — retire it before minting a new one so repeated
     // clicks stay self-cleaning.
     const prevSid = localStorage.getItem('mammoth_sid');
-    if (prevSid) {
-      try {
-        const dr = await fetch('/redfish/v1/SessionService/Sessions/' + prevSid, {
-          method: 'DELETE', headers: { From: 'WebUI', 'X-Requested-With': 'XMLHttpRequest' },
-        });
-        log('清理上次会话 ' + prevSid.slice(0, 8) + '…: HTTP ' + dr.status);
-      } catch (_) {}
-    }
+    // retire the previous session WITHOUT awaiting: it must land before the
+    // login only when the BMC table is full — the common case races it in
+    // the background and the SessionLimitExceeded fallback reaps + retries.
+    const retire = () => prevSid && fetch('/redfish/v1/SessionService/Sessions/' + prevSid, {
+      method: 'DELETE', headers: { From: 'WebUI', 'X-Requested-With': 'XMLHttpRequest' },
+    }).catch(() => {});
     log('登录 BMC (' + BOOT.vendor + ') …');
-    const lr = await fetch('/redfish/v1/SessionService/Sessions/', {
+    retire();
+    let lr = await fetch('/redfish/v1/SessionService/Sessions/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'From': 'WebUI' },
       body: JSON.stringify({ UserName: BOOT.user, Password: BOOT.password }),
     });
+    if (lr.status === 400 && (await lr.text()).indexOf('SessionLimitExceeded') > -1) {
+      await retire(); // the background race lost — reap the slot, retry once
+      lr = await fetch('/redfish/v1/SessionService/Sessions/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'From': 'WebUI' },
+        body: JSON.stringify({ UserName: BOOT.user, Password: BOOT.password }),
+      });
+    }
     if (lr.status !== 201) {
       let why = 'HTTP ' + lr.status;
       try {
@@ -98,13 +105,15 @@ func (Driver) BootScript(*store.Machine) string {
     localStorage.setItem('mammoth_sid', lbody.Id || ''); // next click retires this one
 
     // session activation — the vendor SPA does this on every page load and
-    // before launching the console; the ticket path expects it.
-    await fetch('/redfish/v1/SessionService/Sessions/' + (lbody.Id || '') +
+    // before launching the console. Fire-and-forget with keepalive: it must
+    // REACH the BMC but need not block the navigation (the page tears down
+    // right after).
+    fetch('/redfish/v1/SessionService/Sessions/' + (lbody.Id || '') +
       '/Oem/Huawei/Actions/Session.RefreshActivationState', {
-      method: 'POST',
+      method: 'POST', keepalive: true,
       headers: { 'Content-Type': 'application/json;charset=UTF-8', 'From': 'WebUI' },
       body: JSON.stringify({ Mode: 'Activate' }),
-    });
+    }).catch(() => {});
 
     // arm the vendor one-shot launch flag and BECOME the KVM page: a same
     // -origin navigation instead of window.open — the open ran after async

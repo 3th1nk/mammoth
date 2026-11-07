@@ -2,11 +2,13 @@ package bmcweb
 
 import (
 	"net/http"
+	"net/http/httptest"
 
 	"github.com/3th1nk/mammoth/internal/store"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 const testToken = "devtoken"
@@ -132,5 +134,24 @@ func TestTargetContextRoundtrip(t *testing.T) {
 	u, _ := url.Parse("https://x.example.com:443")
 	if u.Port() != "443" {
 		t.Fatalf("port parse = %q", u.Port())
+	}
+}
+
+func TestAssetCacheRoundtrip(t *testing.T) {
+	p := testProxy()
+	req := httptest.NewRequest(http.MethodGet, "http://x/src/virtualControl/h5/kvmclient.js", nil)
+	resp := &http.Response{StatusCode: 200, Header: http.Header{"Etag": []string{`"abc"`}, "Content-Type": []string{"application/javascript"}}}
+	resp.Body = http.NoBody
+	if !cacheable(req, resp) {
+		t.Fatal("cacheable = false for a plain etag GET")
+	}
+	p.cache.put("mch|x", &cachedResp{status: 200, header: resp.Header.Clone(), body: []byte("js-body"), etag: "\"abc\"", at: time.Now()})
+	if _, ok := p.cache.get("mch|x"); !ok {
+		t.Fatal("cache miss right after put")
+	}
+	// redfish never caches
+	rreq := httptest.NewRequest(http.MethodGet, "http://x/redfish/v1/Managers/1", nil)
+	if cacheable(rreq, resp) {
+		t.Error("redfish path marked cacheable")
 	}
 }

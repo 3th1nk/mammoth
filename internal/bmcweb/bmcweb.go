@@ -22,6 +22,7 @@
 package bmcweb
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -29,11 +30,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -55,17 +58,91 @@ const (
 // Proxy is the engine-side BMC web reverse proxy. Nil-safe at the wiring
 // site: a nil proxy leaves every engine route untouched. Vendor launchers
 // register via Register; machines without a match take the generic fallback
-// (plain proxy, manual vendor login).
+// (plain proxy, manual login).
 type Proxy struct {
 	Machines    *store.MachineRepo
 	Credentials *store.CredentialRepo
 	Crypto      *store.SecretCrypto
 	apiToken    string
 	launchers   []Launcher
+	cache       assetCache
+}
+
+// assetCache holds proxied STATIC BMC content (ETag-bearing GETs only, never
+// /redfish) so the vendor web bundle loads at engine-LAN speed instead of a
+// per-file double hop through the BMC — the KVM page pulls ~40 assets and
+// the BMC web server answers each in 200-500ms through the proxy (real-run
+// waterfall 2026-11-07). Invalidation: the vendor version-stamps its bundles
+// in the URL query; a TTL (6h) bounds staleness for unversioned paths; ETag
+// revalidation answers If-None-Match locally.
+type assetCache struct {
+	mu    sync.Mutex
+	m     map[string]*cachedResp
+	bytes int64
+}
+
+const (
+	cacheMaxBytes = 256 << 20
+	cacheEntryMax = 16 << 20
+	cacheTTL      = 6 * time.Hour
+)
+
+type cachedResp struct {
+	status int
+	header http.Header
+	body   []byte
+	etag   string
+	at     time.Time
+}
+
+func newAssetCache() assetCache {
+	return assetCache{m: make(map[string]*cachedResp)}
+}
+
+func (c *assetCache) get(key string) (*cachedResp, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cr, ok := c.m[key]
+	if !ok {
+		return nil, false
+	}
+	if time.Since(cr.at) > cacheTTL {
+		delete(c.m, key)
+		c.bytes -= int64(len(cr.body))
+		return nil, false
+	}
+	return cr, true
+}
+
+func (c *assetCache) put(key string, cr *cachedResp) {
+	if len(cr.body) > cacheEntryMax {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if old, ok := c.m[key]; ok {
+		c.bytes -= int64(len(old.body))
+	}
+	c.m[key] = cr
+	c.bytes += int64(len(cr.body))
+	for c.bytes > cacheMaxBytes { // naive overflow: drop everything (console bundle ~10MB)
+		c.m = make(map[string]*cachedResp)
+		c.bytes = 0
+	}
+}
+
+// cacheable reports whether a request/response pair may populate the static
+// cache: plain GET, not the Redfish API, no Range, 200 with an ETag.
+func cacheable(r *http.Request, resp *http.Response) bool {
+	return r.Method == http.MethodGet &&
+		!strings.HasPrefix(r.URL.Path, "/redfish/") &&
+		r.Header.Get("Range") == "" &&
+		resp.StatusCode == http.StatusOK &&
+		resp.Header.Get("Etag") != ""
 }
 
 func New(machines *store.MachineRepo, credentials *store.CredentialRepo, crypto *store.SecretCrypto, apiToken string) *Proxy {
-	return &Proxy{Machines: machines, Credentials: credentials, Crypto: crypto, apiToken: apiToken}
+	return &Proxy{Machines: machines, Credentials: credentials, Crypto: crypto, apiToken: apiToken, cache: newAssetCache()}
 }
 
 // Register adds a vendor launcher (first match wins; evaluated in
@@ -279,6 +356,32 @@ func (p *Proxy) TryProxy(w http.ResponseWriter, r *http.Request) bool {
 		http.Error(w, "unusable BMC address: "+m.BMCAddress, http.StatusGone)
 		return true
 	}
+	// static-asset cache fast path: ETag-bearing GETs answered from the
+	// engine (If-None-Match → local 304), zero BMC roundtrip.
+	cacheKey := ""
+	if r.Method == http.MethodGet &&
+		!strings.HasPrefix(r.URL.Path, "/redfish/") &&
+		r.Header.Get("Range") == "" {
+		cacheKey = id + "|" + r.URL.RequestURI()
+		inm := r.Header.Get("If-None-Match")
+		if cr, ok := p.cache.get(cacheKey); ok {
+			h := w.Header()
+			for k, vs := range cr.header {
+				for _, v := range vs {
+					h.Add(k, v)
+				}
+			}
+			// ETag revalidation: the browser's heuristic cache revalidates
+			// against the served ETag even with no Cache-Control upstream.
+			if inm != "" && etagMatches(inm, cr.etag) {
+				w.WriteHeader(http.StatusNotModified)
+				return true
+			}
+			w.WriteHeader(cr.status)
+			_, _ = w.Write(cr.body)
+			return true
+		}
+	}
 	rp := &httputil.ReverseProxy{
 		Transport: &http.Transport{
 			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, // vendor self-signed cert
@@ -299,6 +402,22 @@ func (p *Proxy) TryProxy(w http.ResponseWriter, r *http.Request) bool {
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			stripSecureCookie(resp)
+			// populate the static cache (cacheKey non-empty ⟺ cacheable
+			// request shape; cacheable() re-checks the response itself).
+			if cacheKey != "" && cacheable(r, resp) {
+				body, err := io.ReadAll(resp.Body)
+				if err == nil {
+					resp.Body = io.NopCloser(bytes.NewReader(body))
+					resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
+					p.cache.put(cacheKey, &cachedResp{
+						status: resp.StatusCode,
+						header: resp.Header.Clone(),
+						body:   body,
+						etag:   resp.Header.Get("Etag"),
+						at:     time.Now(),
+					})
+				}
+			}
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
@@ -307,6 +426,24 @@ func (p *Proxy) TryProxy(w http.ResponseWriter, r *http.Request) bool {
 	}
 	rp.ServeHTTP(w, r)
 	return true
+}
+
+// etagMatches evaluates an If-None-Match header against the cached ETag
+// (exact match or any-match "*"; weak prefixes compare on the opaque part).
+func etagMatches(inm, etag string) bool {
+	if inm == "*" {
+		return true
+	}
+	trim := func(s string) string {
+		s = strings.TrimSpace(s)
+		return strings.TrimPrefix(strings.TrimPrefix(s, "W/"), `"`)
+	}
+	for _, cand := range strings.Split(inm, ",") {
+		if trim(cand) == trim(etag) {
+			return true
+		}
+	}
+	return false
 }
 
 // stripSecureCookie drops the Secure attribute from upstream cookies: the

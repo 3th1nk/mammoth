@@ -49,11 +49,11 @@ acceptance: build
 	  MAMMOTH_API_TOKEN=$${MAMMOTH_API_TOKEN:-devtoken} \
 	  MAMMOTH_MASTER_KEY=$$(openssl rand -base64 32); \
 	MAMMOTH_FAKE_BMC_DELAY=8s $(BIN) serve --mode=all & \
-	sleep 3; \
+	ENGINE_PID=$$!; sleep 3; \
 	MAMMOTH_FAKE_BMC_DELAY=8s python3 scripts/acceptance.py \
 	  --api http://localhost:8080 --token $${MAMMOTH_API_TOKEN:-devtoken} \
 	  --dsn '$(DSN)' --binary ./$(BIN); \
-	rc=$$?; pkill -f "$(BIN) serve" || true; exit $$rc
+	rc=$$?; kill -9 $$ENGINE_PID 2>/dev/null; exit $$rc
 
 compose-up:
 	docker compose -f deploy/compose.all-in-one.yml up -d --build

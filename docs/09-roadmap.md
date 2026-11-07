@@ -523,9 +523,18 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
     BIOS/ERASE 先例;202 任务轮询;版本回读校验)。前置:iBMC 对
     UpdateService 的支持度与固件包获取形态真机核验(华为/浪潮各一轮);
     风险高(变砖),缺能力 422 沿契约先例。
-16. **bootc/OCI 镜像直装**(P2→**当前主线,设计定稿 2026-11-07**;CLI/
-    Terraform 判不做后按用户定案提前;RHEL 10 Anaconda `bootc` 指令确立
-    "OCI 镜像即装机单元",Ubuntu/Debian/MAAS 未跟进 = 差异化窗口)
+16. **bootc/OCI 镜像直装**(P2→**✅ 代码落地后冻结进「等条件组」
+    (2026-11-07 复议定案)**;RHEL 10 Anaconda `bootc` 指令确立"OCI 镜像
+    即装机单元"。**复议否决项**:立项纯趋势跟随、无真实需求触发(对比
+    dd=工控机 POC、headless=办公电脑场景);**目标场景错位**——mammoth
+    用户群(私有化/离线机房/信创/工控)与 bootc 生态(RHEL 系公有
+    registry/在线拉取)错位,信创 OS 无 bootc 镜像;部署前置比 dd 重一个
+    量级(podman 必配 + registry 基础设施 + ≥8G RAM,容器存储 tmpfs 是
+    dd 内存墙的同款);增量薄弱(镜像化交付 dd 已通,声明式 agent 通路
+    已通,免构建金镜像 = 另一种镜像工厂)。**重开条件:持有 OCI OS
+    镜像流水线的真实客户出现**。已落地代码自持保留(独立驱动、渲染即
+    拒、不碰现有通路;nocloud 归一重构独立有效)——qemu 轮/工件库 OCI
+    引用/CIDATA-via-mount 随冻结一并搁置)
 
     **定案(agent 通路第四 payload,bootc.dev 官方文档核实)**:
 
@@ -572,9 +581,9 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
     钉死即完整性)+ prepare 双载体泛化(vMedia 池无条件/PXE bootc 分支)+
     appliedTerminalDD 泛化双标记(MAMMOTH_DD_MODE ∨ MAMMOTH_BOOTC)+
     validateBootc 提交门(checksum 拒/单盘 wipe/分区与 lvm 拒)。
-    渲染/agent/提交门单测全绿;**遗留**:qemu 全链轮(musl podman 跑
-    glibc bootc 容器,podman #18398 坑源必验)随窗口;镜像工件库 OCI
-    引用与 CIDATA-via-mount 为后续切片。
+    渲染/agent/提交门单测全绿;**冻结项(随重开条件一并)**:qemu 全链轮
+    (musl podman 跑 glibc bootc 容器,podman #18398 坑源必验)、镜像
+    工件库 OCI 引用、CIDATA-via-mount。
 17. **TPM2 + LUKS sealed key 装机**(P2,2026-11-07 立项;调研确认无竞品
     做成一等公民;等保/信创合规刚需)——spec.storage 增加密档意图(LUKS)
     + TPM2 sealing(Clevis 渲染);发行版通路按方言渲染能力分型(anaconda

@@ -542,6 +542,7 @@ func serve(args []string) error {
 			VerifyReadyWait:           cfg.VerifyReadyWait,
 			MediaUploader:             mediaUploader,
 			RamdiskEnabled:            cfg.RamdiskEnabled,
+			RescueWait:                cfg.RescueWait,
 			IPRegistry:                syslogIPs,
 			ProbeAlpineISO:            cfg.ProbeAlpineISO,
 			ProbeAlpineNetboot:        cfg.ProbeAlpineNetboot,

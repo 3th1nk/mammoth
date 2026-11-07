@@ -102,6 +102,7 @@ type Config struct {
 	ProbePrefix           int    // prefix length for a bare ssh.address fallback CIDR (default 24)
 	ProbeGateway          string // fallback default route (cross-subnet report targets)
 	ProbeWait             time.Duration
+	RescueWait            time.Duration
 
 	MediaDir     string // local media repository (boot ISOs)
 	MediaWorkDir string // scratch dir for media builds (default: beside the output)
@@ -351,6 +352,7 @@ func FromEnv() (Config, error) {
 	applyDuration(&c.TaskLogsTTL, "MAMMOTH_TASK_LOGS_TTL", &errs)
 	applyDuration(&c.InbandTimeout, "MAMMOTH_INBAND_TIMEOUT", &errs)
 	applyDuration(&c.ProbeWait, "MAMMOTH_PROBE_WAIT", &errs)
+	applyDuration(&c.RescueWait, "MAMMOTH_RESCUE_WAIT", &errs)
 	applyDuration(&c.BootSettleDelay, "MAMMOTH_BOOT_SETTLE_DELAY", &errs)
 	applyDuration(&c.VerifyReadyWait, "MAMMOTH_VERIFY_READY_WAIT", &errs)
 	applyDuration(&c.DevFakeBMCDelay, "MAMMOTH_FAKE_BMC_DELAY", &errs)

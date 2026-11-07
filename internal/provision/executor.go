@@ -112,8 +112,14 @@ type Executor struct {
 	ProbeGateway string
 	// ProbeWait bounds the ramdisk discover's wait for the machine's report
 	// (boot + scan + report ≈ 1 minute in qemu; real BMC virtual media is
-	// slower). Zero applies the default (10m).
+	// slower). Zero applies the default (10m). When set it also overrides
+	// the rescue wait (the deploy knob is shared; the rescue flow's own
+	// default is 25m — its boot chain carries bootstrap_tools' apk pull).
 	ProbeWait time.Duration
+	// RescueWait bounds the rescue flow's wait for the rescue-ready report
+	// (POST + boot + modloop + bootstrap_tools apk pull + sshd ≈ 8-12
+	// minutes real-hardware). Zero applies the default (25m).
+	RescueWait time.Duration
 
 	// LayoutKeep is the per-machine snapshot retention (docs/08-data-model.md).
 	LayoutKeep int

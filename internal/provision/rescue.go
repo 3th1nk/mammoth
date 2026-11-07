@@ -332,9 +332,20 @@ func (e *Executor) runRescueStage(ctx context.Context, task *store.Task, job *st
 
 	// ── wait for the rescue-ready report (the callback persists it under
 	// the context's "rescue" key) ────────────────────────────────────────
-	wait := e.ProbeWait
+	// The rescue budget is its own default (25m), NOT the ramdisk probe's
+	// 10m: the rescue boot chain carries bootstrap_tools' apk pull from
+	// the extended pool (sfdisk/util-linux/...) before sshd and the
+	// report — real-hardware (.250/2288H, 2026-11-07): POST + PXE + modloop
+	// + bootstrap ≈ 8-12 minutes on its own, and a 10m budget killed the
+	// agent mid-bootstrap so every retry cycle restarted the boot from
+	// zero (the KVM-observed double-boot). ProbeWait still overrides when
+	// the deployment sets it.
+	wait := e.RescueWait
 	if wait <= 0 {
-		wait = 10 * time.Minute
+		wait = 25 * time.Minute
+	}
+	if e.ProbeWait > 0 {
+		wait = e.ProbeWait
 	}
 	deadline := time.NewTimer(wait)
 	defer deadline.Stop()

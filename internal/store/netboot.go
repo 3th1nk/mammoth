@@ -154,8 +154,9 @@ func (r *NetbootRepo) DeleteByTask(ctx context.Context, taskID string) (bool, er
 // DeletedTree is an entry removed by the orphan sweep; the caller removes
 // its boot tree directory (the store knows nothing of the filesystem).
 type DeletedTree struct {
-	Token string
-	MAC   string
+	Token  string
+	MAC    string
+	TaskID string
 }
 
 // DeleteTerminated removes entries whose owning task reached a terminal
@@ -168,7 +169,7 @@ func (r *NetbootRepo) DeleteTerminated(ctx context.Context, maxAge time.Duration
 		WHERE e.task_id = t.id
 		  AND t.state IN ('succeeded', 'failed', 'canceled')
 		  AND e.updated_at < now() - make_interval(secs => $1)
-		RETURNING e.token, e.mac`, maxAge.Seconds())
+		RETURNING e.token, e.mac, e.task_id`, maxAge.Seconds())
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +177,7 @@ func (r *NetbootRepo) DeleteTerminated(ctx context.Context, maxAge time.Duration
 	var out []DeletedTree
 	for rows.Next() {
 		var d DeletedTree
-		if err := rows.Scan(&d.Token, &d.MAC); err != nil {
+		if err := rows.Scan(&d.Token, &d.MAC, &d.TaskID); err != nil {
 			return nil, err
 		}
 		out = append(out, d)

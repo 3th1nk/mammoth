@@ -643,14 +643,37 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
   无需新 API(轮询 cursor 近实时,logs SSE 属后续可选)。测试:IPRegistry
   单测 + sink 归因回退/Forget + SyslogOnly 冒烟 + 三方言渲染断言。
 
-## 装机网段地址服务可观测与边缘地址池(设计定稿,待实施)
+## 装机网段地址服务可观测与边缘地址池(✅ 落地 2026-11-07;边缘实时门控设计保留备用)
 
 **背景**(2026-10-30 现场系列实测):装机网段的 DHCP 服务健康度
 是 PXE/vMedia 装机成败的高频根因,且当前完全不可观测——站点 DHCP 抖动、
 无站点 DHCP、池耗尽三种形态的失败都表现为装机静默卡死或装好系统离线,
 排障成本极高。设计讨论定稿如下。
 
-**三层检测(按部署拓扑择用,信号统一收敛到任务日志 + 网段健康聚合):**
+**✅ 实现注记(2026-11-07,切片 1:引擎内建观测 + edge 饥饿上报 + 提交预检)**:
+
+1. **观测核心**(`internal/netboot/observe.go`,Observer):per-MAC DHCP
+   状态机——DISCOVER≥3 次/3 分钟窗口无地址后续 → 根因行("no DHCP
+   answered on this segment";proxy 形态=网段无地址服务,pool 形态=站点
+   侧静默);地址 REQUEST(option 50/ciaddr/bound-ip)= 健康对照信号清态;
+   归因链复用引导条目注册表的 TaskID(武装 MAC 才有归属,外来客户端
+   纯引擎日志);抑制窗 5 分钟防刷屏;任务日志经 TaskLogTee 落 task_logs;
+2. **装机后离线观测**(installed-orphan):reaper 孤儿清扫删条目前先向
+   Observer 注记 MAC→终态任务;此后该 MAC 的 DISCOVER = "刚装的机器无
+   地址服务"警告,归属到已 succeeded 任务日志(免费装机质量回访);
+3. **edge 饥饿上报**:`POST /netboot/sightings` 增 `starved` 标记(edge
+   侧 per-MAC 计数 ≥N 次无地址 REQUEST 即置位)——pending.sighted 事件
+   携带 starved,引擎侧告警;
+4. **提交预检**:零声明网络的 install 提交时,按机器硬件 MAC 查近期
+   starved sighting → 非阻塞警告行(202 照常;声明静态网络的规格豁免
+   ——警告的受众就是零声明形态);
+5. **净boot 无库依赖**:Observer 不碰数据库——归因走回调链(默认 =
+   注册表),reaper 交接经内存注记;Tests:五态单测(阈值/对照清态/
+   外来无归属/orphan 武装/窗口重置)+ PG 预检(警告落行/声明豁免/
+   非阻塞)。
+   **边缘实时门控**(定稿后半:实时引擎查询 + fail-closed + TTL 负缓存)
+   设计保留备用——触发条件:edge 跨网段部署出现"未登记 MAC 白吃地址"
+   的真实问题;当前 edge 的 dnsmasq allowlist 已覆盖第一层。
 
 1. **引擎内建模式(单网段最简部署,引擎即在 L2)——主检测点**:
    - 池模式:租约发放/拒绝/耗尽事件归属已登记任务(现仅引擎日志一行);

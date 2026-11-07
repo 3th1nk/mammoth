@@ -7,13 +7,17 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/3th1nk/mammoth/internal/netboot"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/store"
 )
 
 // ReaperOptions size the control-plane reaper.
 type ReaperOptions struct {
-	Interval       time.Duration
+	Interval time.Duration
+	// Observer receives the orphan-sweep's MAC→terminal-task notes (the
+	// address-service observability's installed-orphan arming). nil-safe.
+	Observer       *netboot.Observer
 	HeartbeatLimit time.Duration // running + silent this long → interrupted
 	IdempotencyTTL time.Duration
 	TaskLogsTTL    time.Duration // task_logs retention (90d default)
@@ -35,6 +39,8 @@ type Reaper struct {
 	Events   *store.EventRepo
 	TaskLogs *store.TaskLogRepo
 	Netboot  *store.NetbootRepo
+	// Observer receives the orphan sweep's MAC→terminal-task notes (nil-safe).
+	Observer *netboot.Observer
 	Opts     ReaperOptions
 	Logger   *slog.Logger
 	Metrics  *obs.Metrics
@@ -100,6 +106,15 @@ func (r *Reaper) sweepNetboot(ctx context.Context) {
 		return
 	}
 	for _, d := range deleted {
+		// Installed-orphan arming: the task is terminal; from now on the
+		// MAC's continued DISCOVERs are the "freshly installed machine has
+		// no address service" signal, attributed to the task's log (the
+		// DHCP observer's free install quality follow-up). The registry
+		// row goes with this sweep, so the MAC→task chain dies here — the
+		// observer is the one place the attribution survives it.
+		if r.Observer != nil && d.MAC != "" && d.TaskID != "" {
+			r.Observer.NoteTerminal(d.MAC, d.TaskID)
+		}
 		if r.Opts.BootTreeDir != "" && d.Token != "" {
 			_ = os.RemoveAll(filepath.Join(r.Opts.BootTreeDir, d.Token))
 		}

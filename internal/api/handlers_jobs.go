@@ -14,11 +14,13 @@ import (
 	"strings"
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
+	"github.com/3th1nk/mammoth/internal/netboot"
 	"github.com/3th1nk/mammoth/internal/obs"
 	"github.com/3th1nk/mammoth/internal/provision"
 	"github.com/3th1nk/mammoth/internal/render"
 	"github.com/3th1nk/mammoth/internal/store"
 	"github.com/3th1nk/mammoth/internal/store/queue"
+	"sort"
 )
 
 // repoNameRe bounds package_source repo names: they become config file
@@ -215,6 +217,15 @@ func (s *Server) CreateJob(ctx context.Context, request gen.CreateJobRequestObje
 			return nil, err
 		}
 	}
+	// Address-starvation preflight (docs/09-roadmap.md「装机网段地址服务
+	// 可观测」layer 3): PXE installs without a DECLARED network get a
+	// non-blocking warning when the machine's MAC sighted recent
+	// address-starvation on its segment (the edge marker or the engine's
+	// own observer via pending.sighted events). Probability hint, never a
+	// gate — the runtime detection is the authority.
+	if flow == provision.FlowInstall {
+		s.warnStarvation(ctx, machineIDs, specRaw)
+	}
 
 	policy := store.Policy{OnTaskFailure: "continue"}
 	if body.Policy != nil {
@@ -351,6 +362,74 @@ func (s *Server) rejectRetiredMachines(ctx context.Context, machineIDs []string)
 	return verrStatus(http.StatusUnprocessableEntity, "MACHINE_RETIRED",
 		"retired machines: %s — reinstatement is a fresh discover (POST /machines/{id}/actions {\"type\":\"discover\"})",
 		strings.Join(retired, ", "))
+}
+
+// warnStarvation is the address-starvation preflight's whole body: machines
+// whose MAC carries a recent pending.sighted starved marker get a warning
+// line on the submission (non-blocking — 202 still). The spec's declared
+// networks downgrade it: a declared static network is the documented fix
+// and the warning would nag. No events query when the spec declares none of
+// the two (install to a declared-static machine is immune to segment DHCP
+// silence by construction — the warning's audience is the zero-declaration
+// shape).
+func (s *Server) warnStarvation(ctx context.Context, machineIDs []string, specRaw json.RawMessage) {
+	var probe struct {
+		Network []any `json:"network"`
+	}
+	declared := false
+	if len(specRaw) > 0 && json.Unmarshal(specRaw, &probe) == nil {
+		declared = len(probe.Network) > 0
+	}
+	if declared {
+		return
+	}
+	events, err := s.Events.List(ctx, store.EventFilter{Type: "pending.sighted", Limit: 100})
+	if err != nil {
+		return
+	}
+	starvedByMAC := map[string]bool{}
+	for _, e := range events {
+		var payload struct {
+			Starved bool `json:"starved"`
+		}
+		if json.Unmarshal(e.Payload, &payload) == nil && payload.Starved {
+			starvedByMAC[e.ResourceID] = true
+		}
+	}
+	if len(starvedByMAC) == 0 {
+		return
+	}
+	starved := map[string]bool{}
+	for _, mid := range machineIDs {
+		m, err := s.Machines.Get(ctx, mid)
+		if err != nil || m.PXELastSeenAt == nil {
+			continue
+		}
+		// The machine's hardware MACs — the sighting markers key by MAC.
+		var hw struct {
+			NICs []struct{ MAC string } `json:"nics"`
+		}
+		if json.Unmarshal(m.Hardware, &hw) != nil {
+			continue
+		}
+		for _, nic := range hw.NICs {
+			if nic.MAC != "" && starvedByMAC[netboot.NormalizeMAC(nic.MAC)] {
+				starved[mid] = true
+				break
+			}
+		}
+	}
+	if len(starved) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(starved))
+	for id := range starved {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	obs.FromContext(ctx).WarnContext(ctx, "address-starvation preflight",
+		"machines", ids,
+		"note", "recent PXE sightings from these MACs showed DISCOVERs with no address service — installs without a declared static network may strand (the spec's network section is the documented fix)")
 }
 
 // rejectUnhealthyMachines is the hardware health gate's blocking half

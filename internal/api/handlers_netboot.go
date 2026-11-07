@@ -386,7 +386,10 @@ func (s *Server) ObservePXEClient(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 		return
 	}
-	var body struct{ Mac, Firmware string }
+	var body struct {
+		Mac, Firmware string
+		Starved       bool
+	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -400,10 +403,23 @@ func (s *Server) ObservePXEClient(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	s.Events.Append(c.Request.Context(), "pending", mac, "pending.sighted", map[string]any{
-		"firmware": body.Firmware, "source": "edge",
-	})
-	obs.FromContext(c.Request.Context()).InfoContext(c.Request.Context(),
-		"edge sighting recorded", "mac", mac, "firmware", body.Firmware)
+	payload := map[string]any{"firmware": body.Firmware, "source": "edge"}
+	// Address-starvation marker (docs/09-roadmap.md「装机网段地址服务可
+	// 观测」layer 2): the edge counted ≥N DISCOVERs from this MAC with no
+	// addressing REQUEST — the provisioning segment's site DHCP is silent
+	// for it. The event is the aggregation feed (submit-side preflight
+	// reads the latest per-MAC marker through the events table).
+	if body.Starved {
+		payload["starved"] = true
+	}
+	s.Events.Append(c.Request.Context(), "pending", mac, "pending.sighted", payload)
+	if body.Starved {
+		obs.FromContext(c.Request.Context()).WarnContext(c.Request.Context(),
+			"edge address-starvation sighting", "mac", mac,
+			"cause", "repeated DISCOVER with no address REQUEST — the segment's site DHCP answered nothing")
+	} else {
+		obs.FromContext(c.Request.Context()).InfoContext(c.Request.Context(),
+			"edge sighting recorded", "mac", mac, "firmware", body.Firmware)
+	}
 	c.Status(http.StatusNoContent)
 }

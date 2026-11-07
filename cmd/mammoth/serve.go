@@ -113,6 +113,11 @@ func serve(args []string) error {
 	// by the netboot service and the executor; lives in every
 	// API-serving mode.
 	syslogIPs := netboot.NewIPRegistry()
+	// Address-service observability: the DHCP wire watcher attributes
+	// root-cause lines to armed tasks (the default MAC→task chain rides the
+	// boot-entry registry inside netboot.Start); the reaper arms the
+	// installed-orphan signal as terminal tasks release their entries.
+	dhcpObserver := netboot.NewObserver(nil, logger)
 
 	// Log dual-write (docs/02-architecture.md §5.2): from here on, every log
 	// line that carries task_id is also persisted for API retrieval; lines
@@ -319,6 +324,7 @@ func serve(args []string) error {
 			Snoop:        leaseSnoop,
 			IPResolver:   syslogIPs,
 			Log:          logger,
+			Observer:     dhcpObserver,
 			// macOS/vmnet verification setups: limited broadcast leaves via
 			// the default interface, so offer a directed one (config.go).
 			BroadcastAddr: net.ParseIP(cfg.PXEBroadcastAddr),
@@ -373,6 +379,7 @@ func serve(args []string) error {
 			BaseURL:    strings.TrimSuffix(cfg.ExternalURL, "/"),
 			IPResolver: syslogIPs,
 			Log:        logger,
+			Observer:   dhcpObserver,
 		})
 		if nerr != nil {
 			return fmt.Errorf("netboot: %w", nerr)
@@ -464,6 +471,7 @@ func serve(args []string) error {
 			Events:   eventRepo,
 			TaskLogs: logsRepo,
 			Netboot:  netbootRepo,
+			Observer: dhcpObserver,
 			Opts: provision.ReaperOptions{
 				Interval:       cfg.ReaperInterval,
 				HeartbeatLimit: cfg.HeartbeatTimeout,

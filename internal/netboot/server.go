@@ -120,6 +120,17 @@ type Options struct {
 	SyslogOnly bool
 	// Log receives service diagnostics; nil defaults to slog.Default().
 	Log *slog.Logger
+	// TaskFor resolves the active task id for a MAC ("" when none) — the
+	// address-service observer's attribution chain override. nil + a
+	// Resolver wires the default chain (the boot-entry registry's TaskID);
+	// both nil disables the observer: DHCP silence stays unwatched (tests,
+	// embedders).
+	TaskFor func(mac string) string
+	// Observer injects a shared instance (serve composes one observer
+	// across Start invocations and hands the same to the reaper for the
+	// installed-orphan arming). nil = the Server builds its own when the
+	// attribution chain exists.
+	Observer *Observer
 }
 
 // broadcastFor resolves the reply broadcast target: the configured directed
@@ -168,6 +179,9 @@ type Server struct {
 	nbpOK   map[string]bool
 	done    chan error
 	closers []ioCloser
+	// observer watches per-MAC DHCP discovery patterns (address-service
+	// observability); nil when Options.TaskFor is unset.
+	observer *Observer
 	// learned is the next-server discovered from the interface the first
 	// PXE request arrived on (auto mode: Options.NextServer unset). The
 	// arrival interface IS the provisioning L2 by construction, so its
@@ -266,6 +280,17 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 		return nil, fmt.Errorf("netboot: bind tftp :%d: %w", opts.TFTPPort, err)
 	}
 	s.closers = []ioCloser{dhcpConn, proxyConn, tftpConn}
+	switch {
+	case opts.Observer != nil:
+		s.observer = opts.Observer
+	case opts.TaskFor != nil:
+		s.observer = NewObserver(opts.TaskFor, s.log)
+	case opts.Resolver != nil:
+		// Default wiring: the boot-entry registry IS the MAC→task chain
+		// (armed entries carry TaskID; the observer only attributes armed
+		// MACs — foreign clients stay engine-log-only, which is correct).
+		s.observer = NewObserver(s.taskForMAC, s.log)
+	}
 	// The installer-log sink: a busy port (a site rsyslogd, a missing
 	// privilege on an exotic deployment) costs diagnostics, not boots —
 	// degrade to a warning where DHCP/TFTP above abort startup.
@@ -335,6 +360,25 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 func (s *Server) Wait() error { return <-s.done }
 
 // logf emits a service diagnostic at info level.
+// taskForMAC resolves the active task for a MAC through the two existing
+// attribution chains (the boot-entry registry's TaskID, then the
+// provision-registered address attributions) — the address-service
+// observer's TaskFor composition. Cheap: both chains are in-memory maps.
+func (s *Server) taskForMAC(mac string) string {
+	if s.opts.Resolver != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		e, err := s.opts.Resolver.Entry(ctx, mac)
+		cancel()
+		if err == nil && e != nil && e.TaskID != "" {
+			return e.TaskID
+		}
+	}
+	return "" // the address-side registry keys by IP, not MAC — the MAC→IP
+	// reverse (lease/snoop) is the caller's shape; the observer's DISCOVER
+	// phase is pre-address by definition, so the registry chain is the only
+	// one that applies here.
+}
+
 func (s *Server) logf(format string, args ...any) {
 	s.log.Info("netboot: " + fmt.Sprintf(format, args...))
 }

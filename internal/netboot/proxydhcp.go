@@ -71,6 +71,24 @@ func (s *Server) handle(req []byte, port int, src *net.UDPAddr) ([]byte, *net.UD
 			}
 		}
 	}
+	// Address-service observability: DISCOVER-repeat (no address follow-up)
+	// and the installed-orphan signal both fire from this one choke point —
+	// every client message passes here before any silence decision.
+	if s.observer != nil {
+		if mac := p.mac(); mac != "" {
+			mt := p.messageType()
+			addressed := boundIP(p, src) != nil
+			if !addressed {
+				// option 50 (requested IP) also claims an address intent
+				// the client is CONFIRMING — a REQUEST with option 50 that
+				// got no reply yet is not silence proof, but its presence
+				// means the client got an OFFER from somewhere: treat as
+				// addressed (the healthy contrast).
+				_, addressed = p.options[optRequestedIP]
+			}
+			s.observer.NoteMessage(mac, mt, addressed)
+		}
+	}
 	// Proxy mode answers PXE clients only. Pool mode is the address
 	// authority for the whole L2 (docs/operations.md §4.5): the installer
 	// kernel's own DHCP (dracut ip=dhcp) carries no option 60 and must be

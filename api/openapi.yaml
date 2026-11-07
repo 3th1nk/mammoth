@@ -473,7 +473,7 @@ paths:
       summary: Live system event log of the controller
       description: |
         Reads the controller's system event log synchronously (docs
-        07-bmc.md §6.3) — the rescue-room record of what happened before
+        07-bmc.md §6.4) — the rescue-room record of what happened before
         the OS died. Newest first, capped at the 500 most recent records.
         Requires a controller with the SEL capability (redfish); others
         answer BMC_UNSUPPORTED.
@@ -548,6 +548,16 @@ paths:
                 $ref: '#/components/schemas/Job'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          description: >
+            Conflict — boot_rescue targets a machine that already has an
+            unfinished install or rescue task (pending/running/interrupted);
+            the same mutual-exclusion gate installs answer to. Cancel the
+            active job first; the problem detail names the busy machine.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '422':
           $ref: '#/components/responses/Unprocessable'
 
@@ -2268,6 +2278,35 @@ components:
           default: false
           description: Explicit high-risk confirmation; required by the default policy.
 
+    ActionBootRescue:
+      type: object
+      description: |
+        Boot the machine into the engine's in-memory rescue system — an alpine
+        RAM OS with an SSH daemon, no disks touched and no install steps run
+        (docs/07-bmc.md §6.4). The operator repairs the machine over SSH or
+        the machine console, then a plain reboot (any power action) returns
+        it to its installed system: the boot payload is released the moment
+        the machine reports rescue-ready. NOT destructive — no confirm gate;
+        but it reboots the machine and is mutually exclusive with install
+        jobs (409 JOB_MACHINE_BUSY), the same gate installs answer to.
+        ssh_keys are the operator's way in over the network; without them
+        the rescue system still offers a root shell on the machine console
+        (BMC-authenticated). Virtual-media carrier: needs a BMC (protocol
+        none machines reject controller-backed actions).
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [boot_rescue]
+        ssh_keys:
+          type: array
+          items:
+            type: string
+          description: |
+            OpenSSH public keys (authorized_keys format) injected into the
+            rescue system's root account. Optional — omit for console-only
+            rescue.
+
     ActionRequest:
       oneOf:
         - $ref: '#/components/schemas/ActionDiscover'
@@ -2282,6 +2321,7 @@ components:
         - $ref: '#/components/schemas/ActionEjectMedia'
         - $ref: '#/components/schemas/ActionSetBiosAttributes'
         - $ref: '#/components/schemas/ActionEraseDrives'
+        - $ref: '#/components/schemas/ActionBootRescue'
       discriminator:
         propertyName: type
         mapping:
@@ -2297,6 +2337,7 @@ components:
           eject_media: '#/components/schemas/ActionEjectMedia'
           set_bios_attributes: '#/components/schemas/ActionSetBiosAttributes'
           erase_drives: '#/components/schemas/ActionEraseDrives'
+          boot_rescue: '#/components/schemas/ActionBootRescue'
 
     ActionDiscover:
       type: object
@@ -3136,7 +3177,7 @@ components:
     # ── jobs & tasks ───────────────────────────────────────────────────────
     JobType:
       type: string
-      enum: [install, power, discover]
+      enum: [install, power, discover, rescue]
     JobState:
       type: string
       enum: [pending, running, succeeded, partial, failed, canceled]

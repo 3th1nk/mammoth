@@ -17,9 +17,11 @@ import (
 	"github.com/3th1nk/mammoth/internal/store"
 )
 
-// mintProbeToken generates the machine-face credential when job creation
+// mintTaskToken generates the machine-face credential when job creation
 // left none (defensive — the actions API mints discover tokens at creation).
-func mintProbeToken() (string, error) {
+// (renamed from mintProbeToken: the rescue flow mints the same
+// shape — a random per-task render-face token, probe or rescue.)
+func mintTaskToken() (string, error) {
 	var b [18]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", fmt.Errorf("entropy: %w", err)
@@ -81,7 +83,7 @@ func (e *Executor) probeRamdisk(ctx context.Context, task *store.Task, usePXE bo
 	_ = json.Unmarshal(task.Context, &pctx)
 	if pctx.Token == "" {
 		var err error
-		pctx.Token, err = mintProbeToken()
+		pctx.Token, err = mintTaskToken()
 		if err != nil {
 			return err
 		}

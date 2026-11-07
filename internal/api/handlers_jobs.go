@@ -64,6 +64,18 @@ func (s *Server) PerformMachineAction(ctx context.Context, request gen.PerformMa
 		jobType = "discover"
 		flow = provision.FlowDiscover
 	}
+	// boot_rescue runs its own flow (docs/07-bmc.md §6.4): it is a
+	// state-machine job — carrier build, boot, rescue-ready wait — and it
+	// answers to the same install/rescue mutual-exclusion gate installs do
+	// (409 JOB_MACHINE_BUSY); power actions stay ungated (they are quick
+	// and non-owning).
+	if aType == "boot_rescue" {
+		jobType = "rescue"
+		flow = provision.FlowRescue
+		if verr := s.rejectBusyMachines(ctx, []string{machine.ID}); verr != nil {
+			return nil, verr
+		}
+	}
 
 	job, err := s.createJobRecord(ctx, createJobRecord{
 		jobType:        jobType,
@@ -171,9 +183,10 @@ func (s *Server) CreateJob(ctx context.Context, request gen.CreateJobRequestObje
 		return nil, verr("SCHEMA_INVALID_JOB", "unknown job type %q", body.Type)
 	}
 
-	// Machine-busy gate (install only): see rejectBusyInstallMachines.
+	// Machine-busy gate (install; the query also blocks on active rescue
+	// tasks — the two flows are mutually exclusive): see rejectBusyMachines.
 	if flow == provision.FlowInstall {
-		if err := s.rejectBusyInstallMachines(ctx, machineIDs); err != nil {
+		if err := s.rejectBusyMachines(ctx, machineIDs); err != nil {
 			return nil, err
 		}
 	}
@@ -265,16 +278,17 @@ func (s *Server) CreateJob(ctx context.Context, request gen.CreateJobRequestObje
 	return gen.CreateJob202JSONResponse(*job), nil
 }
 
-// rejectBusyInstallMachines is the machine-busy gate: an install is
-// destructive and slow, and the queue would happily run a second one after
-// the first — submissions used to pile up pending reinstall tasks on the
-// same machine (real-hardware: the windows agent apply rounds; the
+// rejectBusyMachines is the machine-busy gate: install and rescue are the
+// two mutually exclusive flows (an install wipes disks; rescue owns the
+// boot chain) and each is slow — the queue would happily run a second one
+// after the first — submissions used to pile up pending reinstall tasks on
+// the same machine (real-hardware: the windows agent apply rounds; the
 // workaround was a manual batch cancel before every re-run). A machine with
-// an unfinished install task (pending/running/interrupted) must have that
-// job explicitly canceled first — the gate names the busy machines with
-// their task/job ids instead of silently queueing another reinstall.
-func (s *Server) rejectBusyInstallMachines(ctx context.Context, machineIDs []string) error {
-	busy, err := s.Jobs.ActiveInstallTasksByMachines(ctx, machineIDs)
+// an unfinished install or rescue task (pending/running/interrupted) must
+// have that job explicitly canceled first — the gate names the busy
+// machines with their task/job ids instead of silently queueing another.
+func (s *Server) rejectBusyMachines(ctx context.Context, machineIDs []string) error {
+	busy, err := s.Jobs.ActiveBlockingTasksByMachines(ctx, machineIDs)
 	if err != nil {
 		return err
 	}
@@ -288,7 +302,7 @@ func (s *Server) rejectBusyInstallMachines(ctx context.Context, machineIDs []str
 		}
 	}
 	return verrStatus(http.StatusConflict, "JOB_MACHINE_BUSY",
-		"machines with an unfinished install task: %s — cancel the active job first (POST /jobs/{id}/cancel)",
+		"machines with an unfinished install or rescue task: %s — cancel the active job first (POST /jobs/{id}/cancel)",
 		strings.Join(details, ", "))
 }
 
@@ -592,7 +606,7 @@ func encodeAction(body *gen.ActionRequest) (json.RawMessage, string, error) {
 	switch probe.Type {
 	case "discover", "power_on", "power_off", "soft_off", "reboot", "hard_reboot",
 		"cycle", "set_boot_device", "mount_media", "eject_media", "set_bios_attributes",
-		"erase_drives":
+		"erase_drives", "boot_rescue":
 		return b, probe.Type, nil
 	default:
 		return nil, "", verr("SCHEMA_INVALID_ACTION", "unknown action type %q", probe.Type)

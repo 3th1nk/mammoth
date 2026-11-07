@@ -188,13 +188,19 @@ func (e *Executor) ExecuteStage(ctx context.Context, task *store.Task, job *stor
 		err := e.runInstallStage(ctx, task, job, seq)
 		// Terminal failure after the payload was produced: reclaim it now
 		// (retryable failures deliberately keep it — the retry's
-		// prepare_media rebuilds it anyway).
+		// prepare_media rebuilds it anyway). The fresh re-read matters:
+		// the claim-time snapshot predates prepare's context patch.
 		if err != nil && installMediaProduced(stage) && !Classified(err).Retryable {
-			// Terminal failure after the payload was produced: reclaim it
-			// now (retryable failures deliberately keep it — the retry's
-			// prepare_media rebuilds it anyway). The fresh re-read matters:
-			// the claim-time snapshot predates prepare's context patch.
 			e.releaseBootPayloadFresh(ctx, task, "terminal failure")
+		}
+		return err
+	case FlowRescue:
+		err := e.runRescueStage(ctx, task, job)
+		// Terminal failure after the carrier was produced: reclaim it now
+		// (the stage releases on its own wait-phase terminals; this catches
+		// build-phase terminals and non-retryable BMC errors mid-path).
+		if err != nil && !Classified(err).Retryable {
+			e.releaseRescuePayloadFresh(ctx, task, "terminal failure")
 		}
 		return err
 	default:

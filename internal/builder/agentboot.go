@@ -120,7 +120,7 @@ func agentScript() string {
 # any failing command would kill the whole runtime silently (no report, no
 # shell). This runtime handles its own errors: strip the -e and re-exec. The
 # child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
-SCRIPT_VERSION="ab-v27"
+SCRIPT_VERSION="ab-v28"
 case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
 log "agent runtime $SCRIPT_VERSION starting"
 
@@ -870,6 +870,42 @@ if [ "$MAMMOTH_DD_MODE" = "1" ]; then
     if report applied "image written and verified ($MAMMOTH_DD_FORMAT) — first boot pending"; then
         log "rebooting into the image's first boot"
         reboot -f
+    fi
+    bail report "completion report could not be delivered"
+fi
+if [ "$MAMMOTH_RESCUE" = "1" ]; then
+    log "rescue mode — in-memory repair system, no install steps run"
+    # sshd from the pool (alpine_repo= boot line or media apks — the rescue
+    # carrier stages the extended pool the same way dd does). Missing pool
+    # degrades to console-only rescue: an honest warning, not a failure.
+    if apk add --no-cache openssh >/dev/console 2>&1; then
+        mkdir -p /root/.ssh && chmod 700 /root/.ssh
+        : > /root/.ssh/authorized_keys
+        while IFS= read -r k; do
+            [ -n "$k" ] && echo "$k" >> /root/.ssh/authorized_keys
+        done <<RESCUEKEYS
+$MAMMOTH_SSH_KEYS
+RESCUEKEYS
+        chmod 600 /root/.ssh/authorized_keys
+        ssh-keygen -A >/dev/console 2>&1
+        if /usr/sbin/sshd; then
+            log "sshd up on :22 ($(grep -c . /root/.ssh/authorized_keys) keys)"
+        else
+            log "sshd start failed — console-only rescue"
+        fi
+    else
+        log "sshd package install failed (pool unreachable?) — console-only rescue"
+    fi
+    if report ok "rescue ready — in-memory repair system up, no disks touched"; then
+        log "rescue console open — operator session begins"
+        log "reboot (BMC power action) returns the machine to its installed system"
+        # Foreground interactive shell on the console: the script process
+        # stays alive (the log-shipper loop keeps running), sshd survives
+        # it, and exiting the shell leaves the RAM OS up until the operator
+        # reboots. NOT exec — rescue is long-lived by design.
+        /bin/sh
+        log "rescue console session ended — system stays up; reboot to return"
+        exit 0
     fi
     bail report "completion report could not be delivered"
 fi

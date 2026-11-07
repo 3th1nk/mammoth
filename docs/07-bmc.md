@@ -146,6 +146,38 @@ cycle);绕开装机单独下发 BIOS 的调用方,须自行跟进一次 `cycle` 
 4. **边界**:周期带外巡检(异常→事件→webhook)是有状态服务化能力,
    等真实需求触发再排(roadmap 第 9 项);本节只交付按需读。
 
+### 6.4 boot_rescue 救援动作(内存修复系统,非破坏性)
+
+商业裸金属云的标配能力(内存 RAM OS + SSH 修复),自研引擎普遍缺失;
+mammoth 全件复用:alpine agent 内存系统(bootstrap/plan 机制)+ 虚拟介质
+载体 + token 化 render 面 + syslog sink。**非破坏性,不进两段式确认门**
+——但它重开机并独占引导链,与 install 同答 JOB_MACHINE_BUSY 互斥门
+(409,双向:install 拦 rescue,rescue 拦 install,查询面 flow IN)。
+
+1. **动作形态**:`POST /machines/{id}/actions`
+   `{"type":"boot_rescue","ssh_keys":[...]}`——ssh_keys 可选,缺省 =
+   console-only 救援(根 shell 走 BMC KVM/SOL,BMC 访问本身就是门);
+2. **载体**:alpine standard ISO 重打包(agent overlay + rescue 计划在
+   介质根,dd 通路同构);extended ISO /apks 池暂存到任务 netboot 路径
+   供 sshd(`MAMMOTH_WINDOWS_APPLY_ALPINE_ISO`)——池缺席诚实降级为
+   console-only(双侧告警,不失败);**PXE 载体待第二切片**(headless
+   机器当前 422,沿 headlessActionGate);
+3. **执行流**:单阶段 rescue flow(建载体 → vMedia 挂载一次性引导 →
+   等 agent 的 rescue-ready 报告 → 释放载荷);agent 侧
+   `MAMMOTH_RESCUE=1` 分支:apk openssh → authorized_keys 注入 →
+   sshd → report ok → **前台 console shell(不 reboot)**——救援会话
+   长驻,日志随报心跳;报告走与 install 相同的
+   `/render/{token}/complete` 面(handler 按 flow 分流);
+4. **终态语义**:rescue-ready 即任务成功 + 载荷即刻释放(vMedia 弹载 +
+   引导序回 disk)——机器**留在内存系统里**,运维修完后任意 power 动作
+   重启即回原系统;超时(默认随探针预算 10 分钟)按探针语义关机释放,
+   重试整段重建(幂等);
+5. **事件**:`task.rescue_reported`(报告面)/ `task.boot_rescue`
+   (ready 落档,带 ssh_keys 数)/ `task.stage_changed`(armed);
+6. **边界**:机器状态机不动(rescue 不改 state);救援不修数据——内存
+   系统里能做什么由运维决定,引擎只负责把机器送进可修复状态。
+
+
 选择逻辑(`protocol: auto`):
 
 ```

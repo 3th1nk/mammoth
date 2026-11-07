@@ -829,6 +829,56 @@ func (r *JobRepo) RecordInstallComplete(ctx context.Context, taskID, status, det
 	})
 }
 
+// RecordRescueProgress merges rescue progress into the task context under
+// the "rescue" key — the rescue flow's counterpart of RecordInstallProgress
+// (same row-lock, monotonic facts shape).
+func (r *JobRepo) RecordRescueProgress(ctx context.Context, taskID string, rec map[string]any) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var raw []byte
+	if err := tx.QueryRowContext(ctx,
+		`SELECT context FROM tasks WHERE id = $1 FOR UPDATE`, taskID).Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	var current map[string]any
+	_ = json.Unmarshal(raw, &current)
+	rescue, _ := current["rescue"].(map[string]any)
+	if rescue == nil {
+		rescue = map[string]any{}
+	}
+	for k, v := range rec {
+		rescue[k] = v
+	}
+	current["rescue"] = rescue
+	merged, err := json.Marshal(current)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE tasks SET context = $2, updated_at = now() WHERE id = $1`, taskID, merged); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RecordRescueReady records the rescue agent's report (status ok|failed)
+// under a row lock: monotonic terminal facts, no stage CAS. status ok means
+// the in-memory rescue system is up (sshd + keys per the request); the
+// rescue stage releases the boot payload on this marker and completes.
+func (r *JobRepo) RecordRescueReady(ctx context.Context, taskID, status, detail string) error {
+	now := time.Now().UTC()
+	return r.RecordRescueProgress(ctx, taskID, map[string]any{
+		"ready_at": now, "status": status, "detail": detail,
+	})
+}
+
 // ActiveTaskRef is the minimal identity of an unfinished task — the busy
 // gate's error detail (docs/04-install-spec.md §5: a machine with an
 // unfinished install task must have that job explicitly canceled first)
@@ -842,11 +892,15 @@ type ActiveTaskRef struct {
 	CreatedAt time.Time
 }
 
-// ActiveInstallTasksByMachines returns, per machine, its latest unfinished
-// install task (pending / running / interrupted — an interrupted task is
-// retryable and will run again). Machines without one are absent from the
-// map; every requested machine missing from the result is free.
-func (r *JobRepo) ActiveInstallTasksByMachines(ctx context.Context, machineIDs []string) (map[string]ActiveTaskRef, error) {
+// ActiveBlockingTasksByMachines returns, per machine, its latest unfinished
+// install or rescue task (pending / running / interrupted — an interrupted
+// task is retryable and will run again). The two flows are mutually
+// exclusive by machine: an install wipes disks while rescue owns the boot
+// chain, and neither may queue behind the other (docs/07-bmc.md §6.4 —
+// both submissions answer 409 JOB_MACHINE_BUSY naming the blocker).
+// Machines without one are absent from the map; every requested machine
+// missing from the result is free.
+func (r *JobRepo) ActiveBlockingTasksByMachines(ctx context.Context, machineIDs []string) (map[string]ActiveTaskRef, error) {
 	out := make(map[string]ActiveTaskRef, len(machineIDs))
 	if len(machineIDs) == 0 {
 		return out, nil
@@ -854,7 +908,7 @@ func (r *JobRepo) ActiveInstallTasksByMachines(ctx context.Context, machineIDs [
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT DISTINCT ON (machine_id) machine_id, id, job_id, state
 		FROM tasks
-		WHERE machine_id = ANY($1) AND flow_name = 'install'
+		WHERE machine_id = ANY($1) AND flow_name IN ('install', 'rescue')
 		  AND state IN ('pending', 'running', 'interrupted')
 		ORDER BY machine_id, created_at DESC`, machineIDs)
 	if err != nil {

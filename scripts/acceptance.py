@@ -387,6 +387,47 @@ def main():
     else:
         ok &= check("error-classification machine registered", False, str(status))
 
+    # 3.6 boot_rescue (docs/07-bmc.md §6.4): contract surface + the
+    # install/rescue mutual-exclusion gate. The rescue task's terminal
+    # state depends on the deployment's alpine carrier
+    # (MAMMOTH_PROBE_ALPINE_ISO): without it the task fails fast and
+    # honestly (RESCUE_MEDIA_FAILED names the env var); with it the
+    # carrier builds and the task waits for a machine report that only a
+    # real boot can deliver — that shape is canceled for cleanup. Both
+    # are correct outcomes for this environment-dependent tail.
+    print("· boot_rescue (contract + busy gate)")
+    status, gjob = c.post("/api/v1/jobs", {
+        "type": "install",
+        "targets": {"targets": [{"machine_id": machines[0]}]},
+        "spec": {"image": {"source": "https://mirror.example/rocky9.iso", "distro": "rocky9"},
+                 "storage": {"disks": [{"select": {"match": {"type": "nvme", "size": "largest"}},
+                                        "wipe": True,
+                                        "partitions": [{"size": "rest", "fs": "xfs", "mount": "/"}]}]}}})
+    ok &= check("install job accepted (busy-gate fixture)", status == 202, f"{status}")
+    status, busy = c.post(f"/api/v1/machines/{machines[0]}/actions", {"type": "boot_rescue"})
+    ok &= check("boot_rescue on machine with active install → 409 JOB_MACHINE_BUSY",
+                status == 409 and busy.get("code") == "JOB_MACHINE_BUSY",
+                f"{status} {busy.get('code')}")
+    status, _ = c.post(f"/api/v1/jobs/{gjob['id']}/cancel")
+    ok &= check("gate fixture install job canceled (cleanup)", status in (200, 202), f"{status}")
+    wait_job(c, gjob["id"], {"canceled", "failed", "succeeded", "partial"}, timeout=60)
+
+    status, rjob = c.post(f"/api/v1/machines/{machines[0]}/actions",
+                          {"type": "boot_rescue", "ssh_keys": ["ssh-ed25519 AAA acceptance@mammoth"]})
+    ok &= check("boot_rescue accepted → 202, job type rescue",
+                status == 202 and rjob.get("type") == "rescue", f"{status} {rjob.get('type')}")
+    rjob_final, rtasks = wait_job(c, rjob["id"], {"succeeded", "failed", "canceled", "partial"}, timeout=30)
+    if rjob_final and rjob_final.get("state") in ("failed", "succeeded"):
+        rerr = (rtasks[0].get("error") or {}) if rtasks else {}
+        ok &= check("rescue terminal is honest (no carrier → RESCUE_MEDIA_FAILED names the env)",
+                    rtasks[0]["state"] == "failed" and rerr.get("code") == "RESCUE_MEDIA_FAILED",
+                    f"{rtasks[0]['state']} {rerr.get('code')}")
+    else:
+        status, _ = c.post(f"/api/v1/jobs/{rjob['id']}/cancel")
+        ok &= check("rescue with carrier configured → task runs (canceled for cleanup)",
+                    status in (200, 202), f"{status}")
+        wait_job(c, rjob["id"], {"canceled", "succeeded", "failed", "partial"}, timeout=60)
+
     # 4. idempotency
     print("· idempotency")
     key = f"acc-{time.time()}"

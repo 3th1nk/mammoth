@@ -100,6 +100,8 @@ func (j *Job) FlowName() string {
 		return "install"
 	case "discover":
 		return "discover"
+	case "rescue":
+		return "rescue"
 	default:
 		return "power"
 	}
@@ -108,7 +110,7 @@ func (j *Job) FlowName() string {
 // Job is the async-operation carrier.
 type Job struct {
 	ID             string
-	Type           string // install | power | discover
+	Type           string // install | power | discover | rescue
 	Request        json.RawMessage
 	Action         json.RawMessage // power jobs: the BMC action
 	SpecResolved   json.RawMessage

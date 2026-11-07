@@ -66,6 +66,21 @@ func (s *Server) ReportInstallComplete(ctx context.Context, request gen.ReportIn
 			detail = *request.Body.Detail
 		}
 	}
+	// The rescue flow reports through the same token-scoped surface (the
+	// plan carries the same /render/{token}/complete callback): the
+	// rescue-ready report persists under the context's "rescue" key — the
+	// rescue stage polls it and owns the payload release + terminal state.
+	if task.FlowName == "rescue" {
+		if err := s.Jobs.RecordRescueReady(ctx, task.ID, status, detail); err != nil {
+			return nil, err
+		}
+		s.Events.Append(ctx, "task", task.ID, "task.rescue_reported", map[string]any{
+			"status": status, "detail": detail,
+		})
+		obs.FromContext(ctx).InfoContext(ctx, "rescue report received",
+			obs.FieldTaskID, task.ID, "status", status)
+		return gen.ReportInstallComplete204Response{}, nil
+	}
 	// status "applied" is the agent apply-image pathway's phase-one report:
 	// the image is laid down and the machine is rebooting into first boot —
 	// it releases the boot payload but does NOT complete the task; the

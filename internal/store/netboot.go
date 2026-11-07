@@ -26,7 +26,7 @@ type NetbootEntry struct {
 	TaskID     string            `json:"task_id"`
 	MachineID  string            `json:"machine_id"`
 	Token      string            `json:"-"`
-	Kind       string            `json:"kind"` // install | probe
+	Kind       string            `json:"kind"` // install | probe | rescue
 	Kernel     string            `json:"kernel"`
 	Initrd     string            `json:"initrd"`
 	KernelArgs string            `json:"kernel_args,omitempty"`

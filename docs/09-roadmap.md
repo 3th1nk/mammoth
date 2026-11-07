@@ -474,7 +474,13 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
     (ActiveBlockingTasksByMachines flow IN install+rescue)/ docs 07 §6.4、
     03 动作清单、12 载荷分型。单测(渲染/agent 断言/上下文解析)+ PG 忙门
     (rescue↔install 双向)+ acceptance §3.6(契约面 + 409 + 终态诚实性)
-    全绿。**遗留**:PXE 载体切片(headless 机器解锁,当前 422)与 qemu
+    全绿。**✅ PXE 载体切片落地(2026-11-07 同日)**——双载体统一重构:
+    载体决策纯函数(headless 强制 PXE / boot:"pxe" 显式覆盖 vMedia 死路
+    机型 / BMC 缺省 vMedia),PXE 路径 = BuildAgentNetboot 引导树 + per-MAC
+    注册(Kind rescue)+ 计划经 mammoth_base 走 context answers,arm/release
+    全量复用策略层(pxe().arm 内含 headless 证据等待:带内重启/WoL/人工
+    上电;releaseBootPayloadFresh 按 boot_strategy 路由);headlessActionGate
+    对 boot_rescue 放开;载体决策单测;契约增 boot 字段。**遗留**:qemu
     全链轮(真引导 → agent 报告 → 释放全链)随窗口。
 12. **装后验收探针(第七阶段)**(P1,2026-11-07 立项;MAAS testing scripts
     同型)——六阶段证据化流水线的收尾:装机完成回调后,引擎在下一次带内

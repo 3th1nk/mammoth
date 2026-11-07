@@ -40,3 +40,40 @@ func TestParseRescueContextAndRecord(t *testing.T) {
 		t.Fatalf("corrupt context must yield no record, got %+v", rec)
 	}
 }
+
+// The rescue carrier decision: headless machines force PXE (no media slot),
+// BMC machines default to the virtual-media mount, boot:"pxe" overrides for
+// vMedia-dead firmware, anything else is a schema error.
+func TestRescueCarrierFor(t *testing.T) {
+	cases := []struct {
+		protocol, boot, want string
+		wantErr              bool
+	}{
+		{"redfish", "", "virtual_media", false},
+		{"redfish", "virtual_media", "virtual_media", false},
+		{"redfish", "pxe", "pxe", false}, // explicit override
+		{"ipmi", "", "virtual_media", false},
+		{"fake", "virtual_media", "virtual_media", false},
+		{"none", "", "pxe", false},              // headless forces PXE
+		{"none", "virtual_media", "pxe", false}, // no media slot — forced
+		{"none", "pxe", "pxe", false},
+		{"redfish", "usb", "", true},
+		{"none", "floppy", "", true},
+	}
+	for _, c := range cases {
+		got, err := rescueCarrierFor(c.protocol, c.boot)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("(%s,%s): want error, got %q", c.protocol, c.boot, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("(%s,%s): unexpected error %v", c.protocol, c.boot, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("(%s,%s): got %q, want %q", c.protocol, c.boot, got, c.want)
+		}
+	}
+}

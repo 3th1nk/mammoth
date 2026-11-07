@@ -157,11 +157,15 @@ mammoth 全件复用:alpine agent 内存系统(bootstrap/plan 机制)+ 虚拟介
 1. **动作形态**:`POST /machines/{id}/actions`
    `{"type":"boot_rescue","ssh_keys":[...]}`——ssh_keys 可选,缺省 =
    console-only 救援(根 shell 走 BMC KVM/SOL,BMC 访问本身就是门);
-2. **载体**:alpine standard ISO 重打包(agent overlay + rescue 计划在
-   介质根,dd 通路同构);extended ISO /apks 池暂存到任务 netboot 路径
-   供 sshd(`MAMMOTH_WINDOWS_APPLY_ALPINE_ISO`)——池缺席诚实降级为
-   console-only(双侧告警,不失败);**PXE 载体待第二切片**(headless
-   机器当前 422,沿 headlessActionGate);
+2. **载体**(双载体,装机通路同款分型):virtual_media 缺省(alpine
+   standard ISO 重打包,agent overlay + rescue 计划在介质根,dd 同构);
+   `boot:"pxe"` 显式覆盖(vMedia 固件死路机型的逃生门);**protocol=none
+   机器强制 PXE**(headlessActionGate 对 boot_rescue 放开——无介质槽,
+   PXE 是 headless 唯一能拿到的救援,arm 走 headless 证据路径:带内重启
+   / WoL / 人工上电);extended ISO /apks 池两载体共用
+   (`MAMMOTH_WINDOWS_APPLY_ALPINE_ISO`;PXE 载体另需
+   `MAMMOTH_PROBE_ALPINE_NETBOOT` 引导树)——池缺席诚实降级 console-only
+   (双侧告警,不失败);
 3. **执行流**:单阶段 rescue flow(建载体 → vMedia 挂载一次性引导 →
    等 agent 的 rescue-ready 报告 → 释放载荷);agent 侧
    `MAMMOTH_RESCUE=1` 分支:apk openssh → authorized_keys 注入 →

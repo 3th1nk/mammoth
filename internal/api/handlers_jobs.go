@@ -616,8 +616,10 @@ func encodeAction(body *gen.ActionRequest) (json.RawMessage, string, error) {
 // headlessActionGate rejects controller-backed actions on protocol=none
 // machines with an explicit 422 (docs/13-headless-design.md §2): honest
 // degradation beats a job that dies at the first BMC call with
-// CREDENTIAL_UNAVAILABLE. The in-band discover probe (probe=inband_ssh)
-// is the one flavor that stays — it drives from ssh, not the BMC.
+// CREDENTIAL_UNAVAILABLE. Two flavors stay: the in-band discover probe
+// (probe=inband_ssh — it drives from ssh, not the BMC) and boot_rescue
+// (its carrier decision forces PXE on headless machines — the arm runs
+// the headless evidence path, WoL / in-band reboot / manual power-on).
 func (s *Server) headlessActionGate(ctx context.Context, machine *store.Machine, body *gen.ActionRequest) error {
 	if machine.BMCProtocol != "none" || body == nil {
 		return nil
@@ -629,6 +631,9 @@ func (s *Server) headlessActionGate(ctx context.Context, machine *store.Machine,
 	}
 	_ = json.Unmarshal(raw, &probe)
 	if probe.Type == "discover" && probe.Probe == "inband_ssh" {
+		return nil
+	}
+	if probe.Type == "boot_rescue" {
 		return nil
 	}
 	return verrStatus(http.StatusUnprocessableEntity, "HEADLESS_UNSUPPORTED",

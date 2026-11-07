@@ -2291,13 +2291,21 @@ components:
         jobs (409 JOB_MACHINE_BUSY), the same gate installs answer to.
         ssh_keys are the operator's way in over the network; without them
         the rescue system still offers a root shell on the machine console
-        (BMC-authenticated). Virtual-media carrier: needs a BMC (protocol
-        none machines reject controller-backed actions).
+        (BMC-authenticated). Carrier: virtual-media mount by default (needs
+        a BMC); protocol-none machines force the PXE carrier (netboot tree +
+        Wake-on-LAN / manual power-on evidence); an explicit boot:"pxe"
+        overrides for vMedia-dead firmware.
       required: [type]
       properties:
         type:
           type: string
           enum: [boot_rescue]
+        boot:
+          type: string
+          enum: [pxe, virtual_media]
+          description: |
+            Carrier override (default: virtual_media when a BMC exists,
+            pxe for protocol-none machines).
         ssh_keys:
           type: array
           items:

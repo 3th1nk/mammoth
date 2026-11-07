@@ -200,7 +200,7 @@ func (e *Executor) ExecuteStage(ctx context.Context, task *store.Task, job *stor
 		// (the stage releases on its own wait-phase terminals; this catches
 		// build-phase terminals and non-retryable BMC errors mid-path).
 		if err != nil && !Classified(err).Retryable {
-			e.releaseRescuePayloadFresh(ctx, task, "terminal failure")
+			e.releaseRescueFresh(ctx, task, "terminal failure")
 		}
 		return err
 	default:

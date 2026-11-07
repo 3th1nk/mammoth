@@ -264,9 +264,25 @@ func (e *Executor) runRescueStage(ctx context.Context, task *store.Task, job *st
 				kernelArgs += " alpine_repo=" + external + "/netboot/files/" + rctx.Token + "/apks"
 			}
 		}
-		if berr := buildBootISO(ctx, alpineISO, filepath.Join(e.MediaDir, mediaFile), kernelArgs, seed, e.MediaWorkDir, e.MediaDir); berr != nil {
+		// Work/cache split mirrors the install strategy: the build scratch
+		// lives in a per-task SUBPATH of MediaWorkDir (the builder RemoveAlls
+		// its workDir — passing the mount point itself dies with "device or
+		// resource busy"), then the finished ISO moves into the repo.
+		outputPath := filepath.Join(e.MediaDir, mediaFile)
+		buildWork := ""
+		if e.MediaWorkDir != "" {
+			buildWork = filepath.Join(e.MediaWorkDir, filepath.Base(mediaFile)+".build")
+			outputPath = filepath.Join(e.MediaWorkDir, filepath.Base(mediaFile))
+		}
+		if berr := buildBootISO(ctx, alpineISO, outputPath, kernelArgs, seed, buildWork, e.MediaDir); berr != nil {
 			return classifiedErr("RESCUE_MEDIA_FAILED", true,
 				"rescue media build failed: %s", berr.Error())
+		}
+		if buildWork != "" {
+			if merr := moveFile(outputPath, filepath.Join(e.MediaDir, mediaFile)); merr != nil {
+				return classifiedErr("RESCUE_MEDIA_FAILED", true,
+					"rescue media move into repo failed: %s", merr.Error())
+			}
 		}
 		if e.MediaUploader != nil {
 			if _, perr := e.MediaUploader.Push(ctx, filepath.Join(e.MediaDir, mediaFile), mediaFile); perr != nil {

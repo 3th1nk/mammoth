@@ -523,12 +523,44 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
     BIOS/ERASE 先例;202 任务轮询;版本回读校验)。前置:iBMC 对
     UpdateService 的支持度与固件包获取形态真机核验(华为/浪潮各一轮);
     风险高(变砖),缺能力 422 沿契约先例。
-16. **bootc/OCI 镜像直装**(P2→**当前主线**,2026-11-07 立项;CLI/Terraform
-    判不做后按用户定案提前;RHEL 10 Anaconda `bootc` 指令确立"OCI 镜像
-    即装机单元",Ubuntu/Debian/MAAS 未跟进 = 差异化窗口)——agent 通路
-    天然同构(分区 + 引导 + 拉镜像,dd 的近亲),或 rocky10+ 渲染 bootc
-    kickstart 指令走安装器通路。前置:bootc 意图块契约设计(storage/
-    identity/access 如何映射 seed)+ qemu 轮。
+16. **bootc/OCI 镜像直装**(P2→**当前主线,设计定稿 2026-11-07**;CLI/
+    Terraform 判不做后按用户定案提前;RHEL 10 Anaconda `bootc` 指令确立
+    "OCI 镜像即装机单元",Ubuntu/Debian/MAAS 未跟进 = 差异化窗口)
+
+    **定案(agent 通路第四 payload,bootc.dev 官方文档核实)**:
+
+    1. **通路开关** = `image.distro: "bootc"`(驱动注册表分发,dd 同款);
+       `image.source` = OCI 引用(`docker://registry/repo:tag` 或裸
+       `registry/repo:tag`,**推荐 digest 钉死 `@sha256:...`**——OCI 摘要
+       即完整性,pull 即校验,spec.image.checksum 不适用);
+    2. **storage 退化为单目标盘选择器**(dd 同款):`bootc install to-disk`
+       自建布局(DPS GUID:root+ESP+BIOS boot,filesystem 由镜像 install
+       .toml 或 --filesystem 定)——引擎不声明分区;lvm/raid/keep 互斥
+       提交即拒;
+    3. **运行时**(`bootc install` 必须在目标镜像自己的容器里跑,官方
+       文档明文):agent `apk add podman`(alpine community 包;扩展池
+       须携带或 alpine_repo 指向在线镜像——离线机房 ops 前置)→
+       `podman pull <ref>` → `podman run --rm --privileged --pid=host
+       --ipc=host -v /var/lib/containers:/var/lib/containers -v /dev:/dev
+       --security-opt label=type:unconfined_t <ref> bootc install to-disk
+       <target>`;`--root-ssh-authorized-keys`(access.ssh_keys 原生通道)+
+       `--karg`(console 等);
+    4. **first-boot 意图**(dd CIDATA 机制复用):to-disk 落盘后追加
+       16MiB CIDATA 槽(dd 切片②同一机制),NoCloud 三件承载 identity/
+       network/access(root_password 经 CIDATA)——**镜像须含 cloud-init**
+       (文档写明);网络意图 netplan 双平面同 dd;
+    5. **applied 即终态**(dd 同款):to-disk 完成 → report applied →
+       载荷释放 + 终态;install.go 的 appliedTerminalDD 门泛化为双标记
+       (MAMMOTH_DD_MODE=1 ∨ MAMMOTH_BOOTC=1);
+    6. **RAM 预算**:容器存储走 tmpfs,base 镜像 1-2G + podman 足印
+       ~200MB → **推荐 ≥8G 内存机型**;工控机/小内存边缘是 dd 的领地,
+       bootc 不假设小内存(目标盘自缓存为后续优化,等真实需求);
+    7. **qemu 全链轮必验**:musl podman 跑 glibc bootc 容器
+       (podman #18398 是已知坑源,conmon 相关);
+    8. **切片**:①契约(distro=bootc 驱动注册 + source OCI 形态校验 +
+       storage 单盘互斥)+ render plan;②agent runtime bootc 分支;
+       ③prepare 双载体(vMedia/PXE 同 dd)+ appliedTerminal 泛化;
+       ④qemu 轮(随窗口)+ docs;镜像工件库承载 OCI 引用为后续。
 17. **TPM2 + LUKS sealed key 装机**(P2,2026-11-07 立项;调研确认无竞品
     做成一等公民;等保/信创合规刚需)——spec.storage 增加密档意图(LUKS)
     + TPM2 sealing(Clevis 渲染);发行版通路按方言渲染能力分型(anaconda

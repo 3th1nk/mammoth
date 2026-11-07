@@ -82,7 +82,7 @@ type action struct {
 	// Confirm gates it the same two-stage way.
 	Serials []string `json:"serials,omitempty"`
 	All     bool     `json:"all,omitempty"`
-	// SshKeys carries the boot_rescue payload (docs/07-bmc.md §6.4):
+	// SshKeys carries the boot_rescue payload (docs/07-bmc.md §6.5):
 	// authorized_keys-format entries injected into the in-memory rescue
 	// system's root account. Empty = console-only rescue.
 	SshKeys []string `json:"ssh_keys,omitempty"`

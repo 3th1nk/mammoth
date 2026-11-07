@@ -36,14 +36,14 @@ type BMC struct {
 	FirmwareList []bmc.FirmwareComponent
 
 	// SensorList scripts the health snapshot the controller reports
-	// (docs/07-bmc.md §6.3); defaultSensors fills a plausible set.
+	// (docs/07-bmc.md §6.4); defaultSensors fills a plausible set.
 	SensorList []bmc.SensorReading
 	// PowerScripted overrides the chassis power state Health reports;
 	// empty falls through to the Power field.
 	PowerScripted bmc.PowerState
 
 	// SELList scripts the system event log the controller reports
-	// (docs/07-bmc.md §6.3); defaultSEL fills a plausible pair.
+	// (docs/07-bmc.md §6.4); defaultSEL fills a plausible pair.
 	SELList []bmc.SELEntry
 
 	// BIOS is the simulated BIOS attribute table (docs/07-bmc.md §6);
@@ -53,7 +53,7 @@ type BMC struct {
 	BIOS map[string]any
 
 	// ErasedSerials records what SecureErase has destroyed on this
-	// controller (docs/07-bmc.md §6.2); unknown serials are rejected with
+	// controller (docs/07-bmc.md §6.3); unknown serials are rejected with
 	// the same "resolve before touching" semantics the redfish driver
 	// implements. EraseSupport defaults to true (secure-erase actions are
 	// the norm on controllers that expose drive resources); script it off

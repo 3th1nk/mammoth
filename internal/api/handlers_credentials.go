@@ -439,7 +439,7 @@ func (s *Server) GetMachineBios(ctx context.Context, request gen.GetMachineBiosR
 }
 
 // GetMachineDrives live-reads the controller's physical drive table
-// (docs/07-bmc.md §6.2). Serials here are the identity erase_drives
+// (docs/07-bmc.md §6.3). Serials here are the identity erase_drives
 // consumes; a synchronous BMC read like the console/bios endpoints.
 func (s *Server) GetMachineDrives(ctx context.Context, request gen.GetMachineDrivesRequestObject) (gen.GetMachineDrivesResponseObject, error) {
 	cred, addr, proto, err := s.outOfBandFor(ctx, string(request.Id))
@@ -478,7 +478,7 @@ func (s *Server) GetMachineDrives(ctx context.Context, request gen.GetMachineDri
 }
 
 // GetMachineHealth live-reads the controller's health snapshot
-// (docs/07-bmc.md §6.3). A synchronous BMC read like the console/bios
+// (docs/07-bmc.md §6.4). A synchronous BMC read like the console/bios
 // endpoints — sensor state is only true at read time.
 func (s *Server) GetMachineHealth(ctx context.Context, request gen.GetMachineHealthRequestObject) (gen.GetMachineHealthResponseObject, error) {
 	cred, addr, proto, err := s.outOfBandFor(ctx, string(request.Id))
@@ -522,7 +522,7 @@ func (s *Server) GetMachineHealth(ctx context.Context, request gen.GetMachineHea
 }
 
 // GetMachineSEL live-reads the controller's system event log
-// (docs/07-bmc.md §6.3) — the rescue-room record. A synchronous BMC read
+// (docs/07-bmc.md §6.4) — the rescue-room record. A synchronous BMC read
 // like the console/bios endpoints.
 func (s *Server) GetMachineSEL(ctx context.Context, request gen.GetMachineSELRequestObject) (gen.GetMachineSELResponseObject, error) {
 	cred, addr, proto, err := s.outOfBandFor(ctx, string(request.Id))

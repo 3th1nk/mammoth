@@ -162,3 +162,39 @@ func joinStrings(items []string, sep string) string {
 	}
 	return out
 }
+
+// BiosDrift is the baseline drift inspection's verdict shape
+// (docs/07-bmc.md §6.1): the same comparison semantics the runner enforces
+// on writes (unknown names rejected, equal values are no-ops, JSON-typed
+// comparison), read-side.
+type BiosDrift struct {
+	// Matched is the count of baseline entries equal on the live table.
+	Matched int `json:"matched"`
+	// Drifted lists baseline entries whose live value differs (name →
+	// declared vs live) — the write set the batch apply would send.
+	Drifted map[string][]any `json:"drifted,omitempty"`
+	// Unknown lists baseline names the live table doesn't carry (the
+	// profile predates a BIOS update, or a typo shipped).
+	Unknown []string `json:"unknown,omitempty"`
+}
+
+// BiosDrift compares the live BIOS attribute table against a baseline
+// (exported for the API layer's drift read; BiosSetter live reads stay
+// there, the comparison semantics stay here — one definition of "drift").
+func CompareBiosDrift(current, baseline map[string]any) *BiosDrift {
+	if baseline == nil {
+		return nil
+	}
+	out := &BiosDrift{Drifted: map[string][]any{}}
+	diff, unknown, matched := biosDiff(current, baseline)
+	out.Matched = matched
+	out.Unknown = unknown
+	for k, want := range diff {
+		have := current[k]
+		out.Drifted[k] = []any{want, have}
+	}
+	if len(out.Drifted) == 0 {
+		out.Drifted = nil
+	}
+	return out
+}

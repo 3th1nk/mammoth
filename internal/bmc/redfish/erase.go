@@ -1,5 +1,5 @@
 // Secure drive erase (bmc.DriveEraser — NIST 800-88 media sanitization at
-// the controller level, docs/07-bmc.md §6.2). The standard Redfish shape is
+// the controller level, docs/07-bmc.md §6.3). The standard Redfish shape is
 // a POST to the drive resource's #Drive.SecureErase action target; many
 // controllers answer 202 with a task. What the controller actually does
 // (ATA sanitize, NVMe crypto erase, overwrite passes) is vendor policy —

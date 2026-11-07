@@ -76,6 +76,7 @@ func machineOut(m *store.Machine) gen.Machine {
 			out.Firmware = &fw
 		}
 	}
+	out.BiosProfileId = m.BIOSProfileID
 	return out
 }
 

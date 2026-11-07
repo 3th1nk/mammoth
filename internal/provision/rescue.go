@@ -1,6 +1,6 @@
 package provision
 
-// The rescue flow (docs/07-bmc.md §6.4, docs/09-roadmap.md 下一阶段 11):
+// The rescue flow (docs/07-bmc.md §6.5, docs/09-roadmap.md 下一阶段 11):
 // boot_rescue boots the machine into the engine's in-memory alpine rescue
 // system — the agent runtime with a rescue plan (sshd + the operator's
 // keys, NO install steps). Dual carrier, the install pathway's own split:

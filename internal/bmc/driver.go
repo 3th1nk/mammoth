@@ -99,7 +99,7 @@ type FirmwareInventoryProvider interface {
 }
 
 // SanitizeResult reports what one drive's secure erase actually did, for
-// the NIST 800-88 sanitization record (docs/07-bmc.md §6.2): which purge
+// the NIST 800-88 sanitization record (docs/07-bmc.md §6.3): which purge
 // mechanism the controller applied and when it finished.
 type SanitizeResult struct {
 	Serial    string `json:"serial"`
@@ -110,7 +110,7 @@ type SanitizeResult struct {
 
 // DriveEraser is the optional capability of issuing the controller's
 // secure erase on physical drives — the BMC-side half of NIST 800-88 media
-// sanitization (docs/07-bmc.md §6.2). This is the most destructive
+// sanitization (docs/07-bmc.md §6.3). This is the most destructive
 // capability in the surface: erased data is unrecoverable by design. The
 // pipeline layers the two-stage confirmation and live-drive validation
 // around it; the driver only speaks the protocol.
@@ -153,7 +153,7 @@ const (
 )
 
 // SensorReading is one health sensor sample (fan / temperature / power
-// supply / voltage — docs/07-bmc.md §6.3). Reading is optional: presence-
+// supply / voltage — docs/07-bmc.md §6.4). Reading is optional: presence-
 // only sensors report state without a numeric value.
 type SensorReading struct {
 	Name    string      `json:"name"`
@@ -174,7 +174,7 @@ type HealthView struct {
 
 // HealthProvider is the optional read-only capability of sampling the
 // controller's health sensors (Redfish Chassis → Thermal/Power, docs
-// 07-bmc.md §6.3). Pure read like FirmwareInventoryProvider: drivers
+// 07-bmc.md §6.4). Pure read like FirmwareInventoryProvider: drivers
 // without it leave the health endpoint answering BMC_UNSUPPORTED rather
 // than failing anything else.
 type HealthProvider interface {
@@ -184,7 +184,7 @@ type HealthProvider interface {
 	Health(ctx context.Context, addr string, cred Credentials) (HealthView, error)
 }
 
-// SELEntry is one system event log record (docs/07-bmc.md §6.3): what the
+// SELEntry is one system event log record (docs/07-bmc.md §6.4): what the
 // controller logged, when, and how severe. Severity keeps the vendor's own
 // normalized ok|warning|critical|unknown vocabulary.
 type SELEntry struct {

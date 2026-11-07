@@ -64,7 +64,7 @@ func (s *Server) PerformMachineAction(ctx context.Context, request gen.PerformMa
 		jobType = "discover"
 		flow = provision.FlowDiscover
 	}
-	// boot_rescue runs its own flow (docs/07-bmc.md §6.4): it is a
+	// boot_rescue runs its own flow (docs/07-bmc.md §6.5): it is a
 	// state-machine job — carrier build, boot, rescue-ready wait — and it
 	// answers to the same install/rescue mutual-exclusion gate installs do
 	// (409 JOB_MACHINE_BUSY); power actions stay ungated (they are quick
@@ -667,7 +667,7 @@ func (s *Server) validateBiosConfirm(actionRaw json.RawMessage, aType string) er
 }
 
 // validateEraseConfirm is the two-stage contract's API half for the most
-// destructive action in the contract (docs/07-bmc.md §6.2): erase_drives
+// destructive action in the contract (docs/07-bmc.md §6.3): erase_drives
 // must name at least one drive (serials or all) and, when the deployment
 // policy requires it, carry the explicit confirm flag. The runner adds the
 // live-table validation on top: any serial missing from the controller's

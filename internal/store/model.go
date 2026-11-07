@@ -90,6 +90,22 @@ type Machine struct {
 	// facts, not identity — nil until the machine has been seen on the wire.
 	PXEFirmware   *string
 	PXELastSeenAt *time.Time
+	// BIOSProfileID is the assigned baseline profile (migration 00014,
+	// docs/07-bmc.md §6.1) — the drift-inspection reference. nil =
+	// unassigned (drift reads answer "no baseline").
+	BIOSProfileID *string
+}
+
+// BiosProfile is a named declarative BIOS attribute set (migration 00014):
+// the fleet-level baseline the drift inspection holds the live BiosView
+// against, and the batch apply's payload source. Attributes keep the
+// vendor's JSON types — the same shape ActionSetBiosAttributes carries.
+type BiosProfile struct {
+	ID         string
+	Name       string
+	Attributes map[string]any
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // AcceptanceReport is the post-install validation record

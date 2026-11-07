@@ -210,7 +210,7 @@ func unitOr(unit, fallback string) string {
 }
 
 // SystemEventLog retrieves the controller's system event log (docs
-// 07-bmc.md §6.3): every manager's log services concatenated, newest
+// 07-bmc.md §6.4): every manager's log services concatenated, newest
 // first, capped at bmc.SELMaxEntries.
 func (d *Driver) SystemEventLog(ctx context.Context, addr string, cred bmc.Credentials) ([]bmc.SELEntry, error) {
 	c, err := d.connect(ctx, addr, cred)

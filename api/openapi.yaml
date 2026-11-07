@@ -374,6 +374,168 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
 
+  /api/v1/bios-profiles:
+    post:
+      operationId: createBiosProfile
+      tags: [bios]
+      summary: Create a BIOS baseline profile
+      description: |
+        A named declarative BIOS attribute set (docs/07-bmc.md §6.1): the
+        drift-inspection reference and the batch apply's payload source.
+        Attributes use the vendor's own names and JSON types — the same
+        shape set_bios_attributes carries (unknown names surface as drift
+        "unknown", rejected at apply time by the runner's live table).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BiosProfileCreate'
+      responses:
+        '201':
+          description: Profile created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BiosProfile'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+    get:
+      operationId: listBiosProfiles
+      tags: [bios]
+      summary: List BIOS baseline profiles
+      responses:
+        '200':
+          description: All profiles, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/BiosProfile'
+
+  /api/v1/bios-profiles/{id}:
+    parameters:
+      - $ref: '#/components/parameters/profileId'
+    get:
+      operationId: getBiosProfile
+      tags: [bios]
+      summary: Fetch one profile
+      responses:
+        '200':
+          description: The profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BiosProfile'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: deleteBiosProfile
+      tags: [bios]
+      summary: Delete a profile
+      description: Machine assignments clear (ON DELETE SET NULL) — nothing dangles.
+      responses:
+        '204':
+          description: Deleted.
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/bios-profiles/{id}/apply:
+    parameters:
+      - $ref: '#/components/parameters/profileId'
+    post:
+      operationId: applyBiosProfile
+      tags: [bios]
+      summary: Fan the profile's attributes out as one batch job
+      description: |
+        Creates ONE power job with one set_bios_attributes task per target
+        machine — the two-stage confirmation contract applies unchanged
+        (confirm:true required by the default policy; the runner re-reads
+        each machine's live attribute table and rejects unknown names).
+        machine_ids absent → every machine assigned to the profile.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BiosProfileApply'
+      responses:
+        '202':
+          description: Apply job created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /api/v1/machines/{id}/bios/baseline:
+    parameters:
+      - $ref: '#/components/parameters/machineId'
+    put:
+      operationId: setMachineBiosBaseline
+      tags: [machines]
+      summary: Assign (or clear) the machine's BIOS baseline profile
+      description: |
+        body {profile_id: "..."} assigns; {profile_id: null} clears. The
+        profile must exist.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BiosBaselineSet'
+      responses:
+        '200':
+          description: Assignment stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Machine'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /api/v1/machines/{id}/bios/drift:
+    parameters:
+      - $ref: '#/components/parameters/machineId'
+    get:
+      operationId: getMachineBiosDrift
+      tags: [machines]
+      summary: Live BIOS attributes held against the assigned baseline
+      description: |
+        Synchronous BMC read (BiosSetter) compared against the assigned
+        profile — the runner's own write semantics on the read side: equal
+        values count matched, differing values list drifted (declared vs
+        live), unknown names surface as unknown. No baseline assigned ->
+        {"drift": null}.
+      responses:
+        '200':
+          description: 'The drift verdict, or {"drift": null} without a baseline.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BiosDriftView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '502':
+          description: BMC error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
   /api/v1/machines/{id}/bios:
     get:
       operationId: getMachineBios
@@ -410,7 +572,7 @@ paths:
       summary: Live physical drive table of the controller
       description: |
         Reads the storage controller's physical drives synchronously (the
-        same out-of-band path the actions use; docs/07-bmc.md §6.2). Serials
+        same out-of-band path the actions use; docs/07-bmc.md §6.3). Serials
         here are the identity erase_drives consumes — read first, erase
         second.
       parameters:
@@ -467,7 +629,7 @@ paths:
       summary: Live health snapshot of the controller
       description: |
         Samples the controller's sensors synchronously (the same
-        out-of-band path the actions use; docs/07-bmc.md §6.3): fans,
+        out-of-band path the actions use; docs/07-bmc.md §6.4): fans,
         temperatures, power supplies, voltages — each with a health state —
         plus the chassis power state and the overall verdict (worst of all
         reported states; unreadable sensors are unknown, never a
@@ -500,7 +662,7 @@ paths:
       summary: Live system event log of the controller
       description: |
         Reads the controller's system event log synchronously (docs
-        07-bmc.md §6.4) — the rescue-room record of what happened before
+        07-bmc.md §6.5) — the rescue-room record of what happened before
         the OS died. Newest first, capped at the 500 most recent records.
         Requires a controller with the SEL capability (redfish); others
         answer BMC_UNSUPPORTED.
@@ -1498,6 +1660,12 @@ components:
       required: true
       schema:
         $ref: '#/components/schemas/CredentialId'
+    profileId:
+      name: id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/ProfileId'
     machineId:
       name: id
       in: path
@@ -1542,6 +1710,9 @@ components:
     CredentialId:
       type: string
       pattern: '^cred_[0-9a-z]+$'
+    ProfileId:
+      type: string
+      pattern: '^bp_[0-9a-z]+'
     MachineId:
       type: string
       pattern: '^mch_[0-9a-z]+$'
@@ -2016,6 +2187,10 @@ components:
           $ref: '#/components/schemas/PowerState'
         state:
           $ref: '#/components/schemas/MachineState'
+        bios_profile_id:
+          type: string
+          nullable: true
+          description: Assigned BIOS baseline profile (docs/07-bmc.md §6.1); null = unassigned.
         last_error:
           allOf:
             - $ref: '#/components/schemas/ErrorInfo'
@@ -2235,6 +2410,89 @@ components:
         detail:
           type: string
 
+    BiosProfileCreate:
+      type: object
+      required: [name, attributes]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        attributes:
+          type: object
+          description: Attribute names per the controller's own registry; values keep the vendor's JSON types.
+          additionalProperties: true
+          minProperties: 1
+
+    BiosProfile:
+      type: object
+      required: [id, name, attributes, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        attributes:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    BiosProfileApply:
+      type: object
+      properties:
+        machine_ids:
+          type: array
+          items:
+            type: string
+          description: Explicit targets; absent = every machine assigned to the profile.
+        confirm:
+          type: boolean
+          default: false
+          description: Explicit high-risk confirmation; required by the default policy.
+
+    BiosBaselineSet:
+      type: object
+      required: [profile_id]
+      properties:
+        profile_id:
+          nullable: true
+          type: string
+          description: The profile to assign; null clears the assignment.
+
+    BiosDriftView:
+      type: object
+      description: Wrapper — the machine's drift verdict (null without an assigned baseline).
+      properties:
+        drift:
+          nullable: true
+          $ref: '#/components/schemas/BiosDrift'
+
+    BiosDrift:
+      type: object
+      required: [matched]
+      properties:
+        matched:
+          type: integer
+          description: Baseline entries equal on the live table.
+        drifted:
+          nullable: true
+          type: object
+          additionalProperties:
+            type: array
+            items: {}
+          description: Baseline entries whose live value differs — name → [declared, live].
+        unknown:
+          nullable: true
+          type: array
+          items:
+            type: string
+          description: Baseline names the live table doesn't carry.
+
     HealthView:
       type: object
       required: [health, sensors]
@@ -2303,7 +2561,7 @@ components:
       type: object
       description: |
         Issue the controller's secure erase on physical drives — NIST 800-88
-        media sanitization at the controller level (docs/07-bmc.md §6.2).
+        media sanitization at the controller level (docs/07-bmc.md §6.3).
         THE MOST DESTRUCTIVE ACTION IN THE CONTRACT: data is unrecoverable
         by design. Two-stage confirmation applies — the explicit confirm
         flag unless the deployment sets MAMMOTH_ERASE_CONFIRM=optional, and
@@ -2357,7 +2615,7 @@ components:
       description: |
         Boot the machine into the engine's in-memory rescue system — an alpine
         RAM OS with an SSH daemon, no disks touched and no install steps run
-        (docs/07-bmc.md §6.4). The operator repairs the machine over SSH or
+        (docs/07-bmc.md §6.5). The operator repairs the machine over SSH or
         the machine console, then a plain reboot (any power action) returns
         it to its installed system: the boot payload is released the moment
         the machine reports rescue-ready. NOT destructive — no confirm gate;

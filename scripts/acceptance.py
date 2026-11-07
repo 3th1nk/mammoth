@@ -230,7 +230,7 @@ def main():
                 f"state={machine['state']} vendor={machine['bmc'].get('vendor')}")
 
     # 3.1 NIST 800-88 secure erase (two-stage confirm + live-table
-    # validation, docs/07-bmc.md §6.2)
+    # validation, docs/07-bmc.md §6.3)
     print("· drive erase (two-stage)")
     status, caps0 = c.get("/api/v1")
     ok &= check("capabilities expose drive_erase_confirm",
@@ -263,7 +263,7 @@ def main():
     erased = any("S6XPN0001" in str(e.get("payload", {})) for e in ev1.get("items", []))
     ok &= check("task.drive_erase event with serials", erased, str(ev1.get("items", [])[:1]))
 
-    # 3.2 health + SEL live reads (docs/07-bmc.md §6.3)
+    # 3.2 health + SEL live reads (docs/07-bmc.md §6.4)
     print("· health / sel (live reads)")
     status, health = c.get(f"/api/v1/machines/{machines[0]}/health")
     ok &= check("GET health snapshot",
@@ -387,7 +387,7 @@ def main():
     else:
         ok &= check("error-classification machine registered", False, str(status))
 
-    # 3.6 boot_rescue (docs/07-bmc.md §6.4): contract surface + the
+    # 3.6 boot_rescue (docs/07-bmc.md §6.5): contract surface + the
     # install/rescue mutual-exclusion gate. The rescue task's terminal
     # state depends on the deployment's alpine carrier
     # (MAMMOTH_PROBE_ALPINE_ISO): without it the task fails fast and

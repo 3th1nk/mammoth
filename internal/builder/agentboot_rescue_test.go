@@ -1,6 +1,6 @@
 package builder
 
-// The agent runtime's rescue payload (docs/07-bmc.md §6.4, roadmap 下一阶段
+// The agent runtime's rescue payload (docs/07-bmc.md §6.5, roadmap 下一阶段
 // 11): the dispatch branches on MAMMOTH_RESCUE before the declarative
 // install chain — no install steps run in rescue mode; sshd comes from the
 // staged pool, the operator's keys land in root's authorized_keys, and the

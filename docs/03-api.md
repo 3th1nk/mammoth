@@ -94,8 +94,8 @@ DELETE /api/v1/webhooks/{id}
 {"type": "set_boot_device", "device": "pxe", "once": true}   // pxe|disk|cdrom|bios
 {"type": "mount_media", "image_url": "...", "eject_after": false}
 {"type": "set_bios_attributes", "attributes": {...}, "confirm": true}   // 两段式确认,docs/07-bmc.md §6.1
-{"type": "erase_drives", "serials": [...], "confirm": true}             // NIST 800-88,docs/07-bmc.md §6.2
-{"type": "boot_rescue", "ssh_keys": ["ssh-ed25519 ..."]}                // 内存救援系统,非破坏,docs/07-bmc.md §6.4
+{"type": "erase_drives", "serials": [...], "confirm": true}             // NIST 800-88,docs/07-bmc.md §6.3
+{"type": "boot_rescue", "ssh_keys": ["ssh-ed25519 ..."]}                // 内存救援系统,非破坏,docs/07-bmc.md §6.5
 ```
 
 **设计决策:所有 BMC 动作返回 202 + job,不提供同步 BMC 调用端点。**

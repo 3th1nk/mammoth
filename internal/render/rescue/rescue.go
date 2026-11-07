@@ -1,5 +1,5 @@
 // Package rescue renders the rescue-mode plan the agent runtime sources
-// (docs/07-bmc.md §6.4, docs/09-roadmap.md 下一阶段 11): boot_rescue boots
+// (docs/07-bmc.md §6.5, docs/09-roadmap.md 下一阶段 11): boot_rescue boots
 // the machine into the engine's in-memory alpine rescue system — sshd up,
 // the operator's keys injected, NO install steps run. The plan's executable
 // face follows the dd plan's shape (render/dd): MAMMOTH_* declarations the

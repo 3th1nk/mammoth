@@ -896,7 +896,7 @@ type ActiveTaskRef struct {
 // install or rescue task (pending / running / interrupted — an interrupted
 // task is retryable and will run again). The two flows are mutually
 // exclusive by machine: an install wipes disks while rescue owns the boot
-// chain, and neither may queue behind the other (docs/07-bmc.md §6.4 —
+// chain, and neither may queue behind the other (docs/07-bmc.md §6.5 —
 // both submissions answer 409 JOB_MACHINE_BUSY naming the blocker).
 // Machines without one are absent from the map; every requested machine
 // missing from the result is free.

@@ -136,7 +136,7 @@ type Config struct {
 	// live-table validation always stays on).
 	BiosConfirmRequired bool
 	// EraseConfirmRequired gates the erase_drives action's two-stage
-	// confirmation (docs/07-bmc.md §6.2) the same way, via
+	// confirmation (docs/07-bmc.md §6.3) the same way, via
 	// MAMMOTH_ERASE_CONFIRM — the most destructive action in the surface.
 	EraseConfirmRequired bool
 

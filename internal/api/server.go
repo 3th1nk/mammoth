@@ -27,18 +27,19 @@ import (
 // Deps carries everything the handlers touch. The server stays stateless so
 // the control plane can run multi-replica (docs/02-architecture.md §1).
 type Deps struct {
-	Credentials *store.CredentialRepo
-	Machines    *store.MachineRepo
-	Jobs        *store.JobRepo
-	Events      *store.EventRepo
-	Logs        *store.TaskLogRepo
-	Crypto      *store.SecretCrypto
-	BMC         *bmc.Registry
-	Render      *render.Registry
-	Webhooks    *store.WebhookRepo
-	Queue       queue.TaskQueue
-	Metrics     *obs.Metrics
-	Logger      *slog.Logger
+	Credentials  *store.CredentialRepo
+	Machines     *store.MachineRepo
+	BiosProfiles *store.BiosProfileRepo
+	Jobs         *store.JobRepo
+	Events       *store.EventRepo
+	Logs         *store.TaskLogRepo
+	Crypto       *store.SecretCrypto
+	BMC          *bmc.Registry
+	Render       *render.Registry
+	Webhooks     *store.WebhookRepo
+	Queue        queue.TaskQueue
+	Metrics      *obs.Metrics
+	Logger       *slog.Logger
 
 	// Netboot resolves pending boot entries for the machine-face script
 	// endpoint (nil-safe: the endpoint degrades to the exit fallback).
@@ -85,7 +86,7 @@ type Deps struct {
 	// confirmation, docs/07-bmc.md §6); surfaced in capabilities.
 	BiosConfirmRequired bool
 	// EraseConfirmRequired gates erase_drives submissions (two-stage
-	// confirmation, docs/07-bmc.md §6.2); surfaced in capabilities.
+	// confirmation, docs/07-bmc.md §6.3); surfaced in capabilities.
 	EraseConfirmRequired bool
 
 	// Images is the artifact-library registration store (nil-safe: the

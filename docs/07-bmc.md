@@ -96,7 +96,30 @@ cycle);绕开装机单独下发 BIOS 的调用方,须自行跟进一次 `cycle` 
 读 `GET /machines/{id}/bios` 活表确认落定——PATCH 2xx/任务 done 只代
 表 BMC 收下了 pending,不代表属性已生效。
 
-### 6.2 DriveEraser 两段式确认契约(NIST 800-88 介质擦除)
+### 6.2 BIOS 基线模板与漂移巡检(批量下发,roadmap 下一阶段 13)
+
+BiosSetter 单机写之上的编排面——纯既有能力组合,无新 BMC 面:
+
+1. **基线 profile**(bios_profiles 表):命名式声明属性集(name 唯一,
+   attributes 用厂商自己的名字与 JSON 类型——与 set_bios_attributes 同形);
+   CRUD 面 = `POST/GET/DELETE /bios-profiles`;
+2. **赋值**:`PUT /machines/{id}/bios/baseline`(body {profile_id} 赋值,
+   null 清除;profile 必须存在——拼错的 id 会让后续漂移读全部落空);
+   machines.bios_profile_id ON DELETE SET NULL(profile 删除不清机,
+   不留悬空);
+3. **漂移巡检**:`GET /machines/{id}/bios/drift` 同步读(BiosSetter 活读
+   vs 基线)——**runner 写语义在读侧的同一份实现**(provision
+   .CompareBiosDrift):等值计 matched,差值列 drifted([声明, 活]对,
+   即批量下发的写集),活表没有的名字列 unknown(基线先于 BIOS 升级,
+   或笔误出厂);无赋值 = `{"drift": null}`;每次检查落
+   `machine.bios_drift_checked` 事件(档案标记 = machine 作用域的事件面,
+   不设会陈旧的判定列);
+4. **批量下发**:`POST /bios-profiles/{id}/apply` 扇出为**一个批量 power
+   作业**(每机一个 set_bios_attributes 任务)——两段式确认契约原样适用
+   (缺省 422 BIOS_CONFIRM_REQUIRED;runner 逐机活表复核,未知名整单拒);
+   显式 machine_ids 或按基线赋值集,两者皆空 422。
+
+### 6.3 DriveEraser 两段式确认契约(NIST 800-88 介质擦除)
 
 `erase_drives` 动作(v1.1 第二个写能力,全契约中破坏性最高的动作)沿
 §6.1 范式落盘侧 NIST 800-88 media sanitization——退役/重用途场景的数据
@@ -124,7 +147,7 @@ cycle);绕开装机单独下发 BIOS 的调用方,须自行跟进一次 `cycle` 
    Clear 还是 Purge 档;LSI 卷的 secure erase 支持度随真机窗口核验
    (见 compat/huawei.md 回归表)。
 
-### 6.3 HealthProvider / SELReader 健康面(纯读能力)
+### 6.4 HealthProvider / SELReader 健康面(纯读能力)
 
 数据中心的"急救室"面:OS 崩溃、网络中断时,带外健康快照与事件日志是
 仅存的观测手段(同赛道产品定位参照;DeplOS IPMI 模块调研结论)。两个
@@ -146,7 +169,7 @@ cycle);绕开装机单独下发 BIOS 的调用方,须自行跟进一次 `cycle` 
 4. **边界**:周期带外巡检(异常→事件→webhook)是有状态服务化能力,
    等真实需求触发再排(roadmap 第 9 项);本节只交付按需读。
 
-### 6.4 boot_rescue 救援动作(内存修复系统,非破坏性)
+### 6.5 boot_rescue 救援动作(内存修复系统,非破坏性)
 
 商业裸金属云的标配能力(内存 RAM OS + SSH 修复),自研引擎普遍缺失;
 mammoth 全件复用:alpine agent 内存系统(bootstrap/plan 机制)+ 虚拟介质

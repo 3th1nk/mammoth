@@ -382,7 +382,7 @@ const machineSelect = `
 	SELECT id, labels, bmc_address, bmc_protocol, bmc_credential_id, ssh_credential_id, ssh_address,
 	       vendor, model, serial_number, firmware_version, hardware, firmware,
 	       power_state, state, last_error, created_at, updated_at,
-	       pxe_firmware, pxe_last_seen_at
+	       pxe_firmware, pxe_last_seen_at, bios_profile_id
 	FROM machines`
 
 type rowScanner interface{ Scan(dest ...any) error }
@@ -397,11 +397,12 @@ func scanMachine(row rowScanner) (*Machine, error) {
 	var sshAddr sql.NullString
 	var pxeFirmware sql.NullString
 	var pxeSeen sql.NullTime
+	var biosProfile sql.NullString
 	err := row.Scan(
 		&m.ID, &labels, &m.BMCAddress, &m.BMCProtocol, &bmcCred, &sshCred, &sshAddr,
 		&vendor, &model, &serial, &firmware, &hardware, &firmwareList,
 		&m.PowerState, &m.State, &lastError, &m.CreatedAt, &m.UpdatedAt,
-		&pxeFirmware, &pxeSeen,
+		&pxeFirmware, &pxeSeen, &biosProfile,
 	)
 	if err == nil {
 		m.SSHAddress = sshAddr.String
@@ -430,6 +431,10 @@ func scanMachine(row rowScanner) (*Machine, error) {
 	if pxeSeen.Valid {
 		t := pxeSeen.Time
 		m.PXELastSeenAt = &t
+	}
+	if biosProfile.Valid {
+		v := biosProfile.String
+		m.BIOSProfileID = &v
 	}
 	if len(hardware) > 0 {
 		m.Hardware = json.RawMessage(hardware)
@@ -559,6 +564,20 @@ func (r *MachineRepo) LatestAcceptanceByMachine(ctx context.Context, machineID s
 		Verdict: row.Verdict, Checks: content.Checks, System: content.System,
 		CapturedAt: row.CapturedAt,
 	}, nil
+}
+
+// SetBiosProfile assigns (or clears, nil) the machine's BIOS baseline
+// profile. The profile's existence is caller-verified (the API layer's
+// FK-shape check); the DB FK is the second net.
+func (r *MachineRepo) SetBiosProfile(ctx context.Context, machineID string, profileID *string) error {
+	if profileID == nil {
+		_, err := r.db.ExecContext(ctx, `
+			UPDATE machines SET bios_profile_id = NULL, updated_at = now() WHERE id = $1`, machineID)
+		return err
+	}
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE machines SET bios_profile_id = $2, updated_at = now() WHERE id = $1`, machineID, *profileID)
+	return err
 }
 
 // SetHardware replaces the stored hardware view (used by in-band link

@@ -502,7 +502,16 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
     存基线 profile(声明式 BIOS 属性集);②巡检动作对照活读 BiosView 与
     基线出漂移报告(事件 + 档案标记);③批量下发 = 按 profile 扇出
     ActionSetBiosAttributes(两段式确认契约不变)。纯既有能力组合,
-    无新 BMC 面。
+    无新 BMC 面。**✅ 代码落地(2026-11-07)**——迁移 00014(bios_profiles
+    + machines.bios_profile_id SET NULL)/ CRUD 面(POST/GET/DELETE
+    /bios-profiles,重名 409,空集 422)/ 赋值(PUT machines/{id}/bios/
+    baseline,profile 存在性校验)/ 漂移读(GET machines/{id}/bios/drift,
+    provision.CompareBiosDrift = runner 写语义同一实现:matched/drifted
+    [声明,活]/unknown;无赋值 null;machine.bios_drift_checked 事件,
+    档案标记 = 事件面不设陈旧列)/ 扇出(POST /bios-profiles/{id}/apply,
+    一个批量 power 作业,两段式门禁原样,显式 targets 或赋值集)/
+    Machine 契约增 bios_profile_id。PG 套件全绿;真机漂移读随 2288H
+    窗口顺带。
 14. **官方 CLI / Terraform Provider**(P1,2026-11-07 立项;API-first 标配
     生态件,MAAS/RackN 先例)——mammothctl(单二进制子命令,与 MCP 复用
     同一客户端面:机器/盘查/spec 提交/任务跟踪/日志)+ Terraform provider

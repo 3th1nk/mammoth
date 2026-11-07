@@ -376,7 +376,7 @@ func (e *Executor) setBiosAttributes(ctx context.Context, task *store.Task, addr
 }
 
 // eraseDrives runs the two-stage contract's server side for NIST 800-88
-// media sanitization (docs/07-bmc.md §6.2): re-read the controller's LIVE
+// media sanitization (docs/07-bmc.md §6.3): re-read the controller's LIVE
 // physical-drive table, reject any serial not on it BEFORE touching
 // anything, then hand the resolved set to the controller's secure erase.
 // The drive list is the audit trail — it lands in the task event.

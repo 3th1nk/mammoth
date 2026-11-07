@@ -321,7 +321,10 @@ func (e *Executor) runPowerAction(ctx context.Context, task *store.Task, job *st
 		return e.setBiosAttributes(ctx, task, addr, cred, proto, a.Attributes)
 
 	case "erase_drives":
-		return e.eraseDrives(ctx, task, addr, cred, proto, a.Serials, a.All)
+		if _, err := e.eraseDrives(ctx, task, addr, cred, proto, a.Serials, a.All); err != nil {
+			return err
+		}
+		return nil
 
 	case "discover":
 		return e.runDiscover(ctx, task, job)
@@ -380,7 +383,7 @@ func (e *Executor) setBiosAttributes(ctx context.Context, task *store.Task, addr
 // physical-drive table, reject any serial not on it BEFORE touching
 // anything, then hand the resolved set to the controller's secure erase.
 // The drive list is the audit trail — it lands in the task event.
-func (e *Executor) eraseDrives(ctx context.Context, task *store.Task, addr string, cred bmc.Credentials, proto bmc.Protocol, requested []string, all bool) error {
+func (e *Executor) eraseDrives(ctx context.Context, task *store.Task, addr string, cred bmc.Credentials, proto bmc.Protocol, requested []string, all bool) (*eraseRecord, error) {
 	res, err := e.BMC.Do(ctx, addr, cred, proto, "physical_drives", func(ctx context.Context, d bmc.Driver) (any, error) {
 		pde, ok := d.(bmc.PhysicalDriveEnumerator)
 		if !ok {
@@ -389,13 +392,13 @@ func (e *Executor) eraseDrives(ctx context.Context, task *store.Task, addr strin
 		return pde.PhysicalDrives(ctx, addr, cred)
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	live := res.([]bmc.DiskView)
 
 	serials, err := resolveEraseTargets(live, requested, all)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	san, err := e.BMC.Do(ctx, addr, cred, proto, "secure_erase", func(ctx context.Context, d bmc.Driver) (any, error) {
@@ -406,7 +409,7 @@ func (e *Executor) eraseDrives(ctx context.Context, task *store.Task, addr strin
 		return de.SecureErase(ctx, addr, cred, serials)
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	results, _ := san.([]bmc.SanitizeResult)
 	methods := map[string]string{}
@@ -420,7 +423,15 @@ func (e *Executor) eraseDrives(ctx context.Context, task *store.Task, addr strin
 		"methods": methods,
 		"note":    "controller secure erase completed — data unrecoverable (NIST 800-88 media sanitization)",
 	})
-	return nil
+	return &eraseRecord{Serials: serials, Methods: methods}, nil
+}
+
+// eraseRecord is the durable copy of one erase run: the serials and the
+// controller's own reported mechanisms (the NIST 800-88 sanitization
+// record's raw material — the decommission evidence persists it).
+type eraseRecord struct {
+	Serials []string          `json:"serials"`
+	Methods map[string]string `json:"methods,omitempty"`
 }
 
 // resolveEraseTargets pins the requested serials against the live physical

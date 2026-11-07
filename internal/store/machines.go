@@ -533,6 +533,62 @@ func (r *MachineRepo) SaveAcceptance(ctx context.Context, rep *AcceptanceReport)
 	return tx.Commit()
 }
 
+// SaveDecommissionReport persists the decommission evidence and prunes the
+// machine's history to the rolling window (acceptance_reports' discipline).
+func (r *MachineRepo) SaveDecommissionReport(ctx context.Context, rep *DecommissionReport) error {
+	if rep.ID == "" {
+		rep.ID = NewID("dc_")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO decommission_reports (id, machine_id, task_id, content, captured_at)
+		VALUES ($1, $2, $3, $4, now())`,
+		rep.ID, rep.MachineID, rep.TaskID, rep.Content); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM decommission_reports
+		WHERE machine_id = $1 AND id NOT IN (
+		  SELECT id FROM decommission_reports WHERE machine_id = $1
+		  ORDER BY captured_at DESC, id DESC LIMIT 10
+		)`, rep.MachineID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// LatestDecommissionReportByMachine returns the machine's newest
+// decommission evidence (ErrNotFound when none exists — the machine has
+// never been through the terminal flow).
+func (r *MachineRepo) LatestDecommissionReportByMachine(ctx context.Context, machineID string) (*DecommissionReport, error) {
+	var row struct {
+		ID         string
+		TaskID     string
+		Content    []byte
+		CapturedAt time.Time
+	}
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, task_id, content, captured_at FROM decommission_reports
+		WHERE machine_id = $1
+		ORDER BY captured_at DESC, id DESC LIMIT 1`, machineID).
+		Scan(&row.ID, &row.TaskID, &row.Content, &row.CapturedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &DecommissionReport{
+		ID: row.ID, MachineID: machineID, TaskID: row.TaskID,
+		Content: json.RawMessage(row.Content), CapturedAt: row.CapturedAt,
+	}, nil
+}
+
 // LatestAcceptanceByMachine returns the machine's newest acceptance report
 // (the read face's backing query; ErrNotFound when none exists yet).
 func (r *MachineRepo) LatestAcceptanceByMachine(ctx context.Context, machineID string) (*AcceptanceReport, error) {

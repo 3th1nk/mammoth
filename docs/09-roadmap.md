@@ -594,6 +594,20 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
     (退役/待重投)+ 动作流编排:擦盘(NIST 800-88 已有)→ 固件基线核对
     (FirmwareInventory 已有)→ BIOS 复位 → 资产证据报告导出 → 标记
     retired。全件已有,缺编排与机器状态语义。
+    **✅ 代码落地(2026-11-07)**——迁移 00015(jobs.type +=
+    decommission / machines.state += retired / decommission_reports 表)+
+    三阶段 flow(全盘 NIST 800-88 → 证据采集[擦除记录 serials+mechanisms
+    / 固件清单 / SEL 尾部 / BIOS 快照,各自 best-effort]→ retired)+
+    eraseDrives 返回擦除记录(上下文承载,事件面不变)+ 确认门复用擦盘
+    策略(**confirm 是唯一门禁,擦盘不可回滚**)+ retired 语义
+    (install/rescue/decommission 一律 422 MACHINE_RETIRED;**复投 =
+    重新盘查**,discover 状态机自带回 ready,零新端点)+ 批量提交原生
+    (POST /jobs targets 机群一次退役)+ 报告读面
+    GET /machines/{id}/decommission(无报告 = null 非 404)。
+    **边界**:BIOS 复位不做(Redfish 无标准 reset-to-default,OEM 领地,
+    退役档案里的 BIOS 快照即审计对照物)。PG 套件(确认门/忙门三向/
+    retired 门/报告往返/复投)全绿;真机轮随 2288H 窗口(DriveEraser
+    对 LSI 卷的支持度已有真机结论)。
 19. **P3 候选组(2026-11-07 竞品扫描,条件触发)**——批量扇出编排(按
     标签/分组扇出 + 限速 + 失败熔断;前置 = 机器标签面);GPU/DPU 机型
     探针(lspci class / NUMA 入档案,驱动预装经 package_source+scripts

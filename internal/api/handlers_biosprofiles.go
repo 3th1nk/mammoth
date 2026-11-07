@@ -235,3 +235,24 @@ func isProfileNameTaken(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
+
+// GetMachineDecommission returns the machine's latest decommission evidence
+// (docs/07-bmc.md §6.6) — a persisted read: machines without a report
+// answer {"report": null}, never a 404.
+func (s *Server) GetMachineDecommission(ctx context.Context, request gen.GetMachineDecommissionRequestObject) (gen.GetMachineDecommissionResponseObject, error) {
+	if _, err := s.Machines.Get(ctx, string(request.Id)); err != nil {
+		return nil, err
+	}
+	rep, err := s.Machines.LatestDecommissionReportByMachine(ctx, string(request.Id))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return gen.GetMachineDecommission200JSONResponse(gen.DecommissionView{}), nil
+		}
+		return nil, err
+	}
+	var content map[string]any
+	if json.Unmarshal(rep.Content, &content) == nil {
+		return gen.GetMachineDecommission200JSONResponse(gen.DecommissionView{Report: &content}), nil
+	}
+	return gen.GetMachineDecommission200JSONResponse(gen.DecommissionView{Report: &map[string]any{}}), nil
+}

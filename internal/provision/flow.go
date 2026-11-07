@@ -8,10 +8,11 @@ package provision
 // are declared here and nowhere else — there is exactly one source for the
 // enumeration and the execution order (docs/02-architecture.md §2.1).
 const (
-	FlowPower    = "power"
-	FlowDiscover = "discover"
-	FlowInstall  = "install"
-	FlowRescue   = "rescue"
+	FlowPower        = "power"
+	FlowDiscover     = "discover"
+	FlowInstall      = "install"
+	FlowRescue       = "rescue"
+	FlowDecommission = "decommission"
 )
 
 // StageNames returns the ordered stages of a flow.
@@ -22,7 +23,9 @@ const (
 //	                declarative hardware RAID; no-op for software-only specs)
 //	rescue:         one composite stage — build the rescue carrier, boot the
 //	                machine into the in-memory rescue system, wait for the
-//	                agent's rescue-ready report (docs/07-bmc.md §6.4)
+//	                agent's rescue-ready report (docs/07-bmc.md §6.5)
+//	decommission:   erase_drives (NIST 800-88, every drive) → evidence
+//	                capture → retire (docs/07-bmc.md §6.6)
 func StageNames(flow string) []string {
 	switch flow {
 	case FlowPower:
@@ -33,6 +36,8 @@ func StageNames(flow string) []string {
 		return []string{"verify_layout", "configure_raid", "prepare_media", "boot", "install_os", "verify_ready"}
 	case FlowRescue:
 		return []string{"rescue"}
+	case FlowDecommission:
+		return []string{"erase_drives", "evidence", "retire"}
 	default:
 		return []string{"unknown"}
 	}

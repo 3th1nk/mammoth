@@ -204,6 +204,37 @@ mammoth 全件复用:alpine agent 内存系统(bootstrap/plan 机制)+ 虚拟介
 6. **边界**:机器状态机不动(rescue 不改 state);救援不修数据——内存
    系统里能做什么由运维决定,引擎只负责把机器送进可修复状态。
 
+### 6.6 decommission 退役动作流(生命周期收尾,roadmap 下一阶段 18)
+
+机器生命周期的终态编排(MAAS 释放/RackN Day-2 同型)——纯既有能力组合
+(DriveEraser/FirmwareInventory/SELReader/BiosSetter 读均已实装),本节
+交付的是**编排与证据面**:
+
+1. **提交**:`POST /jobs {type:"decommission", targets:{...}, confirm:true}`
+   (批量原生——机群退役一次提交);确认门复用擦盘策略
+   (MAMMOTH_ERASE_CONFIRM=required 缺省 422 DRIVE_ERASE_CONFIRM_REQUIRED)
+   ——**confirm 是唯一门禁:擦盘不可回滚,没有第二道**;
+2. **三阶段 flow**(erase_drives → evidence → retire):
+   - `erase_drives`:全盘 NIST 800-88(活表逐盘,task.drive_erase 事件
+     带 serial + 控制器自报机制);缺 DriveEraser 能力 = 诚实终态失败
+     ——**盘擦不掉的机器不 retire**;
+   - `evidence`:退役档案——机器身份(vendor/model/serial/BMC)+ 擦除
+     记录(serials+mechanisms)+ 固件清单 / SEL 尾部 / BIOS 快照
+     (各自 best-effort,能力缺席落 available:false——"固件未知"也是
+     诚实证据);decommission_reports 落档(滚动窗口 10,沿验收报告
+     纪律)+ task.decommission_evidence 事件;
+   - `retire`:机器终态 retired(事件 machine.retired);
+3. **retired 语义**:install/rescue/decommission 对 retired 机器一律
+   422 MACHINE_RETIRED;**复投 = 重新盘查**(discover 自带状态机
+   discovering→ready,证据驱动——值得复投的机器值得重新盘查,零新
+   端点);BMC 读面(bios/drives/health/sel)不受限,退役机器仍是
+   可盘点的资产;
+4. **取消语义**:擦盘阶段开始后取消不可回滚(盘已擦)——文档明示,
+   confirm 门就是为这一刻存在的;
+5. **BIOS 复位边界**:roadmap 曾列"BIOS 复位"——Redfish 无标准
+   reset-to-default(OEM 领地),切片不做;退役档案里的 BIOS 快照 +
+   固件清单就是审计者要的对照物。
+
 
 选择逻辑(`protocol: auto`):
 

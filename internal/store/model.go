@@ -123,6 +123,19 @@ type AcceptanceReport struct {
 	CapturedAt time.Time
 }
 
+// DecommissionReport is the machine's terminal-flow evidence record
+// (docs/07-bmc.md §6.6): what was erased (serials + the controller's own
+// sanitization mechanisms), what the machine looked like at retirement
+// (firmware inventory / SEL tail / BIOS snapshot), and the identity facts
+// an asset ledger needs. Evidence, not orchestration state.
+type DecommissionReport struct {
+	ID         string
+	MachineID  string
+	TaskID     string
+	Content    json.RawMessage
+	CapturedAt time.Time
+}
+
 // AcceptanceCheck is one named comparison in the report.
 type AcceptanceCheck struct {
 	Name   string `json:"name"`   // system_facts | hostname | storage_mounts | boot_cmdline
@@ -140,6 +153,8 @@ func (j *Job) FlowName() string {
 		return "discover"
 	case "rescue":
 		return "rescue"
+	case "decommission":
+		return "decommission"
 	default:
 		return "power"
 	}
@@ -148,7 +163,7 @@ func (j *Job) FlowName() string {
 // Job is the async-operation carrier.
 type Job struct {
 	ID             string
-	Type           string // install | power | discover | rescue
+	Type           string // install | power | discover | rescue | decommission
 	Request        json.RawMessage
 	Action         json.RawMessage // power jobs: the BMC action
 	SpecResolved   json.RawMessage

@@ -893,13 +893,13 @@ type ActiveTaskRef struct {
 }
 
 // ActiveBlockingTasksByMachines returns, per machine, its latest unfinished
-// install or rescue task (pending / running / interrupted — an interrupted
-// task is retryable and will run again). The two flows are mutually
-// exclusive by machine: an install wipes disks while rescue owns the boot
-// chain, and neither may queue behind the other (docs/07-bmc.md §6.5 —
-// both submissions answer 409 JOB_MACHINE_BUSY naming the blocker).
-// Machines without one are absent from the map; every requested machine
-// missing from the result is free.
+// install, rescue or decommission task (pending / running / interrupted —
+// an interrupted task is retryable and will run again). The three flows are
+// mutually exclusive by machine: an install wipes disks, rescue owns the
+// boot chain, decommission erases everything — and none may queue behind
+// another (docs/07-bmc.md §6.5/§6.6 — submissions answer 409
+// JOB_MACHINE_BUSY naming the blocker). Machines without one are absent
+// from the map; every requested machine missing from the result is free.
 func (r *JobRepo) ActiveBlockingTasksByMachines(ctx context.Context, machineIDs []string) (map[string]ActiveTaskRef, error) {
 	out := make(map[string]ActiveTaskRef, len(machineIDs))
 	if len(machineIDs) == 0 {
@@ -908,7 +908,7 @@ func (r *JobRepo) ActiveBlockingTasksByMachines(ctx context.Context, machineIDs 
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT DISTINCT ON (machine_id) machine_id, id, job_id, state
 		FROM tasks
-		WHERE machine_id = ANY($1) AND flow_name IN ('install', 'rescue')
+		WHERE machine_id = ANY($1) AND flow_name IN ('install', 'rescue', 'decommission')
 		  AND state IN ('pending', 'running', 'interrupted')
 		ORDER BY machine_id, created_at DESC`, machineIDs)
 	if err != nil {

@@ -75,6 +75,10 @@ func (s *Server) PerformMachineAction(ctx context.Context, request gen.PerformMa
 		if verr := s.rejectBusyMachines(ctx, []string{machine.ID}); verr != nil {
 			return nil, verr
 		}
+		if machine.State == "retired" {
+			return nil, verrStatus(http.StatusUnprocessableEntity, "MACHINE_RETIRED",
+				"machine %s is retired — reinstatement is a fresh discover (POST /machines/{id}/actions {\"type\":\"discover\"})", machine.ID)
+		}
 	}
 
 	job, err := s.createJobRecord(ctx, createJobRecord{
@@ -179,14 +183,35 @@ func (s *Server) CreateJob(ctx context.Context, request gen.CreateJobRequestObje
 			}
 			specRaw = resolved
 		}
+	case "decommission":
+		// The lifecycle's terminal flow (docs/07-bmc.md §6.6): NIST 800-88
+		// erase of EVERY drive, evidence capture, then the retired state.
+		// The submission's confirm flag is the one gate — erase is not
+		// rollbackable and there is no second.
+		flow = provision.FlowDecommission
+		if s.EraseConfirmRequired && (body.Confirm == nil || !*body.Confirm) {
+			return nil, verrStatus(http.StatusUnprocessableEntity, "DRIVE_ERASE_CONFIRM_REQUIRED",
+				"decommission includes an NIST 800-88 erase of every drive — it requires \"confirm\": true (deployment policy %q)", "required")
+		}
 	default:
 		return nil, verr("SCHEMA_INVALID_JOB", "unknown job type %q", body.Type)
 	}
 
-	// Machine-busy gate (install; the query also blocks on active rescue
-	// tasks — the two flows are mutually exclusive): see rejectBusyMachines.
-	if flow == provision.FlowInstall {
+	// Machine-busy gate: install / rescue / decommission are the mutually
+	// exclusive flows (the query weighs all three): see rejectBusyMachines.
+	if flow == provision.FlowInstall || flow == provision.FlowRescue ||
+		flow == provision.FlowDecommission {
 		if err := s.rejectBusyMachines(ctx, machineIDs); err != nil {
+			return nil, err
+		}
+	}
+	// Retired machines leave the pool: install / rescue / decommission
+	// submissions name the retired machines (422 MACHINE_RETIRED).
+	// Reinstatement is a fresh discover — the probe's own state machine
+	// walks it back to ready, so discover is deliberately NOT gated.
+	if flow == provision.FlowInstall || flow == provision.FlowRescue ||
+		flow == provision.FlowDecommission {
+		if err := s.rejectRetiredMachines(ctx, machineIDs); err != nil {
 			return nil, err
 		}
 	}
@@ -304,6 +329,28 @@ func (s *Server) rejectBusyMachines(ctx context.Context, machineIDs []string) er
 	return verrStatus(http.StatusConflict, "JOB_MACHINE_BUSY",
 		"machines with an unfinished install or rescue task: %s — cancel the active job first (POST /jobs/{id}/cancel)",
 		strings.Join(details, ", "))
+}
+
+// rejectRetiredMachines names the machines that have left the pool — the
+// lifecycle's terminal state answers 422 on every flow that would touch
+// them again (docs/07-bmc.md §6.6). Reinstatement runs through discover.
+func (s *Server) rejectRetiredMachines(ctx context.Context, machineIDs []string) error {
+	var retired []string
+	for _, id := range machineIDs {
+		m, err := s.Machines.Get(ctx, id)
+		if err != nil {
+			return err
+		}
+		if m.State == "retired" {
+			retired = append(retired, id)
+		}
+	}
+	if len(retired) == 0 {
+		return nil
+	}
+	return verrStatus(http.StatusUnprocessableEntity, "MACHINE_RETIRED",
+		"retired machines: %s — reinstatement is a fresh discover (POST /machines/{id}/actions {\"type\":\"discover\"})",
+		strings.Join(retired, ", "))
 }
 
 // rejectUnhealthyMachines is the hardware health gate's blocking half

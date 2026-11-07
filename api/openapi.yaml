@@ -622,6 +622,32 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /api/v1/machines/{id}/decommission:
+    get:
+      operationId: getMachineDecommission
+      tags: [machines]
+      summary: Latest decommission evidence report
+      description: |
+        The newest decommission report (docs/07-bmc.md §6.6, docs/09-roadmap.md
+        下一阶段 18): what was erased (serials + the controller's own reported
+        sanitization mechanisms), and what the machine looked like at
+        retirement — firmware inventory, SEL tail, BIOS snapshot, identity
+        facts. Evidence for the asset ledger; the retired state itself rides
+        the machine's state field. Reinstatement is a fresh discover.
+      parameters:
+        - $ref: '#/components/parameters/machineId'
+      responses:
+        '200':
+          description: >
+            The latest decommission report, or {"report": null} when the
+            machine has never been through the terminal flow.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecommissionView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /api/v1/machines/{id}/health:
     get:
       operationId: getMachineHealth
@@ -1949,7 +1975,7 @@ components:
       enum: [on, off, unknown]
     MachineState:
       type: string
-      enum: [registering, discovering, ready, error]
+      enum: [registering, discovering, ready, error, retired]
 
     BMC:
       type: object
@@ -2362,6 +2388,20 @@ components:
           description: ssd | hdd | unknown.
         protocol:
           type: string
+
+    DecommissionView:
+      type: object
+      description: Wrapper — the machine's latest decommission report (null when none).
+      properties:
+        report:
+          nullable: true
+          type: object
+          additionalProperties: true
+          description: >
+            The retirement record: machine identity, the erase record
+            (serials + mechanisms), firmware inventory / SEL tail / BIOS
+            snapshot (each null-shaped when the controller lacked the
+            capability).
 
     AcceptanceView:
       type: object
@@ -3517,7 +3557,7 @@ components:
     # ── jobs & tasks ───────────────────────────────────────────────────────
     JobType:
       type: string
-      enum: [install, power, discover, rescue]
+      enum: [install, power, discover, rescue, decommission]
     JobState:
       type: string
       enum: [pending, running, succeeded, partial, failed, canceled]
@@ -3595,7 +3635,15 @@ components:
           $ref: '#/components/schemas/InstallSpec'
         action:
           $ref: '#/components/schemas/ActionRequest'
-          description: "Required for `power` jobs (the BMC action to run on each target); optional for `discover` (defaults to `probe: auto`); ignored for `install`."
+          description: "Required for `power` jobs (the BMC action to run on each target); optional for `discover` (defaults to `probe: auto`); ignored for `install` and `decommission`."
+        confirm:
+          type: boolean
+          default: false
+          description: |
+            Explicit high-risk confirmation — required by the default policy
+            for `decommission` jobs, which include an NIST 800-88 erase of
+            EVERY drive on every target (docs/07-bmc.md §6.6). Ignored by
+            the other job types.
         policy:
           $ref: '#/components/schemas/Policy'
 

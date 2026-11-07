@@ -162,6 +162,11 @@
 > 渲染 / 装前硬件健康门禁)——全部 qemu/fake 可先行,不占真机窗口;
 > 明确不跟进:对外镜像源站、虚拟化管理、常驻带内故障感知、RBAC(超出
 > 单二进制引擎边界)。
+>
+> **2026-11-07 增补(竞品扫描)**:新增第 11~19 项(rescue mode / 装后
+> 验收探针 / BIOS 基线巡检 / CLI·Terraform / 固件升级 / bootc 直装 /
+> TPM-LUKS / 生命周期收尾 / P3 候选组)——调研底稿见
+> docs/related-work.md §7。
 
 1. **agent initramfs 安装路径试点**(related-work §1 修正结论,提前:qemu
    全程可验且架构红利最大——减少未来所有发行版接入对真机联调的依赖面):
@@ -447,6 +452,75 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
 10. **镜像直写通路**——设计已定稿(见下方「镜像直写通路」节,2026-11-06):
     dd 运行时 = agent initramfs 第三 payload,dd 优于 url=(内存墙),解压
     契约按 busybox 能力分三档;qemu 全程可验,切片①③不占真机窗口。
+11. **rescue mode(救援动作)**(P1,2026-11-07 竞品扫描立项)——商业裸金属
+    云标配(Latitude.sh/phoenixNAP:内存 RAM OS + SSH 修复),自研引擎普遍
+    缺失;mammoth 全件已有:alpine agent RAM OS(bootstrap/plan 机制)+
+    双载体(PXE/vMedia)+ console 代理 + syslog sink。形态 = 机器级动作
+    `boot_rescue`(非破坏性,不进两段式确认):引擎渲染 rescue payload
+    (agent 以 rescue 模式启动:sshd + 注入 ssh_keys,不执行任何安装步骤)
+    → 按装机同型载体引导 → 机器报告 rescue ready(任务/事件落档,console
+    链接可用)→ 运维在内存系统内排障 → 既有 power 动作重启回原系统,载荷
+    随任务终态释放(dd applied 即终态的释放链先例)。契约:ActionBootRescue /
+    事件 task.boot_rescue / 救援期间同机装机互斥(409 复用
+    JOB_MACHINE_BUSY);alpine ISO 复用已注册介质,零新增资产。验收:fake
+    BMC + agent 断言(sshd 起、无安装步)+ qemu 全链轮,不占真机窗口。
+    **✅ 代码落地(vMedia 切片,2026-11-07)**——契约(ActionBootRescue +
+    JobType rescue + 动作端点 409)/ 迁移 00012 / 单阶段 rescue flow
+    (建载体 → vMedia 挂载引导 → 等 rescue-ready 报告 → 载荷即刻释放,
+    机器留内存系统,超时按探针语义关机)/ agent `MAMMOTH_RESCUE=1` 分支
+    (池装 openssh → authorized_keys → sshd → report ok → 前台 console
+    shell 不 reboot;池缺席诚实降级 console-only)/ 回调 handler 按 flow
+    分流(/render/{token}/complete 复用)/ 忙门双向
+    (ActiveBlockingTasksByMachines flow IN install+rescue)/ docs 07 §6.4、
+    03 动作清单、12 载荷分型。单测(渲染/agent 断言/上下文解析)+ PG 忙门
+    (rescue↔install 双向)+ acceptance §3.6(契约面 + 409 + 终态诚实性)
+    全绿。**遗留**:PXE 载体切片(headless 机器解锁,当前 422)与 qemu
+    全链轮(真引导 → agent 报告 → 释放全链)随窗口。
+12. **装后验收探针(第七阶段)**(P1,2026-11-07 立项;MAAS testing scripts
+    同型)——六阶段证据化流水线的收尾:装机完成回调后,引擎在下一次带内
+    可达时执行验收采集(带内 SSH 凭证通路已有:网络连通 / 分区落盘对照
+    spec 布局 / 内核版本 / 主机名与时区 / 关键服务健康)→ 机器验收报告
+    (落档 + 事件)。与 verify_ready 的关系:verify_ready 是装中门禁
+    (探针快照),本项是装后终验;ubuntu26 确认门这类悬案可借同一采集面
+    读 /proc/cmdline 定案。验收:qemu + 真机各一轮。
+13. **BIOS 基线模板 + 漂移巡检**(P1,2026-11-07 立项;Metal3
+    HostFirmwareSettings 企业形态)——BiosSetter 单机写之上:①机器档案
+    存基线 profile(声明式 BIOS 属性集);②巡检动作对照活读 BiosView 与
+    基线出漂移报告(事件 + 档案标记);③批量下发 = 按 profile 扇出
+    ActionSetBiosAttributes(两段式确认契约不变)。纯既有能力组合,
+    无新 BMC 面。
+14. **官方 CLI / Terraform Provider**(P1,2026-11-07 立项;API-first 标配
+    生态件,MAAS/RackN 先例)——mammothctl(单二进制子命令,与 MCP 复用
+    同一客户端面:机器/盘查/spec 提交/任务跟踪/日志)+ Terraform provider
+    (resources:machines/spec/jobs;先 CLI 后 provider,建立在 OpenAPI
+    契约之上)。
+15. **固件升级(Redfish UpdateService 写路径)**(P2,2026-11-07 立项;
+    Ironic firmware_updates / Metal3 HostFirmwareComponents 同型)——只读
+    FirmwareInventory 之上的自然延伸:任务化固件下发(两段式确认沿
+    BIOS/ERASE 先例;202 任务轮询;版本回读校验)。前置:iBMC 对
+    UpdateService 的支持度与固件包获取形态真机核验(华为/浪潮各一轮);
+    风险高(变砖),缺能力 422 沿契约先例。
+16. **bootc/OCI 镜像直装**(P2,2026-11-07 立项;RHEL 10 Anaconda `bootc`
+    指令确立"OCI 镜像即装机单元",Ubuntu/Debian/MAAS 未跟进 = 差异化
+    窗口)——镜像工件库扩展 `oci://` source + `image.distro=bootc` 通路:
+    agent 通路天然同构(分区 + 引导 + 拉镜像,dd 的近亲),或 rocky10+
+    渲染 bootc kickstart 指令走安装器通路。前置:bootc 意图块契约设计
+    (storage/identity/access 如何映射 seed)+ qemu 轮。
+17. **TPM2 + LUKS sealed key 装机**(P2,2026-11-07 立项;调研确认无竞品
+    做成一等公民;等保/信创合规刚需)——spec.storage 增加密档意图(LUKS)
+    + TPM2 sealing(Clevis 渲染);发行版通路按方言渲染能力分型(anaconda
+    已有加密盘声明;autoinstall/preseed 靠 late-commands),agent 通路
+    全自持。前置:2288H TPM 真机摸底。
+18. **release/decommission 生命周期动作流**(P2,2026-11-07 立项;MAAS
+    释放 / RackN Day-2 同型)——机器终态语义(退役/待重投)+ 动作流编排:
+    擦盘(NIST 800-88 已有)→ 固件基线核对(FirmwareInventory 已有)→
+    BIOS 复位 → 资产证据报告导出 → 标记 retired。全件已有,缺编排与机器
+    状态语义。
+19. **P3 候选组(2026-11-07 竞品扫描,条件触发)**——批量扇出编排(按
+    标签/分组扇出 + 限速 + 失败熔断;前置 = 机器标签面);GPU/DPU 机型
+    探针(lspci class / NUMA 入档案,驱动预装经 package_source+scripts
+    已可达;AI 机群趋势,等真实机群);装机容量轮(并发 vMedia 会话上限、
+    数百台级压测);DPU 装机(MAAS BlueField-3 风向,等硬件)。
 
 ## 长期方向(不承诺排期)
 

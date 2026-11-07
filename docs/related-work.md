@@ -12,6 +12,11 @@ Tinkerbell 换用 agent 工作流哲学,Pixiecore 只做引导层。
 | Tinkerbell | 工作流引擎 | 多组件 | osie hook 镜像 | 同域,agent 哲学 |
 | Pixiecore | PXE 引导器 | 无 | 无(引导层) | ✅ 已吸收(M7 netboot 服务) |
 
+> **2026-11-07 现状注记**:Foreman 3.17 季度节奏活跃(继续对照);Cobbler
+> 维护缓慢(仅参考);**xCAT 已 EOL 归档(2023-12),移出竞品清单**;
+> Tinkerbell 进 CNCF Sandbox 且 tink/boots/smee 已并入单仓 monorepo。
+> 完整扫描见 §7。
+
 ## 借鉴清单(按 roadmap 对应)
 
 1. **M7 PXE(已落地)**:Pixiecore(Apache-2.0,Go)的 **proxyDHCP** 模式
@@ -204,3 +209,61 @@ ubuntu late-commands 同步补容忍清除(双方言对称);
    的哲学是 SetupComplete.cmd 自包含(spec 烘焙,无 metadata 依赖,与 Linux 方言
    late-commands 同型)。代价是首启配置的表达力弱于 cloudbase-init userdata——
    当前 spec 面本来就窄,成立。
+
+## 7. 竞品扫描(2026-11-07:开源引擎 2025-26 现状 + 商业功能面)
+
+> 2026-11-07 定向调研,产出 roadmap「下一阶段」第 11~19 项;本节沉淀
+> 结论与证据,行动项一律看 roadmap,此处不重复展开。
+
+### 7.1 开源引擎 2025-2026 现状
+
+| 项目 | 最新 | 2025-26 关键动向 | 对 mammoth 的意义 |
+|------|------|-----------------|------------------|
+| MAAS | 3.7.x(2025-12) | BlueField-3 DPU 装机;**maas-agent EOL 回退 classic 架构**;Terraform provider 活跃;FDE 无原生支持 | 常驻 agent 路线被其自身放弃佐证:mammoth 的 agent 是 initramfs 载荷(用完即走)非常驻,不受此劫;Terraform provider 是 API-first 标配生态件(roadmap 14) |
+| Ironic | 2026.1 Gazpacho | 新增独立 `ironic-networking`(脱离 Neutron 直管交换机);VirtualMedia NFS/CIFS/SMB 自动探测;**servicing(装后免重装动作)成一等状态机路径**;固件更新走 UpdateService | servicing 风向支持动作面扩展思路;固件写路径(roadmap 15)是其标准范式 |
+| Metal3 | BMO v0.14.x | Redfish 快速检查模式;**Live Updates/Servicing**;HostFirmwareComponents/Settings CRD;HostClaim/HostDeployPolicy 新抽象 | HostClaim 与 mammoth 零注册 claim 同型,方向被验证;BIOS 基线巡检(roadmap 13)是其 HostFirmwareSettings 企业形态 |
+| Tinkerbell | CNCF Sandbox | tink/boots/smee 全部归档并入 monorepo;HookOS v0.22 + TUI 诊断面板提案 | 单二进制/组件做减法与 mammoth 路线一致;HookOS TUI 是 agent 调试体验参照 |
+| Sidero/Omni | Infra Providers | PXE→agent 模式自动注册;staged networking | 零注册入门的业界同型(方向验证) |
+| Foreman | 3.17(2025-12) | 季度节奏活跃 | 继续对照(模板与 lifecycle) |
+| Cobbler | 3.3.x 维护 | 3.4.0 延期后发布,社区小 | 降级为仅参考 |
+| xCAT | **EOL 归档** | 维护者 2023-12 宣布 EOL,最终 2.16.5 | **移出竞品清单** |
+
+### 7.2 三个功能演进风向
+
+1. **装后 servicing 成为一等能力**——Ironic servicing 与 Metal3 Live Updates
+   汇合成同一定义:装机引擎不结束于"装完",需对已装机器执行固件/配置/
+   维护动作而免重装。mammoth 对应面:动作框架(erase_drives/bios 先例)
+   + rescue mode(roadmap 11)+ 生命周期收尾(roadmap 18)。
+2. **OS 交付镜像化(bootc)**——RHEL 10 Anaconda 新增 `bootc` kickstart
+   指令:安装器直接从 OCI registry 拉容器镜像完成安装,bootloader 由容器
+   内 bootc 自写;Ubuntu subiquity/Debian 未跟进,MAAS 未跟进。OS 交付物
+   从"ISO+应答文件"变为"OCI 镜像+最小安装器",安装器退化成"分区+引导+
+   拉镜像"——与 mammoth agent 通路/dd 直写天然同构(roadmap 16)。
+3. **固件即一等资源**——Redfish UpdateService 写路径已成 Ironic/Metal3
+   标准范式;mammoth 只读 FirmwareInventory 之上的写路径是自然延伸
+   (roadmap 15),两段式确认契约沿 BIOS/ERASE 先例。
+
+### 7.3 商业功能面(差异化清单)
+
+- **Equinix Metal 2026-06-30 正式关停**,官方引导自托管迁移(Tinkerbell
+  同源)——独立装机引擎的市场叙事获外部验证;
+- **rescue mode 是海外裸金属云标配**(Latitude.sh/phoenixNAP:内存 RAM OS
+  + SSH 修复),自研引擎普遍缺失——mammoth 全件已有,立项 roadmap 11;
+- **国内云厂商装机面**:华为云 BMS 重装 API(仅重装系统盘、数据盘不动)+
+  私有镜像共享/导出 + 一键重置密码;腾讯黑石重装可自定义 RAID 级别;
+  阿里云 EBM 批量主机名/自定义数据/实例诊断——均为云上形态,mammoth 的
+  私有化面无对应义务,但"重装不动数据盘"的语义值得 spec 层留意;
+- **RackN/Digital Rebar**:Day 0/1/2 全生命周期宣传,decommission 是
+  重点环节——对应 roadmap 18;
+- **信创**:麒麟 V10 服务器版与 openEuler 均为 anaconda/kickstart 系,
+  与 mammoth kickstart 方言同族(openEuler 驱动接入已立项,见 roadmap
+  第 9 项子条目),差的是逐发行版真机验证;
+- **GPU/AI 机群**:K8s-on-bare-metal(Meta/CoreWeave)主流化,机器管理层
+  产品化(vCluster vMetal 等),装机速度/节点 bring-up 自动化 SLA 化;
+  MAAS 的 DPU 装机是同类风向——对应 P3 候选组(roadmap 19)。
+
+### 7.4 行动清单
+
+全部落 roadmap 11~19 项(P1:rescue mode → 装后验收探针 → BIOS 基线
+巡检 → CLI/Terraform;P2:固件升级 → bootc → TPM-LUKS → 生命周期收尾;
+P3:批量扇出/GPU 探针/容量轮/DPU,条件触发)。本节不另立行动项。

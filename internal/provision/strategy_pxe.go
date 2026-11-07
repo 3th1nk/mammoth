@@ -98,6 +98,18 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 		// python3 — the BCD pre-bake runs on python3).
 		apksISO := distroISO
 		switch {
+		case b.Spec.Image.Distro == "bootc":
+			// bootc runs podman — the extended pool is the pathway's hard
+			// prerequisite (unconditional, unlike dd's seed/xz conditional).
+			if e.WindowsApplyAlpineISO == "" {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,
+					"bootc pathway needs the alpine extended ISO pool (set MAMMOTH_WINDOWS_APPLY_ALPINE_ISO) — podman (the pathway's prerequisite) is absent from the busybox runtime")
+			}
+			apksISO, terr = builder.EnsureISO(ctx, e.WindowsApplyAlpineISO, e.MediaWorkDir)
+			if terr != nil {
+				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
+					"bootc tools pool fetch failed: %s", terr.Error())
+			}
 		case isDD:
 			// busybox-only runtime (dd/wget/gunzip/tee/sha256sum are
 			// built-ins): no apks subtree — UNLESS the plan carries the

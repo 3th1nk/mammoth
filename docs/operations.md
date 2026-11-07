@@ -210,6 +210,14 @@ iPXE 脚本),默认关闭。启用清单:
      介质挂 BMC),且工具池为必配(seed 注入 / raw.xz 都出自它)——双载体
      (虚拟介质 / PXE)均依赖 extended 池,无池部署时 dd 仅在「无 seed
      意图且 format=raw/raw.gz」组合下可用。
+   - **bootc/OCI 通路专属**(roadmap 下一阶段 16):extended 池为**硬性
+     必配**——agent `apk add podman` 是通路前提(boot 行无条件携带
+     alpine_repo;无池部署 bootc 不可用,任务失败错误点名本项)。注意
+     extended ISO 的 /apks 是否携带 podman 按镜像版本核对:3.22 extended
+     的 /apks 为 main 子集,podman 在 **community** 仓——若部署介质未
+     携带,需将 boot 行 alpine_repo 指向在线 community 镜像(离线机房
+     暂不支持 bootc,等镜像侧需求再定制池);RAM 预算:容器存储走
+     tmpfs,base 镜像 1-2G + podman 足印 ~200MB,推荐 ≥8G 内存机型。
 
 ### 4.5.0 PXE 寻址:DHCP 决策框架
 

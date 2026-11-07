@@ -31,6 +31,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/render"
 	"github.com/3th1nk/mammoth/internal/render/agent"
 	"github.com/3th1nk/mammoth/internal/render/autoinstall"
+	"github.com/3th1nk/mammoth/internal/render/bootc"
 	"github.com/3th1nk/mammoth/internal/render/dd"
 	"github.com/3th1nk/mammoth/internal/render/kickstart"
 	"github.com/3th1nk/mammoth/internal/render/preseed"
@@ -212,6 +213,11 @@ func serve(args []string) error {
 		// the same agent carrier streams a pre-built whole-disk image onto
 		// the target — the spec's distro key IS the pathway switch.
 		dd.New("dd"),
+		// The bootc/OCI install pathway (docs/09-roadmap.md 下一阶段 16):
+		// the agent pulls the declared OCI image and runs bootc install
+		// to-disk inside a container of that image — same agent carrier,
+		// the image owns the disk layout.
+		bootc.New("bootc"),
 	} {
 		if err := renderReg.Register(d); err != nil {
 			return err

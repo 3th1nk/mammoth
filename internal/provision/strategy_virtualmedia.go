@@ -41,10 +41,15 @@ func (s *virtualMediaStrategy) prepare(ctx context.Context, b *bootSession) erro
 	// pool (extended ISO /apks → sfdisk/dosfstools for the seed surgery, xz
 	// for raw.xz) is staged under the task's netboot path — the ISO boot
 	// line's alpine_repo points there over HTTP.
+	// The image-mode pathways (dd / bootc) have no distro ISO to repack:
+	// the boot ISO is the ALPINE STANDARD media + the agent overlay + the
+	// plan. bootc additionally needs the extended pool unconditionally —
+	// podman IS the pathway's hard prerequisite (docs/09-roadmap.md 下一阶段 16).
 	isDD := b.Spec.Image.Distro == "dd"
+	isBootc := b.Spec.Image.Distro == "bootc"
 	var err error
 	distroISO := ""
-	if isDD {
+	if isDD || isBootc {
 		if e.ProbeAlpineISO == "" {
 			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", false,
 				"dd pathway on virtual_media needs the alpine standard ISO (set MAMMOTH_PROBE_ALPINE_ISO) — it is the boot media the BMC mounts")
@@ -113,12 +118,15 @@ func (s *virtualMediaStrategy) prepare(ctx context.Context, b *bootSession) erro
 	// from it for the seed surgery / raw.xz). Extended ISO is a deployment
 	// prerequisite for dd-with-seed (operations §4.5-10); without the pool
 	// configured and seed intent present this task cannot inject the seed.
-	if isDD {
-		needPool := b.Spec.Image.Format == "raw.xz"
-		for _, a := range b.Answers {
-			if strings.Contains(a.Content, "MAMMOTH_SEED=1") {
-				needPool = true
-				break
+	if isDD || isBootc {
+		needPool := isBootc // podman is unconditional on the bootc pathway
+		if isDD {
+			needPool = b.Spec.Image.Format == "raw.xz"
+			for _, a := range b.Answers {
+				if strings.Contains(a.Content, "MAMMOTH_SEED=1") {
+					needPool = true
+					break
+				}
 			}
 		}
 		if needPool {

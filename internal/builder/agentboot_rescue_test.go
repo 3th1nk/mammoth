@@ -53,3 +53,48 @@ func TestRuntimeRescueDispatch(t *testing.T) {
 		t.Errorf("rescue branch must not reboot:\n%s", rescueBlock)
 	}
 }
+
+// The agent runtime's bootc payload (docs/09-roadmap.md 下一阶段 16): the
+// dispatch branches on MAMMOTH_BOOTC after dd — podman from the pool, pull,
+// then bootc install to-disk inside the image's own container (bootc's
+// documented shape); keys ride --root-ssh-authorized-keys; the report is
+// "applied" (no first-boot callback — the image's boot is its own business).
+func TestRuntimeBootcDispatch(t *testing.T) {
+	script := agentScript()
+	if !strings.Contains(script, `if [ "$MAMMOTH_BOOTC" = "1" ]; then`) {
+		t.Errorf("runtime has no MAMMOTH_BOOTC dispatch branch")
+	}
+	idxBootc := strings.Index(script, `if [ "$MAMMOTH_BOOTC" = "1" ]; then`)
+	idxDD := strings.Index(script, `if [ "$MAMMOTH_DD_MODE" = "1" ]; then`)
+	idxRescue := strings.Index(script, `if [ "$MAMMOTH_RESCUE" = "1" ]; then`)
+	if idxBootc < idxDD || (idxRescue >= 0 && idxBootc > idxRescue) {
+		t.Errorf("bootc dispatch out of order (dd at %d, bootc at %d, rescue at %d)",
+			idxDD, idxBootc, idxRescue)
+	}
+	for _, want := range []string{
+		// podman from the extended pool — the pathway's hard prerequisite,
+		// with an honest error naming the deployment knob
+		"apk add --no-cache podman",
+		"MAMMOTH_WINDOWS_APPLY_ALPINE_ISO",
+		"podman pull",
+		// bootc's documented container-install shape (privileged, host
+		// /dev, the image's own storage bind)
+		"--privileged --pid=host --ipc=host",
+		"-v /var/lib/containers:/var/lib/containers",
+		"bootc install to-disk",
+		"--root-ssh-authorized-keys",
+		// applied, not ok — the appliedTerminalDD gate (bootc marker
+		// included) completes the task on this report
+		`report applied "bootc image installed`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("bootc branch missing %q", want)
+		}
+	}
+	// No read-back sha256: a deployment-style install has no byte-image to
+	// hash — the digest-pinned pull is the integrity claim.
+	bootcBlock := script[idxBootc:idxRescue]
+	if strings.Contains(bootcBlock, "sha256sum") {
+		t.Errorf("bootc branch must not carry the dd read-back hash:\n%s", bootcBlock)
+	}
+}

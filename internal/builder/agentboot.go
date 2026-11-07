@@ -120,7 +120,7 @@ func agentScript() string {
 # any failing command would kill the whole runtime silently (no report, no
 # shell). This runtime handles its own errors: strip the -e and re-exec. The
 # child keeps stderr on the console; MAMMOTH_AGENT_TRACE=1 adds set -x.
-SCRIPT_VERSION="ab-v28"
+SCRIPT_VERSION="ab-v29"
 case "$-" in *e*) sh +e "$0" "$@"; exit $? ;; esac
 log "agent runtime $SCRIPT_VERSION starting"
 
@@ -641,6 +641,51 @@ seed_partition() { # NoCloud seed onto the image's CIDATA slot (封装契约)
     log "nocloud seed written to $part (CIDATA slot)"
 }
 
+bootc_install() { # bootc/OCI install (docs/09-roadmap.md 下一阶段 16)
+    [ -n "$MAMMOTH_BOOTC_REF" ] || { echo "plan carries no BOOTC_REF" >> /tmp/mammoth-bootc.err; return 1; }
+    [ -n "$MAMMOTH_BOOTC_TARGET" ] || { echo "plan carries no BOOTC_TARGET" >> /tmp/mammoth-bootc.err; return 1; }
+    # Controller-named targets resolve to the kernel device here — the dd
+    # resolver idiom verbatim (the Redfish name is inventory-speak; size
+    # matching with the same ±1% tolerance is the machine-side ground
+    # truth). The resolver reads /proc/partitions directly — tool-free.
+    case "$MAMMOTH_BOOTC_TARGET" in
+        /dev/*) ;;
+        *)
+            [ -n "$MAMMOTH_BOOTC_SIZE_BYTES" ] || { echo "controller target $MAMMOTH_BOOTC_TARGET with no size hint to resolve by" >> /tmp/mammoth-bootc.err; return 1; }
+            resolved=$(awk -v want="$MAMMOTH_BOOTC_SIZE_BYTES" '$4 !~ /^(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+|hd[a-z]+)$/ { next } { bytes=$3*1024; diff=bytes-want; if (diff<0) diff=-diff; tol=(want/100); if (tol<67108864) tol=67108864; if (diff<=tol) { print "/dev/" $4; exit } }' /proc/partitions)
+            [ -b "$resolved" ] || { echo "no block device matches size=$MAMMOTH_BOOTC_SIZE_BYTES (controller name $MAMMOTH_BOOTC_TARGET unresolved)" >> /tmp/mammoth-bootc.err; return 1; }
+            log "target $MAMMOTH_BOOTC_TARGET resolved to $resolved (by size)"
+            export MAMMOTH_BOOTC_TARGET=$resolved
+            ;;
+    esac
+    # podman from the extended pool (the boot line carries alpine_repo=
+    # unconditionally on this pathway — podman IS the pathway's hard
+    # prerequisite, unlike dd where the pool is seed/xz-conditional).
+    apk add --no-cache podman >>/tmp/mammoth-bootc.err 2>&1 || { echo "apk podman failed (the extended alpine pool is this pathway's prerequisite — check alpine_repo=/MAMMOTH_WINDOWS_APPLY_ALPINE_ISO)" >> /tmp/mammoth-bootc.err; return 1; }
+    log "podman installed; pulling $MAMMOTH_BOOTC_REF"
+    podman pull "$MAMMOTH_BOOTC_REF" >>/tmp/mammoth-bootc.err 2>&1 || { echo "podman pull failed: $(tail -c 300 /tmp/mammoth-bootc.err | tr '\n' ' ')" >> /tmp/mammoth-bootc.err; return 1; }
+    log "image pulled; running bootc install to-disk"
+    # bootc install MUST run from a container of the image being installed
+    # (bootc's documented shape): privileged, host /dev, the container's
+    # OWN storage bind-mounted so it can see its underlying image layers.
+    # The pull is digest-pinned by the spec — the digest IS the integrity
+    # claim (a read-back sha256 like dd's is meaningless against a
+    # deployment-style install: the disk layout is bootc's own).
+    base_args="--rm --privileged --pid=host --ipc=host -v /var/lib/containers:/var/lib/containers -v /dev:/dev --security-opt label=type:unconfined_t"
+    if [ -n "$MAMMOTH_SSH_KEYS" ]; then
+        mkdir -p /run/mammoth-keys
+        printf '%s\n' "$MAMMOTH_SSH_KEYS" | while IFS= read -r k; do [ -n "$k" ] && echo "$k"; done > /run/mammoth-keys/authorized_keys
+        chmod 600 /run/mammoth-keys/authorized_keys
+        podman run $base_args -v /run/mammoth-keys:/run/mammoth-keys:ro "$MAMMOTH_BOOTC_REF" bootc install to-disk --root-ssh-authorized-keys /run/mammoth-keys/authorized_keys "$MAMMOTH_BOOTC_TARGET" >>/tmp/mammoth-bootc.err 2>&1 || { echo "bootc install to-disk failed: $(tail -c 400 /tmp/mammoth-bootc.err | tr '\n' ' ')" >> /tmp/mammoth-bootc.err; return 1; }
+    else
+        podman run $base_args "$MAMMOTH_BOOTC_REF" bootc install to-disk "$MAMMOTH_BOOTC_TARGET" >>/tmp/mammoth-bootc.err 2>&1 || { echo "bootc install to-disk failed: $(tail -c 400 /tmp/mammoth-bootc.err | tr '\n' ' ')" >> /tmp/mammoth-bootc.err; return 1; }
+    fi
+    sync
+    blockdev --flushbufs "$MAMMOTH_BOOTC_TARGET" >>/tmp/mammoth-bootc.err 2>&1 || true
+    log "bootc install complete"
+    return 0
+}
+
 dd_image() { # image direct-write (roadmap「镜像直写通路」)
     [ -n "$MAMMOTH_DD_URL" ] || { echo "plan carries no DD_URL" >> /tmp/mammoth-dd.err; return 1; }
     [ -n "$MAMMOTH_DD_TARGET" ] || { echo "plan carries no DD_TARGET" >> /tmp/mammoth-dd.err; return 1; }
@@ -868,6 +913,16 @@ if [ "$MAMMOTH_DD_MODE" = "1" ]; then
         seed_partition || bail seed "seed injection failed: $(tail -c 2000 /tmp/mammoth-seed.err 2>/dev/null | tr '\n' ' ' | tr -d '"\\')"
     fi
     if report applied "image written and verified ($MAMMOTH_DD_FORMAT) — first boot pending"; then
+        log "rebooting into the image's first boot"
+        reboot -f
+    fi
+    bail report "completion report could not be delivered"
+fi
+if [ "$MAMMOTH_BOOTC" = "1" ]; then
+    log "bootc OCI install flow"
+    bootc_install || bail bootc "bootc install failed: $(tail -c 220 /tmp/mammoth-bootc.err 2>/dev/null | tr '\n' ' ' | tr -d '"\\')"
+    sync
+    if report applied "bootc image installed ($MAMMOTH_BOOTC_REF) — first boot pending"; then
         log "rebooting into the image's first boot"
         reboot -f
     fi

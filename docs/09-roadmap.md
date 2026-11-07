@@ -561,6 +561,20 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
        storage 单盘互斥)+ render plan;②agent runtime bootc 分支;
        ③prepare 双载体(vMedia/PXE 同 dd)+ appliedTerminal 泛化;
        ④qemu 轮(随窗口)+ docs;镜像工件库承载 OCI 引用为后续。
+    **✅ 代码落地(切片①②③,2026-11-07)**——render/bootc 驱动(OCI 引用
+    形态校验:docker:// 剥离、ISO/路径形拒;**切片1意图边界:仅
+    access.ssh_keys,hostname/network/password 渲染即拒**——bootc 自建
+    布局无 CIDATA 槽,sfdisk 追加在 MegaRAID 有既录死墙,CIDATA-via-mount
+    切片重开)+ nocloud 抽为共享包(render/nocloud,dd 委托,CIDATA 双消费
+    契约归一)+ agent `MAMMOTH_BOOTC=1` 分支(目标盘解析=dd 习语 → apk
+    podman(池必配,boot 行无条件 alpine_repo)→ pull → 容器内 to-disk →
+    --root-ssh-authorized-keys 原生通道;applied 报告,无读回哈希——digest
+    钉死即完整性)+ prepare 双载体泛化(vMedia 池无条件/PXE bootc 分支)+
+    appliedTerminalDD 泛化双标记(MAMMOTH_DD_MODE ∨ MAMMOTH_BOOTC)+
+    validateBootc 提交门(checksum 拒/单盘 wipe/分区与 lvm 拒)。
+    渲染/agent/提交门单测全绿;**遗留**:qemu 全链轮(musl podman 跑
+    glibc bootc 容器,podman #18398 坑源必验)随窗口;镜像工件库 OCI
+    引用与 CIDATA-via-mount 为后续切片。
 17. **TPM2 + LUKS sealed key 装机**(P2,2026-11-07 立项;调研确认无竞品
     做成一等公民;等保/信创合规刚需)——spec.storage 增加密档意图(LUKS)
     + TPM2 sealing(Clevis 渲染);发行版通路按方言渲染能力分型(anaconda

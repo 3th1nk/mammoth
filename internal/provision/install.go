@@ -110,17 +110,20 @@ type installProgress struct {
 }
 
 // appliedTerminalDD reports whether the task's applied marker is the terminal
-// fact — i.e. the task runs the dd plan, whose runtime has no first-boot
-// callback (an arbitrary image can't carry one): the applied report completes
-// the task. The answers (the plan prepare persisted) are the ground truth of
-// the pathway that actually ran — MAMMOTH_DD_MODE is the dd plan's first
-// declaration (render/dd renderSH) and the same marker the agent runtime
-// dispatches on. Answers-based detection works for tasks prepared before this
-// gate existed, with no spec re-read in the polling loop (the same sniffing
-// idiom strategy_pxe uses for the seed intent).
+// fact — i.e. the task runs an image-mode plan (dd direct-write, or the
+// bootc/OCI install), whose runtime has no first-boot callback (an arbitrary
+// image/bootc deployment can't carry one): the applied report completes the
+// task. The answers (the plan prepare persisted) are the ground truth of
+// the pathway that actually ran — MAMMOTH_DD_MODE / MAMMOTH_BOOTC are the
+// plans' first declarations (render/dd and render/bootc renderSH) and the
+// same markers the agent runtime dispatches on. Answers-based detection
+// works for tasks prepared before this gate existed, with no spec re-read
+// in the polling loop (the same sniffing idiom strategy_pxe uses for the
+// seed intent).
 func appliedTerminalDD(ictx *installTaskContext) bool {
 	for _, a := range ictx.Answers {
-		if strings.Contains(a.Content, "MAMMOTH_DD_MODE=1") {
+		if strings.Contains(a.Content, "MAMMOTH_DD_MODE=1") ||
+			strings.Contains(a.Content, "MAMMOTH_BOOTC=1") {
 			return true
 		}
 	}
@@ -449,6 +452,9 @@ func (e *Executor) loadSpec(ctx context.Context, task *store.Task, job *store.Jo
 	if err := validateDD(&spec); err != nil {
 		return nil, err
 	}
+	if err := validateBootc(&spec); err != nil {
+		return nil, err
+	}
 	return &spec, nil
 }
 
@@ -576,6 +582,39 @@ func validateDD(spec *installSpecView) error {
 	if len(spec.Scripts) > 0 || len(spec.PackageSource.Repos) > 0 {
 		return classifiedErr("SCHEMA_INVALID_SPEC", false,
 			"scripts/package_source are not supported by the dd pathway (no package manager runs — the image is pre-built)")
+	}
+	return nil
+}
+
+// validateBootc enforces the bootc/OCI install contract (docs/09-roadmap.md
+// 下一阶段 16): the OCI reference is the payload, bootc owns the disk
+// layout — the spec's storage degrades to a single whole-disk selector
+// (the dd pathway's shape), and the checksum field is meaningless (an OCI
+// digest IS the integrity claim; integrity rides the digest-pinned pull).
+func validateBootc(spec *installSpecView) error {
+	if spec.Image.Distro != "bootc" {
+		return nil
+	}
+	if spec.Image.Checksum != "" {
+		return classifiedErr("SCHEMA_INVALID_SPEC", false,
+			"image.checksum is not applicable to the bootc pathway — pin the OCI reference instead: image.source = registry/repo@sha256:<digest> (the pull IS the verification)")
+	}
+	if len(spec.Storage.Disks) != 1 {
+		return classifiedErr("SCHEMA_INVALID_SPEC", false,
+			"bootc takes exactly one target disk selector; got %d", len(spec.Storage.Disks))
+	}
+	d := spec.Storage.Disks[0]
+	if !d.Wipe {
+		return classifiedErr("SCHEMA_INVALID_SPEC", false,
+			"storage.disks[0]: bootc consumes the whole disk — declare wipe: true")
+	}
+	if len(d.Partitions) > 0 {
+		return classifiedErr("SCHEMA_INVALID_SPEC", false,
+			"storage.disks[0]: bootc owns the disk layout (DPS GUIDs: root + ESP + BIOS boot) — declare no partitions")
+	}
+	if len(spec.Storage.Lvm) > 0 || len(spec.Storage.Raid) > 0 {
+		return classifiedErr("SCHEMA_INVALID_SPEC", false,
+			"storage.lvm/raid are not expressible in the bootc pathway (the image owns the layout)")
 	}
 	return nil
 }

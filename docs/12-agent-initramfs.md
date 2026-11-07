@@ -40,7 +40,7 @@ mammoth 的价值主张是声明式 Install Spec(存储三档/network v2/身份/
                           │
                  ┌────────▼─────────┐
                  │  alpine 内存系统  │  ← 与 ramdisk 探针同载体(复用全部坑位结论)
-                 │                   │    载荷分型:声明式安装 / windows apply / dd 直写 / rescue 救援
+                 │                   │    载荷分型:声明式安装 / windows apply / dd 直写 / bootc OCI / rescue 救援
                  │  mammoth-agent   │
                  └────────┬─────────┘
         读 plan → 分区/格式化/挂载 → 从池装 alpine-base+kernel+openssh

@@ -2471,10 +2471,22 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 					}
 					res, degraded, perr := e.waitForNewSystem(ctx, m.SSHAddress, cred)
 					if perr != nil {
-						// DHCP-carrier installs (ubuntu PXE: no static
-						// declaration allowed) move the machine off the
-						// recorded address — its live lease is where the
-						// completion report came from. Retry there once.
+						// Retry chain for address drift. The recorded address
+						// can be stale in two directions: a DECLARED-static
+						// install whose completion report arrived from the
+						// boot-time lease (the report's peer used to
+						// overwrite the declared address — handlers_render
+						// now guards that, but tasks prepared before the
+						// guard carry the pollution), and a DHCP-carrier
+						// install whose live lease moved on. Try the
+						// declared address first, then the lease.
+						if declared, ok := e.declaredNetworkAddr(job.SpecResolved); ok && declared != m.SSHAddress {
+							obs.FromContext(ctx).WarnContext(ctx, "verify_ready recorded address unreachable; retrying against the declared static address",
+								"machine", task.MachineID, "recorded", m.SSHAddress, "declared", declared)
+							res, degraded, perr = e.waitForNewSystem(ctx, declared, cred)
+						}
+					}
+					if perr != nil {
 						if addr, ok := e.dhcpLeaseAddr(m.Hardware); ok {
 							obs.FromContext(ctx).WarnContext(ctx, "verify_ready static address unreachable; retrying against the DHCP lease",
 								"machine", task.MachineID, "static", m.SSHAddress, "lease", addr)
@@ -2781,6 +2793,32 @@ func netmaskString(mask net.IPMask) string {
 		return ""
 	}
 	return fmt.Sprintf("%d.%d.%d.%d", mask[0], mask[1], mask[2], mask[3])
+}
+
+// declaredNetworkAddr reads the job's resolved spec and returns the first
+// declared static network address — the deterministic post-install address
+// of a declared-static install. ok=false when the spec carries no network
+// section or every entry is DHCP-shaped.
+func (e *Executor) declaredNetworkAddr(specRaw json.RawMessage) (string, bool) {
+	if len(specRaw) == 0 {
+		return "", false
+	}
+	var spec struct {
+		Network []struct {
+			Addresses []string `json:"addresses"`
+		} `json:"network"`
+	}
+	if json.Unmarshal(specRaw, &spec) != nil {
+		return "", false
+	}
+	for _, n := range spec.Network {
+		for _, a := range n.Addresses {
+			if net.ParseIP(a) != nil {
+				return a, true
+			}
+		}
+	}
+	return "", false
 }
 
 // dhcpLeaseAddr resolves the machine's live DHCP lease IP from its hardware

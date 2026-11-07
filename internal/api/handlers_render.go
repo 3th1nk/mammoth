@@ -114,12 +114,25 @@ func (s *Server) ReportInstallComplete(ctx context.Context, request gen.ReportIn
 			obs.FieldMachineID, task.MachineID, "client_ip", clientIP,
 			"reason", "empty, unparseable, public or loopback — verify_ready will degrade to the completion-report surface")
 	default:
-		if uerr := s.Machines.SetSSHAddress(ctx, task.MachineID, ip.String()); uerr != nil {
-			obs.FromContext(ctx).WarnContext(ctx, "machine ssh address write failed",
-				obs.FieldMachineID, task.MachineID, "ssh_address", ip.String(), "err", uerr.Error())
+		// Declared-static installs: the completion report arrives from the
+		// BOOT-time address (agent's DHCP/lease during the pipeline), while
+		// the installed system comes up on the DECLARED address — recording
+		// the report's peer here would point verify_ready and every later
+		// in-band probe at a dead lease (2288H 2026-11-08: PXE agent install
+		// with a declared .221 recorded the boot lease .195; the new system
+		// on .221 was invisible to verify_ready). The declared address is
+		// deterministic — it wins over the report peer.
+		if declared, ok := s.declaredStaticIP(ctx, task.JobID); ok && declared != ip.String() {
+			obs.FromContext(ctx).InfoContext(ctx, "completion report peer not recorded — spec declares a static address",
+				obs.FieldMachineID, task.MachineID, "report_ip", ip.String(), "declared", declared)
 		} else {
-			obs.FromContext(ctx).InfoContext(ctx, "machine ssh address refreshed from completion report",
-				obs.FieldMachineID, task.MachineID, "ssh_address", ip.String())
+			if uerr := s.Machines.SetSSHAddress(ctx, task.MachineID, ip.String()); uerr != nil {
+				obs.FromContext(ctx).WarnContext(ctx, "machine ssh address write failed",
+					obs.FieldMachineID, task.MachineID, "ssh_address", ip.String(), "err", uerr.Error())
+			} else {
+				obs.FromContext(ctx).InfoContext(ctx, "machine ssh address refreshed from completion report",
+					obs.FieldMachineID, task.MachineID, "ssh_address", ip.String())
+			}
 		}
 	}
 	s.Events.Append(ctx, "task", task.ID, "task.install_reported", map[string]any{
@@ -128,6 +141,34 @@ func (s *Server) ReportInstallComplete(ctx context.Context, request gen.ReportIn
 	obs.FromContext(ctx).InfoContext(ctx, "install completion reported",
 		obs.FieldTaskID, task.ID, "status", status)
 	return gen.ReportInstallComplete204Response{}, nil
+}
+
+// declaredStaticIP reads the job's resolved spec and returns the first
+// declared static address of its network section. ok=false when the job
+// carries no spec (discover/power), no network section, or every entry is
+// DHCP-shaped — i.e. exactly the installs where the completion report's
+// peer IS the machine's live address and should be recorded.
+func (s *Server) declaredStaticIP(ctx context.Context, jobID string) (string, bool) {
+	job, err := s.Jobs.GetJob(ctx, jobID)
+	if err != nil || len(job.SpecResolved) == 0 {
+		return "", false
+	}
+	var spec struct {
+		Network []struct {
+			Addresses []string `json:"addresses"`
+		} `json:"network"`
+	}
+	if json.Unmarshal(job.SpecResolved, &spec) != nil {
+		return "", false
+	}
+	for _, n := range spec.Network {
+		for _, a := range n.Addresses {
+			if ip := net.ParseIP(a); ip != nil && !ip.IsLoopback() {
+				return ip.String(), true
+			}
+		}
+	}
+	return "", false
 }
 
 // ReportProbeFindings records the ramdisk probe's /sys scan: the body lands

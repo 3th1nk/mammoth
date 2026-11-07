@@ -44,7 +44,10 @@ const rescuePlanName = "agent-plan.sh"
 
 // rescueKernelArgs boots the agent from the repacked alpine ISO — the dd
 // ISO line's shape (render/dd isoKernelArgs).
-const rescueKernelArgs = "modules=loop,squashfs,sd-mod,usb-storage,ext4,vfat console=tty0 console=ttyS0,115200"
+// ttyS0 FIRST, tty0 LAST (the /dev/console primary — VGA stays live
+// through the openrc handoff; 2288H 2026-11-08 ttyS0-last froze the KVM
+// view at the initramfs tail while the system ran on SOL).
+const rescueKernelArgs = "modules=loop,squashfs,sd-mod,usb-storage,ext4,vfat console=ttyS0,115200 console=tty0"
 
 // rescueTaskContext is the rescue flow's context marker: the media facts
 // (token / media_uri / boot_strategy / netboot) share the install context's
@@ -216,7 +219,7 @@ func (e *Executor) runRescueStage(ctx context.Context, task *store.Task, job *st
 				"rescue boot tree build failed: %s", berr.Error())
 		}
 		files := external + "/netboot/files/" + rctx.Token
-		args := "modules=loop,squashfs,sd-mod,usb-storage console=tty0 console=ttyS0,115200 ip=dhcp"
+		args := "modules=loop,squashfs,sd-mod,usb-storage console=ttyS0,115200 console=tty0 ip=dhcp"
 		args += " modloop=" + files + "/modloop"
 		args += " apkovl=" + files + "/agent.apkovl.tar.gz"
 		args += " mammoth_base=" + external + "/render/" + rctx.Token

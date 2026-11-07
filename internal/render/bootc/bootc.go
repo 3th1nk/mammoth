@@ -51,7 +51,7 @@ func (d *Driver) AgentInstaller() bool { return true }
 const planName = "agent-plan.sh"
 
 // isoKernelArgs boots the agent from a repacked ISO (the dd line's shape).
-const isoKernelArgs = "modules=loop,squashfs,sd-mod,usb-storage,ext4,vfat console=tty0 console=ttyS0,115200"
+const isoKernelArgs = "modules=loop,squashfs,sd-mod,usb-storage,ext4,vfat console=ttyS0,115200 console=tty0"
 
 // netbootKernelArgs boots the agent over PXE: early DHCP, the network
 // modloop, the apkovl overlay and the plan base — the agent carrier's URL
@@ -61,7 +61,7 @@ func netbootKernelArgs(in render.InstallInputs) string {
 	base := strings.TrimSuffix(in.AnswerBaseURL, "/")
 	ext := strings.TrimSuffix(base, "/render/"+in.TaskToken)
 	files := ext + "/netboot/files/" + in.TaskToken
-	args := "modules=loop,squashfs,sd-mod,usb-storage console=tty0 console=ttyS0,115200 ip=dhcp"
+	args := "modules=loop,squashfs,sd-mod,usb-storage console=ttyS0,115200 console=tty0 ip=dhcp"
 	args += " modloop=" + files + "/modloop"
 	args += " apkovl=" + files + "/agent.apkovl.tar.gz"
 	args += " mammoth_base=" + base

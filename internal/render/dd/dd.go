@@ -105,7 +105,7 @@ func netbootKernelArgs(in render.InstallInputs, withSeed bool) string {
 	base := strings.TrimSuffix(in.AnswerBaseURL, "/")
 	ext := strings.TrimSuffix(base, "/render/"+in.TaskToken)
 	files := ext + "/netboot/files/" + in.TaskToken
-	args := "modules=loop,squashfs,sd-mod,usb-storage console=tty0 console=ttyS0,115200 ip=dhcp"
+	args := "modules=loop,squashfs,sd-mod,usb-storage console=ttyS0,115200 console=tty0 ip=dhcp"
 	args += " modloop=" + files + "/modloop"
 	args += " apkovl=" + files + "/agent.apkovl.tar.gz"
 	args += " mammoth_base=" + base

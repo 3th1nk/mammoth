@@ -128,7 +128,12 @@ func NetbootKernelArgs(in render.InstallInputs) string {
 	base := strings.TrimSuffix(in.AnswerBaseURL, "/")
 	ext := strings.TrimSuffix(base, "/render/"+in.TaskToken)
 	files := ext + "/netboot/files/" + in.TaskToken
-	args := "modules=loop,squashfs,sd-mod,usb-storage console=tty0 console=ttyS0,115200 ip=dhcp"
+	// Serial console FIRST, VGA LAST: the LAST console= becomes /dev/console,
+	// the primary output init/openrc write to after switch_root. tty0-last
+	// keeps the KVM/VGA view live through the openrc handoff (2288H
+	// 2026-11-08: ttyS0-last left the VGA view frozen at the initramfs tail
+	// while the system ran on — every "hang" was the output being on SOL).
+	args := "modules=loop,squashfs,sd-mod,usb-storage console=ttyS0,115200 console=tty0 ip=dhcp"
 	args += " modloop=" + files + "/modloop"
 	args += " alpine_repo=" + files + "/apks"
 	args += " apkovl=" + files + "/" + overlayNetbootName()

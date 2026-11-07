@@ -445,6 +445,53 @@ grub.cfg,`cat /proc/cmdline` 可验。
 边界:agent 通路 PXE-only、UEFI-only、仅 inbox 驱动机型(wimlib 只铺文件,
 不做驱动服务化)。两通路回调面/verify 语义完全一致,可按机型混用。
 
+### 5.45 镜像类通路(image.distro = dd / bootc)— 镜像即交付物
+
+`image.distro` 的两个非安装器取值:整机镜像直写(dd)与 bootc/OCI 安装
+(bootc)。共同点:**镜像自带布局,storage 退化为单目标盘选择器**;
+差异:交付物形态与运行时。
+
+**dd — 整盘镜像直写**(roadmap「镜像直写通路」,2026-11-06 真机定案):
+
+```jsonc
+{ "image": { "source": "http://host/disk.raw.gz",       // http(s),引擎可及
+             "checksum": "sha256:9f86d0...",             // 必填:解压后整盘哈希,读回验证
+             "distro": "dd",                             // 通路开关
+             "format": "raw.gz" },                       // raw | raw.gz(busybox gunzip 内建,推荐)| raw.xz(池装 xz)
+  "storage": { "disks": [{ "select": {...}, "wipe": true }] } }  // 恰一盘、必 wipe、禁 partitions/lvm/raid
+```
+
+- 运行时 = agent 第四载荷的 dd payload:流式 `wget→gunzip→tee(盘)→
+  sha256sum` 单趟写 + **读回哈希验证**(流哈希看不见盘上真字节,
+  LSI write-back 教训);conv=fsync + blockdev --flushbufs;
+- **CIDATA 槽契约**:镜像须自带分区表 + ≥16MiB 尾部槽分区(封装规范见
+  docs/09「镜像直写通路」)——identity/network/access 意图渲染为 NoCloud
+  seed 写入槽(共享实现 render/nocloud),镜像须含 cloud-init;
+- **applied 即终态**:写完读回通过 = 任务完成(镜像首启是镜像自己的事,
+  无完成回调);重试语义同款(applied 不再进 boot-two);
+- 双载体(vMedia standard ISO + PXE NETBOOT)与工具池前置见
+  docs/operations.md §4.5。
+
+**bootc — OCI 镜像安装**(roadmap 下一阶段 16;**已冻结进等条件组**,
+重开条件 = 持有 OCI OS 镜像流水线的真实客户;代码自持):
+
+```jsonc
+{ "image": { "source": "quay.io/centos/centos-bootc@sha256:abc...",  // OCI 引用,digest 钉死 = 完整性
+             "distro": "bootc" },
+  "storage": { "disks": [{ "select": {...}, "wipe": true }] } }       // 同 dd:恰一盘、必 wipe、禁分区声明
+```
+
+- `image.checksum` **提交即拒**——OCI digest 就是完整性声明,pull 即校验;
+- 运行时:agent `apk add podman`(扩展池硬性必配)→ pull → 容器内
+  `bootc install to-disk`(bootc 官方形态:install 必须在目标镜像自己的
+  容器里跑),布局由 bootc 自建(DPS GUID);applied 即终态同 dd;
+- **切片 1 意图边界:仅 `access.ssh_keys`**(bootc 原生
+  --root-ssh-authorized-keys,tmpfiles 每次开机重放);hostname/network/
+  password 渲染即拒(CIDATA-via-mount 切片重开);RAM 预算 ≥8G
+  (容器存储走 tmpfs),离线机房不支持(extended ISO 不带 podman);
+- 共同校验(两通路同款):单盘选择器、wipe 必真、partitions/lvm/raid
+  提交即拒(镜像拥有布局)。
+
 ### 5.5 package_source — 装机后的软件源指配
 
 ```jsonc

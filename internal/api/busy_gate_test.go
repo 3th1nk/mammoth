@@ -173,3 +173,19 @@ func TestRejectBusyMachinesRescueBlocked(t *testing.T) {
 		t.Fatalf("terminal rescue task must NOT block: %v", err)
 	}
 }
+
+// The discover flow's tasks carry NO spec — the per-machine resolution
+// pipeline (spec_patch → variable substitution) must pass the empty spec
+// through untouched. The regression window: resolveSpecVars' json.Unmarshal
+// died on the nil spec, failing EVERY registration's auto-discovery enqueue
+// and stranding machines in registering (found by acceptance, not by the
+// unit suite — registration's auto-discovery has no other test).
+func TestResolveSpecVarsEmptySpecPassesThrough(t *testing.T) {
+	out, err := resolveSpecVars(nil, varContext{index: 1, machineID: "m"})
+	if err != nil {
+		t.Fatalf("empty spec must pass through, got %v", err)
+	}
+	if len(out) != 0 {
+		t.Fatalf("empty spec must stay empty, got %s", out)
+	}
+}

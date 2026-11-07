@@ -105,6 +105,15 @@ func expandRefs(s string, resolve func(ref string) (string, bool)) string {
 // resolveSpecVars walks a spec JSON tree and expands every string value.
 // Keys are never templated; object/array structure is preserved.
 func resolveSpecVars(raw json.RawMessage, ctx varContext) (json.RawMessage, error) {
+	// Empty spec: nothing to substitute — the discover flow's tasks carry
+	// no spec at all (the auto-discovery enqueue on registration passes
+	// through here; json.Unmarshal(nil) would die with "unexpected end of
+	// JSON input" and strand every registration in registering — the
+	// regression that went unnoticed for a day because only the acceptance
+	// run exercises registration's auto-discovery).
+	if len(raw) == 0 {
+		return raw, nil
+	}
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return nil, fmt.Errorf("spec is not valid JSON: %w", err)

@@ -379,7 +379,10 @@ def main():
         "bmc": {"address": "192.0.2.1", "protocol": "redfish",
                 "credential_id": cred_id}})
     if status == 201:
-        errored = wait_machine(c, bad["id"], "error", timeout=60)
+        # The redfish probe against a blackholed IP pays the full dial
+        # timeout per protocol before the classified failure lands — 60s
+        # loses the race on slow networks (local macOS: ~75s SYN retries).
+        errored = wait_machine(c, bad["id"], "error", timeout=180)
         code = (errored.get("last_error") or {}).get("code", "")
         ok &= check("unreachable BMC → state=error with BMC_UNREACHABLE",
                     errored.get("state") == "error" and code == "BMC_UNREACHABLE",
@@ -427,6 +430,61 @@ def main():
         ok &= check("rescue with carrier configured → task runs (canceled for cleanup)",
                     status in (200, 202), f"{status}")
         wait_job(c, rjob["id"], {"canceled", "succeeded", "failed", "partial"}, timeout=60)
+
+    # 3.7 decommission (docs/07-bmc.md §6.6): the FULL fake-BMC chain —
+    # confirm gate → erase → evidence → retire → report. This is the one
+    # new flow this round that needs no real boot (everything is BMC-side),
+    # so the acceptance run exercises it end to end. Dedicated machine:
+    # retirement is terminal and would break later sections.
+    print("· decommission (full fake chain)")
+    status, dcred = c.post("/api/v1/credentials", {
+        "type": "bmc", "name": f"acc-dc-{time.time()}",
+        "secret": {"username": "root", "password": "whatever"}})
+    ok &= check("decommission credential created", status == 201, str(status))
+    status, dcm = c.post("/api/v1/machines", {
+        "labels": {"env": "acceptance"},
+        "bmc": {"address": "fake://acc-dc-node", "protocol": "fake",
+                "credential_id": dcred["id"]}})
+    if status == 201:
+        dmid = dcm["id"]
+        wait_machine(c, dmid, "ready", timeout=60)
+        status, _ = c.post("/api/v1/jobs", {
+            "type": "decommission",
+            "targets": {"targets": [{"machine_id": dmid}]}})
+        ok &= check("decommission without confirm → 422",
+                    status == 422, str(status))
+        confirm = True
+        status, dcjob = c.post("/api/v1/jobs", {
+            "type": "decommission",
+            "targets": {"targets": [{"machine_id": dmid}]},
+            "confirm": confirm})
+        ok &= check("decommission with confirm → 202",
+                    status == 202, str(status))
+        djf, dtasks = wait_job(c, dcjob["id"], {"succeeded", "failed"}, timeout=120)
+        ok &= check("decommission flow all green (erase→evidence→retire)",
+                    djf and djf.get("summary", {}).get("succeeded") == 1,
+                    str(djf.get("summary", {})))
+        dm = wait_machine(c, dmid, "retired", timeout=60)
+        ok &= check("machine retired", dm.get("state") == "retired",
+                    dm.get("state"))
+        status, drep = c.get(f"/api/v1/machines/{dmid}/decommission")
+        rep = drep.get("report") or {}
+        ok &= check("decommission report with erase record",
+                    bool(status == 200 and (rep.get("erase") or {}).get("serials")),
+                    str(rep)[:120])
+        status, dev = c.get(f"/api/v1/events?page_size=50&type=machine.retired")
+        ok &= check("machine.retired event",
+                    any(e.get("resource_id") == dmid for e in dev.get("items", [])),
+                    str(dev.get("items", [])[:1]))
+
+        # Reinstatement is a fresh discover (the probe walks state back to
+        # ready) — after which the machine is flow-eligible again.
+        status, _ = c.post(f"/api/v1/machines/{dmid}/actions", {"type": "discover"})
+        rm = wait_machine(c, dmid, "ready", timeout=60)
+        ok &= check("reinstatement: fresh discover → ready", rm.get("state") == "ready",
+                    rm.get("state"))
+    else:
+        ok &= check("decommission machine registered", False, str(status))
 
     # 4. idempotency
     print("· idempotency")

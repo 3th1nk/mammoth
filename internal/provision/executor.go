@@ -203,6 +203,8 @@ func (e *Executor) ExecuteStage(ctx context.Context, task *store.Task, job *stor
 			e.releaseRescueFresh(ctx, task, "terminal failure")
 		}
 		return err
+	case FlowDecommission:
+		return e.runDecommissionStage(ctx, task, job, seq)
 	default:
 		return classifiedErr("JOB_UNKNOWN_FLOW", false, "unknown flow %s", task.FlowName)
 	}

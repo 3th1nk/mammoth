@@ -3615,12 +3615,19 @@ components:
             SCHEMA_UNRESOLVED_VAR, naming machine + variable); install jobs
             only.
         spec_patch:
-          $ref: '#/components/schemas/InstallSpec'
+          type: object
+          additionalProperties: true
           description: >
             RFC 7386 JSON Merge Patch applied over `spec` for THIS machine
             before variable substitution — deep merge, `null` deletes a key.
             For structural divergence only (a different disk layout on one
             machine); value-level divergence (IP/hostname) belongs in `vars`.
+            RAW JSON BY DESIGN: the patch must keep its own shape (absent
+            fields mean "inherit", `null` means "delete") — a typed
+            InstallSpec parse would emit empty strings for unset fields and
+            the merge would overwrite declared intent with zeros (the
+            regression this loosening fixes: a storage-only patch blanked
+            image.distro for the patched machine).
             Install jobs only.
 
     JobCreate:

@@ -45,7 +45,7 @@ import (
 // serve wires the selected facets and blocks until shutdown.
 func serve(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	mode := fs.String("mode", "", "runtime facet: all | api | runner | builder | prober (default from MAMMOTH_MODE)")
+	mode := fs.String("mode", "", "runtime facet: all | api | runner (default from MAMMOTH_MODE)")
 	envFile := fs.String("env-file", "", "dotenv file to seed the environment before reading MAMMOTH_* (also MAMMOTH_ENV_FILE); existing environment variables win")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -70,6 +70,23 @@ func serve(args []string) error {
 	ctx := obs.IntoContext(mustContext(), logger)
 	logger.InfoContext(ctx, "mammoth starting",
 		"mode", cfg.Mode, "version", version.Version, "commit", version.Commit)
+
+	// Media assembly shells out to external tools (xorriso/wimlib/7z); a
+	// missing toolchain used to surface as a mid-install task failure
+	// (vMedia repack, PXE kit export, agent carriers) — fail at startup
+	// instead, pointing at the toolchain-bearing image. xorriso gates every
+	// media path (hard); wimlib/7z only serve the windows pathway (soft, so
+	// linux-only deployments on a lean image still boot).
+	if cfg.Mode.RunsRunner() {
+		hard, soft := builder.CheckToolchain(osexec.LookPath)
+		if len(hard) > 0 {
+			return fmt.Errorf("runner facet needs the media-assembly toolchain, missing %s from PATH — deploy the mammoth-builder image (alpine, tools included) or provide them", strings.Join(hard, ", "))
+		}
+		if len(soft) > 0 {
+			logger.Warn("windows pathway tools missing from PATH — windows installs fail until provided",
+				"missing", strings.Join(soft, ", "))
+		}
+	}
 
 	// Tracing: no-op exporter unless OTLP endpoint is configured (D6).
 	stopTracing, err := obs.SetupTracing(ctx, cfg.OTELExporterEndpoint)
@@ -616,15 +633,6 @@ func serve(args []string) error {
 				errCh <- err
 			}
 		}()
-	}
-
-	// Builder / prober facets: declared in the architecture, arriving with
-	// the install pipeline (M3) and in-band probes (M2).
-	if cfg.Mode == config.ModeBuilder {
-		return errors.New("builder facet arrives with M3 (media assembly); see docs/09-roadmap.md")
-	}
-	if cfg.Mode == config.ModeProber {
-		return errors.New("prober facet arrives with M2 (inband_ssh probe); see docs/09-roadmap.md")
 	}
 
 	select {

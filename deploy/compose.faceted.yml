@@ -6,9 +6,9 @@
 # every node binds the same dir), an LB over api replicas, and one PXE
 # responder per provisioning L2 (pxe-proxy for the rest — operations.md §4.5).
 #
-# NOTE: there is no `builder` service — --mode=builder is a reserved facet
-# (serve.go refuses it until the media-assembly split lands); today the runner
-# assembles media in-process, hence the builder toolchain image below.
+# NOTE: there is no `builder` service — the placeholder mode was removed
+# (v1.4.2); the runner assembles media in-process, hence the builder
+# toolchain image below.
 name: mammoth-faceted
 
 # Shared by api and runner. PXE/netboot keys are NOT here — they belong to

@@ -11,7 +11,7 @@
 [![release](https://img.shields.io/github/v/release/3th1nk/mammoth)](https://github.com/3th1nk/mammoth/releases)
 [![license](https://img.shields.io/github/license/3th1nk/mammoth)](LICENSE)
 
-> A self-contained bare-metal provisioning engine.
+> A self-contained bare-metal lifecycle engine — beyond install, through acceptance, drift audits, and rescue, all the way to decommission.
 > Give it an out-of-band address and a credential — or let the machine introduce itself — and get back a machine that runs.
 
 [**中文**](README.zh-CN.md)
@@ -19,8 +19,11 @@
 Mammoth takes over machines through their out-of-band controllers (BMC),
 inventories hardware and disk layout, and installs/reinstalls operating
 systems from declarative intent — while exposing generic power / boot-device /
-virtual-media operations as a first-class API. **Backend only, API-first;
-no built-in UI.**
+virtual-media operations as a first-class API. Install is not the finish
+line: post-install acceptance reports, BIOS baseline & drift audits,
+in-memory boot_rescue, and decommission (NIST 800-88 wipe + evidence)
+carry a machine from first boot to retirement on the same pipeline and
+API. **Backend only, API-first; no built-in UI.**
 
 - Design documents: [docs/README.md](docs/README.md)
 - API contract (single source of truth): [api/openapi.yaml](api/openapi.yaml)
@@ -35,7 +38,8 @@ frozen in permafrost, but there is still a heartbeat under the ice: the BMC,
 an out-of-band chip that keeps pulsing even when the machine is "dead".
 Mammoth follows that heartbeat, inventories the skeleton, listens to your
 declared intent, then carries the heavy lifting alone — repacking ISOs,
-virtual media, the DHCP/PXE dance, four installer dialects. Send in an
+virtual media, the DHCP/PXE dance, four installer dialects, direct image
+writes. Send in an
 address and a credential; get back a machine that runs.
 
 **The mammoth task, tamed.**
@@ -43,73 +47,17 @@ address and a credential; get back a machine that runs.
 The gopher in mammoth fur at the top says the same thing: a small binary
 (single, self-contained) doing mammoth-sized work.
 
-## Try it in 5 minutes — the sandbox
-
-No BMC hardware, no second machine: `mammoth sandbox up` turns a laptop into
-a small datacenter — virtual machines with simulated BMCs get registered,
-inventoried and provisioned with real alpine systems, end to end through the
-default virtual-media carrier, then second-booted for SSH.
-
-Requires: Go ≥ 1.26, Docker, QEMU, xorriso, curl.
-
-```bash
-brew install qemu xorriso     # linux: sudo apt-get install qemu-system-x86 qemu-utils xorriso
-go build -o bin/mammoth ./cmd/mammoth
-bin/mammoth sandbox up        # --nodes N (1–5, default 3)
-```
-
-Docker supplies only PostgreSQL; guests are isolated slirp NATs — no bridges,
-no privileged containers, no root. Budget roughly 2 GB RAM and one CPU core
-per guest (3 guests ≈ 6 GB; without KVM a full install runs a few minutes
-per guest). When the install job goes green:
-
-```bash
-ssh -i ~/.mammoth-sandbox/id_ed25519 -p 2222 root@127.0.0.1   # sandbox-node-1
-bin/mammoth sandbox status    # what is running, how far the install got
-bin/mammoth sandbox down      # stop everything; ISO cache and logs are kept
-```
-
-Port collisions are handled: override `MAMMOTH_SANDBOX_HTTP_PORT`,
-`MAMMOTH_SANDBOX_DB_PORT`, `MAMMOTH_SANDBOX_SSH_PORT`. The sandbox machines
-are fake-BMC demos — real fleets speak Redfish/IPMI through the same API and
-install specs.
-
-## Drive it from your AI — the MCP server
-
-`mammoth mcp serve` exposes the same API as MCP tools over stdio: register
-machines, drive discovery, submit declarative installs, track jobs to
-completion, read task logs. All tools are read-only except `install_submit`
-(which wipes and reinstalls the targets) and `job_cancel`.
-
-```json
-{
-  "mcpServers": {
-    "mammoth": {
-      "command": "/usr/local/bin/mammoth",
-      "args": ["mcp", "serve"],
-      "env": {
-        "MAMMOTH_API_URL": "http://127.0.0.1:8080",
-        "MAMMOTH_API_TOKEN": "<token>"
-      }
-    }
-  }
-}
-```
-
-Point Claude Desktop or Cursor at the sandbox (above) and just ask:
-*"machines_list, then install Rocky 9 from this ISO on every ready machine
-and wait for the job"* — the mammoth task, tamed by one sentence.
-
 ## At a glance
 
-**One pipeline, three inventory paths, two boot carriers, four installer
-dialects.**
+**One pipeline, three inventory paths, two boot carriers, six install
+pathways — four installer dialects, the alpine agent, and dd image write.**
 
 ```mermaid
 flowchart TD
     subgraph ON["1 · Onboarding"]
         reg["register a machine:<br/>BMC address + credential<br/>(Redfish, IPMI fallback)"]
         zr["zero-registration:<br/>unknown machine PXE-boots<br/>the shared probe tree<br/>→ pending_machines → claim"]
+        hl["headless (no BMC):<br/>bmc.protocol = none, MAC is identity<br/>manual reboot / WoL assist"]
     end
     subgraph INV["2 · Inventory / probe"]
         rf["redfish (out-of-band)"]
@@ -120,15 +68,20 @@ flowchart TD
         vm["virtual_media (default):<br/>BMC mounts a rebuilt boot ISO<br/>(NFS/HTTP media repo)"]
         pxe["pxe (opt-in):<br/>shim → grubnet → kernel<br/>DHCP/proxyDHCP + TFTP + HTTP"]
     end
-    subgraph DIA["4 · Installer dialects"]
+    subgraph DIA["4 · Install pathways — installer dialects & direct write"]
         ks["kickstart<br/>rocky · centos · kylin · UOS"]
         ai["autoinstall<br/>ubuntu 22.04 / 24.04 / 26.04"]
         ps["preseed<br/>debian 12 / 13"]
         wu["unattend<br/>windows 2019 / 2022 / 2025 (UEFI)<br/>boots differently ⤓ windows pathways"]
+        ag["alpine agent: in-memory write to disk<br/>(fastest pathway · the headless carrier)"]
+        dd["dd image write: image-library ref + CIDATA seed<br/>raw / raw.gz / raw.xz · read-back hash verify"]
     end
     ver["5 · verify: completion report +<br/>in-band SSH probe (installer-aware)<br/>+ post-install layout snapshot"]
+    acc["6 · accept & audit: acceptance report<br/>(declared vs actual, evidence face)<br/>BIOS baseline drift checks"]
+    ret["7 · retire: decommission<br/>NIST 800-88 wipe + evidence<br/>boot_rescue available anytime"]
     reg --> rf
     zr --> ram
+    hl --> ram
     rf --> vm
     ram --> vm
     vm --> ks
@@ -137,10 +90,18 @@ flowchart TD
     pxe --> ks
     pxe --> ai
     pxe --> ps
+    vm --> ag
+    pxe --> ag
+    vm --> dd
+    pxe --> dd
     ks --> ver
     ai --> ver
     ps --> ver
     wu --> ver
+    ag --> ver
+    dd --> ver
+    ver --> acc
+    acc --> ret
 ```
 
 ### Windows pathways — windows boots differently
@@ -180,6 +141,13 @@ installer carrier (casper); **live desktop** = unsupported (no installer
 inside). The virtual_media carrier always repacks the official ISO with the
 answer files baked in — the PXE carrier extracts boot files and serves the
 ISO content as a package source.
+
+**dd image write is outside this matrix** — it is distro-agnostic: any full
+disk image (self-built, vendor-certified preinstalled images, …) registered
+into the image library (raw / raw.gz / raw.xz), with a CIDATA seed carrying
+first-boot config, streams onto disk over either carrier with read-back hash
+verification — no installer, no dialect; pick the "dd image write" pathway in
+the install wizard.
 
 ### Regression baseline — mainstream server images
 
@@ -350,39 +318,115 @@ python3 scripts/acceptance.py --api http://localhost:8080 --token devtoken \
   --dsn 'postgres://mammoth:mammoth@localhost:5432/mammoth?sslmode=disable'
 ```
 
-## Architecture in one screen
+## Try it in 5 minutes — the sandbox
 
-```
-client ──▶ api (control plane, stateless)      ──┐
-            runner (executes tasks via BMC)    ──┼──▶ PostgreSQL (state + table queue)
-            builder (media assembly)           ──┤
-            prober (in-band probes)            ──┘
-```
+No BMC hardware, no second machine: `mammoth sandbox up` turns a laptop into
+a small datacenter — virtual machines with simulated BMCs get registered,
+inventoried and provisioned with real alpine systems, end to end through the
+default virtual-media carrier, then second-booted for SSH.
 
-- Single binary, multiple facets: `serve --mode=all|api|runner|builder|prober`
-- At-least-once task queue with visibility timeouts (`SKIP LOCKED` on PG);
-  state transitions and queue ops share one transaction domain
-- Every task has a heartbeat; a reaper marks lost tasks `interrupted` (retryable) —
-  a crashed runner never leaves a task suspended forever
-- Redfish first, IPMI fallback; `fake` driver for development and CI
-- Two boot carriers per install: BMC virtual media (default) or PXE/iPXE
-  network boot (built-in proxyDHCP + TFTP, Pixiecore-style; opt-in via
-  `MAMMOTH_PXE_ENABLED` — docs/operations.md §4.5)
-
-## Delivery
-
-| Image | Base | Modes | Notes |
-|-------|------|-------|-------|
-| `mammoth` | distroless (static) | api | file serving / control plane only |
-| `mammoth-builder` | alpine + xorriso/wimlib/7z | all / runner | media assembly shells out to these tools; `builder` is a reserved facet (serve refuses it until the split lands) |
+Requires: Go ≥ 1.26, Docker, QEMU, xorriso, curl.
 
 ```bash
-docker compose -f deploy/compose.all-in-one.yml up -d   # 1×all + PG
-docker compose -f deploy/compose.faceted.yml up -d      # 1×api + N×runner (media assembly in-process)
+brew install qemu xorriso     # linux: sudo apt-get install qemu-system-x86 qemu-utils xorriso
+go build -o bin/mammoth ./cmd/mammoth
+bin/mammoth sandbox up        # --nodes N (1–5, default 3)
 ```
 
-Restricted networks: `--build-arg RUNTIME_IMAGE=<mirror>/distroless/static-debian12:nonroot`
-and `--build-arg GOPROXY=https://goproxy.cn,direct`.
+Docker supplies only PostgreSQL; guests are isolated slirp NATs — no bridges,
+no privileged containers, no root. Budget roughly 2 GB RAM and one CPU core
+per guest (3 guests ≈ 6 GB; without KVM a full install runs a few minutes
+per guest). When the install job goes green:
+
+```bash
+ssh -i ~/.mammoth-sandbox/id_ed25519 -p 2222 root@127.0.0.1   # sandbox-node-1
+bin/mammoth sandbox status    # what is running, how far the install got
+bin/mammoth sandbox down      # stop everything; ISO cache and logs are kept
+```
+
+Port collisions are handled: override `MAMMOTH_SANDBOX_HTTP_PORT`,
+`MAMMOTH_SANDBOX_DB_PORT`, `MAMMOTH_SANDBOX_SSH_PORT`. The sandbox machines
+are fake-BMC demos — real fleets speak Redfish/IPMI through the same API and
+install specs.
+
+## Drive it from your AI — the MCP server
+
+`mammoth mcp serve` exposes the same API as MCP tools over stdio: register
+machines, drive discovery, submit declarative installs, track jobs to
+completion, read task logs. All tools are read-only except `install_submit`
+(which wipes and reinstalls the targets) and `job_cancel`.
+
+```json
+{
+  "mcpServers": {
+    "mammoth": {
+      "command": "/usr/local/bin/mammoth",
+      "args": ["mcp", "serve"],
+      "env": {
+        "MAMMOTH_API_URL": "http://127.0.0.1:8080",
+        "MAMMOTH_API_TOKEN": "<token>"
+      }
+    }
+  }
+}
+```
+
+Point Claude Desktop or Cursor at the sandbox (above) and just ask:
+*"machines_list, then install Rocky 9 from this ISO on every ready machine
+and wait for the job"* — the mammoth task, tamed by one sentence.
+
+## Architecture in one screen
+
+```mermaid
+flowchart LR
+    cli["client · console · MCP"]
+    subgraph E["single binary, multiple facets: serve --mode=all|api|runner"]
+        api["api · control plane (stateless)"]
+        runner["runner · executes tasks via BMC"]
+        builder["builder · media & boot kit"]
+        prober["prober · in-band probes"]
+    end
+    pg[("PostgreSQL · state + table queue")]
+    subgraph SEG["provisioning VLAN (one edge per VLAN)"]
+        edge["edge agent<br/>proxyDHCP + TFTP<br/>(kit sync · sightings)"]
+        dhcp["site DHCP · addressing<br/>(single-segment uses the builtin pool)"]
+    end
+    bmc["BMC (Redfish first / IPMI fallback)"]
+    m["target machine"]
+    media["media repo (NFS/HTTP pool)"]
+    cli -->|"REST + SSE event stream"| api
+    api <--> pg
+    runner <-->|"task queue: at-least-once<br/>heartbeat + reaper (SKIP LOCKED)"| pg
+    builder <--> pg
+    prober <--> pg
+    runner --> bmc
+    bmc -->|"virtual media"| m
+    prober -->|"SSH layout snapshot"| m
+    builder -->|"rebuilt ISOs · external kit"| media
+    media -.->|"kit sync"| edge
+    edge -->|"boot chain + installer log sink (:514)"| m
+    dhcp -.->|"addressing"| m
+    m -->|"spec/media fetch over HTTP · completion callback"| api
+    edge -.->|"sightings"| api
+```
+
+- Single-segment (builtin): the engine answers proxyDHCP + TFTP + a DHCP pool
+  itself (only for machines with registered install tasks); cross-segment
+  (external): one `edge` agent per provisioning VLAN (same image, one
+  subcommand) — kit auto-sync, sightings into pending_machines, installer
+  logs sinked to task logs via :514
+- State transitions and queue ops share one transaction domain; a reaper marks
+  lost tasks `interrupted` (retryable) — a crashed runner never leaves a task
+  suspended forever; `fake` BMC driver for development and CI
+- Delivery images: **`mammoth-builder` (alpine + xorriso/wimlib/7z; all /
+  runner — the actual form for provisioning deployments**, media and boot-kit
+  assembly shell out to these tools; the builder/prober placeholder modes were
+  removed in v1.4.2) · `mammoth` (distroless static; api-only control plane,
+  no media assembly)
+- Deploy: `docker compose -f deploy/compose.all-in-one.yml up -d` (1×all + PG)
+  or `compose.faceted.yml` (1×api + N×runner); restricted networks via
+  `--build-arg RUNTIME_IMAGE=<mirror>/distroless/static-debian12:nonroot` +
+  `GOPROXY=https://goproxy.cn,direct`
 
 ## Official console
 
@@ -391,8 +435,9 @@ is the official web console for this engine — a single-page Vue 3 app with zer
 private backend: every capability boundary is driven by `GET /api/v1`
 (capabilities), and every action goes through the same public API you just used.
 
-Machine lifecycle (register / auto-discovery / power / health & SEL / BIOS / drive
-erase with two-stage confirmations), a four-step install wizard with an
+Machine lifecycle (register / auto-discovery / power / health & SEL / drive
+erase with two-stage confirmations; BIOS baseline & drift audit, post-install
+acceptance report, and decommission evidence cards), a four-step install wizard with an
 install-plan dry run, live task & log streaming (SSE), zero-registration
 onboarding, event audit with HMAC-signed webhooks, a ⌘K command palette, and
 dark mode. Run it beside the engine with `docker compose`, or `npm run dev` for

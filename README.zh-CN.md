@@ -11,14 +11,16 @@
 [![release](https://img.shields.io/github/v/release/3th1nk/mammoth)](https://github.com/3th1nk/mammoth/releases)
 [![license](https://img.shields.io/github/license/3th1nk/mammoth)](LICENSE)
 
-> 自包含的裸金属服务器安装引擎。
+> 自包含的裸金属服务器生命周期引擎——装机之外,一路管到验收、巡检、救援与退役擦除。
 > 给它一个带外地址和一份凭证——或者让机器自己找上门——还你一台能跑起来的机器。
 
 [**English**](README.md)
 
 Mammoth 通过带外控制器(BMC)接管机器,自动盘查硬件与磁盘布局,并按声明式意图
 安装/重装操作系统——同时把开关机、引导设备、虚拟介质等通用带外能力做成
-一等公民 API。**纯后端,API-first;无内置 UI。**
+一等公民 API。装机不是终点:装后验收报告、BIOS 基线与漂移巡检、boot_rescue
+内存救援、decommission 退役擦除(NIST 800-88 + 证据留存)——一台机器从上架
+到下架的全部动作,跑在同一条流水线与同一套 API 上。**纯后端,API-first;无内置 UI。**
 
 - 设计文档:[docs/README.md](docs/README.md)
 - API 契约(唯一事实源):[api/openapi.yaml](api/openapi.yaml)
@@ -31,75 +33,24 @@ Mammoth 通过带外控制器(BMC)接管机器,自动盘查硬件与磁盘布局
 恰恰是运维圈公认的这种苦役。一台没有操作系统的服务器,像冰封在冻土里的猛犸;
 但冰层下仍有心跳:BMC 那颗不依赖磁盘的带外芯片,整机"死"了也仍在搏动。
 Mammoth 顺着这根心跳找到机器、盘点骨骼、听你声明它该成为的模样,然后独自
-扛下所有重活——重打包 ISO、虚拟介质、DHCP/PXE 的二层博弈、四种安装器方言。
+扛下所有重活——重打包 ISO、虚拟介质、DHCP/PXE 的二层博弈、四种安装器方言、整盘镜像直写。
 你只需要给它一个地址和一份凭证,它还你一台能跑起来的机器。
 
 **The mammoth task, tamed.**
 
 顶部那只披着长毛的 gopher 说的也是同一件事:小个子(单二进制、自包含),干重活。
 
-## 五分钟上手——沙箱
-
-不需要 BMC 硬件,也不需要第二台机器:`mammoth sandbox up` 把笔记本变成一个小机房——
-带模拟 BMC 的虚拟机完成注册、盘查、声明式装机(真实安装 alpine,走默认的
-virtual_media 载体),装完二次起盘,直接 SSH 进去。
-
-前置条件:Go ≥ 1.26、Docker、QEMU、xorriso、curl。
-
-```bash
-brew install qemu xorriso     # linux:sudo apt-get install qemu-system-x86 qemu-utils xorriso
-go build -o bin/mammoth ./cmd/mammoth
-bin/mammoth sandbox up        # --nodes N(1–5,默认 3)
-```
-
-Docker 只用来跑 PostgreSQL;guest 是相互隔离的 slirp NAT——无需网桥、特权容器,
-也不用 root。资源按每台 guest 约 2 GB 内存 + 1 个核估算(3 台约 6 GB;无 KVM 时
-每台装机需数分钟)。装机 job 全绿之后:
-
-```bash
-ssh -i ~/.mammoth-sandbox/id_ed25519 -p 2222 root@127.0.0.1   # sandbox-node-1
-bin/mammoth sandbox status    # 正在跑什么、装到哪一步
-bin/mammoth sandbox down      # 全部停止;ISO 缓存与日志保留
-```
-
-端口冲突可通过环境变量调整:`MAMMOTH_SANDBOX_HTTP_PORT`、
-`MAMMOTH_SANDBOX_DB_PORT`、`MAMMOTH_SANDBOX_SSH_PORT`。沙箱机器是 fake BMC
-演示——真实机群通过同一套 API 与安装规格说 Redfish/IPMI。
-
-## 让 AI 来驱动——MCP server
-
-`mammoth mcp serve` 把同一套 API 以 MCP 工具的形式暴露在 stdio 上:注册机器、
-驱动盘查、提交声明式装机、跟踪任务到终态、读取任务日志。除 `install_submit`
-(会清盘重装目标机)与 `job_cancel` 外,其余工具均为只读。
-
-```json
-{
-  "mcpServers": {
-    "mammoth": {
-      "command": "/usr/local/bin/mammoth",
-      "args": ["mcp", "serve"],
-      "env": {
-        "MAMMOTH_API_URL": "http://127.0.0.1:8080",
-        "MAMMOTH_API_TOKEN": "<token>"
-      }
-    }
-  }
-}
-```
-
-把 Claude Desktop 或 Cursor 指向上面的沙箱,然后直接说:
-「列一下机器,把所有 ready 的机器都装上 Rocky 9,等任务完成」——
-猛犸级的任务,一句话驯服。
-
 ## 一图看懂
 
-**一条流水线,三条盘查通路,两种引导载体,四种安装器方言。**
+**一条流水线,三种盘查通路,两种引导载体,六条安装通路——四种安装器方言 +
+alpine agent + dd 镜像直写。**
 
 ```mermaid
 flowchart TD
     subgraph ON["1 · 上电注册"]
         reg["注册机器:<br/>BMC 地址 + 凭证<br/>(Redfish,IPMI 兜底)"]
         zr["零注册:未知机器 PXE<br/>引导共享探针树<br/>→ pending_machines<br/>→ claim 升格注册"]
+        hl["无带外机器:<br/>bmc.protocol = none,MAC 即身份<br/>人工重启 / WoL 唤醒配合"]
     end
     subgraph INV["2 · 盘查 / 探测"]
         rf["redfish(带外)"]
@@ -110,15 +61,20 @@ flowchart TD
         vm["virtual_media(默认):<br/>BMC 挂载重打包引导 ISO<br/>(NFS/HTTP 介质仓库)"]
         pxe["pxe(可选):<br/>shim → grubnet → 内核<br/>DHCP/proxyDHCP + TFTP + HTTP"]
     end
-    subgraph DIA["4 · 安装器方言"]
+    subgraph DIA["4 · 安装通路 —— 安装器方言与直装"]
         ks["kickstart<br/>rocky · centos · kylin · UOS"]
         ai["autoinstall<br/>ubuntu 22.04 / 24.04 / 26.04"]
         ps["preseed<br/>debian 12 / 13"]
         wu["unattend<br/>windows 2019 / 2022 / 2025(UEFI)<br/>引导形态不同 ⤓ windows 通路"]
+        ag["alpine agent:内存态直接写盘<br/>(最快通路 · 无带外机器的载体)"]
+        dd["dd 镜像直写:镜像库引用 + CIDATA seed<br/>raw / raw.gz / raw.xz · 读回哈希验证"]
     end
     ver["5 · 校验:完成回调 + 带内 SSH<br/>探测(识别安装器)<br/>+ 装后布局快照"]
+    acc["6 · 验收与巡检:装后验收报告<br/>(声明 vs 实际,证据面)<br/>BIOS 基线漂移巡检"]
+    ret["7 · 退役:decommission<br/>NIST 800-88 擦除 + 证据留存<br/>boot_rescue 救援随时可入"]
     reg --> rf
     zr --> ram
+    hl --> ram
     rf --> vm
     ram --> vm
     vm --> ks
@@ -127,10 +83,18 @@ flowchart TD
     pxe --> ks
     pxe --> ai
     pxe --> ps
+    vm --> ag
+    pxe --> ag
+    vm --> dd
+    pxe --> dd
     ks --> ver
     ai --> ver
     ps --> ver
     wu --> ver
+    ag --> ver
+    dd --> ver
+    ver --> acc
+    acc --> ret
 ```
 
 ### Windows 通路——windows 的引导形态不同
@@ -204,6 +168,11 @@ pending_machines 台账。防火墙:代理放行 UDP 67/69/4011,装机网段须�
 **DVD** = 完全离线池;**live-server** = ubuntu 的安装器载体(casper);
 **live desktop** = 不支持(内无安装器)。virtual_media 载体总是重打包
 官方 ISO 并烘焙应答文件;PXE 载体抽取引导文件、把 ISO 内容当作包源。
+
+**dd 整盘镜像直装不在此矩阵内**——它与发行版无关:任意整盘镜像(自封装
+镜像、厂商认证预装镜像等)注册进镜像库(raw / raw.gz / raw.xz 三档),
+CIDATA seed 承载首启配置,vMedia/PXE 双载体单遍流式写盘 + 读回哈希验证
+——不经安装器、无方言,装机向导选「镜像直写(dd)」通路即可。
 
 ### 回归基线 —— 主流服务器镜像
 
@@ -322,35 +291,98 @@ python3 scripts/acceptance.py --api http://localhost:8080 --token devtoken \
   --dsn 'postgres://mammoth:mammoth@localhost:5432/mammoth?sslmode=disable'
 ```
 
-## 一屏看懂架构
+## 五分钟上手——沙箱
 
-```
-client ──▶ api (控制面, 无状态)                    ──┐
-            runner (经 BMC 执行任务)               ──┼──▶ PostgreSQL (状态 + 表队列)
-            builder (介质构建)                     ──┤
-            prober (带内盘查)                      ──┘
-```
+不需要 BMC 硬件,也不需要第二台机器:`mammoth sandbox up` 把笔记本变成一个小机房——
+带模拟 BMC 的虚拟机完成注册、盘查、声明式装机(真实安装 alpine,走默认的
+virtual_media 载体),装完二次起盘,直接 SSH 进去。
 
-- 单二进制多模式:`serve --mode=all|api|runner|builder|prober`
-- 至少一次投递的任务队列 + 可见性超时(PG `SKIP LOCKED`);状态流转与队列操作共享同一事务域
-- 每个任务都有心跳;reaper 将失联任务标记为 `interrupted`(可重试)——runner 崩溃也不会让任务永久挂起
-- Redfish 优先,IPMI 兜底;`fake` 驱动用于开发与 CI
-- 每次安装两条引导载体:BMC 虚拟介质(默认)或 PXE/iPXE 网络引导(内置 proxyDHCP + TFTP,Pixiecore 风格;经 `MAMMOTH_PXE_ENABLED` 开启——见 docs/operations.md §4.5)
-
-## 交付物
-
-| 镜像 | 基础镜像 | 模式 | 说明 |
-|------|---------|------|------|
-| `mammoth` | distroless(静态) | api | 纯文件服务/控制面 |
-| `mammoth-builder` | alpine + xorriso/wimlib/7z | all / runner | 介质组装经外部命令;`builder` 为预留面(拆分落地前 serve 拒启) |
+前置条件:Go ≥ 1.26、Docker、QEMU、xorriso、curl。
 
 ```bash
-docker compose -f deploy/compose.all-in-one.yml up -d   # 1×all + PG
-docker compose -f deploy/compose.faceted.yml up -d      # 1×api + N×runner(builder 面为预留,介质组装在 runner 内)
+brew install qemu xorriso     # linux:sudo apt-get install qemu-system-x86 qemu-utils xorriso
+go build -o bin/mammoth ./cmd/mammoth
+bin/mammoth sandbox up        # --nodes N(1–5,默认 3)
 ```
 
-受限网络:`--build-arg RUNTIME_IMAGE=<mirror>/distroless/static-debian12:nonroot`
-与 `--build-arg GOPROXY=https://goproxy.cn,direct`。
+Docker 只用来跑 PostgreSQL;guest 是相互隔离的 slirp NAT——无需网桥、特权容器,
+也不用 root。资源按每台 guest 约 2 GB 内存 + 1 个核估算(3 台约 6 GB;无 KVM 时
+每台装机需数分钟)。装机 job 全绿之后:
+
+```bash
+ssh -i ~/.mammoth-sandbox/id_ed25519 -p 2222 root@127.0.0.1   # sandbox-node-1
+bin/mammoth sandbox status    # 正在跑什么、装到哪一步
+bin/mammoth sandbox down      # 全部停止;ISO 缓存与日志保留
+```
+
+端口冲突可通过环境变量调整:`MAMMOTH_SANDBOX_HTTP_PORT`、
+`MAMMOTH_SANDBOX_DB_PORT`、`MAMMOTH_SANDBOX_SSH_PORT`。沙箱机器是 fake BMC
+演示——真实机群通过同一套 API 与安装规格说 Redfish/IPMI。
+
+## 让 AI 来驱动——MCP server
+
+`mammoth mcp serve` 把同一套 API 以 MCP 工具的形式暴露在 stdio 上:注册机器、
+驱动盘查、提交声明式装机、跟踪任务到终态、读取任务日志。除 `install_submit`
+(会清盘重装目标机)与 `job_cancel` 外,其余工具均为只读。
+
+```json
+{
+  "mcpServers": {
+    "mammoth": {
+      "command": "/usr/local/bin/mammoth",
+      "args": ["mcp", "serve"],
+      "env": {
+        "MAMMOTH_API_URL": "http://127.0.0.1:8080",
+        "MAMMOTH_API_TOKEN": "<token>"
+      }
+    }
+  }
+}
+```
+
+把 Claude Desktop 或 Cursor 指向上面的沙箱,然后直接说:
+「列一下机器,把所有 ready 的机器都装上 Rocky 9,等任务完成」——
+猛犸级的任务,一句话驯服。
+
+## 一屏看懂架构
+
+```mermaid
+flowchart LR
+    cli["client · console · MCP"]
+    subgraph E["单二进制多模式:serve --mode=all|api|runner"]
+        api["api · 控制面(无状态)"]
+        runner["runner · 经 BMC 执行任务"]
+        builder["builder · 介质与引导 kit"]
+        prober["prober · 带内盘查"]
+    end
+    pg[("PostgreSQL · 状态 + 表队列")]
+    subgraph SEG["装机网段(每 VLAN 一台 edge)"]
+        edge["edge 网段代理<br/>proxyDHCP + TFTP<br/>(kit 定时同步 · sightings 回传)"]
+        dhcp["站点 DHCP · 发地址<br/>(单网段形态用引擎 builtin 池)"]
+    end
+    bmc["BMC(Redfish 优先 / IPMI 兜底)"]
+    m["被装机器"]
+    media["介质仓库(NFS/HTTP 池)"]
+    cli -->|"REST + SSE 事件流"| api
+    api <--> pg
+    runner <-->|"任务队列:至少一次投递<br/>心跳 + reaper(SKIP LOCKED)"| pg
+    builder <--> pg
+    prober <--> pg
+    runner --> bmc
+    bmc -->|"虚拟介质挂载"| m
+    prober -->|"SSH 布局快照"| m
+    builder -->|"重打包 ISO · external kit"| media
+    media -.->|"kit 同步"| edge
+    edge -->|"引导链 + 安装器日志 sink(:514)"| m
+    dhcp -.->|"发地址"| m
+    m -->|"spec/介质 HTTP 拉取 · 完成回调"| api
+    edge -.->|"sightings"| api
+```
+
+- 单网段(builtin)形态:引擎内建 proxyDHCP + TFTP + DHCP 池直答(仅对已登记装机任务发址);跨网段(external)形态:每装机 VLAN 一台 `edge` 代理(同镜像单子命令),kit 自动同步、sightings 回传进 pending_machines 台账、安装器日志经 :514 汇入任务日志
+- 状态流转与队列操作共享同一事务域;reaper 将失联任务标记为 `interrupted`(可重试)——runner 崩溃也不会让任务永久挂起;`fake` BMC 驱动用于开发与 CI
+- 交付镜像:**`mammoth-builder`(alpine + xorriso/wimlib/7z;all / runner——装机部署的实际形态**,介质组装与引导 kit 经外部命令;builder/prober 占位模式已于 v1.4.2 移除)· `mammoth`(distroless 静态;仅纯 api 控制面,无介质组装能力)
+- 部署:`docker compose -f deploy/compose.all-in-one.yml up -d`(1×all + PG)或 `compose.faceted.yml`(1×api + N×runner);受限网络 `--build-arg RUNTIME_IMAGE=<mirror>/distroless/static-debian12:nonroot` + `GOPROXY=https://goproxy.cn,direct`
 
 ## 官方控制台
 
@@ -358,7 +390,8 @@ docker compose -f deploy/compose.faceted.yml up -d      # 1×api + N×runner(bui
 是本引擎的官方 Web 控制台——零私有后端的 Vue 3 单页应用:所有能力边界由
 `GET /api/v1`(capabilities)驱动,所有动作都走你刚刚用过的同一套公开 API。
 
-机器全生命周期(注册/自动盘查/电源/健康与 SEL/BIOS/擦盘,高危动作两段式确认)、
+机器全生命周期(注册/自动盘查/电源/健康与 SEL/擦盘,高危动作两段式确认;
+BIOS 基线与漂移巡检、装后验收报告、退役证据三卡片)、
 四步装机向导(install-plan 试算预览)、任务与日志实时流(SSE)、零注册入门、
 事件审计与 HMAC 签名 webhook、⌘K 全局命令面板、暗色模式。`docker compose`
 伴引擎部署,或 `npm run dev` 本地开发。

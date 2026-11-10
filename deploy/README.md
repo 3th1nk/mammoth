@@ -64,4 +64,4 @@ visibility timeout + reaper 兜底)保证多 runner 消费不重不悬;api 无�
 | 镜像 | 基础 | 何时用 |
 |------|------|--------|
 | `Dockerfile` → distroless | 静态二进制,无 shell | `--mode=api`(纯文件服务/控制面) |
-| `Dockerfile.builder` → alpine + xorriso/wimlib/7z | 有 shell、有工具链 | **`--mode=all` 与 `--mode=runner`**(介质组装在进程内 shell 出这些工具,distroless 上必失败);`--mode=builder` 是预留面,serve 启动即拒绝,拆分落地前不要用 |
+| `Dockerfile.builder` → alpine + xorriso/wimlib/7z | 有 shell、有工具链 | **`--mode=all` 与 `--mode=runner`**(介质组装在进程内 shell 出这些工具,distroless 上必失败);`--mode=builder`/`prober` 占位模式已移除(v1.4.2) |

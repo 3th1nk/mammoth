@@ -41,4 +41,9 @@ COPY --from=build /out/mammoth /mammoth
 USER 65532:65532
 EXPOSE 8080
 ENTRYPOINT ["/mammoth"]
-CMD ["serve", "--mode=all"]
+# Default CMD must sit inside the image's capability boundary: distroless has
+# no media-assembly toolchain (xorriso/wimlib/7z), so all/runner would die
+# mid-install at the first repack — serve now fails that case at startup.
+# Pure control plane is what this image can honestly serve; provisioning
+# deployments use mammoth-builder (--mode=all is its default).
+CMD ["serve", "--mode=api"]

@@ -29,9 +29,11 @@ Mammoth 的运行时由三个职责面组成,可同进程运行,也可独立部�
 - **控制面**不触碰 BMC、不触碰文件系统:只做校验、受理、聚合。它随时可以多副本。
 - **runner** 从队列领取 task,推进状态机。每个 task 有心跳;控制面的 reaper 将心跳超时的
   task 标记为 `interrupted`,使其可被重试——进程崩溃不产生永久悬挂任务。
-- **builder** 独立消费"介质准备"子任务。渲染与介质组装是 CPU/IO 密集操作,独立成面后
-  可单独扩容,且把外部工具依赖(xorriso 等)圈定在专用部署单元内。
-- **prober** 承担带内盘查(SSH 探针)。逻辑简单但涉及外部网络访问,独立部署便于网络分区与限流。
+- **builder**(构建职责)负责应答文件渲染与引导介质组装——CPU/IO 密集,外部工具依赖
+  (xorriso/wimlib/7z)由工具链镜像(Dockerfile.builder)圈定。当前作为 runner 的内含
+  职责运行(all/runner 模式);独立拆分面从未立项,占位模式已于 v1.4.2 移除。
+- **prober**(盘查职责)承担带内盘查(SSH 探针)——同样作为 runner 的内含职责运行,
+  独立拆分面一并移除。
 
 **为什么控制面与执行面必须分离**
 
@@ -101,13 +103,12 @@ BMC 虚拟介质挂载 + 一次性引导(介质服务:内核 nfsd / 外部 NFS /
 ```
 mammoth serve --mode=all        # 单机一体化(评估/小规模)
 mammoth serve --mode=api        # 控制面
-mammoth serve --mode=runner     # 执行面
-mammoth serve --mode=builder    # 构建面(需要 xorriso,用户态装配无特权要求)
-mammoth serve --mode=prober     # 盘查面
+mammoth serve --mode=runner     # 执行面(构建/盘查职责内含,工具链镜像交付)
 ```
 
-- 容器化交付;builder 容器仅需 xorriso(纯用户态探测/提取/装配,不 loop mount),见 [06-install-pipeline.md](06-install-pipeline.md);
-- runner/builder/prober 与 api 同二进制、不同入口,共享一份配置与契约,避免分叉。
+- 容器化交付;介质组装为纯用户态装配(xorriso/wimlib/7z,不 loop mount),工具依赖
+  由 Dockerfile.builder 圈定,见 [06-install-pipeline.md](06-install-pipeline.md);
+- runner 与 api 同二进制、不同入口,共享一份配置与契约,避免分叉。
 
 ### 5.2 可观测性
 
@@ -128,8 +129,8 @@ mammoth serve --mode=prober     # 盘查面
 
 | 镜像 | 内容 | 基础镜像 | 说明 |
 |------|------|---------|------|
-| `mammoth` | 主二进制,`--mode=all/api/runner/prober` 共用 | distroless(静态编译,无 shell) | `api` 纯文件服务/控制面适用;`all`/`runner` 介质组装经外部命令(xorriso 等),须用 mammoth-builder 镜像(下方) |
-| `mammoth-builder` | 主二进制 + xorriso/wimlib/7z | alpine | 介质组装为纯用户态装配(`--mode=builder` 是预留面,拆分落地前 serve 拒启;当前 all/runner 以本镜像承载介质组装) |
+| `mammoth` | 主二进制,默认 `--mode=api` | distroless(静态编译,无 shell) | 纯控制面(默认值即能力边界);`all`/`runner` 介质组装经外部命令(xorriso 等),须用 mammoth-builder 镜像(下方) |
+| `mammoth-builder` | 主二进制 + xorriso/wimlib/7z,默认 `--mode=all` | alpine | 装机部署的实际形态:介质组装为纯用户态装配,all/runner 以本镜像承载(`--mode=builder`/`prober` 占位模式已移除) |
 
 - 多架构:amd64 + arm64(goreleaser → 多架构 manifest);
 - 配置全部经环境变量与挂载配置文件注入,镜像无状态;

@@ -1,4 +1,4 @@
-# mammoth-builder — build facet image (--mode=builder).
+# mammoth-builder — toolchain image for the provisioning facets (--mode=all/runner).
 # Needs external tools (xorriso for media assembly, M3) and loop-mount
 # privileges, so it stays on alpine rather than distroless
 # (docs/02-architecture.md §5.3).
@@ -40,4 +40,8 @@ COPY --from=build /out/mammoth /mammoth
 USER mammoth
 EXPOSE 8080
 ENTRYPOINT ["/mammoth"]
-CMD ["serve", "--mode=builder"]
+# The toolchain-bearing image exists to run the provisioning facets — its
+# default must be all (media assembly shells out to the apk tools above).
+# The old default pointed at --mode=builder, a placeholder mode removed
+# entirely in v1.4.2 — it made the image dead on a bare `docker run`.
+CMD ["serve", "--mode=all"]

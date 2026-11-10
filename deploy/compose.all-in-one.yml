@@ -33,8 +33,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    # The builder image's default CMD serves --mode=builder (its facet) —
-    # the engine refuses it (M3). All-in-one needs every facet in-process.
+    # All-in-one needs every facet in-process; the builder image's default
+    # CMD is --mode=all since v1.4.2 — stated here to stay explicit.
     command: ["serve", "--mode=all"]
     # PXE binds privileged UDP ports (67/69/4011) — the image runs as uid
     # 1000, so the capability must be granted explicitly when PXE is on.

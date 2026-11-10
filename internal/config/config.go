@@ -21,16 +21,14 @@ import (
 type Mode string
 
 const (
-	ModeAll     Mode = "all"
-	ModeAPI     Mode = "api"
-	ModeRunner  Mode = "runner"
-	ModeBuilder Mode = "builder"
-	ModeProber  Mode = "prober"
+	ModeAll    Mode = "all"
+	ModeAPI    Mode = "api"
+	ModeRunner Mode = "runner"
 )
 
 func (m Mode) Valid() bool {
 	switch m {
-	case ModeAll, ModeAPI, ModeRunner, ModeBuilder, ModeProber:
+	case ModeAll, ModeAPI, ModeRunner:
 		return true
 	}
 	return false

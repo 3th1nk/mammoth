@@ -381,7 +381,7 @@ flowchart LR
 
 - 单网段(builtin)形态:引擎内建 proxyDHCP + TFTP + DHCP 池直答(仅对已登记装机任务发址);跨网段(external)形态:每装机 VLAN 一台 `edge` 代理(同镜像单子命令),kit 自动同步、sightings 回传进 pending_machines 台账、安装器日志经 :514 汇入任务日志
 - 状态流转与队列操作共享同一事务域;reaper 将失联任务标记为 `interrupted`(可重试)——runner 崩溃也不会让任务永久挂起;`fake` BMC 驱动用于开发与 CI
-- 交付镜像:**`mammoth-builder`(alpine + xorriso/wimlib/7z;all / runner——装机部署的实际形态**,介质组装与引导 kit 经外部命令;builder/prober 占位模式已于 v1.4.2 移除)· `mammoth`(distroless 静态;仅纯 api 控制面,无介质组装能力)
+- 交付镜像:**`mammoth`(alpine + xorriso/wimlib/7z;all / runner——装机部署的实际形态**,介质组装与引导 kit 经外部命令;builder/prober 占位模式已于 v1.4.2 移除)· `mammoth-api`(distroless 静态;仅纯 api 控制面,无介质组装能力)
 - 部署:`docker compose -f deploy/compose.all-in-one.yml up -d`(1×all + PG)或 `compose.faceted.yml`(1×api + N×runner);受限网络 `--build-arg RUNTIME_IMAGE=<mirror>/distroless/static-debian12:nonroot` + `GOPROXY=https://goproxy.cn,direct`
 
 ## 官方控制台

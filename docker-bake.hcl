@@ -1,7 +1,7 @@
 // Multi-architecture image build matrix (amd64 + arm64) for both delivery
 // images (docs/02-architecture.md §5.3).
 group "default" {
-  targets = ["mammoth", "mammoth-builder"]
+  targets = ["mammoth", "mammoth-api"]
 }
 
 target "common" {
@@ -15,9 +15,9 @@ target "mammoth" {
   tags = ["mammoth:dev"]
 }
 
-target "mammoth-builder" {
+target "mammoth-api" {
   inherits = ["common"]
-  dockerfile = "Dockerfile"
+  dockerfile = "Dockerfile.api"
   context = "."
-  tags = ["mammoth-builder:dev"]
+  tags = ["mammoth-api:dev"]
 }

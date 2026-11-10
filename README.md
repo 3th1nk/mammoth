@@ -418,11 +418,11 @@ flowchart LR
 - State transitions and queue ops share one transaction domain; a reaper marks
   lost tasks `interrupted` (retryable) — a crashed runner never leaves a task
   suspended forever; `fake` BMC driver for development and CI
-- Delivery images: **`mammoth-builder` (alpine + xorriso/wimlib/7z; all /
+- Delivery images: **`mammoth` (alpine + xorriso/wimlib/7z; all /
   runner — the actual form for provisioning deployments**, media and boot-kit
   assembly shell out to these tools; the builder/prober placeholder modes were
-  removed in v1.4.2) · `mammoth` (distroless static; api-only control plane,
-  no media assembly)
+  removed in v1.4.2) · `mammoth-api` (distroless static; api-only control
+  plane, no media assembly)
 - Deploy: `docker compose -f deploy/compose.all-in-one.yml up -d` (1×all + PG)
   or `compose.faceted.yml` (1×api + N×runner); restricted networks via
   `--build-arg RUNTIME_IMAGE=<mirror>/distroless/static-debian12:nonroot` +

@@ -80,7 +80,7 @@ func serve(args []string) error {
 	if cfg.Mode.RunsRunner() {
 		hard, soft := builder.CheckToolchain(osexec.LookPath)
 		if len(hard) > 0 {
-			return fmt.Errorf("runner facet needs the media-assembly toolchain, missing %s from PATH — deploy the mammoth-builder image (alpine, tools included) or provide them", strings.Join(hard, ", "))
+			return fmt.Errorf("runner facet needs the media-assembly toolchain, missing %s from PATH — deploy the toolchain mammoth image (alpine, tools included) or provide them", strings.Join(hard, ", "))
 		}
 		if len(soft) > 0 {
 			logger.Warn("windows pathway tools missing from PATH — windows installs fail until provided",

@@ -129,8 +129,8 @@ mammoth serve --mode=runner     # 执行面(构建/盘查职责内含,工具链�
 
 | 镜像 | 内容 | 基础镜像 | 说明 |
 |------|------|---------|------|
-| `mammoth` | 主二进制,默认 `--mode=api` | distroless(静态编译,无 shell) | 纯控制面(默认值即能力边界);`all`/`runner` 介质组装经外部命令(xorriso 等),须用 mammoth-builder 镜像(下方) |
-| `mammoth-builder` | 主二进制 + xorriso/wimlib/7z,默认 `--mode=all` | alpine | 装机部署的实际形态:介质组装为纯用户态装配,all/runner 以本镜像承载(`--mode=builder`/`prober` 占位模式已移除) |
+| `mammoth` | 主二进制 + xorriso/wimlib/7z,默认 `--mode=all` | alpine(默认 Dockerfile) | **装机部署的实际形态**:介质组装为纯用户态装配,all/runner 以本镜像承载(占位模式 `--mode=builder`/`prober` 已移除) |
+| `mammoth-api` | 主二进制,默认 `--mode=api` | distroless(静态编译,无 shell) | 纯控制面(Dockerfile.api;默认值即能力边界,无介质组装能力) |
 
 - 多架构:amd64 + arm64(goreleaser → 多架构 manifest);
 - 配置全部经环境变量与挂载配置文件注入,镜像无状态;

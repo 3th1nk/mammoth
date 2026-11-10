@@ -1,4 +1,4 @@
-# mammoth-builder — toolchain image for the provisioning facets (--mode=all/runner).
+# mammoth — toolchain image for the provisioning facets (--mode=all/runner).
 # This is the repo's default Dockerfile: `docker build .` produces the
 # provisioning image, because a full-toolchain run is what most deployments
 # need. Needs external tools (xorriso for media assembly) and loop-mount

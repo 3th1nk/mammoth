@@ -47,5 +47,5 @@ ENTRYPOINT ["/mammoth"]
 # no media-assembly toolchain (xorriso/wimlib/7z), so all/runner would die
 # mid-install at the first repack — serve now fails that case at startup.
 # Pure control plane is what this image can honestly serve; provisioning
-# deployments use mammoth-builder (--mode=all is its default).
+# deployments use the toolchain mammoth image (--mode=all is its default).
 CMD ["serve", "--mode=api"]

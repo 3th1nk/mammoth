@@ -47,6 +47,16 @@ func (s *Server) GetNetbootScript(ctx context.Context, request gen.GetNetbootScr
 		// on, an unknown MAC is offered the shared probe payload and reports
 		// itself into pending_machines; otherwise fall through to disk.
 		if s.Enroll != nil {
+			// A MAC the hardware view owns belongs to a registered machine
+			// with no active task (NIC-first reboot, the stray-machine case):
+			// hand it the same fallback as no entry at all — exits to the
+			// firmware boot order, no probe ramdisk, no pending write. Match
+			// errors fall through to the enroll path (availability first).
+			if owned, oerr := s.Machines.HasMAC(ctx, mac); oerr == nil && owned {
+				obs.FromContext(ctx).InfoContext(ctx,
+					"enroll skipped — MAC belongs to a registered machine", "mac", mac)
+				return gen.GetNetbootScript200TextResponse(netboot.NoEntryScript(mac)), nil
+			}
 			// pending resource dimension — the MAC is not a machine id yet.
 			s.Events.Append(ctx, "pending", mac, "pending.enroll_served", map[string]any{
 				"mac": mac,
@@ -397,6 +407,21 @@ func (s *Server) ObservePXEClient(c *gin.Context) {
 	mac := netboot.NormalizeMAC(body.Mac)
 	if mac == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "mac is not a hardware address"})
+		return
+	}
+	// Same match-first rule as the builtin mode's OnObserve hook
+	// (cmd/mammoth/serve.go): a MAC the hardware view owns updates that
+	// machine's PXE observation columns and never enters pending_machines —
+	// the ledger records unknown devices, not registered ones.
+	hit, err := s.Machines.ObservePXE(c.Request.Context(), mac, body.Firmware)
+	if err != nil {
+		// Availability over strictness: an observation is a fact feed, not a
+		// transaction — fall through to the pending path like the builtin
+		// hook does on persist errors.
+		obs.FromContext(c.Request.Context()).WarnContext(c.Request.Context(),
+			"edge observation persist failed", "mac", mac, "err", err.Error())
+	} else if hit {
+		c.Status(http.StatusNoContent)
 		return
 	}
 	if _, err := s.Pending.TouchByMAC(c.Request.Context(), mac, body.Firmware); err != nil {

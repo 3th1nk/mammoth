@@ -50,6 +50,11 @@ POST   /api/v1/machines/batch-labels            # 批量打标签(单事务全�
 POST   /api/v1/machines/{id}/install-plan       # 试算(只读;已实现 V1,见 §4)
 POST   /api/v1/machines/{id}/actions            # 单机动作 → 202 + job
 
+GET    /api/v1/pending-machines                 # 待认领(零注册 sighting 清单)
+GET    /api/v1/pending-machines/{mac}           # 单条 sighting
+POST   /api/v1/pending-machines/{mac}/claim     # 认领 → 注册机器并消费 sighting
+DELETE /api/v1/pending-machines/{mac}           # 手动移除 sighting(幂等;已注册机器不会再入)
+
 POST   /api/v1/images                           # 工件库注册 + 触发拉取 → 202
 GET    /api/v1/images                           # 注册清单(新→旧)
 GET    /api/v1/images/{id}                      # 注册详情(fetching/ready/failed)

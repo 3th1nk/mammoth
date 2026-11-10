@@ -38,6 +38,22 @@ func (s *Server) ReportEnrollment(ctx context.Context, request gen.ReportEnrollm
 	if err != nil {
 		return nil, verr("SCHEMA_INVALID_PROBE_REPORT", "enrollment report is not valid JSON content")
 	}
+	// A MAC the hardware view owns belongs to a registered machine (the
+	// script fallback above makes this exotic — an in-flight enroll served
+	// before the machine was registered). Its facts live in the machine's
+	// own hardware/layout views; answer the probe so it completes, but keep
+	// the zero-registration ledger clean. Match errors fall through to the
+	// old behavior (availability first).
+	owned, oerr := s.Machines.HasMAC(ctx, mac)
+	if oerr != nil {
+		obs.FromContext(ctx).WarnContext(ctx, "enrollment report mac check failed",
+			"mac", mac, "err", oerr.Error())
+	}
+	if owned {
+		obs.FromContext(ctx).InfoContext(ctx,
+			"enrollment report ignored — MAC belongs to a registered machine", "mac", mac)
+		return gen.ReportEnrollment204Response{}, nil
+	}
 	if err := s.Pending.SaveReport(ctx, mac, raw); err != nil {
 		return nil, err
 	}
@@ -189,6 +205,25 @@ func (s *Server) GetPendingMachine(ctx context.Context, request gen.GetPendingMa
 		return nil, err
 	}
 	return gen.GetPendingMachine200JSONResponse(pendingToGen(m)), nil
+}
+
+// DeletePendingMachine removes one sighting — the manual answer for a row
+// whose machine was registered by hand after the sighting landed. Every
+// ingestion path auto-matches registered machines' NIC MACs, so without
+// this such leftovers would sit in the list forever. Idempotent: removing
+// an absent sighting is a no-op; an unregistered machine re-creates the
+// sighting on its next PXE boot (the ledger records the room's present).
+func (s *Server) DeletePendingMachine(ctx context.Context, request gen.DeletePendingMachineRequestObject) (gen.DeletePendingMachineResponseObject, error) {
+	if s.Pending == nil {
+		return gen.DeletePendingMachine204Response{}, nil
+	}
+	mac := netboot.NormalizeMAC(request.Mac)
+	if err := s.Pending.Delete(ctx, mac); err != nil {
+		return nil, err
+	}
+	s.Events.Append(ctx, "pending", mac, "pending.dismissed", map[string]any{})
+	obs.FromContext(ctx).InfoContext(ctx, "pending sighting dismissed", "mac", mac)
+	return gen.DeletePendingMachine204Response{}, nil
 }
 
 // ClaimPendingMachine promotes a sighting to a registered machine: the

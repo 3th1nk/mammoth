@@ -668,6 +668,23 @@ func (r *MachineRepo) ObservePXE(ctx context.Context, mac, firmware string) (boo
 	return n > 0, err
 }
 
+// HasMAC reports whether a NIC MAC belongs to a registered machine — the
+// read-only half of ObservePXE's jsonb match. The pending ingestion paths
+// (edge observation feed, iPXE script fallback, enrollment report) use it
+// to keep already-registered machines out of the zero-registration ledger.
+func (r *MachineRepo) HasMAC(ctx context.Context, mac string) (bool, error) {
+	var owned bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM machines
+			WHERE jsonb_typeof(hardware->'nics') = 'array'
+			  AND EXISTS (
+			      SELECT 1 FROM jsonb_array_elements(hardware->'nics') AS n
+			      WHERE regexp_replace(lower(n->>'mac'), '[:.-]', '', 'g')
+			          = regexp_replace(lower($1), '[:.-]', '', 'g')))`, mac).Scan(&owned)
+	return owned, err
+}
+
 // SetPXEObservation seeds the PXE observation columns directly, by machine
 // id — the claim path (docs/09-roadmap.md): a freshly registered machine
 // has no hardware view yet, so the pending sighting's facts are attached

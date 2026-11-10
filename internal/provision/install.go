@@ -586,37 +586,22 @@ func validateDD(spec *installSpecView) error {
 	return nil
 }
 
-// validateBootc enforces the bootc/OCI install contract (docs/09-roadmap.md
-// 下一阶段 16): the OCI reference is the payload, bootc owns the disk
-// layout — the spec's storage degrades to a single whole-disk selector
-// (the dd pathway's shape), and the checksum field is meaningless (an OCI
-// digest IS the integrity claim; integrity rides the digest-pinned pull).
+// validateBootc: the bootc/OCI pathway is FROZEN (2026-11-06 复议定案:
+// 无需求触发/目标场景错位/部署前置重一个量级 — docs/09-roadmap.md 下一阶段
+// 16). Submissions are refused at the door; the rendering payload stays in
+// tree (render/bootc, the agent's fourth payload) so a reopening — a real
+// customer holding an OCI OS image pipeline — is a revert of this gate plus
+// the contract checks from history, not a rewrite. 镜像派需求由 dd 整盘镜像
+// 直装(distro=dd)承接。
 func validateBootc(spec *installSpecView) error {
 	if spec.Image.Distro != "bootc" {
 		return nil
 	}
-	if spec.Image.Checksum != "" {
-		return classifiedErr("SCHEMA_INVALID_SPEC", false,
-			"image.checksum is not applicable to the bootc pathway — pin the OCI reference instead: image.source = registry/repo@sha256:<digest> (the pull IS the verification)")
-	}
-	if len(spec.Storage.Disks) != 1 {
-		return classifiedErr("SCHEMA_INVALID_SPEC", false,
-			"bootc takes exactly one target disk selector; got %d", len(spec.Storage.Disks))
-	}
-	d := spec.Storage.Disks[0]
-	if !d.Wipe {
-		return classifiedErr("SCHEMA_INVALID_SPEC", false,
-			"storage.disks[0]: bootc consumes the whole disk — declare wipe: true")
-	}
-	if len(d.Partitions) > 0 {
-		return classifiedErr("SCHEMA_INVALID_SPEC", false,
-			"storage.disks[0]: bootc owns the disk layout (DPS GUIDs: root + ESP + BIOS boot) — declare no partitions")
-	}
-	if len(spec.Storage.Lvm) > 0 || len(spec.Storage.Raid) > 0 {
-		return classifiedErr("SCHEMA_INVALID_SPEC", false,
-			"storage.lvm/raid are not expressible in the bootc pathway (the image owns the layout)")
-	}
-	return nil
+	return classifiedErr("SCHEMA_INVALID_SPEC", false,
+		"the bootc/OCI pathway is frozen and not accepting submissions — "+
+			"reopening requires a real customer with an OCI OS image pipeline "+
+			"(docs/09-roadmap.md 下一阶段 16); image-based delivery is served "+
+			"by the dd pathway (distro=dd)")
 }
 
 // partitionPV resolves a fresh-VG PV that lands on a disks[]-claimed disk:

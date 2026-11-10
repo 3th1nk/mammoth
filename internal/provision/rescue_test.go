@@ -138,50 +138,27 @@ func TestBuildAcceptanceReport(t *testing.T) {
 	}
 }
 
-// The bootc/OCI install contract's submit-side gates (docs/09-roadmap.md
-// 下一阶段 16): the checksum field is meaningless (the digest IS the
-// integrity claim), and bootc owns the disk layout — the storage degrades
-// to a single whole-disk selector, the dd shape.
-func TestValidateBootc(t *testing.T) {
-	mk := func() *installSpecView {
-		spec := &installSpecView{}
-		spec.Image.Distro = "bootc"
-		spec.Image.Source = "quay.io/centos/centos-bootc:stream9"
-		spec.Storage.Disks = []storageDiskView{{Wipe: true}}
-		return spec
-	}
-	if err := validateBootc(mk()); err != nil {
-		t.Fatalf("clean spec: %v", err)
-	}
-
-	spec := mk()
-	spec.Image.Checksum = "sha256:" + strings.Repeat("a", 64)
+// The bootc/OCI pathway is frozen (docs/09-roadmap.md 下一阶段 16 复议定案):
+// distro=bootc submissions are refused at the door with the reopening
+// condition; the rendering payload stays in tree for that eventual revert.
+func TestBootcFrozenRefusesSubmission(t *testing.T) {
+	spec := &installSpecView{}
+	spec.Image.Distro = "bootc"
+	spec.Image.Source = "quay.io/centos/centos-bootc:stream9"
+	spec.Storage.Disks = []storageDiskView{{Wipe: true}}
 	err := validateBootc(spec)
-	if err == nil || !strings.Contains(err.Error(), "digest") {
-		t.Fatalf("checksum must be rejected (digest-pinned source is the claim): %v", err)
+	if err == nil || !strings.Contains(err.Error(), "frozen") {
+		t.Fatalf("frozen pathway must refuse the submission, got: %v", err)
 	}
-
-	spec = mk()
-	spec.Storage.Disks[0].Wipe = false
-	if err := validateBootc(spec); err == nil || !strings.Contains(err.Error(), "wipe") {
-		t.Fatalf("unwiped target must be rejected: %v", err)
-	}
-
-	spec = mk()
-	spec.Storage.Disks[0].Partitions = []partitionView{{}}
-	if err := validateBootc(spec); err == nil || !strings.Contains(err.Error(), "layout") {
-		t.Fatalf("declared partitions must be rejected (bootc owns the layout): %v", err)
-	}
-
-	spec = mk()
-	spec.Storage.Lvm = []volumeGroupView{{}}
-	if err := validateBootc(spec); err == nil {
-		t.Fatal("lvm must be rejected (the image owns the layout)")
-	}
-
-	spec = mk()
-	spec.Storage.Disks = []storageDiskView{{Wipe: true}, {Wipe: true}}
-	if err := validateBootc(spec); err == nil || !strings.Contains(err.Error(), "one target disk") {
-		t.Fatalf("multi-disk must be rejected: %v", err)
+	// non-bootc distros pass this gate untouched (dd serves image-based delivery)
+	other := &installSpecView{}
+	other.Image.Distro = "dd"
+	if err := validateBootc(other); err != nil {
+		t.Fatalf("non-bootc distros must be ignored by this gate: %v", err)
 	}
 }
+
+func TestValidateBootcContractRemoved(t *testing.T) {
+	t.Skip("contract checks reverted with the freeze gate — recover from git history on reopening (2026-11-10)")
+}
+

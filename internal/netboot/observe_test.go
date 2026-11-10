@@ -101,3 +101,28 @@ func TestWindowResetsBurst(t *testing.T) {
 		t.Fatalf("out-of-window burst must reset, got: %s", buf.String())
 	}
 }
+
+// 2026-11-10 .132 real-segment panic: serve constructs the observer before
+// its resolver exists (taskFor nil), and the first real DISCOVER burst past
+// the threshold called the nil func — SIGSEGV took the whole netboot
+// handler down. Attribution must degrade, never panic.
+func TestNilTaskForDegradesInsteadOfPanic(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	o := NewObserver(nil, log)
+	o.now = func() time.Time { return time.Unix(1_000_000, 0) }
+	for i := 0; i < discoverThreshold; i++ {
+		o.NoteMessage("aa:bb:cc:dd:ee:01", msgDiscover, false)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("no task attribution")) {
+		t.Fatalf("nil taskFor must degrade to engine-log-only, got: %s", buf.String())
+	}
+	// Late wiring turns attribution on without restarting the watcher.
+	o.SetTaskFor(func(mac string) string { return "tsk_late" })
+	for i := 0; i < discoverThreshold; i++ {
+		o.NoteMessage("aa:bb:cc:dd:ee:02", msgDiscover, false)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("tsk_late")) {
+		t.Fatalf("SetTaskFor must arm attribution, got: %s", buf.String())
+	}
+}

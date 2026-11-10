@@ -296,6 +296,19 @@ func serve(args []string) error {
 					Extra: e.Extra,
 				}, nil
 			}), 15*time.Second)
+		// The DHCP address-service observer was constructed before this
+		// resolver existed (NewObserver(nil) above) — wire its MAC→task
+		// chain now. Without this, attribution falls back to engine-log-only
+		// (and pre-fix, nil-func call panicked on real-segment DISCOVERs).
+		dhcpObserver.SetTaskFor(func(mac string) string {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			e, err := nbResolver.Entry(ctx, mac)
+			if err == nil && e != nil && e.TaskID != "" {
+				return e.TaskID
+			}
+			return ""
+		})
 		// Escape-hatch mode (MAMMOTH_PXE_MODE=external): materialize the
 		// static TFTP kit the site dnsmasq serves — NBP binaries, grub
 		// modules, and the two self-identifying trampolines. Export failure

@@ -78,7 +78,9 @@ type macWatch struct {
 }
 
 // NewObserver wires the watcher. taskFor resolves the MAC's active task id
-// ("" when the MAC maps to no task); log receives the attributed lines.
+// ("") when the MAC maps to no task); log receives the attributed lines.
+// taskFor may be nil at construction and late-wired via SetTaskFor —
+// attribution degrades to engine-log-only until then.
 func NewObserver(taskFor func(mac string) string, log *slog.Logger) *Observer {
 	if log == nil {
 		log = slog.Default()
@@ -89,6 +91,21 @@ func NewObserver(taskFor func(mac string) string, log *slog.Logger) *Observer {
 		log:     log,
 		now:     time.Now,
 	}
+}
+
+// SetTaskFor late-wires the MAC→task attribution chain. serve constructs
+// the observer before its resolver exists (cmd/mammoth/serve.go wires it
+// right after the boot-entry registry is built); calling the nil func used
+// to SIGSEGV the netboot handler on the first real-segment DISCOVER burst
+// (2026-11-10 .132). Nil taskFor stays safe: attribution falls back to the
+// engine-log-only path in NoteMessage.
+func (o *Observer) SetTaskFor(taskFor func(mac string) string) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.taskFor = taskFor
 }
 
 // NoteMessage feeds one parsed client message into the state machine.
@@ -145,7 +162,11 @@ func (o *Observer) NoteMessage(mac string, msgType byte, addressed bool) {
 		return
 	}
 	if w.warnedAt.IsZero() || now.Sub(w.warnedAt) >= repeatSuppression {
-		o.emit(mac, o.taskFor(mac),
+		var taskID string
+		if o.taskFor != nil { // nil until SetTaskFor late-wires the chain
+			taskID = o.taskFor(mac)
+		}
+		o.emit(mac, taskID,
 			"repeated DISCOVER with no address follow-up — no DHCP answered on this segment (proxy mode: the segment has NO address service; pool mode: the site side is silent)")
 		w.warnedAt = now
 	}

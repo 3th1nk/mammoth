@@ -524,7 +524,9 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
     UpdateService 的支持度与固件包获取形态真机核验(华为/浪潮各一轮);
     风险高(变砖),缺能力 422 沿契约先例。
 16. **bootc/OCI 镜像直装**(P2→**✅ 代码落地后冻结进「等条件组」
-    (2026-11-07 复议定案)**;RHEL 10 Anaconda `bootc` 指令确立"OCI 镜像
+    (2026-11-07 复议定案;v1.4.2 更新:提交入口已关闭——distro=bootc
+    提交即拒,SCHEMA_INVALID_SPEC 文案带重开条件并指路 dd 通路,渲染
+    payload 自持)**;RHEL 10 Anaconda `bootc` 指令确立"OCI 镜像
     即装机单元"。**复议否决项**:立项纯趋势跟随、无真实需求触发(对比
     dd=工控机 POC、headless=办公电脑场景);**目标场景错位**——mammoth
     用户群(私有化/离线机房/信创/工控)与 bootc 生态(RHEL 系公有

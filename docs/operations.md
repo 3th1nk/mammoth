@@ -210,8 +210,9 @@ iPXE 脚本),默认关闭。启用清单:
      介质挂 BMC),且工具池为必配(seed 注入 / raw.xz 都出自它)——双载体
      (虚拟介质 / PXE)均依赖 extended 池,无池部署时 dd 仅在「无 seed
      意图且 format=raw/raw.gz」组合下可用。
-   - **bootc/OCI 通路专属**(roadmap 下一阶段 16):extended 池为**硬性
-     必配**——agent `apk add podman` 是通路前提(boot 行无条件携带
+   - **bootc/OCI 通路专属**(**通路已冻结,v1.4.2 起提交入口关闭——
+     distro=bootc 提交即拒;以下池要求仅在重开时生效**,roadmap 下一阶段
+     16):extended 池为**硬性必配**——agent `apk add podman` 是通路前提(boot 行无条件携带
      alpine_repo;无池部署 bootc 不可用,任务失败错误点名本项)。注意
      extended ISO 的 /apks 是否携带 podman 按镜像版本核对:3.22 extended
      的 /apks 为 main 子集,podman 在 **community** 仓——若部署介质未

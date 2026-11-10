@@ -472,8 +472,11 @@ grub.cfg,`cat /proc/cmdline` 可验。
 - 双载体(vMedia standard ISO + PXE NETBOOT)与工具池前置见
   docs/operations.md §4.5。
 
-**bootc — OCI 镜像安装**(roadmap 下一阶段 16;**已冻结进等条件组**,
-重开条件 = 持有 OCI OS 镜像流水线的真实客户;代码自持):
+**bootc — OCI 镜像安装**(roadmap 下一阶段 16;**已冻结,v1.4.2 起提交
+入口关闭**——`distro=bootc` 提交即拒(`SCHEMA_INVALID_SPEC`,文案带重开
+条件并指路 dd 通路);重开条件 = 持有 OCI OS 镜像流水线的真实客户,重开 =
+revert 门禁 + 从历史恢复契约校验。渲染 payload 自持。**以下 spec 形态仅作
+重开参考,当前不被接受**):
 
 ```jsonc
 { "image": { "source": "quay.io/centos/centos-bootc@sha256:abc...",  // OCI 引用,digest 钉死 = 完整性

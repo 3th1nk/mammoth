@@ -14,7 +14,7 @@ Mammoth 是一个自包含的裸金属服务器安装/重装引擎:以 `{带外�
 | 文档 | 内容 |
 |------|------|
 | [01-overview.md](01-overview.md) | 项目定位、能力总览、设计原则、明确不做什么 |
-| [02-architecture.md](02-architecture.md) | 总体架构:控制面/执行面/构建面分离、任务状态机、部署形态 |
+| [02-architecture.md](02-architecture.md) | 总体架构:控制面/执行面分离(构建/盘查职责内含 runner)、任务状态机、部署形态 |
 | [03-api.md](03-api.md) | API 设计规范:资源模型、URL 空间、动作语义、横切规范 |
 | [04-install-spec.md](04-install-spec.md) | 数据契约:Machine/Credential/Layout 与 Install Spec(storage/network/…) |
 | [05-inventory.md](05-inventory.md) | 盘查体系:三探针(Redfish / inband-ssh / ramdisk)与分区快照 |

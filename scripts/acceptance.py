@@ -2,7 +2,9 @@
 """M0 acceptance flow (docs/09-roadmap.md).
 
 Drives a running mammoth instance (mode=all) through the full acceptance
-path with the fake BMC driver:
+path with the fake BMC driver. Host prerequisites: the media-assembly
+toolchain on PATH — xorriso (hard: the v1.4.2 startup preflight refuses
+all/runner without it), wimlib-imagex/7z only warn (windows pathway):
 
   1. register credential + a batch of machines
   2. submit a batch power_on job            → 202 + job

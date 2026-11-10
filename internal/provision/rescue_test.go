@@ -161,4 +161,3 @@ func TestBootcFrozenRefusesSubmission(t *testing.T) {
 func TestValidateBootcContractRemoved(t *testing.T) {
 	t.Skip("contract checks reverted with the freeze gate — recover from git history on reopening (2026-11-10)")
 }
-

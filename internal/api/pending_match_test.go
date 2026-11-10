@@ -38,8 +38,8 @@ func TestPendingIngestionMatchFirst(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	const ownedMAC = "aa:bb:cc:dd:ee:91"  // NIC of the seeded machine
-	const strayMAC = "aa:bb:cc:dd:ee:92"  // never registered
+	const ownedMAC = "aa:bb:cc:dd:ee:91" // NIC of the seeded machine
+	const strayMAC = "aa:bb:cc:dd:ee:92" // never registered
 	t.Cleanup(func() {
 		_, _ = db.Exec(`DELETE FROM pending_machines WHERE mac IN ($1, $2)`, ownedMAC, strayMAC)
 		_, _ = db.Exec(`DELETE FROM events WHERE resource_id IN ($1, $2)`, ownedMAC, strayMAC)

@@ -28,8 +28,9 @@ services:
       # Builder image (alpine + xorriso/wimlib/7z), NOT distroless: media
       # assembly shells out to those tools (bootiso.go), and mode=all runs
       # it in-process — vMedia/agent media builds fail on distroless.
-      # The distroless Dockerfile fits file-serving-only facets (api).
-      dockerfile: Dockerfile.builder
+      # The distroless image (Dockerfile.api) fits file-serving-only
+      # facets (api) — not this service, which assembles media.
+      dockerfile: Dockerfile
     depends_on:
       postgres:
         condition: service_healthy

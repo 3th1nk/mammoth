@@ -9,7 +9,7 @@
 #   MAMMOTH_EDGE_BASE_URL=http://<engine>:8080 \
 #     docker compose -f compose.edge.yml up -d
 #
-# The image builds from the repo Dockerfile (distroless, static binary —
+# The image builds from the repo Dockerfile.api (distroless, static binary —
 # the edge facet needs no media toolchain) and runs `mammoth edge`; the
 # synced kit lives on a mounted volume so it survives recreation.
 # (v1.4.0 renamed the subcommand: it used to be `pxe-proxy`.)
@@ -18,7 +18,7 @@ services:
   edge:
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.api
     command: ["edge"]
     network_mode: host
     restart: unless-stopped

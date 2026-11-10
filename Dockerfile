@@ -1,11 +1,10 @@
-# mammoth — main business-facet image (--mode=all|api|runner|prober).
-# distroless: static binary, no shell, no package manager (docs/02-architecture.md §5.3).
-#
-# Restricted networks can redirect the runtime base, e.g.:
-#   docker build --build-arg RUNTIME_IMAGE=<mirror>/distroless/static-debian12:nonroot .
-# Global build arg so the FROM line below can consume it.
-ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
-
+# mammoth-builder — toolchain image for the provisioning facets (--mode=all/runner).
+# This is the repo's default Dockerfile: `docker build .` produces the
+# provisioning image, because a full-toolchain run is what most deployments
+# need. Needs external tools (xorriso for media assembly) and loop-mount
+# privileges, so it stays on alpine rather than distroless
+# (docs/02-architecture.md §5.3). The control-plane-only shape lives in
+# Dockerfile.api.
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 # Restricted networks: --build-arg GOPROXY=https://goproxy.cn,direct
 ARG GOPROXY=https://proxy.golang.org,direct
@@ -34,16 +33,18 @@ RUN VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || ec
     go build -trimpath -buildvcs=false -ldflags "-s -w -X github.com/3th1nk/mammoth/internal/version.Version=${VERSION} -X github.com/3th1nk/mammoth/internal/version.Commit=${COMMIT}" \
     -o /out/mammoth ./cmd/mammoth
 
-FROM ${RUNTIME_IMAGE}
+FROM alpine:3.20
+# xorriso lands with M3 media assembly; declared here so the deployment
+# unit boundary is visible from day one. wimlib/p7zip back the windows WIM
+# path (wimlib-imagex / 7z). genisoimage never existed on alpine and no
+# code path invokes it — dropped.
+RUN apk add --no-cache xorriso wimlib p7zip ca-certificates && adduser -D -u 1000 mammoth
 COPY --from=build /out/mammoth /mammoth
-# Facets other than builder have no external tool dependencies.
-# nonroot on distroless = uid 65532; numeric form works on any substitute base.
-USER 65532:65532
+USER mammoth
 EXPOSE 8080
 ENTRYPOINT ["/mammoth"]
-# Default CMD must sit inside the image's capability boundary: distroless has
-# no media-assembly toolchain (xorriso/wimlib/7z), so all/runner would die
-# mid-install at the first repack — serve now fails that case at startup.
-# Pure control plane is what this image can honestly serve; provisioning
-# deployments use mammoth-builder (--mode=all is its default).
-CMD ["serve", "--mode=api"]
+# The toolchain-bearing image exists to run the provisioning facets — its
+# default must be all (media assembly shells out to the apk tools above).
+# The old default pointed at --mode=builder, a placeholder mode removed
+# entirely in v1.4.2 — it made the image dead on a bare `docker run`.
+CMD ["serve", "--mode=all"]

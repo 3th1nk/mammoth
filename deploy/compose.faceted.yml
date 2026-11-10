@@ -51,7 +51,7 @@ services:
       context: ..
       # Distroless is fine here: the api serves files (from the shared media
       # mount) but assembles nothing.
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.api
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,7 +78,7 @@ services:
       # Builder image (alpine + xorriso/wimlib/7z): the runner assembles
       # media in-process (prepare_media → bootiso/wimlib), distroless would
       # fail every vMedia/agent build.
-      dockerfile: Dockerfile.builder
+      dockerfile: Dockerfile
     depends_on:
       postgres:
         condition: service_healthy

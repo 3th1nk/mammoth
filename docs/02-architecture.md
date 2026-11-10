@@ -30,7 +30,7 @@ Mammoth 的运行时由三个职责面组成,可同进程运行,也可独立部�
 - **runner** 从队列领取 task,推进状态机。每个 task 有心跳;控制面的 reaper 将心跳超时的
   task 标记为 `interrupted`,使其可被重试——进程崩溃不产生永久悬挂任务。
 - **builder**(构建职责)负责应答文件渲染与引导介质组装——CPU/IO 密集,外部工具依赖
-  (xorriso/wimlib/7z)由工具链镜像(Dockerfile.builder)圈定。当前作为 runner 的内含
+  (xorriso/wimlib/7z)由工具链镜像(默认 Dockerfile)圈定。当前作为 runner 的内含
   职责运行(all/runner 模式);独立拆分面从未立项,占位模式已于 v1.4.2 移除。
 - **prober**(盘查职责)承担带内盘查(SSH 探针)——同样作为 runner 的内含职责运行,
   独立拆分面一并移除。
@@ -107,7 +107,7 @@ mammoth serve --mode=runner     # 执行面(构建/盘查职责内含,工具链�
 ```
 
 - 容器化交付;介质组装为纯用户态装配(xorriso/wimlib/7z,不 loop mount),工具依赖
-  由 Dockerfile.builder 圈定,见 [06-install-pipeline.md](06-install-pipeline.md);
+  由默认 Dockerfile(工具链镜像)圈定,见 [06-install-pipeline.md](06-install-pipeline.md);
 - runner 与 api 同二进制、不同入口,共享一份配置与契约,避免分叉。
 
 ### 5.2 可观测性

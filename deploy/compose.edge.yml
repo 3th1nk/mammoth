@@ -1,0 +1,33 @@
+# mammoth edge — one instance per provisioning VLAN
+# (docs/operations.md §4.5.1 edge 节 for the full runbook: addressing, firewall,
+#  site-DHCP coexistence, UEFI NBP choice).
+#
+# Runs on the edge host of the machine segment; host networking is required
+# (proxyDHCP :67/:4011, TFTP :69 and the optional :514 sink would be
+# isolated by a bridge network).
+#
+#   MAMMOTH_EDGE_BASE_URL=http://<engine>:8080 \
+#     docker compose -f compose.edge.yml up -d
+#
+# The image builds from the repo Dockerfile (distroless, static binary —
+# the edge facet needs no media toolchain) and runs `mammoth edge`; the
+# synced kit lives on a mounted volume so it survives recreation.
+# (v1.4.0 renamed the subcommand: it used to be `pxe-proxy`.)
+name: mammoth-edge
+services:
+  edge:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["edge"]
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      MAMMOTH_EDGE_BASE_URL: ${MAMMOTH_EDGE_BASE_URL:?set the engine base URL}
+      MAMMOTH_EDGE_NEXT_SERVER: ${MAMMOTH_EDGE_NEXT_SERVER:-}
+      MAMMOTH_EDGE_KIT_TOKEN: ${MAMMOTH_EDGE_KIT_TOKEN:-}
+      MAMMOTH_EDGE_SEGMENT: ${MAMMOTH_EDGE_SEGMENT:-vlan-1}
+      MAMMOTH_EDGE_TFTP_ROOT: ${MAMMOTH_EDGE_TFTP_ROOT:-/var/lib/mammoth/tftp}
+      MAMMOTH_EDGE_SYNC_INTERVAL: ${MAMMOTH_EDGE_SYNC_INTERVAL:-5m}
+    volumes:
+      - ${MAMMOTH_EDGE_TFTP_ROOT:-/var/lib/mammoth/tftp}:${MAMMOTH_EDGE_TFTP_ROOT:-/var/lib/mammoth/tftp}

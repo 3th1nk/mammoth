@@ -4,7 +4,7 @@
 # deploy/README.md §跨机器: identical MASTER_KEY on every node, MediaDir on a
 # shared kernel-nfsd export (machine-facing HTTP reads the LOCAL MediaDir —
 # every node binds the same dir), an LB over api replicas, and one PXE
-# responder per provisioning L2 (pxe-proxy for the rest — operations.md §4.5).
+# responder per provisioning L2 (edge for the rest — operations.md §4.5).
 #
 # NOTE: there is no `builder` service — the placeholder mode was removed
 # (v1.4.2); the runner assembles media in-process, hence the builder
@@ -62,7 +62,7 @@ services:
       # Off by default; enabling needs the container ON the provisioning L2
       # (host or macvlan networking — bridge port mappings cannot carry DHCP
       # broadcasts; ops.md §4.5) and only ONE responder per L2 — run
-      # compose.pxe-proxy.yml on the edge of every other VLAN instead.
+      # compose.edge.yml on the edge of every other VLAN instead.
       MAMMOTH_PXE_ENABLED: ${MAMMOTH_PXE_ENABLED:-false}
       MAMMOTH_PXE_NEXT_SERVER: ${MAMMOTH_PXE_NEXT_SERVER:-}
       MAMMOTH_PXE_SYSLOG_PORT: "5514"

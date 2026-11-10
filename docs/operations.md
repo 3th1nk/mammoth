@@ -349,7 +349,7 @@ windows 全链 rig 见 `scripts/windows-dev/external-win-e2e.sh`。
 
 ### 站点 DHCP 不可控:共存边界与最佳实践(2026-11-03)
 
-装机 VLAN 上已有站点 DHCP 且不可改造时,**proxyDHCP 旁挂(pxeproxy)是
+装机 VLAN 上已有站点 DHCP 且不可改造时,**proxyDHCP 旁挂(edge)是
 唯一共存形态**——POOL 模式与 external(站点 dnsmasq 全量 DHCP)都是完整
 地址权威,并存即双权威(租约打架/外来客户端抽干小池,allowlist 门禁的
 2288H 机房教训即源于此)。行业同型实践:FOG 的 dnsmasq proxy 是官方

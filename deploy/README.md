@@ -11,7 +11,7 @@
 | `compose.all-in-one.yml` | **拓扑 1(评估/小规模)**:单引擎 `--mode=all` + PostgreSQL。介质组装工具链(builder 镜像)+ 介质目录 bind mount 已内置 |
 | `compose.faceted.yml` | **拓扑 2(分面/扩展)**:1×api + N×runner + PostgreSQL,单机或跨机器展开,见下文[跨机器](#跨机器多机器多节点) |
 | `compose.tls.yml` + `Caddyfile` | TLS 终止 overlay(生产):与上面任一拓扑叠加 `-f compose.tls.yml`,引擎保持 HTTP,443 由 Caddy 终止(§4.6) |
-| `compose.pxe-proxy.yml` + `pxe-proxy.env.example` | **每装机 VLAN 一个**的 Go 原生网段代理(proxyDHCP + TFTP,host 网络):中心引擎不在该 L2 时的 PXE 投递(§4.5 pxe-proxy 节) |
+| `compose.edge.yml` + `edge.env.example` | **每装机 VLAN 一个**的 Go 原生网段代理(proxyDHCP + TFTP,host 网络):中心引擎不在该 L2 时的 PXE 投递(§4.5.1 edge 节) |
 | `Dockerfile.nfsd` + `nfsd/` | 内核 nfsd 管理 sidecar(管理**宿主机内核**的 nfsd 单例;privileged + host 网络) |
 | `Dockerfile.samba` + `samba/` | guest 只读 SMB2 sidecar(Windows wimboot setup 通路的安装源;bridge 网络 + 445 即可) |
 | `mammoth.env.example` | 全量环境变量模板(`.env` 放同目录即被 compose 读取) |
@@ -55,7 +55,7 @@ visibility timeout + reaper 兜底)保证多 runner 消费不重不悬;api 无�
 3. **api 前面挂 LB**(任意四层/七层轮询即可,机器面都是一次性拉取无会话),
    所有节点 `MAMMOTH_EXTERNAL_URL` 指向 LB VIP。
 4. **PXE 每 L2 一个应答者**:目标 L2 上的节点开 `MAMMOTH_PXE_ENABLED`
-   (api 面,需 host/macvlan 网络,§4.5);其余 VLAN 用 `compose.pxe-proxy.yml`。
+   (api 面,需 host/macvlan 网络,§4.5);其余 VLAN 用 `compose.edge.yml`。
 5. `MAMMOTH_BMC_TIMEOUT` 等执行面参数在 runner 上调整;控制面 api 不发起
    BMC 调用。
 

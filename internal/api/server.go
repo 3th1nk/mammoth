@@ -15,6 +15,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/bmc"
 	"github.com/3th1nk/mammoth/internal/bmcweb"
 	"github.com/3th1nk/mammoth/internal/bmcweb/dell"
+	"github.com/3th1nk/mammoth/internal/bmcweb/h3c"
 	"github.com/3th1nk/mammoth/internal/bmcweb/huawei"
 	"github.com/3th1nk/mammoth/internal/netboot"
 	"github.com/3th1nk/mammoth/internal/obs"
@@ -257,6 +258,7 @@ func New(d Deps, apiToken string) *gin.Engine {
 		bmcwebProxy = bmcweb.New(d.Machines, d.Credentials, d.Crypto, apiToken)
 		// vendor launchers (统一入口,按机型 Vendor 解析;新厂商在此注册)
 		bmcwebProxy.Register(huawei.New())
+		bmcwebProxy.Register(h3c.New())
 		bmcwebProxy.Register(dell.New())
 		router.GET("/bmcweb/:id/session", func(c *gin.Context) {
 			bmcwebProxy.Session(c, c.Param("id"))

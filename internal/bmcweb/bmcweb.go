@@ -384,7 +384,10 @@ func (p *Proxy) TryProxy(w http.ResponseWriter, r *http.Request) bool {
 	}
 	rp := &httputil.ReverseProxy{
 		Transport: &http.Transport{
-			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, // vendor self-signed cert
+			// Vendor self-signed cert + the same wide TLS floor the redfish
+			// driver carries: HDM (AMI MegaRAC) negotiates only RSA-key-exchange
+			// suites that Go defaults no longer offer (docs/compat/h3c.md §1).
+			TLSClientConfig:   tlsVendorConfig(),
 			ForceAttemptHTTP2: false,
 		},
 		Director: func(req *http.Request) {
@@ -444,6 +447,25 @@ func etagMatches(inm, etag string) bool {
 		}
 	}
 	return false
+}
+
+// tlsVendorConfig is the shared TLS floor for proxying to vendor BMCs:
+// self-signed certs, TLS 1.0 floor, every suite (legacy BMC stacks — AMI
+// MegaRAC family — need RSA-key-exchange ciphers Go stopped offering by
+// default).
+func tlsVendorConfig() *tls.Config {
+	var suites []uint16
+	for _, s := range tls.CipherSuites() {
+		suites = append(suites, s.ID)
+	}
+	for _, s := range tls.InsecureCipherSuites() {
+		suites = append(suites, s.ID)
+	}
+	return &tls.Config{ // #nosec G402 — vendor self-signed certs are the norm
+		InsecureSkipVerify: true,
+		MinVersion:         tls.VersionTLS10,
+		CipherSuites:       suites,
+	}
 }
 
 // stripSecureCookie drops the Secure attribute from upstream cookies: the

@@ -1,13 +1,60 @@
-# 厂商实录:H3C HDM(文档推演,待真机复核)
+# 厂商实录:H3C HDM(文档推演 + 真机定案)
 
-> 本文档与 [huawei.md](huawei.md) 不同:全部内容摘自官方文档
-> **《H3C HDM Redfish 参考手册》(资料版本 V3.35,适用 HDM-3.26 及以上)**
-> 与既有驱动的对号推演,**尚未经任何真机验证**。矩阵 YAML(known_defects
-> 需可复现固件区间)在真机复核前保持为空——本页只回答"接上 H3C 时
-> 该预期什么、先验什么"。
+> **真机复核已完成(2026-11-14,UniServer R4900 G3 / HDM 3.16.00
+> V100R001B05D071,只读)**——文首推演与真机行为逐条对账见下文
+> "真机定案";控制台适配(internal/bmcweb/h3c)已落地。原始文档推演
+> 保留在真机定案之后。
 >
 > 跨厂商共性模式见 [patterns.md](patterns.md);新厂商到货 30 分钟预检
 > 流程见 [README.md](README.md)。
+
+## 真机定案(2026-11-14,只读)
+
+| 方法 | 结果 |
+|---|---|
+| Probe | ✓ vendor="new h3c technologies co., ltd." model=UniServer R4900 G3 fw=3.16.00 HDM V100R001B05D071 |
+| PowerState / CollectInventory | ✓ coverage partial(NIC 枚举不可用,见 D2) |
+| Health | ✓ 53 sensors(health=critical,盘位告警) |
+| FirmwareInventory | ✓ 5 组件 |
+| PhysicalDrives | ✓ 4×6TB ST6000NM0034,**带序列号**(好于 Dell iDRAC8 的空 SN) |
+| BiosAttributes | ✓ 2184 属性 |
+| SystemEventLog | ✗ 见 D3(逐条 GET 不可用 + 分页慢,deadline partial 语义兜底) |
+
+**驱动兼容性变更**:
+- **D1 TLS 地板(真机命中的首个 AMI MegaRAC 真机)**:HDM 只协商
+  **RSA-key-exchange 套件**(curl 实测 AES256-GCM-SHA384 即 RSA kex),
+  Go 默认已停发该类套件——裸客户端在任何 HTTP 交换前
+  "tls: handshake failure"死亡。修复:redfish 驱动 makeHTTPClient 与
+  bmcweb proxy 的 transport 显式提供全量套件(含 legacy)+ TLS 1.0
+  下限(与 Dell avct 的 DefaultTLSConfig 同型,已进 patterns)。
+- **D2 NIC 枚举不可用**:Systems/1 无标准 EthernetInterfaces 链接
+  (HDM 把 NIC 放在自家命名空间),CollectInventory 按
+  coverage=partial + note 降级,不失败。
+- **D3 SEL 逐条 GET 不可用**:HDM 有 4 个 LogService
+  (AuditLog/FirmwareUpdateLog/ConfigurationLog/HardwareUpdateLog),
+  AuditLog 的条目资源固件拒绝读取(约 4s 后失败),Entries 集合响应
+  ~8s/963 条且**倒序**(最新在头,违反 DSP0268 升序)。驱动已加:
+  服务名过滤(跳过运维日志)+ 每服务 cap + 方向探测(数值 Id 比对
+  两端)+ 整体 deadline + partial 语义(health.go selWalkDeadline)。
+- **D4 KVM 服务开关在 web 侧**:Redfish KvmService 资源不暴露
+  ServiceEnabled;真机 HDM 的 KVM 服务处于停用状态,需在 HDM web
+  "远程服务-服务设置"开启后 console 通路才完整(链路已通到
+  viewer.html 页面加载,见 §KVM)。
+
+**控制台通路(已实现,internal/bmcweb/h3c)**:
+- HDM 的 KVM 是 **AMI H5 Viewer**(`/viewer.html`,HTML5),数据通道为
+  **同源 websocket**(`wss://<hdm>/kvm`,share 模式经 web 端口;
+  dedicated 9666/9667 明文 ws 不走代理)。
+- 登录:`POST /api/session/login`(form `username=` 在前)→ JSON
+  `{"cc":0,"CSRFToken":"..","privilege":..}` + Set-Cookie QSESSIONID;
+  **表单同样位置敏感**(与 Dell §4 同款)。
+- viewer 的会话状态读 cookie `CSRF`/`kvm_mode`(1=share)与
+  sessionStorage `garc`(=CSRFToken)/privilege 等;launcher BootScript
+  在代理同源内完成登录、注入状态、跳 `/viewer.html`——websocket 升级
+  由 httputil.ReverseProxy 原生承载。
+- 真机链路已通到 viewer 页面加载;KVM 服务启用(D4)后待 E2E 出图。
+
+## 原始文档推演(真机复核前的对号,保留供对照)
 
 ## 底座判定:AMI MegaRAC(文档实证)
 

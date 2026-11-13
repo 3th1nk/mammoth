@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/3th1nk/mammoth/internal/bmc"
 )
@@ -217,14 +218,21 @@ func (d *Driver) SystemEventLog(ctx context.Context, addr string, cred bmc.Crede
 	if err != nil {
 		return nil, err
 	}
-	entries, err := walkSEL(ctxGet(ctx, "sel", c))
+	// The walk is GET-per-entry; chatty logs (H3C HDM keeps four services
+	// with hundreds of records each — real run 2026-11-14) can outlive any
+	// caller's patience, so the whole walk runs under its own deadline and a
+	// hit returns the entries gathered so far rather than an error. An empty
+	// log at deadline still fails: "timeout" must not read as "no events".
+	selCtx, cancel := context.WithTimeout(ctx, selWalkDeadline)
+	defer cancel()
+	entries, err := walkSEL(ctxGet(selCtx, "sel", c))
 	if err != nil {
 		return nil, err
 	}
-	// Same discipline as Health: per-manager/per-entry failures degrade to a
-	// partial log; a deadline hit must not read as "controller has no events".
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return nil, bmc.Classify("sel", ctxErr)
+	if len(entries) == 0 {
+		if ctxErr := selCtx.Err(); ctxErr != nil {
+			return nil, bmc.Classify("sel", ctxErr)
+		}
 	}
 	return entries, nil
 }
@@ -276,7 +284,20 @@ func walkSEL(get func(string) ([]byte, error)) ([]bmc.SELEntry, error) {
 			if ls.ODataID == "" {
 				continue
 			}
-			entries = append(entries, walkSELService(get, ls.ODataID)...)
+			// Operational logs (firmware-update history, config-change
+			// history — H3C HDM splits them out alongside the hardware log,
+			// real run 2026-11-14) are not machine-health events; skipping
+			// them keeps the per-entry GET budget on the audit/SEL service.
+			lsName := strings.ToLower(ls.ODataID)
+			if strings.Contains(lsName, "firmwareupdate") || strings.Contains(lsName, "configuration") {
+				continue
+			}
+			// HardwareUpdateLog is the same shape as FirmwareUpdateLog here
+			// (operation history, not machine-health events).
+			if strings.Contains(lsName, "hardwareupdate") {
+				continue
+			}
+			entries = append(entries, walkSELService(get, ls.ODataID, selPerServiceCap)...)
 		}
 	}
 
@@ -293,10 +314,19 @@ func walkSEL(get func(string) ([]byte, error)) ([]bmc.SELEntry, error) {
 	return entries, nil
 }
 
+// selPerServiceCap bounds the entry-body GETs per log service: the newest
+// slice is what inspection needs, and each entry costs one GET.
+const selPerServiceCap = 20
+
+// selWalkDeadline bounds the whole SystemEventLog walk (GET-per-entry is
+// the slow shape; see walkSEL).
+const selWalkDeadline = 180 * time.Second
+
 // walkSELService reads one log service's entries collection, following the
 // nextLink pages — vendors cap page size (75 entries is a common default),
-// and the newest records live on the last page.
-func walkSELService(get func(string) ([]byte, error), serviceURL string) []bmc.SELEntry {
+// and the newest records live on the last page. At most cap entry bodies
+// are fetched (collection tail).
+func walkSELService(get func(string) ([]byte, error), serviceURL string, cap int) []bmc.SELEntry {
 	svcRaw, err := get(serviceURL)
 	if err != nil {
 		return nil
@@ -311,9 +341,22 @@ func walkSELService(get func(string) ([]byte, error), serviceURL string) []bmc.S
 	if err != nil {
 		return nil
 	}
-	// Collection-order tail across pages: the newest records live at the end.
-	if len(links) > bmc.SELMaxEntries {
-		links = links[len(links)-bmc.SELMaxEntries:]
+	// Trim to the cap around the newest records. DSP0268 puts collections
+	// in oldest→newest order (tail = newest), but H3C HDM answers
+	// newest-first (AuditLog Entries/999 first, real run 2026-11-14) — probe
+	// the two ends' numeric ids and trim the correct end. Non-numeric ids
+	// keep the standard tail behaviour.
+	if len(links) > cap {
+		first, last := fetchEntryID(get, links[0].ODataID), fetchEntryID(get, links[len(links)-1].ODataID)
+		if n0, ok0 := numericID(first); ok0 {
+			if n1, ok1 := numericID(last); ok1 && n0 > n1 {
+				links = links[:cap] // newest-first collection
+			} else {
+				links = links[len(links)-cap:]
+			}
+		} else {
+			links = links[len(links)-cap:]
+		}
 	}
 
 	out := make([]bmc.SELEntry, 0, len(links))
@@ -342,6 +385,39 @@ func walkSELService(get func(string) ([]byte, error), serviceURL string) []bmc.S
 		})
 	}
 	return out
+}
+
+// fetchEntryID reads one entry's Id ("" when unreachable — used only for
+// the newest-first direction probe).
+func fetchEntryID(get func(string) ([]byte, error), url string) string {
+	raw, err := get(url)
+	if err != nil {
+		return ""
+	}
+	var item struct {
+		ID string `json:"Id"`
+	}
+	if json.Unmarshal(raw, &item) != nil {
+		return ""
+	}
+	return item.ID
+}
+
+// numericID parses a purely-numeric entry id.
+func numericID(id string) (int64, bool) {
+	if id == "" {
+		return 0, false
+	}
+	for _, c := range id {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+	}
+	var n int64
+	for _, c := range id {
+		n = n*10 + int64(c-'0')
+	}
+	return n, true
 }
 
 // normalizeSeverity maps a Redfish LogEntry.Severity onto the contract's

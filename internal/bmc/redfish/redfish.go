@@ -606,13 +606,30 @@ func normalizeHost(addr string) string {
 // and gofish resource walks. InsecureSkipVerify is opt-in per deployment —
 // BMC self-signed certificates are the norm in the field
 // (MAMMOTH_BMC_TLS_INSECURE).
+//
+// The TLS floor is deliberately wide: H3C HDM (AMI MegaRAC, real run
+// 2026-11-14, docs/compat/h3c.md §1) negotiates only RSA-key-exchange
+// suites, which Go defaults stopped offering — a plain client dies with
+// "tls: handshake failure" before any HTTP exchange. Offering the full
+// legacy suite list costs nothing for modern BMCs (they pick ECDHE anyway).
 func makeHTTPClient(timeout time.Duration, insecure bool) *http.Client {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
 	transport := &http.Transport{}
 	if insecure {
-		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // #nosec G402 — deployment opt-in
+		var suites []uint16
+		for _, s := range tls.CipherSuites() {
+			suites = append(suites, s.ID)
+		}
+		for _, s := range tls.InsecureCipherSuites() {
+			suites = append(suites, s.ID)
+		}
+		transport.TLSClientConfig = &tls.Config{ // #nosec G402 — deployment opt-in
+			InsecureSkipVerify: true,
+			MinVersion:         tls.VersionTLS10,
+			CipherSuites:       suites,
+		}
 	}
 	return &http.Client{Timeout: timeout, Transport: transport}
 }

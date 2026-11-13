@@ -139,6 +139,8 @@ func (e *Executor) probeRamdisk(ctx context.Context, task *store.Task, usePXE bo
 			StaticGateway: gateway,
 			ModloopURL:    strings.TrimSuffix(e.ExternalURL, "/") + "/netboot/files/" + pctx.Token + "/modloop",
 			ApksURL:       strings.TrimSuffix(e.ExternalURL, "/") + "/netboot/files/" + pctx.Token + "/apks",
+			VGAConsole:    e.InstallConsole == "vga",
+			DebugShell:    e.ProbeDebugShell,
 		})
 		if err != nil {
 			return classifiedErr("PROBE_MEDIA_FAILED", true, "probe boot tree build failed: %s", err.Error())
@@ -184,6 +186,8 @@ func (e *Executor) probeRamdisk(ctx context.Context, task *store.Task, usePXE bo
 			ReportURL:     e.ExternalURL + "/render/" + pctx.Token + "/probe-report",
 			StaticCIDR:    staticCIDR,
 			StaticGateway: gateway,
+			VGAConsole:    e.InstallConsole == "vga",
+			DebugShell:    e.ProbeDebugShell,
 		}); err != nil {
 			return classifiedErr("PROBE_MEDIA_FAILED", true, "probe ISO build failed: %s", err.Error())
 		}

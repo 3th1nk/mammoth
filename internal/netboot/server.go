@@ -126,6 +126,18 @@ type Options struct {
 	// both nil disables the observer: DHCP silence stays unwatched (tests,
 	// embedders).
 	TaskFor func(mac string) string
+	// EnrollEligible, when set, admits sighted-but-unregistered MACs to the
+	// pool lease gate: the zero-registration entry (docs/09-roadmap.md,
+	// docs/13-headless-design.md §3.1) on address-authority deployments.
+	// Without a site DHCP, strict UEFI ROMs refuse the proxy offer (lease
+	// and boot information must arrive in one packet), so pool mode must
+	// hand unknown machines a lease too — but only MACs the PXE wire has
+	// sighted (the pending ledger), never the room's ordinary DHCP
+	// population (the 2288H pool-drain finding). serve wires it to
+	// enroll-enabled && MAC unregistered && sighting exists; nil keeps the
+	// gate strict (armed entries only). Called inline on the DHCP read
+	// path — keep it fast; it must tolerate unknown MACs.
+	EnrollEligible func(mac string) bool
 	// Observer injects a shared instance (serve composes one observer
 	// across Start invocations and hands the same to the reaper for the
 	// installed-orphan arming). nil = the Server builds its own when the

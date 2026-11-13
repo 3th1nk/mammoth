@@ -339,6 +339,32 @@ func serve(args []string) error {
 			logger.InfoContext(ctx, "external PXE kit exported",
 				"dir", kitDir, "note", "serve this directory from the site TFTP; dnsmasq.conf.example inside is ready to edit")
 		}
+		// Pool-mode lease gate for the zero-registration entry (docs/
+		// 13-headless-design.md §3.1): sighted unknown MACs get lease and
+		// boot information in one OFFER — strict consumer UEFI ROMs refuse
+		// the site-DHCP/proxy split (office-PC finding 2026-11-12). nil
+		// when enroll is off: the gate stays armed-entries-only.
+		var enrollEligible func(string) bool
+		if cfg.PXEEnroll {
+			enrollEligible = func(mac string) bool {
+				ectx, ecancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer ecancel()
+				owned, err := machineRepo.HasMAC(ectx, mac)
+				if err != nil {
+					logger.Warn("pool: enroll eligibility mac check failed", "mac", mac, "err", err.Error())
+					return false
+				}
+				if owned {
+					return false // registered machines lease through their armed entries
+				}
+				exists, err := pendingRepo.Exists(ectx, mac)
+				if err != nil {
+					logger.Warn("pool: enroll eligibility pending check failed", "mac", mac, "err", err.Error())
+					return false
+				}
+				return exists
+			}
+		}
 		nb, nerr := netboot.Start(ctx, netboot.Options{
 			ExternalOnly: cfg.PXEMode == "external",
 			DHCPPort:     cfg.PXEDHCPPort,
@@ -389,6 +415,7 @@ func serve(args []string) error {
 					}
 				}
 			},
+			EnrollEligible: enrollEligible,
 		})
 		if nerr != nil {
 			return fmt.Errorf("netboot: %w", nerr)
@@ -566,6 +593,7 @@ func serve(args []string) error {
 			UbuntuAptMirror:           cfg.UbuntuAptMirror,
 			SyslogPort:                cfg.PXESyslogPort,
 			InstallConsole:            cfg.InstallConsole,
+			ProbeDebugShell:           cfg.ProbeDebug,
 			WindowsInstallSMBUser:     cfg.WindowsInstallSMBUser,
 			WindowsInstallSMBPassword: cfg.WindowsInstallSMBPassword,
 			BootSettleDelay:           cfg.BootSettleDelay,
@@ -673,6 +701,8 @@ func buildEnrollTree(ctx context.Context, cfg *config.Config) (*netboot.Entry, e
 		ReportURL:   base + "/netboot/enroll/" + cfg.PXEEnrollToken,
 		ModloopURL:  base + "/netboot/enroll-file/modloop",
 		ApksURL:     base + "/netboot/enroll-file/apks",
+		VGAConsole:  cfg.InstallConsole == "vga",
+		DebugShell:  cfg.ProbeDebug,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("boot tree build failed: %w", err)

@@ -172,22 +172,52 @@ func (s *Server) reply(p *packet) []byte {
 	// read only the field and never the options.
 	copy(p.siaddr[:], next)
 
+	// Firmware observation moved ahead of every mode gate: pool mode's
+	// lease gate used to return before this hook, so unknown MACs were
+	// never sighted — the zero-registration ledger stayed blind in exactly
+	// the deployments it exists for (address-authority shapes without a
+	// site DHCP). Sightings stay PXE-only (vendor class + resolvable arch):
+	// ordinary hosts are still never recorded, and unknown architectures
+	// stay unsighted (the arch check below answers them with silence).
+	if p.isPXEClient() {
+		if arch, ok := p.arch(); ok {
+			if s.opts.OnObserve != nil {
+				s.opts.OnObserve(mac, arch)
+			}
+		}
+	}
+
 	// Pool mode (MAMMOTH_PXE_DHCP_POOL): the ROM needs an IP lease before
-	// it will fetch anything, and the installer kernel's dracut re-requests
-	// one without any PXE options. Leases go ONLY to MACs with an armed
-	// netboot entry — the pool is the address authority for the machines it
-	// installs, not for the wire: foreign DHCP clients (site VMs, stray
-	// servers) otherwise drain small pools mid-install (2288H machine room).
+	// it will fetch anything — strict consumer UEFI ROMs go further and
+	// refuse a proxy offer outright: lease and boot information must arrive
+	// in ONE packet (office-PC finding 2026-11-12), so on address-authority
+	// deployments unknown machines must be leased too. The gate admits two
+	// populations only: MACs with an armed netboot entry (installs), and —
+	// when the deployment wires EnrollEligible — MACs the PXE wire has
+	// sighted (the observation above just created that sighting, so the
+	// very first DISCOVER qualifies). Foreign DHCP clients (site VMs,
+	// printers, stray servers) never PXE-sight and are still refused: the
+	// pool is not the room's address service (2288H machine room).
 	var leaseOpts []option
 	if s.opts.DHCP != nil {
+		leased := true
 		if s.opts.Resolver != nil {
 			// The cached wrapper returns (nil, nil) for unknown MACs — both
 			// must gate, or every foreign client passes the allowlist
 			// (2288H machine room: VMs drained the pool through this hole).
-			if e, err := s.opts.Resolver.Entry(context.Background(), mac); err != nil || e == nil {
-				s.logf("dhcp: no armed entry for %s — not leasing (pool serves installs only)", mac)
-				return nil
+			// A nil Resolver keeps the embedder shape un-gated (tests pin
+			// it); production always wires one.
+			leased = false
+			if e, err := s.opts.Resolver.Entry(context.Background(), mac); err == nil && e != nil {
+				leased = true
 			}
+		}
+		if !leased && s.opts.EnrollEligible != nil && s.opts.EnrollEligible(mac) {
+			leased = true
+		}
+		if !leased {
+			s.logf("dhcp: no armed entry for %s — not leasing (pool serves installs and enroll-eligible sightings only)", mac)
+			return nil
 		}
 		if ip := s.opts.DHCP.lease(mac); ip != nil {
 			copy(p.yiaddr[:], ip.To4())
@@ -218,9 +248,6 @@ func (s *Server) reply(p *packet) []byte {
 	if !ok {
 		s.logf("dhcp: pxe client without recognizable arch (mac %s) — silent", mac)
 		return nil
-	}
-	if s.opts.OnObserve != nil {
-		s.opts.OnObserve(mac, arch)
 	}
 
 	// Options the boot ROM checks before it will accept the offer: the

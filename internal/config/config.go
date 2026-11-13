@@ -190,7 +190,14 @@ type Config struct {
 	// installer faces the BMC serial line) or "vga" (lab/KVM debugging —
 	// the installer and its failure points face the graphical console).
 	InstallConsole string
-	PXESyslogPort  int
+	// ProbeDebug bakes a no-auth debug shell (busybox telnetd :2323, openrc
+	// sysinit stage) into both probe carriers — MAMMOTH_PROBE_DEBUG. The
+	// office-PC / headless debug path: machines without serial get a shell
+	// reachable over the install L2 even when a boot stage stalls (modloop
+	// download, openrc services). The install L2 is trusted by the threat
+	// model (docs/security-baseline); never enable in production.
+	ProbeDebug    bool
+	PXESyslogPort int
 	// PXEDHCPPool (optional) turns the responder into a full DHCP for PXE
 	// clients — for provisioning L2s WITHOUT a site DHCP, where a boot ROM
 	// otherwise never gets an IP lease. Two syntaxes: dash range
@@ -350,6 +357,7 @@ func FromEnv() (Config, error) {
 	applyDuration(&c.TaskLogsTTL, "MAMMOTH_TASK_LOGS_TTL", &errs)
 	applyDuration(&c.InbandTimeout, "MAMMOTH_INBAND_TIMEOUT", &errs)
 	applyDuration(&c.ProbeWait, "MAMMOTH_PROBE_WAIT", &errs)
+	applyBool(&c.ProbeDebug, "MAMMOTH_PROBE_DEBUG", &errs)
 	applyDuration(&c.RescueWait, "MAMMOTH_RESCUE_WAIT", &errs)
 	applyDuration(&c.BootSettleDelay, "MAMMOTH_BOOT_SETTLE_DELAY", &errs)
 	applyDuration(&c.VerifyReadyWait, "MAMMOTH_VERIFY_READY_WAIT", &errs)

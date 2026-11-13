@@ -79,6 +79,20 @@ func (r *PendingRepo) List(ctx context.Context) ([]*PendingMachine, error) {
 	return items, rows.Err()
 }
 
+// Exists reports whether a sighting row exists for mac — the pool-mode
+// lease gate's enroll-eligibility half (netboot.EnrollEligible): unknown
+// MACs the PXE wire has sighted at least once may lease, MACs never seen
+// on the PXE side may not (the pool serves installs and enroll probes,
+// not the room's ordinary DHCP population). The sighting is recorded
+// before the gate consults this, so the very first DISCOVER of a machine
+// already qualifies.
+func (r *PendingRepo) Exists(ctx context.Context, mac string) (bool, error) {
+	var ok bool
+	err := r.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pending_machines WHERE mac = $1)`, mac).Scan(&ok)
+	return ok, err
+}
+
 // Get returns one sighting by normalized MAC.
 func (r *PendingRepo) Get(ctx context.Context, mac string) (*PendingMachine, error) {
 	row := r.db.QueryRowContext(ctx, `

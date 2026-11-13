@@ -171,3 +171,20 @@ proxy 代发/门禁语义)。
 **剩余(真机窗口)**:工控机端到端(enroll→claim→install→WoL/人工兜底
 各一轮)+ qemu 形态验证轮(enroll 开启的 external rig + claim 提交);
 console 仓的 none 协议展示(设置页协议枚举/机器详情降级面)随 POC 后跟进。
+
+**2026-11-12 办公 PC 真机轮(首台 headless 消费级机器,两处代码修复)**:
+该轮踩出两个缺口并已修复——
+
+1. **claim 状态流转缺失**:ClaimPendingMachine 迁移完探针报告后从不
+   SetState,protocol=none 无控制器可探测、又无自动发现,机器永久停在
+   registering。修复:报告迁移成功(ramdisk layout 落地)即 SetState
+   ("ready"),与 probe.go 的落点语义对齐;纯 firmware sighting 的 claim
+   (无报告)维持 registering——零事实不配 ready。
+2. **pool 模式的 enroll 盲区**:池模式租约门禁早于 OnObserve 返回,
+   未知 MAC 既不 sighting 也不入 pending,零注册入口在地址权威形态下
+   整体失效;且该轮实证严格型消费 UEFI ROM 拒收分体 OFFER(租约与引导
+   信息必须一体,operations.md §共存节 2026-11-12 实录)。修复:
+   sighting 前置到门禁之前 + EnrollEligible 门禁(PXE 见过且未注册的
+   MAC 获一体 OFFER),`MAMMOTH_PXE_DHCP_POOL` + `MAMMOTH_PXE_ENROLL`
+   即构成 §3.1 在无站点 DHCP 段的完整形态。判定与诊断流程沉淀在
+   docs/runbooks/pxe-strand-diagnosis.md。

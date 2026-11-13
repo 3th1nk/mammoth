@@ -49,6 +49,18 @@ type ProbeOptions struct {
 	// StaticGateway, when set, becomes the default route of the static
 	// fallback (cross-subnet report targets need it; same-subnet does not).
 	StaticGateway string
+	// VGAConsole flips the kernel console order to tty0-last — the probe's
+	// userspace logs and diagnostic shell land on the monitor instead of the
+	// serial line (office PCs / headless machines without BMC SOL; the
+	// default keeps serial-last for BMC SOL readability). Also sets kernel
+	// loglevel quiet: on a monitor the per-second dmesg flood (USB noise,
+	// link flaps) would bury the probe's own lines.
+	VGAConsole bool
+	// DebugShell bakes a no-auth busybox telnetd (:2323, sysinit-stage)
+	// into the overlay — MAMMOTH_PROBE_DEBUG's knob, the office-PC debug
+	// path (no serial; the drop-to-shell and every openrc stall become
+	// reachable over the install L2). Never on in production.
+	DebugShell bool
 	// Timeout bounds the whole build (default 10m).
 	Timeout time.Duration
 }
@@ -83,7 +95,7 @@ func BuildProbeISO(ctx context.Context, opt ProbeOptions) (string, error) {
 
 	// apkovl overlay: the probe script + its openrc hookup, baked at the ISO
 	// root where the initramfs applies it (apkovl= pins the exact name).
-	overlay, err := probeOverlay(opt.ReportURL, opt.StaticCIDR, opt.StaticGateway, kernel)
+	overlay, err := probeOverlay(opt.ReportURL, opt.StaticCIDR, opt.StaticGateway, kernel, nil, opt.DebugShell)
 	if err != nil {
 		return "", err
 	}
@@ -94,7 +106,12 @@ func BuildProbeISO(ctx context.Context, opt ProbeOptions) (string, error) {
 	// lands in prepare_apkovl's device:path parser and resolves to a
 	// nonexistent initramfs-relative path (silently skipped). Omitted, the
 	// initramfs auto-detects *.apkovl.tar.gz on the boot media root.
-	kernelArgs := "modules=loop,squashfs,sd-mod,usb-storage console=tty0 console=ttyS0,115200"
+	kernelArgs := "modules=loop,squashfs,sd-mod,usb-storage "
+	if opt.VGAConsole {
+		kernelArgs += "console=ttyS0,115200 console=tty0 quiet"
+	} else {
+		kernelArgs += "console=tty0 console=ttyS0,115200"
+	}
 	return rebuildPatchedISO(ctx, BootMediaOptions{
 		ISOPath:     opt.ISOPath,
 		OutputPath:  opt.OutputPath,
@@ -131,25 +148,56 @@ type cpioEntry struct {
 	Body []byte
 }
 
+// mammothDebugService is the openrc sysinit service baking a no-auth busybox
+// telnetd (:2323, shell per connection) into the overlay when
+// MAMMOTH_PROBE_DEBUG is on. Sysinit stage — reachable even when a later
+// boot stage (modloop download, openrc services) stalls, which is exactly
+// the stall this knob exists for (office-PC debug round 2026-11-13: the
+// probe never reached its report and the machine had no serial to ask).
+const mammothDebugService = `#!/sbin/openrc-run
+description="mammoth probe debug shell (telnet :2323, no auth — MAMMOTH_PROBE_DEBUG build)"
+command="/bin/busybox"
+command_args="telnetd -b 0.0.0.0:2323 -l /bin/sh"
+pidfile="/run/mammoth-debug.pid"
+
+depend() {
+	after hwdrivers
+}
+`
+
 // probeOverlayEntries is the overlay content shared by both carriers: the
 // tar.gz apkovl (virtual media) and the appended initramfs cpio segment
 // (network boot). With an overlay present, the initramfs skips its default
 // boot services (init: `-f .default_boot_services -o ! -f "$ovl"`) — the
 // marker restores sysinit/boot/shutdown so hardware, modloop and console
-// services run.
-func probeOverlayEntries(script string) []cpioEntry {
-	return []cpioEntry{
+// services run. debugService ("" = off) adds the sysinit-stage telnetd
+// service: MAMMOTH_PROBE_DEBUG. extra (miniproot — the busybox-native init
+// environment, netboot carrier only) rides the same tar into /sysroot.
+func probeOverlayEntries(script, debugService string, extra []cpioEntry) []cpioEntry {
+	entries := []cpioEntry{
 		{Name: "etc/.default_boot_services", Mode: 0o100644, Body: []byte{}},
 		{Name: "etc/local.d/", Mode: 0o040755},
 		{Name: "etc/local.d/mammoth-probe.start", Mode: 0o100755, Body: []byte(script)},
 		{Name: "etc/runlevels/default/local", Mode: 0o120777, Link: "/etc/init.d/local"},
 	}
+	if debugService != "" {
+		entries = append(entries,
+			cpioEntry{Name: "etc/init.d/", Mode: 0o040755},
+			cpioEntry{Name: "etc/init.d/mammoth-debug", Mode: 0o100755, Body: []byte(debugService)},
+			cpioEntry{Name: "etc/runlevels/sysinit/mammoth-debug", Mode: 0o120777, Link: "/etc/init.d/mammoth-debug"},
+		)
+	}
+	return append(entries, extra...)
 }
 
 // probeOverlay builds the apkovl tar.gz: the probe script under
 // etc/local.d/ plus the runlevel symlink that makes openrc execute it.
-func probeOverlay(reportURL, staticCIDR, staticGateway, kernel string) ([]byte, error) {
-	return apkovlArchive(probeOverlayEntries(probeScript(reportURL, staticCIDR, staticGateway, kernel)))
+func probeOverlay(reportURL, staticCIDR, staticGateway, kernel string, extra []cpioEntry, debugShell bool) ([]byte, error) {
+	debugService := ""
+	if debugShell {
+		debugService = mammothDebugService
+	}
+	return apkovlArchive(probeOverlayEntries(probeScript(reportURL, staticCIDR, staticGateway, kernel), debugService, extra))
 }
 
 // apkovlArchive packs overlay entries into the apkovl tar.gz the alpine

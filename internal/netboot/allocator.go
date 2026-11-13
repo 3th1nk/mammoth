@@ -14,9 +14,13 @@ import (
 // has none): UEFI PXE ROMs need an IP lease before they will fetch anything,
 // so a pure proxy responder strands them. With a pool configured, the
 // responder answers PXE clients (option 60) with a full DHCP OFFER/ACK —
-// and only PXE clients: ordinary hosts on the L2 are left to the site DHCP,
-// keeping the two modes separable on purpose (pool mode assumes it is the
-// address authority for the machines it installs).
+// and only two populations: MACs with an armed netboot entry (installs),
+// and, when the deployment wires EnrollEligible, MACs the PXE wire has
+// sighted (the zero-registration entry — docs/13-headless-design.md §3.1;
+// strict consumer ROMs demand lease and boot information in one packet,
+// office-PC finding 2026-11-12). Ordinary hosts on the L2 are left to the
+// site DHCP, keeping the modes separable on purpose (pool mode assumes it
+// is the address authority for the machines it installs).
 //
 // Leases are in-memory and volatile by design: they only need to cover the
 // boot + install window, and a rebooting machine simply re-requests.

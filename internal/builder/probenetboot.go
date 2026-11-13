@@ -46,6 +46,18 @@ type ProbeNetbootOptions struct {
 	// ApksURL, when set, becomes the kernel's apks= parameter — the HTTP
 	// apk repository the disk-less root installs alpine-base from.
 	ApksURL string
+	// VGAConsole flips the kernel console order to tty0-last: /dev/console
+	// (openrc, the probe's own logs, the diagnostic shell) then lands on the
+	// monitor instead of the serial line. Machines without a BMC/serial
+	// (office PCs, headless docs/13) are otherwise blind to every
+	// userspace message — the default keeps serial-last for BMC SOL. Also
+	// sets kernel loglevel quiet: the monitor would otherwise drown the
+	// probe's own lines in per-second dmesg (USB noise, link flaps).
+	VGAConsole bool
+	// DebugShell bakes a no-auth busybox telnetd (:2323, sysinit stage)
+	// into the overlay — MAMMOTH_PROBE_DEBUG's knob (see executor
+	// ProbeDebugShell). Never on in production.
+	DebugShell bool
 }
 
 // BuildProbeNetboot assembles the ramdisk probe as a network boot tree: the
@@ -112,19 +124,41 @@ func BuildProbeNetboot(ctx context.Context, opt ProbeNetbootOptions) (BootTree, 
 	// file list via --overlay-from-stdin, so its /etc files survive the
 	// apk --clean-protected that would otherwise delete unowned /etc files
 	// during the disk-less package install (2288H console finding).
-	ovl, oerr := probeOverlay(opt.ReportURL, opt.StaticCIDR, opt.StaticGateway, flavor)
-	if oerr != nil {
-		return BootTree{}, oerr
+	// miniproot (2026-11-13 office-PC finding): the disk-less root assembly
+	// runs apk in the initramfs, and apk can fail invisibly there — --quiet
+	// (console flip) silences it and alpine init's `eend $?` takes the
+	// umount's exit code — leaving /sysroot without busybox, openrc or
+	// /sbin/init; switch_root drops to its emergency shell and the probe
+	// never runs. The appended initramfs segment (second initrd, kernel
+	// concatenates in order — later files override earlier ones) REPLACES
+	// /init itself: the boot runs a self-sufficient busybox probe flow with
+	// no alpine init, no openrc and no apk at any stage — the failing stage
+	// is skipped, not patched around.
+	initrd, rerr := os.ReadFile(filepath.Join(tree.Dir, tree.Initrd))
+	if rerr != nil {
+		return BootTree{}, fmt.Errorf("builder: miniproot: carrier initramfs: %w", rerr)
 	}
-	if werr := os.WriteFile(filepath.Join(tree.Dir, "probe.apkovl.tar.gz"), ovl, 0o644); werr != nil {
+	mp, merr := miniprootSegment(initrd, opt.ReportURL, flavor, opt.DebugShell)
+	if merr != nil {
+		return BootTree{}, merr
+	}
+	if werr := os.WriteFile(filepath.Join(tree.Dir, miniprootFile), mp, 0o644); werr != nil {
 		return BootTree{}, werr
 	}
-	tree.Extra["apkovl"] = "probe.apkovl.tar.gz"
+	tree.Extra["miniproot"] = miniprootFile
 
 	// Same module args as the ISO carrier, plus early DHCP, the network
 	// modloop, the apks repo (the disk-less root's package source), and the
-	// apkovl. Serial console last so init's output follows it (BMC SOL).
-	args := "modules=loop,squashfs,sd-mod,usb-storage console=tty0 console=ttyS0,115200 ip=dhcp"
+	// apkovl. Serial console last so init's output follows it (BMC SOL);
+	// VGAConsole flips it for machines with only a monitor, with kernel
+	// loglevel quiet so the dmesg flood doesn't bury the probe's lines.
+	args := "modules=loop,squashfs,sd-mod,usb-storage "
+	if opt.VGAConsole {
+		args += "console=ttyS0,115200 console=tty0 quiet "
+	} else {
+		args += "console=tty0 console=ttyS0,115200 "
+	}
+	args += "ip=dhcp"
 	if opt.ModloopURL != "" {
 		args += " modloop=" + opt.ModloopURL
 	}

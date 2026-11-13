@@ -272,6 +272,7 @@ func (s *Server) ClaimPendingMachine(ctx context.Context, request gen.ClaimPendi
 				obs.FieldMachineID, m.ID, "err", err.Error())
 		}
 	}
+	reported := false
 	if len(pending.Report) > 0 {
 		// Project the probe's own facts onto the machine's hardware view
 		// (docs/13-headless-design.md §3.1): disks and NICs with
@@ -291,6 +292,23 @@ func (s *Server) ClaimPendingMachine(ctx context.Context, request gen.ClaimPendi
 		}
 		if _, err := s.Machines.SaveLayout(ctx, m.ID, "ramdisk", pending.Report, 0); err != nil {
 			obs.FromContext(ctx).WarnContext(ctx, "claim: probe report migration failed",
+				obs.FieldMachineID, m.ID, "err", err.Error())
+		} else {
+			reported = true
+		}
+	}
+	if reported {
+		// The claim-with-report IS the headless machine's discovery
+		// (docs/13-headless-design.md §3.1): the probe report just became
+		// the spec view — settle at the same point the ramdisk probe does
+		// (probe.go sets ready when the layout snapshot lands). protocol=
+		// none has no controller for the discover flow to probe, so
+		// without this a claimed headless machine sits in registering
+		// forever (real-hardware finding, office-PC enroll→claim round
+		// 2026-11-12). A firmware-only claim keeps registering: zero
+		// facts is not a ready machine.
+		if err := s.Machines.SetState(ctx, m.ID, "ready"); err != nil {
+			obs.FromContext(ctx).WarnContext(ctx, "claim: state settle failed",
 				obs.FieldMachineID, m.ID, "err", err.Error())
 		}
 	}

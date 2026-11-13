@@ -110,6 +110,14 @@ type Executor struct {
 	// ProbeGateway, when set, becomes the static fallback's default route —
 	// needed when the report URL is in a different subnet than the machine.
 	ProbeGateway string
+	// ProbeDebugShell, when set, bakes a no-auth debug shell (busybox
+	// telnetd on :2323) into both probe carriers, started at openrc sysinit
+	// — reachable even when a later boot stage stalls (modloop download,
+	// openrc services). Office-PC / headless machines have no serial to
+	// watch (MAMMOTH_INSTALL_CONSOLE=vga shows the monitor, but a shell you
+	// can type into beats one you can only read). Install-L2 trusted by the
+	// threat model (docs/security-baseline); never leave on in production.
+	ProbeDebugShell bool
 	// ProbeWait bounds the ramdisk discover's wait for the machine's report
 	// (boot + scan + report ≈ 1 minute in qemu; real BMC virtual media is
 	// slower). Zero applies the default (10m). When set it also overrides

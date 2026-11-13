@@ -1113,6 +1113,22 @@ paths:
           schema:
             type: string
             enum: [bios, ia32, uefi-x64, uefi-arm64]
+        - name: macs
+          in: query
+          required: false
+          description: |
+            Additional NIC MACs of the same machine, comma-separated — stage
+            two of the two-stage enroll serve. The enroll prescript (stage
+            one, returned when this param is absent) chains back with iPXE's
+            own ${netX/mac} expansion so the pending ledger covers the
+            machine's whole NIC set before the probe kernel's ip=dhcp runs:
+            on pool deployments the kernel may DHCP on a NIC that never spoke
+            during the ROM phase, and the lease gate consults the ledger, not
+            the packet (2026-11-13 office-PC finding). Invalid/empty entries
+            are skipped; registered machines' NICs stay out of the ledger.
+          schema:
+            type: string
+            maxLength: 256
       responses:
         '200':
           description: |

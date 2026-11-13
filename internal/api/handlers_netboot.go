@@ -58,10 +58,36 @@ func (s *Server) GetNetbootScript(ctx context.Context, request gen.GetNetbootScr
 				return gen.GetNetbootScript200TextResponse(netboot.NoEntryScript(mac)), nil
 			}
 			// pending resource dimension — the MAC is not a machine id yet.
+			//
+			// Two-stage serve (2026-11-13 office-PC finding): a machine may
+			// carry NICs beyond the one that PXE-sighted, and on pool
+			// deployments the probe kernel's ip=dhcp lands on whichever
+			// interface alpine names first — an unsighted NIC the lease gate
+			// refuses, stranding the probe without a network. Without a
+			// macs param this fetch is stage one: a prescript that chains
+			// back with iPXE's own ${netX/mac} expansion (deterministic —
+			// script-level substitution). The chained fetch carries macs;
+			// every valid, unregistered NIC goes into the ledger and the
+			// real enroll script goes out with the full set covered.
+			if request.Params.Macs == nil || *request.Params.Macs == "" {
+				obs.FromContext(ctx).InfoContext(ctx, "enroll prescript served (stage 1/2)", "mac", mac)
+				return gen.GetNetbootScript200TextResponse(netboot.RenderEnrollPreScript(s.ExternalURL, mac)), nil
+			}
+			nics := ledgerNICs(mac, *request.Params.Macs)
+			for _, n := range nics {
+				if owned, oerr := s.Machines.HasMAC(ctx, n); oerr == nil && owned {
+					continue // registered machines stay out of the ledger (c64df07 rule)
+				}
+				if _, terr := s.Pending.TouchByMAC(ctx, n, ""); terr != nil {
+					obs.FromContext(ctx).WarnContext(ctx, "enroll NIC ledger failed", "mac", n, "err", terr.Error())
+					continue
+				}
+				obs.FromContext(ctx).InfoContext(ctx, "enroll NIC ledgered", "mac", n)
+			}
 			s.Events.Append(ctx, "pending", mac, "pending.enroll_served", map[string]any{
-				"mac": mac,
+				"mac": mac, "nics": len(nics) + 1,
 			})
-			obs.FromContext(ctx).InfoContext(ctx, "enroll script served", "mac", mac)
+			obs.FromContext(ctx).InfoContext(ctx, "enroll script served", "mac", mac, "nics", len(nics)+1)
 			return gen.GetNetbootScript200TextResponse(netboot.RenderEnrollScript(s.Enroll.Tree, s.ExternalURL, mac)), nil
 		}
 		return gen.GetNetbootScript200TextResponse(netboot.NoEntryScript(mac)), nil
@@ -84,6 +110,26 @@ func (s *Server) GetNetbootScript(ctx context.Context, request gen.GetNetbootScr
 	obs.FromContext(ctx).InfoContext(ctx, "netboot script served",
 		obs.FieldTaskID, e.TaskID, "mac", mac, "kind", e.Kind)
 	return gen.GetNetbootScript200TextResponse(netboot.RenderScript(e, s.ExternalURL)), nil
+}
+
+// ledgerNICs normalizes and dedups the enroll prescript's second-stage macs
+// list (iPXE ${netX/mac} expansion — absent NICs arrive as empty entries),
+// dropping the primary MAC. Invalid entries are silently skipped: iPXE
+// expansion is deterministic, but a literal ${netX/mac} that survived means
+// an exotic build — degrade to the primary-only behavior, never fail the
+// serve.
+func ledgerNICs(primary, macs string) []string {
+	seen := map[string]bool{primary: true}
+	var out []string
+	for _, part := range strings.Split(macs, ",") {
+		m := netboot.NormalizeMAC(part)
+		if len(m) != 17 || seen[m] {
+			continue
+		}
+		seen[m] = true
+		out = append(out, m)
+	}
+	return out
 }
 
 // serveGrubByMAC answers the external-PXE trampoline's configfile fetch

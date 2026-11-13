@@ -95,6 +95,10 @@ func RenderScript(e *Entry, baseURL string) string {
 		strings.TrimSuffix(baseURL, "/"), e.Token, e.Kernel, sanitizeIpxeArgs(e.KernelArgs))
 	fmt.Fprintf(&b, "initrd %s/netboot/files/%s/%s\n",
 		strings.TrimSuffix(baseURL, "/"), e.Token, e.Initrd)
+	if mp, ok := e.Extra["miniproot"]; ok && mp != "" {
+		fmt.Fprintf(&b, "initrd %s/netboot/files/%s/%s\n",
+			strings.TrimSuffix(baseURL, "/"), e.Token, mp)
+	}
 	b.WriteString("boot\n")
 	return b.String()
 }
@@ -124,6 +128,26 @@ func renderWimbootScript(e *Entry, baseURL string) string {
 	return b.String()
 }
 
+// RenderEnrollPreScript renders stage 1 of the two-stage enroll serve
+// (2026-11-13 office-PC finding): the machine behind a sighted MAC may have
+// more NICs than the one that spoke during the ROM phase, and on pool
+// deployments the probe kernel's ip=dhcp lands on whichever interface alpine
+// names first — a NIC the ledger never saw, which the lease gate refuses,
+// stranding the probe without a network. iPXE fixes the information gap
+// itself: this prescript chains back to the same endpoint with every NIC
+// MAC iPXE can see (${netX/mac} — script-level expansion is core iPXE
+// behavior, deterministic; absent NICs expand to empty entries and are
+// filtered server-side). The chained fetch (macs param present) records the
+// whole NIC set as sightings and returns the real enroll script.
+func RenderEnrollPreScript(baseURL, mac string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "#!ipxe\n")
+	fmt.Fprintf(&b, "# mammoth enroll prescript mac=%s — stage 1/2 (NIC ledger)\n", mac)
+	fmt.Fprintf(&b, "chain %s/netboot/script?mac=%s&macs=${net0/mac},${net1/mac},${net2/mac},${net3/mac},${net4/mac},${net5/mac}\n",
+		strings.TrimSuffix(baseURL, "/"), mac)
+	return b.String()
+}
+
 // NoEntryScript is served when a MAC has no pending boot entry. iPXE must
 // exit rather than stop in its shell: exit hands control back to the
 // firmware, which falls through to the next boot device (the local disk).
@@ -149,6 +173,14 @@ func RenderEnrollScript(e *Entry, baseURL, mac string) string {
 		strings.TrimSuffix(baseURL, "/"), e.Kernel, sanitizeIpxeArgs(e.KernelArgs), mac)
 	fmt.Fprintf(&b, "initrd %s/netboot/enroll-file/%s\n",
 		strings.TrimSuffix(baseURL, "/"), e.Initrd)
+	// miniproot (appended cpio segment): the kernel unpacks initramfs
+	// archives in order — the segment REPLACES /init with a standalone
+	// busybox probe boot, bypassing the disk-less package install entirely
+	// (office-PC 2026-11-13).
+	if mp, ok := e.Extra["miniproot"]; ok && mp != "" {
+		fmt.Fprintf(&b, "initrd %s/netboot/enroll-file/%s\n",
+			strings.TrimSuffix(baseURL, "/"), mp)
+	}
 	b.WriteString("boot\n")
 	return b.String()
 }

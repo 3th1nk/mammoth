@@ -226,10 +226,18 @@ iPXE 脚本),默认关闭。启用清单:
 
 - **POOL 模式(无站点 DHCP)**:引擎 builtin 模式自带完整 DHCP 服务器,
   从声明池(如 .120-.129)只对已登记装机任务的 MAC 发租约——地址分配权威在
-  mammoth,陌生客户端不耗池。
+  mammoth,陌生客户端不耗池。v1.4.4 起池模式多一类应答对象(见下一条)。
+- **一体 OFFER(pool+enroll,v1.4.4)**:`MAMMOTH_PXE_DHCP_POOL` 与
+  `MAMMOTH_PXE_ENROLL` 同时开启时,已被 PXE 观测过的未知 MAC(pending
+  台账里存在,首次 DISCOVER 即由 sighting 前置落账)同样获得"租约+引导
+  信息"一体 OFFER——严格型消费 ROM 只认这种形态(见 §共存节 2026-11-12
+  办公 PC 实录);从未 PXE 过的普通客户端依旧拒答,池子不为办公网的
+  打印机/笔记本服务。登记过的机器走原 armed 门禁,语义不变。
 - **PROXY 模式(有站点 DHCP)**:站点 DHCP 继续分配地址;mammoth(或
   网段代理 edge(原 edge) / 外置 dnsmasq)只补 PXE 引导选项(67/4011),
-  真机在 spec 里声明静态地址(routes 形态 netplan)。
+  真机在 spec 里声明静态地址(routes 形态 netplan)。**注意 ROM 兼容性**:
+  分体 OFFER(proxy 只发引导信息)依赖 ROM 做 offer 合并——服务器级网卡
+  实现完整,消费级 UEFI ROM 常拒收,失败签名与处置见 §共存节。
 - **站点 DHCP 可谈判时的第一选择**:引导信息直接配进站点 DHCP 的
   scope/策略(option 66 = TFTP server,option 67 = bootfile;dnsmasq 即
   一行 `dhcp-boot`)——这是"已有站点 DHCP 的网段"上唯一支持 UEFI
@@ -347,15 +355,18 @@ dhcp-boot=tag:winboot,tag:!ipxe,ipxe-amd64.efi,,<tftp-server>
 
 windows 全链 rig 见 `scripts/windows-dev/external-win-e2e.sh`。
 
-### 站点 DHCP 不可控:共存边界与最佳实践(2026-11-03)
+### 站点 DHCP 不可控:共存边界与最佳实践(2026-11-03,2026-11-12 扩)
 
-装机 VLAN 上已有站点 DHCP 且不可改造时,**proxyDHCP 旁挂(edge)是
-唯一共存形态**——POOL 模式与 external(站点 dnsmasq 全量 DHCP)都是完整
-地址权威,并存即双权威(租约打架/外来客户端抽干小池,allowlist 门禁的
-2288H 机房教训即源于此)。行业同型实践:FOG 的 dnsmasq proxy 是官方
-推荐的"站点 DHCP 必须继续使用且不可改"形态,MAAS rack ProxyDHCP 是
-产品级特性,pixiecore 为参考实现——本形态是业界一等场景,但有一条上游
-硬边界(见下),必须按机型固件分型对待。
+装机 VLAN 上已有站点 DHCP 且不可改造时,共存形态有二:**proxyDHCP
+旁挂(edge,分体 OFFER)与 pool+enroll(一体 OFFER,v1.4.4 起)**。
+POOL 模式与 external(站点 dnsmasq 全量 DHCP)都是完整地址权威,并存
+即双权威(租约打架/外来客户端抽干小池,allowlist 门禁的 2288H 机房
+教训即源于此)——pool+enroll 用"只租 PXE 见过的 MAC"把并存风险收窄到
+引导期的一小段(仍存在与站点 DHCP 抢先应答的竞争,见 2026-11-12 实录
+的竞速注记)。行业同型实践:FOG 的 dnsmasq proxy 是官方推荐的"站点
+DHCP 必须继续使用且不可改"形态,MAAS rack ProxyDHCP 是产品级特性,
+pixiecore 为参考实现——本形态是业界一等场景,但有两条上游硬边界
+(grub2 一条、ROM 一条,见下),必须按机型固件分型对待。
 
 **第一推荐仍是谈判**:在站点 DHCP 的 scope/策略上加两条选项——
 option 66(TFTP server = edge/引擎的装机网地址)+ option 67
@@ -447,6 +458,47 @@ blksize 协商尺寸的 DATA——engine TFTP 形态(tsize 必答 + DATA 恒
 512,永不协商,commit 7c6e522)是唯一全 ROM 真机验证过的形态;自建
 第三方 TFTP 服务时按同形态对齐,指纹与判别见 docs/11-pxe-walkthrough
 §抓包表(PXE-E99 + "NBP filesize is 0 Bytes")。
+
+**严格型消费 ROM:lease+boot 必须一体(2026-11-12 办公 PC 实录)**
+
+grub2/KB-00043 边界(上)发生在 shim→grubnet 阶段;这一条更靠前——
+**ROM 本身拒绝分体 OFFER**,连 NBP 都不去取。实录:办公网 PC(消费级
+UEFI,无站点 DHCP 应答之外的任何特殊配置)开 PXE 重启,proxyDHCP 的
+OFFER 正确送达(siaddr/bootfile/GUID echo 齐全,TFTP 服务端本机拉取
+验证可用),ROM 仍 4s/8s/16s 退避重发 DISCOVER,零 TFTP RRQ、零
+4011 discovery、零 REQUEST,数轮后静默落盘。
+
+根因:PXE 规范(Intel WfM 2.1)要求客户端在 DHCP 阶段后做 boot server
+discovery(4011)并把站点 OFFER(租约)与 proxy OFFER(引导信息)合并;
+服务器级网卡(Intel 服务器 NIC 等)实现完整,**消费级 UEFI 网络栈
+(Realtek/AMD option ROM 类)经常只做"简单 DHCP+67"**——没有租约就不
+走,而 proxyDHCP 从不发租约。**SB-off 切裸 iPXE 对这条无效**(iPXE
+根本加载不了,与 grub2 边界的处置互斥:那条 SB-off 是解,这条 SB-off
+无关);WDS/FOG 文档"先问网卡型号"即源于此。
+
+处置矩阵(按可行性与 ROM 兼容性排序):
+
+| 形态 | 一句话 | ROM 兼容 | 前提 |
+|---|---|---|---|
+| A. 站点 DHCP 配 66/67(全局策略或静态绑定) | 引导信息搭站点 DHCP 的车,单服务器完整 ACK | ★★★★★ | 可谈判/可配置站点 DHCP |
+| B. pool+enroll(一体 OFFER,v1.4.4) | mammoth 池模式对 PXE 见过的 MAC 发租约+引导 | ★★★★ | mammoth 在机器 L2,接受引导期竞速 |
+| C. proxyDHCP 分体 OFFER | 站点发租约、mammoth 补引导 | ★★ 服务器级网卡好 | ROM 会合并 offer |
+| D. 独立装机 VLAN | 装机流量与办公流量分离,池/external/edge 自洽 | ★★★★★ | 网络规划权 |
+
+办公网(有站点 DHCP + DHCP snooping 常开)追加两条纪律:
+
+1. **竞速**:双 DHCP 并存时客户端一般认先到的 OFFER;mammoth 应答
+   ~1ms、站点 DHCP 实测 3-8ms,大概率赢,但属概率非保证——ROM 认领
+   站点的"纯租约 OFFER"仍会卡(无 bootfile 可取)。反复失败即转 A/D。
+2. **snooping**:办公接入交换机的 DHCP snooping 会丢弃非 trusted 端口
+   上来的"服务器角色"报文——mammoth 的 OFFER 可能根本到不了客户端
+   (线上抓包在引擎端口上仍看得见自己发出去的包,极具迷惑性)。此形态
+   在办公网不可用,直接转 A/D。
+
+诊断路径(现象:开机 PXE 无引导 / 待认领为空)已沉淀为 runbook:
+docs/runbooks/pxe-strand-diagnosis.md(引擎形态三问 → 日志分水岭 →
+线上抓包及其第三方端口的 L2 单播盲区 → 差分探测站点 DHCP 行为 →
+根因判定表)。
 
 ## 4.5.2 Windows PXE 的部署层 SMB 导出
 

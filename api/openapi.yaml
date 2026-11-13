@@ -2366,6 +2366,10 @@ components:
       description: |
         ramdisk is optional (docs/05-inventory.md §4) and requires the
         alpine carrier (MAMMOTH_PROBE_ALPINE_ISO) with MAMMOTH_RAMDISK_ENABLED.
+        It is the takeover probe: the machine is power-cycled into the probe
+        environment and powered off afterwards — a submission against a
+        machine whose recorded power state is not `off` answers 422
+        RAMDISK_CONFIRM_REQUIRED unless the action carries `confirm: true`.
 
     BiosView:
       type: object
@@ -2736,6 +2740,16 @@ components:
 
     ActionDiscover:
       type: object
+      description: |
+        Trigger (re)discovery (docs/05-inventory.md §2). probe=auto is the
+        registration default: out-of-band reads plus an optional in-band SSH
+        layout snapshot — no reboot. probe=ramdisk is the takeover probe
+        (docs/05-inventory.md §4): the machine is power-cycled into the probe
+        environment and its compensation powers the machine off at the end —
+        a submission against a machine whose recorded power state is not
+        `off` answers 422 RAMDISK_CONFIRM_REQUIRED unless confirm is set;
+        machines with an in-flight install/rescue/decommission task answer
+        409 JOB_MACHINE_BUSY.
       required: [type]
       properties:
         type:
@@ -2745,6 +2759,13 @@ components:
           $ref: '#/components/schemas/ProbeKind'
         boot:
           $ref: '#/components/schemas/BootSpec'
+        confirm:
+          type: boolean
+          default: false
+          description: |
+            Explicit confirmation for probe=ramdisk on a machine whose
+            recorded power state is not `off` — the probe power-cycles the
+            machine and powers it off afterwards. Ignored by the other probes.
 
     ActionPowerOn:
       type: object

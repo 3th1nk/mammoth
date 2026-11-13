@@ -88,6 +88,8 @@ DELETE /api/v1/webhooks/{id}
 ```jsonc
 {"type": "discover",       "probe": "auto"}     // auto | redfish | inband_ssh | ramdisk
                                                 // ramdisk 可选,启用清单见 docs/05-inventory.md §4;
+                                                // ramdisk 是接管式探针(重启 + 探完关机):机器记录的电源
+                                                // 状态非 off 时需 "confirm": true,否则 422 RAMDISK_CONFIRM_REQUIRED;
                                                 // 另接受 "boot":"pxe"|"virtual_media" 选 ramdisk 载体
                                                 // (缺省随部署 boot 策略缺省)
 {"type": "power_on"}

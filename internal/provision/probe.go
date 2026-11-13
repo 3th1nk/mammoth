@@ -288,14 +288,16 @@ func (e *Executor) probeRamdisk(ctx context.Context, task *store.Task, usePXE bo
 				_, _ = e.BMC.Do(cctx, addr, cred, proto, "set_boot_device", func(ctx context.Context, d bmc.Driver) (any, error) {
 					return nil, d.SetBootDevice(ctx, addr, cred, bmc.BootDisk, false)
 				})
-				_, _ = e.BMC.Do(cctx, addr, cred, proto, "set_power", func(ctx context.Context, d bmc.Driver) (any, error) {
+				if _, err := e.BMC.Do(cctx, addr, cred, proto, "set_power", func(ctx context.Context, d bmc.Driver) (any, error) {
 					return nil, d.SetPower(ctx, addr, cred, bmc.PowerOff)
-				})
+				}); err == nil {
+					e.recordProbePowerOff(cctx, task.MachineID)
+				}
 			}
 			return
 		}
 		media := bmc.MediaImage{URL: mediaURI, Kind: bmc.MediaBoot}
-		e.probeCompensate(cctx, addr, cred, proto, media, filepath.Join("boot", "probe-"+pctx.Token+".iso"))
+		e.probeCompensate(cctx, task.MachineID, addr, cred, proto, media, filepath.Join("boot", "probe-"+pctx.Token+".iso"))
 	}
 	for {
 		select {
@@ -327,14 +329,17 @@ func (e *Executor) probeRamdisk(ctx context.Context, task *store.Task, usePXE bo
 
 // probeCompensate clears the probe footprint: eject the media, power the
 // machine off, reclaim the ISO. Best effort throughout — the probe outcome
-// is decided by the report, not by the cleanup.
-func (e *Executor) probeCompensate(ctx context.Context, addr string, cred bmc.Credentials, proto bmc.Protocol, media bmc.MediaImage, mediaName string) {
+// is decided by the report, not by the cleanup. The power-off, when it
+// lands, feeds the ramdisk gate's signal (recordProbePowerOff).
+func (e *Executor) probeCompensate(ctx context.Context, machineID, addr string, cred bmc.Credentials, proto bmc.Protocol, media bmc.MediaImage, mediaName string) {
 	_, _ = e.BMC.Do(ctx, addr, cred, proto, "eject_media", func(ctx context.Context, d bmc.Driver) (any, error) {
 		return nil, d.EjectMedia(ctx, addr, cred, media)
 	})
-	_, _ = e.BMC.Do(ctx, addr, cred, proto, "set_power", func(ctx context.Context, d bmc.Driver) (any, error) {
+	if _, err := e.BMC.Do(ctx, addr, cred, proto, "set_power", func(ctx context.Context, d bmc.Driver) (any, error) {
 		return nil, d.SetPower(ctx, addr, cred, bmc.PowerOff)
-	})
+	}); err == nil {
+		e.recordProbePowerOff(ctx, machineID)
+	}
 	// legacy (root-level name) swept alongside: tasks prepared by older
 	// binaries left their ISOs outside the boot/ subdirectory.
 	if e.MediaUploader != nil {
@@ -345,4 +350,13 @@ func (e *Executor) probeCompensate(ctx context.Context, addr string, cred bmc.Cr
 			_ = os.Remove(filepath.Join(e.MediaDir, p))
 		}
 	}
+}
+
+// recordProbePowerOff feeds the ramdisk gate's signal (API side,
+// validateRamdiskConfirm): the probe's terminal state is "off" — the machine
+// faces the gate's next submission honestly instead of keeping the pre-probe
+// "on" a re-submission would trip over. Best effort: only called when the
+// compensating power-off actually landed.
+func (e *Executor) recordProbePowerOff(ctx context.Context, machineID string) {
+	_ = e.Machines.SetPowerState(ctx, machineID, "off")
 }

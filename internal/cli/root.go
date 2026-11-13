@@ -203,6 +203,7 @@ func machinesCmd(newClient func() *Client) *cobra.Command {
 	}
 
 	var probe string
+	var confirm bool
 	discover := &cobra.Command{
 		Use:   "discover ID",
 		Short: "Trigger (re)discovery on a machine",
@@ -212,6 +213,9 @@ func machinesCmd(newClient func() *Client) *cobra.Command {
 			if probe != "" {
 				body["probe"] = probe
 			}
+			if confirm {
+				body["confirm"] = true
+			}
 			var out map[string]any
 			if err := newClient().Post("/api/v1/machines/"+args[0]+"/actions", body, &out); err != nil {
 				return err
@@ -219,7 +223,9 @@ func machinesCmd(newClient func() *Client) *cobra.Command {
 			return printJSON(map[string]any{"job": out["id"], "state": out["state"]})
 		},
 	}
-	discover.Flags().StringVar(&probe, "probe", "auto", "probe: auto | redfish | inband_ssh")
+	discover.Flags().StringVar(&probe, "probe", "auto", "probe: auto | redfish | inband_ssh | ramdisk")
+	discover.Flags().BoolVar(&confirm, "confirm", false,
+		"explicit confirmation for --probe ramdisk on a machine not known powered off — the probe reboots it and powers it off afterwards")
 
 	del := &cobra.Command{
 		Use:   "delete ID",

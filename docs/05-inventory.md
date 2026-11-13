@@ -75,6 +75,20 @@ POST /machines/{id}/actions {"type": "discover", "probe": "ramdisk"}
                             // 载体:缺省随部署 boot 策略缺省;可显式 "boot": "pxe"|"virtual_media"
 ```
 
+**在用机器防线**(2026-11-14):ramdisk 是"接管式"探针——power cycle 进探针环境,
+探完补偿还把机器**关机**;对还在跑业务的服务器,这是停机事故而非盘查。提交时按
+机器记录的电源状态把关(`power_state` 由注册自动盘查与每次电源动作回写):
+
+- `off`(空机器的下线盘查,设计内流程)→ 直接放行;
+- `on` / `unknown`(从未可靠读到电源状态,按保守处理)→ `422
+  RAMDISK_CONFIRM_REQUIRED`:显式 `"confirm": true` 重提(运营已确认接管该机),
+  或先用电源动作关机再提;
+- 有在途 install/rescue/decommission 任务的机器 → `409 JOB_MACHINE_BUSY`
+  (探针会以 probe 条目覆盖按 MAC 武装的 PXE 安装条目并重启机器);
+- 补偿关机落地后回写 `power_state=off`,被探过的机器重提不再误拦;
+- `auto` / `redfish` / `inband_ssh` 盘查纯只读,注册自动盘查与快照刷新(§5)
+  不受此门禁影响;CLI 侧对应 `mammoth machines discover --probe ramdisk --confirm`。
+
 **启用最小集**(变量语义详见本节其余部分;完整清单以 `internal/config/config.go` 为准):
 
 | 变量 | 何时必配 | 作用 |
@@ -131,6 +145,7 @@ POST /machines/{id}/actions {"type": "discover", "probe": "ramdisk"}
 注册机器 ──▶ 自动盘查(auto)──▶ layout v1(captured_at)
    │
    ├─ 用户可随时 POST /machines/{id}/actions {"type":"discover"} 刷新
+   │  (auto/redfish/inband_ssh 只读不重启;ramdisk 需 confirm,见 §4)
    │  → 生成 v2(追加,不改 v1)
    └─ install job 成功后 verify_ready 自动刷新 ──▶ 装后视角快照
       (设备名 + serial 即安装器所见;Redfish 卷名 → /dev/sda 的鸿沟
@@ -151,4 +166,4 @@ install job 提交:
 | 全新裸机(无系统) | redfish | 规格级(本就无布局可言) |
 | 重装·现存系统健康,已提供 SSH 凭证 | redfish + inband_ssh | 规格 + **分区级** |
 | 重装·带内不可达(系统损坏/凭证失效) | redfish | 规格级(仅支持 keep: disk) |
-| 以上 + 需要分区级但无 SSH 凭证 | redfish + ramdisk(若启用) | 规格 + 分区级 |
+| 以上 + 需要分区级但无 SSH 凭证 | redfish + ramdisk(若启用;接管式——在用机器需 confirm,见 §4) | 规格 + 分区级 |

@@ -60,6 +60,11 @@ func (s *Server) PerformMachineAction(ctx context.Context, request gen.PerformMa
 	if err := s.validateEraseConfirm(actionRaw, aType); err != nil {
 		return nil, err
 	}
+	if aType == "discover" {
+		if err := s.validateRamdiskAction(ctx, machine, actionRaw); err != nil {
+			return nil, err
+		}
+	}
 	jobType := "power"
 	flow := provision.FlowPower
 	if aType == "discover" {
@@ -216,6 +221,16 @@ func (s *Server) CreateJob(ctx context.Context, request gen.CreateJobRequestObje
 		if err := s.rejectRetiredMachines(ctx, machineIDs); err != nil {
 			return nil, err
 		}
+	}
+	// Ramdisk-discover hazard gate (docs/05-inventory.md §4): the takeover
+	// probe power-cycles the machine and powers it off afterwards — an
+	// in-flight owning flow answers 409, a machine not known-off answers
+	// 422 unless the action carries the explicit confirm. Keyed on action
+	// semantics, not job type: a power job carrying a discover action
+	// reaches the same executor. auto/redfish/inband_ssh discovers stay
+	// deliberately ungated (the reinstatement path above).
+	if err := s.validateRamdiskBatch(ctx, machineIDs, actionRaw); err != nil {
+		return nil, err
 	}
 	// Address-starvation preflight (docs/09-roadmap.md「装机网段地址服务
 	// 可观测」layer 3): PXE installs without a DECLARED network get a
@@ -821,6 +836,95 @@ func (s *Server) validateEraseConfirm(actionRaw json.RawMessage, aType string) e
 	if s.EraseConfirmRequired && !a.Confirm {
 		return verrStatus(422, "DRIVE_ERASE_CONFIRM_REQUIRED",
 			"erase_drives is destructive and irreversible — it requires \"confirm\": true (deployment policy %q)", "required")
+	}
+	return nil
+}
+
+// ── ramdisk-discover hazard gate ────────────────────────────────────────────
+//
+// probeRamdisk is the takeover probe (docs/05-inventory.md §4): it boots the
+// machine into the alpine carrier — power-cycling whatever is running — and
+// its compensation powers the machine OFF when the probe ends. Against a
+// machine still serving traffic that is an outage, not an inventory. Two
+// gates answer at submission: the busy gate (an in-flight install/rescue/
+// decommission task would see its armed PXE entries clobbered) and the
+// power-state confirm gate (only a machine known to be off passes without
+// the explicit confirm flag; "unknown" means never reliably read — the
+// conservative side is asking). The auto-discovery enqueue on registration
+// and auto/redfish/inband_ssh discovers are read-only and stay ungated.
+
+// isRamdiskDiscover reports whether actionRaw is a discover action carrying
+// probe=ramdisk. Keyed on action semantics, not job type: a power job
+// carrying a discover action reaches the same executor path.
+func isRamdiskDiscover(actionRaw json.RawMessage) (bool, error) {
+	if len(actionRaw) == 0 {
+		return false, nil
+	}
+	var a struct {
+		Type  string `json:"type"`
+		Probe string `json:"probe"`
+	}
+	if err := json.Unmarshal(actionRaw, &a); err != nil {
+		return false, verr("SCHEMA_INVALID_ACTION", "action is not valid: %v", err)
+	}
+	return a.Type == "discover" && a.Probe == "ramdisk", nil
+}
+
+// validateRamdiskConfirm is the power-state half of the gate: a machine whose
+// recorded power state is not off (on, or unknown — never reliably read)
+// requires the action's explicit confirm flag. The recording is refreshed by
+// registration's auto-discover and by every power action's observation, so a
+// machine powered off through mammoth re-submits clean.
+func validateRamdiskConfirm(machine *store.Machine, actionRaw json.RawMessage) error {
+	var a struct {
+		Confirm bool `json:"confirm"`
+	}
+	if err := json.Unmarshal(actionRaw, &a); err != nil {
+		return verr("SCHEMA_INVALID_ACTION", "action is not valid: %v", err)
+	}
+	if a.Confirm {
+		return nil
+	}
+	if machine.PowerState == "off" {
+		return nil
+	}
+	return verrStatus(http.StatusUnprocessableEntity, "RAMDISK_CONFIRM_REQUIRED",
+		"ramdisk probe power-cycles machine %s and powers it off afterwards (recorded power state: %q) — a running server would be taken down; re-submit with \"confirm\": true, or power the machine off first",
+		machine.ID, machine.PowerState)
+}
+
+// validateRamdiskAction gates the single-machine submission (machine already
+// in hand): busy first, then the power-state confirm.
+func (s *Server) validateRamdiskAction(ctx context.Context, machine *store.Machine, actionRaw json.RawMessage) error {
+	isRamdisk, err := isRamdiskDiscover(actionRaw)
+	if err != nil || !isRamdisk {
+		return err
+	}
+	if err := s.rejectBusyMachines(ctx, []string{machine.ID}); err != nil {
+		return err
+	}
+	return validateRamdiskConfirm(machine, actionRaw)
+}
+
+// validateRamdiskBatch gates a batch submission carrying a discover action —
+// installs carry no action (early exit before any store access), power jobs
+// carry power actions. Same order as the single-machine path.
+func (s *Server) validateRamdiskBatch(ctx context.Context, machineIDs []string, actionRaw json.RawMessage) error {
+	isRamdisk, err := isRamdiskDiscover(actionRaw)
+	if err != nil || !isRamdisk {
+		return err
+	}
+	if err := s.rejectBusyMachines(ctx, machineIDs); err != nil {
+		return err
+	}
+	for _, id := range machineIDs {
+		m, err := s.Machines.Get(ctx, id)
+		if err != nil {
+			return err
+		}
+		if err := validateRamdiskConfirm(m, actionRaw); err != nil {
+			return err
+		}
 	}
 	return nil
 }

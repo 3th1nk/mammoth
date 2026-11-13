@@ -93,7 +93,7 @@ func (d *Driver) CreateVolume(ctx context.Context, addr string, cred bmc.Credent
 			Detail: "volume has no member drives selected"}
 	}
 
-	st, err := firstVolumeStorage(c)
+	st, err := volumeStorage(c)
 	if err != nil {
 		return "", d.classify(op, err)
 	}
@@ -177,7 +177,7 @@ func (d *Driver) postVolumeTask(ctx context.Context, c *gofish.APIClient, op, vo
 		return "", &bmc.Error{Kind: bmc.KindProtocolError, Op: op,
 			Detail: fmt.Sprintf("volume create: %s %s", resp.Status, bmc.FirstLine(string(raw)))}
 	}
-	st, err := firstVolumeStorage(c)
+	st, err := volumeStorage(c)
 	if err != nil {
 		return "", d.classify(op, err)
 	}
@@ -218,7 +218,26 @@ type storageRef struct {
 	odataID string
 }
 
-func firstVolumeStorage(c *gofish.APIClient) (*storageRef, error) {
+// storageSelection is the per-call storage walk result: the controller that
+// owns a Volumes collection (the one CreateVolume can POST at) plus every
+// controller in collection order for drive enumeration.
+type storageSelection struct {
+	volumes *storageRef   // nil when no controller advertises volumes
+	all     []*storageRef // every controller, collection order
+}
+
+// walkStorages enumerates the system's storage controllers.
+//
+// iDRAC8's Storage collection Members order is UNSTABLE across requests —
+// RAID and AHCI controllers alternate positions between two calls on the
+// same session (real run 2026-11-13, R730/iDRAC8 2.82, three requests in
+// three different orders; docs/compat/dell.md §2). Picking storages[0] is a
+// coin flip that lands on an AHCI entry (no Drives, no Volumes) half the
+// time, silently reporting an empty drive pool. So: walk every controller;
+// the volume-capable one is the controller that advertises a Volumes
+// collection, and drive enumeration aggregates every controller that
+// carries an inline Drives array.
+func walkStorages(c *gofish.APIClient) (*storageSelection, error) {
 	sys, err := c.Service.Systems()
 	if err != nil {
 		return nil, err
@@ -233,17 +252,64 @@ func firstVolumeStorage(c *gofish.APIClient) (*storageRef, error) {
 	if len(storages) == 0 {
 		return nil, fmt.Errorf("no storage controller reported")
 	}
-	return &storageRef{odataID: storages[0].ODataID}, nil
+	sel := &storageSelection{all: make([]*storageRef, 0, len(storages))}
+	for _, st := range storages {
+		ref := &storageRef{odataID: st.ODataID}
+		sel.all = append(sel.all, ref)
+		if sel.volumes != nil {
+			continue // first volume-capable controller wins
+		}
+		raw, err := getRaw(c, ref.odataID)
+		if err != nil {
+			continue // a dead controller must not sink the walk
+		}
+		var probe struct {
+			Volumes map[string]any `json:"Volumes"`
+		}
+		if json.Unmarshal(raw, &probe) == nil && probe.Volumes != nil {
+			sel.volumes = ref
+		}
+	}
+	return sel, nil
 }
 
-// controllerDrives walks the storage resource's inline Drives array (which
-// carries Oem.Huawei.DriveID) and the referenced drive resources (which
-// carry SerialNumber).
-func controllerDrives(ctx context.Context, c *gofish.APIClient) ([]controllerDrive, error) {
-	st, err := firstVolumeStorage(c)
+// volumeStorage returns the volume-capable controller, or a classified
+// unsupported error when none advertises a Volumes collection (no RAID —
+// volume intent has no target).
+func volumeStorage(c *gofish.APIClient) (*storageRef, error) {
+	sel, err := walkStorages(c)
 	if err != nil {
 		return nil, err
 	}
+	if sel.volumes == nil {
+		return nil, &bmc.Error{Kind: bmc.KindUnsupported,
+			Detail: "no storage controller exposes a Volumes collection"}
+	}
+	return sel.volumes, nil
+}
+
+// controllerDrives aggregates every controller's inline Drives array (which
+// carries Oem.Huawei.DriveID) and the referenced drive resources (which
+// carry SerialNumber). Aggregation is the order-stable counterpart of the
+// old first-controller walk.
+func controllerDrives(ctx context.Context, c *gofish.APIClient) ([]controllerDrive, error) {
+	sel, err := walkStorages(c)
+	if err != nil {
+		return nil, err
+	}
+	var out []controllerDrive
+	for _, st := range sel.all {
+		drives, err := drivesOf(c, st)
+		if err != nil {
+			continue // a dead controller must not sink the enumeration
+		}
+		out = append(out, drives...)
+	}
+	return out, nil
+}
+
+// drivesOf walks one controller's Drives array into controllerDrive values.
+func drivesOf(c *gofish.APIClient, st *storageRef) ([]controllerDrive, error) {
 	raw, err := getRaw(c, st.odataID)
 	if err != nil {
 		return nil, err

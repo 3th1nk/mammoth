@@ -43,11 +43,15 @@
 
 **控制台通路(✅ 已实现并通过真机 E2E 出图,2026-11-14,internal/bmcweb/h3c)**:
 
-**定案:HDM 的 H5 Viewer 数据通道是专用端口裸 TCP IVTP(7578),非
-websocket**——`singleport_status: 0`,443 的 `/kvm` 路径 400,viewer.min.js
-的 `new WebSocket(.../kvm)` 仅在 WEB_APP_PROXY/单端口特性下服务,该机型
-固件未提供该桥。**HDM 同时暴露标准 RFB/VNC(5900,VNC 认证)**——引擎
-走 VNC 通路,完全不碰 AMI 私有协议:
+**定案:HDM 的 KVM 数据通道是专用端口裸 TCP IVTP(7578),非 websocket**
+——`singleport_status: 0`,443 的 `/kvm` 路径 400,viewer.min.js 的
+`new WebSocket(.../kvm)` 仅在 WEB_APP_PROXY/单端口特性下服务,该机型
+固件未提供该桥。**服务端口模型(HDM"修改服务"对话框 + 实测)**:KVM
+服务接口=both、非安全端口 7578(明文 IVTP,实测连接即回 `S\x00...` 帧,
+负载内联设备序列号)、安全端口 7582(TLS-wrapped IVTP,本机当前连接
+refused)、超时 10 分钟、最大会话 4。**HDM 同时暴露独立的 VNC 服务
+(5900,标准 RFB/VNC,VNC 认证)**——引擎走 VNC 通路,完全不碰 AMI
+私有协议:
 
 ```
 浏览器 noVNC ──ws(RFB)──▶ 引擎 RFB 直通桥(认证代填)──▶ HDM :5900 (RFB/VNC)

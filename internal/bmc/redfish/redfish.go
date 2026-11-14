@@ -29,6 +29,12 @@ type Driver struct {
 	// Timeout bounds a single HTTP exchange against the BMC.
 	Timeout time.Duration
 
+	// h3cCache remembers whether a BMC is an H3C HDM (Systems/1
+	// Manufacturer probe — the service root carries no Oem on this
+	// firmware), so per-call SEL reads skip the detection round trip.
+	h3cMu    sync.Mutex
+	h3cCache map[string]bool
+
 	// Session cache: controllers rate-limit session creation (iBMC 6.41
 	// answers 400 after a handful of rapid POSTs — a boot stage's mount /
 	// eject / boot-set / power burst exhausts it and the stage dies with
@@ -50,7 +56,8 @@ type sessEntry struct {
 }
 
 func New(insecure bool, timeout time.Duration) *Driver {
-	return &Driver{Insecure: insecure, Timeout: timeout, sessCache: map[string]*sessEntry{}}
+	return &Driver{
+		h3cCache: map[string]bool{}, Insecure: insecure, Timeout: timeout, sessCache: map[string]*sessEntry{}}
 }
 
 // classify wraps bmc.Classify with session-cache invalidation: an auth-kind

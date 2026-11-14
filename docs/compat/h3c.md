@@ -30,12 +30,18 @@
 - **D2 NIC 枚举不可用**:Systems/1 无标准 EthernetInterfaces 链接
   (HDM 把 NIC 放在自家命名空间),CollectInventory 按
   coverage=partial + note 降级,不失败。
-- **D3 SEL 逐条 GET 不可用**:HDM 有 4 个 LogService
-  (AuditLog/FirmwareUpdateLog/ConfigurationLog/HardwareUpdateLog),
-  AuditLog 的条目资源固件拒绝读取(约 4s 后失败),Entries 集合响应
-  ~8s/963 条且**倒序**(最新在头,违反 DSP0268 升序)。驱动已加:
-  服务名过滤(跳过运维日志)+ 每服务 cap + 方向探测(数值 Id 比对
-  两端)+ 整体 deadline + partial 语义(health.go selWalkDeadline)。
+- **D3 SEL 定案:硬件事件日志只在 HDM web 层**——Redfish 的 4 个
+  LogService(AuditLog/FirmwareUpdateLog/ConfigurationLog/HardwareUpdateLog)
+  是**运维日志**(AuditLog 条目固件拒绝读取,Entries 倒序违反 DSP0268),
+  不含硬件 SEL。硬件事件日志走 HDM web API **`GET /api/logs/event`**
+  (一次 JSON 数组,**1569 条 2 秒**,IPMI SEL 形态:id/timestamp/level/
+  sensor_name/sensor_type/event_description,倒序)。驱动已实现
+  (h3cweb.go):RSA web 会话(/api/rsapublickey → POST /api/session)+
+  X-CSRFTOKEN 头 → 数组解析 → head 截断 bmc.SELMaxEntries →
+  SELEntry(SensorName+EventDescription 合成 message,level 映射
+  severity)。Redfish walk 保留为非 H3C 机型路径 + 服务过滤/cap/
+  方向探测/deadline partial 语义兜底。真机定案:SystemEventLog
+  500 条、E2E 全套时长 120s→28.5s。
 - **D4 KVM 服务开关在 web 侧**:Redfish KvmService 资源不暴露
   ServiceEnabled;真机 HDM 的 KVM 服务处于停用状态,需在 HDM web
   "远程服务-服务设置"开启后 console 通路才完整(链路已通到

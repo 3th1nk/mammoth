@@ -214,6 +214,13 @@ func unitOr(unit, fallback string) string {
 // 07-bmc.md §6.4): every manager's log services concatenated, newest
 // first, capped at bmc.SELMaxEntries.
 func (d *Driver) SystemEventLog(ctx context.Context, addr string, cred bmc.Credentials) ([]bmc.SELEntry, error) {
+	// H3C HDM: the hardware SEL is only fully exposed through the HDM web
+	// layer (/api/logs/event — one JSON array in ~2s; the Redfish
+	// LogServices carry operational logs and answer the hardware records
+	// unreliably, docs/compat/h3c.md §D3).
+	if d.isH3C(ctx, addr, cred) {
+		return h3cSEL(addr, cred.Username, cred.Password, selWalkDeadline)
+	}
 	c, err := d.connect(ctx, addr, cred)
 	if err != nil {
 		return nil, err
@@ -434,4 +441,41 @@ func normalizeSeverity(s string) string {
 	default:
 		return "unknown"
 	}
+}
+
+// isH3C detects an H3C HDM by the system manufacturer (Systems/1), cached
+// per BMC address — the service root's Oem is empty on this firmware.
+func (d *Driver) isH3C(ctx context.Context, addr string, cred bmc.Credentials) bool {
+	d.h3cMu.Lock()
+	cached, ok := d.h3cCache[addr]
+	d.h3cMu.Unlock()
+	if ok {
+		return cached
+	}
+	isH3C := false
+	c, err := d.connect(ctx, addr, cred)
+	if err == nil {
+		get := ctxGet(ctx, "h3c-detect", c)
+		if raw, err := get("/redfish/v1/Systems"); err == nil {
+			var coll struct {
+				Members []struct {
+					ODataID string `json:"@odata.id"`
+				} `json:"Members"`
+			}
+			if json.Unmarshal(raw, &coll) == nil && len(coll.Members) > 0 {
+				if raw, err := get(coll.Members[0].ODataID); err == nil {
+					var sys struct {
+						Manufacturer string `json:"Manufacturer"`
+					}
+					if json.Unmarshal(raw, &sys) == nil {
+						isH3C = strings.Contains(strings.ToLower(sys.Manufacturer), "h3c")
+					}
+				}
+			}
+		}
+	}
+	d.h3cMu.Lock()
+	d.h3cCache[addr] = isH3C
+	d.h3cMu.Unlock()
+	return isH3C
 }

@@ -25,6 +25,8 @@ import (
 
 	"github.com/3th1nk/mammoth/internal/bmcweb/avct"
 	"github.com/3th1nk/mammoth/internal/bmcweb/dell"
+	"github.com/3th1nk/mammoth/internal/bmcweb/h3c"
+	"github.com/3th1nk/mammoth/internal/store"
 )
 
 const (
@@ -116,6 +118,21 @@ func (p *Proxy) kvmWS(c *gin.Context, machineID string) {
 		_ = ws.Close(code, msg)
 	}
 
+	// H3C HDM: a plain RFB/VNC server on 5900 — the engine proxies it with
+	// the VNC authentication carried on the credential password (truncated
+	// to the RFB 8-byte key), no decoding at all (docs/compat/h3c.md §KVM).
+	if isH3C(m) {
+		netConn := websocket.NetConn(ctx, ws, websocket.MessageBinary)
+		bridgeLog := avct.LogFunc(func(format string, args ...any) {
+			obsLog.Printf("rfb[%s]: "+format, append([]any{machineID}, args...)...)
+		})
+		if err := h3c.BridgeRFB(netConn, strings.TrimSuffix(m.BMCAddress, "/")+":5900", truncateRFBPassword(pass), bridgeLog); err != nil && ctx.Err() == nil {
+			obsLog.Printf("kvm[%s]: rfb bridge: %v", machineID, err)
+		}
+		closeWithReason(websocket.StatusNormalClosure, "")
+		return
+	}
+
 	// 1. iDRAC web session + console ticket.
 	client, err := dell.NewClient(m.BMCAddress, user, pass, kvmConnectTimeout)
 	if err != nil {
@@ -189,6 +206,21 @@ func (p *Proxy) kvmWS(c *gin.Context, machineID string) {
 // Logger is the minimal logging face the KVM bridge needs.
 type Logger interface {
 	Printf(format string, args ...any)
+}
+
+// isH3C mirrors the h3c launcher's vendor match: the branch decides which
+// console transport the device side gets (RFB proxy vs avct session).
+func isH3C(m *store.Machine) bool {
+	return m.Vendor != nil && strings.Contains(strings.ToLower(*m.Vendor), "h3c")
+}
+
+// truncateRFBPassword clamps the credential password to the RFB 8-byte key
+// (the HDM settings page enforces the same limit).
+func truncateRFBPassword(pass string) string {
+	if len(pass) > 8 {
+		return pass[:8]
+	}
+	return pass
 }
 
 // obsLog is wired by the engine at startup (server.go) to the structured

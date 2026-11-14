@@ -41,18 +41,38 @@
   "远程服务-服务设置"开启后 console 通路才完整(链路已通到
   viewer.html 页面加载,见 §KVM)。
 
-**控制台通路(已实现,internal/bmcweb/h3c)**:
-- HDM 的 KVM 是 **AMI H5 Viewer**(`/viewer.html`,HTML5),数据通道为
-  **同源 websocket**(`wss://<hdm>/kvm`,share 模式经 web 端口;
-  dedicated 9666/9667 明文 ws 不走代理)。
-- 登录:`POST /api/session/login`(form `username=` 在前)→ JSON
-  `{"cc":0,"CSRFToken":"..","privilege":..}` + Set-Cookie QSESSIONID;
-  **表单同样位置敏感**(与 Dell §4 同款)。
-- viewer 的会话状态读 cookie `CSRF`/`kvm_mode`(1=share)与
-  sessionStorage `garc`(=CSRFToken)/privilege 等;launcher BootScript
-  在代理同源内完成登录、注入状态、跳 `/viewer.html`——websocket 升级
-  由 httputil.ReverseProxy 原生承载。
-- 真机链路已通到 viewer 页面加载;KVM 服务启用(D4)后待 E2E 出图。
+**控制台通路(✅ 已实现并通过真机 E2E 出图,2026-11-14,internal/bmcweb/h3c)**:
+
+**定案:HDM 的 H5 Viewer 数据通道是专用端口裸 TCP IVTP(7578),非
+websocket**——`singleport_status: 0`,443 的 `/kvm` 路径 400,viewer.min.js
+的 `new WebSocket(.../kvm)` 仅在 WEB_APP_PROXY/单端口特性下服务,该机型
+固件未提供该桥。**HDM 同时暴露标准 RFB/VNC(5900,VNC 认证)**——引擎
+走 VNC 通路,完全不碰 AMI 私有协议:
+
+```
+浏览器 noVNC ──ws(RFB)──▶ 引擎 RFB 直通桥(认证代填)──▶ HDM :5900 (RFB/VNC)
+```
+
+- **登录序列**(真实 web 流程,操作员 F12 实录 + 引擎复刻):
+  `GET /api/rsapublickey` → `POST /api/session`(凭据 PKCS#1 v1.5 RSA
+  加密,base64,公钥参数以 cookie MODULUS/EXPONENT/RSA_Value 绑定会话,
+  `log_type=1`)→ `cc=0 + CSRFToken + QSESSIONID`。注意
+  `/api/session/login`(明文 legacy)也能 cc=0,但其会话**不能访问
+  /api/settings/**(/api/settings/* 需要 RSA 会话 + `X-CSRFTOKEN` 头
+  ——CCSFTOKEN 名大小写不敏感)。
+- **VNC 密码**:RFB type 2(DES challenge)认证,密码独立于 web 登录
+  (`/api/remote/vnc_password` 只写不读,Web 限长 8 字符,Backbone save
+  为 JSON body)。约定:**VNC 密码 = BMC credential 密码的前 8 字符**,
+  引擎用 RSA 会话自动设置一次(POST,cc=0)。
+- **桥形态**:握手段消息级(设备 security types → 引擎向 noVNC 谎报
+  Security None → 引擎对设备选 type 2 并用凭据密码代答 DES → 合成
+  SecurityResult OK),ClientInit/ServerInit 透传,之后**字节直通**
+  (noVNC 与设备同 RFB 3.8,编码/输入全由两端协商)。
+- **viewer.html 的自主登录形态**(`?u=<hex>&p=<hex>&kvm_mode=<n>`,
+  viewer 自带 RSAKey/会话序列)同样验证可行——是"不改设备配置时的
+  备选通路"(操作员可达 BMC 网络时 viewer 直连专用端口 7578)。
+- E2E 实录:引擎启动(manommoth-engine)→ 统一入口 → noVNC 出图
+  (ESXi DCUI,色彩/文本正确,与操作员直连画面一致)。
 
 ## 原始文档推演(真机复核前的对号,保留供对照)
 

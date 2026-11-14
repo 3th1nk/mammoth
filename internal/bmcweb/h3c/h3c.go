@@ -43,36 +43,17 @@ func (*Driver) Matches(m *store.Machine) bool {
 	return strings.Contains(strings.ToLower(*m.Vendor), "h3c")
 }
 
-// BootScript logs the browser into the HDM web API and arms the H5 viewer.
-// Session state the viewer JS reads (html-escaped by json.Marshal — the
-// credential cannot close the surrounding <script>) rides BOOT's JSON.
+// BootScript navigates straight to the AMI H5 Viewer with the credentials
+// as hex parameters: the viewer performs its OWN login flow — it fetches
+// /api/rsapublickey itself, RSA-encrypts the hex credentials, POSTs
+// /api/session, seeds garc/kvm_access/vmedia_access and the X-CSRFTOKEN
+// header (the whole sequence verified in the real capture). The KVM
+// websocket then binds to the web port (WEB_APP_PROXY branch: ws on 80 /
+// wss on 443, same origin), so the engine must listen on the standard web
+// port for the proxy to carry it (docs/compat/h3c.md §KVM).
 func (*Driver) BootScript(m *store.Machine) string {
 	return `
-    log('H3C HDM H5 KVM 由代理同源承载。');
-    const body = new URLSearchParams({
-      username: BOOT.user,
-      password: BOOT.password,
-    });
-    const lr = await fetch('/api/session/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body,
-    });
-    if (!lr.ok) return fail('HDM 登录 HTTP ' + lr.status);
-    const j = await lr.json();
-    if (j.cc !== 0) return fail('HDM 登录失败 (cc=' + j.cc + ')');
-
-    // Session state the H5 viewer reads: CSRF cookie + sessionStorage
-    // bootstraps (garc is the viewer's CSRF handle, real-run names).
-    document.cookie = 'CSRF=' + (j.CSRFToken || '') + '; path=/';
-    document.cookie = 'kvm_mode=1; path=/'; // shared session, over the web port
-    try {
-      sessionStorage.setItem('garc', j.CSRFToken || '');
-      sessionStorage.setItem('status', 'ok');
-      sessionStorage.setItem('privilege', String(j.privilege || 4));
-      sessionStorage.setItem('extended_privilege', String(j.extendedpriv || 0));
-    } catch (e) { /* private mode: viewer degrades but usually still runs */ }
-
-    log('HDM 会话就绪，打开 H5 KVM…', 'ok');
-    location.href = '/viewer.html';`
+    log('H3C HDM H5 KVM 由代理同源承载（viewer 自主登录）。');
+    log('H5 KVM 由引擎桥接（noVNC over RFB 直通）。');
+    location.href = '/bmcweb/' + BOOT.machine + '/kvm';`
 }

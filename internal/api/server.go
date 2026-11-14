@@ -256,6 +256,7 @@ func New(d Deps, apiToken string) *gin.Engine {
 	var bmcwebProxy *bmcweb.Proxy
 	if d.Machines != nil && d.Credentials != nil && d.Crypto != nil {
 		bmcwebProxy = bmcweb.New(d.Machines, d.Credentials, d.Crypto, apiToken)
+		bmcwebProxy.SetBMC(d.BMC) // console panel power/virtual-media actions
 		// vendor launchers (统一入口,按机型 Vendor 解析;新厂商在此注册)
 		bmcwebProxy.Register(huawei.New())
 		bmcwebProxy.Register(h3c.New())

@@ -41,6 +41,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/3th1nk/mammoth/internal/bmc"
 	"github.com/3th1nk/mammoth/internal/store"
 )
 
@@ -63,10 +64,15 @@ type Proxy struct {
 	Machines    *store.MachineRepo
 	Credentials *store.CredentialRepo
 	Crypto      *store.SecretCrypto
+	BMC         *bmc.Registry // power/virtual-media from the console panel
 	apiToken    string
 	launchers   []Launcher
 	cache       assetCache
 }
+
+// SetBMC wires the driver registry for the console panel's power/media
+// actions (set after New at the wiring site).
+func (p *Proxy) SetBMC(reg *bmc.Registry) { p.BMC = reg }
 
 // assetCache holds proxied STATIC BMC content (ETag-bearing GETs only, never
 // /redfish) so the vendor web bundle loads at engine-LAN speed instead of a

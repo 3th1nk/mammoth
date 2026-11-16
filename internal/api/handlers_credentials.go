@@ -568,8 +568,8 @@ func (s *Server) outOfBandFor(ctx context.Context, machineID string) (bmc.Creden
 		return bmc.Credentials{}, "", "", err
 	}
 	if m.BMCProtocol == "none" {
-		return bmc.Credentials{}, "", "", verrStatus(http.StatusUnprocessableEntity, "HEADLESS_UNSUPPORTED",
-			"protocol none machines have no BMC — this out-of-band view is unavailable (docs/13-headless-design.md)")
+		return bmc.Credentials{}, "", "", verrStatus(http.StatusUnprocessableEntity, "BMC_ABSENT",
+			"machine has no BMC (protocol none) — this out-of-band view is unavailable (docs/13-headless-design.md)")
 	}
 	credRow, err := s.Credentials.Get(ctx, m.BMCCredentialID)
 	if err != nil {

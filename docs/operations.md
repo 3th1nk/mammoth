@@ -674,7 +674,8 @@ curl -X POST "$API/machines" \
 none 机器注册**不触发自动盘查**(无 BMC 可探;事实来自 enroll 报告或
 带内探针);`power_state` 恒 `unknown`;控制器动作面(power/boot-device/
 media/BIOS/擦盘)与同步 BMC 读(console/BIOS 表/drives/health/SEL)一律
-422 `HEADLESS_UNSUPPORTED`——诚实降级。提交期门禁:boot.strategy 必须
+422 `BMC_ABSENT`——诚实降级(2026-11-16 更名,原 `HEADLESS_UNSUPPORTED`)。
+提交期门禁:boot.strategy 必须
 `pxe`(无 BMC 挂介质)、hardware RAID 拒绝(任务级预失败,不阻塞同批)。
 
 **boot 阶段(证据驱动)**:netboot 武装(prepare)后,boot 不做电源序列,

@@ -777,8 +777,8 @@ func (s *Server) headlessActionGate(ctx context.Context, machine *store.Machine,
 	if probe.Type == "boot_rescue" {
 		return nil
 	}
-	return verrStatus(http.StatusUnprocessableEntity, "HEADLESS_UNSUPPORTED",
-		"protocol none machines have no BMC — action %q is unavailable (in-band probe: {\"type\":\"discover\",\"probe\":\"inband_ssh\"}; installs via boot.strategy=pxe)", probe.Type)
+	return verrStatus(http.StatusUnprocessableEntity, "BMC_ABSENT",
+		"machine has no BMC (protocol none) — action %q is unavailable (in-band probe: {\"type\":\"discover\",\"probe\":\"inband_ssh\"}; installs via boot.strategy=pxe)", probe.Type)
 }
 
 // validateBiosConfirm is the two-stage contract's API half (docs/07-bmc.md

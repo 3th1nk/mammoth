@@ -156,7 +156,7 @@ Intel 专项:vPro/AMT 平台**不属于 headless 场景**(ME 固件自带带外�
 | 一 | enroll 探针 NIC 采集 + claim 固化 hardware 视图(coverage=partial;PXE 观测与 netboot 武装的承重墙) | 952f245 |
 | 一 | boot none 语义(headlessArm:证据驱动 / 带内优雅重启 / 人工兜底自愈 / BOOT_EVIDENCE_TIMEOUT);顺带修迁移遗漏的 scanMachine NULL 扫描 | 0fb6130 |
 | 二 | WoL 全链:AMD magic packet(golden)+ 引擎直发(MAMMOTH_PXE_WOL_BROADCAST)+ edge 代发端点(--wol-listen,跨网段) | f2ba497 |
-| 三 | 能力降级门禁:控制器动作/同步 BMC 读 422 HEADLESS_UNSUPPORTED;提交期 PXE-only 与 hardware-RAID 拒绝(任务级预失败,不阻塞同批) | cce0293 |
+| 三 | 能力降级门禁:控制器动作/同步 BMC 读 422 BMC_ABSENT(2026-11-16 更名,原 HEADLESS_UNSUPPORTED——"headless"是圈内黑话,直白描述是"机器没有 BMC");提交期 PXE-only 与 hardware-RAID 拒绝(任务级预失败,不阻塞同批) | cce0293 |
 
 证据语义(§4.3 的实现形态):**arm 水位后的 PXE sighting**——builtin 模式
 读 machines.pxe_last_seen_at(proxyDHCP DISCOVER 经 ObservePXE 按 hardware

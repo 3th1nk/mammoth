@@ -1,6 +1,6 @@
 # .git deliberately SHIPS in the build context: the Dockerfile build stage
 # derives VERSION/COMMIT from `git describe` (see the RUN in Dockerfile /
-# Dockerfile.builder). It is never COPYed into a runtime image, only read by
+# Dockerfile.api). It is never COPYed into a runtime image, only read by
 # the build stage — the cost is context transfer size (~42MB) on remote
 # daemons. Pass explicit --build-arg VERSION/COMMIT in CI to pin or avoid it.
 bin/

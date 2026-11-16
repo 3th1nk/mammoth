@@ -21,16 +21,26 @@ COPY internal/ internal/
 # detection below; it never reaches a runtime image.
 COPY .git .git
 ARG TARGETOS TARGETARCH
-# VERSION/COMMIT: auto-detected from git (describe --tags --always --dirty)
-# when the context carries .git; explicit --build-arg overrides for CI and
-# tarball builds. Empty default = auto. Explicit values keep the tag's
-# leading v (v1.3.0) like describe does — see internal/version.
+# VERSION/COMMIT: auto-detected from git (describe --tags --always) when the
+# context carries .git; explicit --build-arg overrides for CI and tarball
+# builds. Empty default = auto. Explicit values keep the tag's leading v
+# (v1.3.0) like describe does — see internal/version. No --dirty here: the
+# build stage COPYs only a subset of tracked paths, so git always reports
+# the worktree torn and the suffix would be a constant lie.
+# The ldflags read VER/REV, not ${VERSION}/${COMMIT}: BuildKit pre-expands
+# DECLARED ARGs in RUN before the shell, so ${VERSION} (empty default)
+# flattened the ldflags to empty — auto-detect never landed (the v1.5.0
+# kit build shipped an empty version string). ${VERSION:-fallback} still
+# collapses via BuildKit (arg value → literal, empty → fallback text);
+# VER/REV are unknown to BuildKit and pass through to the shell's
+# just-assigned values. (\$-escaping is no escape: the backslash reaches
+# ash unstripped and dies into a literal $ inside double quotes.)
 ARG VERSION=""
 ARG COMMIT=""
-RUN VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo v0.1.0-dev)}" \
- && COMMIT="${COMMIT:-$(git rev-parse HEAD 2>/dev/null || echo none)}" \
+RUN VER="${VERSION:-$(git describe --tags --always 2>/dev/null || echo v0.1.0-dev)}" \
+ && REV="${COMMIT:-$(git rev-parse HEAD 2>/dev/null || echo none)}" \
  && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -buildvcs=false -ldflags "-s -w -X github.com/3th1nk/mammoth/internal/version.Version=${VERSION} -X github.com/3th1nk/mammoth/internal/version.Commit=${COMMIT}" \
+    go build -trimpath -buildvcs=false -ldflags "-s -w -X github.com/3th1nk/mammoth/internal/version.Version=${VER} -X github.com/3th1nk/mammoth/internal/version.Commit=${REV}" \
     -o /out/mammoth ./cmd/mammoth
 
 FROM alpine:3.20

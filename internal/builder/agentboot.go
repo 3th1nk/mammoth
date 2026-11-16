@@ -742,9 +742,11 @@ dd_image() { # image direct-write (roadmap「镜像直写通路」)
     sync
     # Read-back verification: hash what the DISK holds now. Requires the
     # image size (MAMMOTH_DD_IMAGE_BYTES, carried by the artifact-library
-    # resolution; absent on bare-inline specs — the stream hash above is
-    # then the only check).
-    if [ -n "$MAMMOTH_DD_IMAGE_BYTES" ] && [ -n "$MAMMOTH_DD_SHA256" ]; then
+    # resolution; absent or zero on bare-inline specs — the stream hash
+    # above is then the only check; a literal "0" from %d-of-zero must be
+    # treated as absent or the read-back reads nothing and hashes the
+    # empty string — office-PC 2026-11-16, four rounds).
+    if [ -n "$MAMMOTH_DD_IMAGE_BYTES" ] && [ "$MAMMOTH_DD_IMAGE_BYTES" != "0" ] && [ -n "$MAMMOTH_DD_SHA256" ]; then
         blocks=$(( (MAMMOTH_DD_IMAGE_BYTES + 1048575) / 1048576 + 1 ))
         got=$(dd if="$MAMMOTH_DD_TARGET" bs=1M count=$blocks 2>/dev/null | head -c "$MAMMOTH_DD_IMAGE_BYTES" | sha256sum | awk '{print $1}')
         if [ "$got" != "$MAMMOTH_DD_SHA256" ]; then

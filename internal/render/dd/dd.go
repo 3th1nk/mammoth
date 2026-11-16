@@ -162,8 +162,13 @@ func renderSH(in render.InstallInputs) string {
 	// ImageBytes feeds the runtime's read-back verification (the write is
 	// only proven when the DISK hashes to the declared digest). Carried by
 	// the artifact-library resolution; bare-inline specs omit it and the
-	// stream hash stands alone.
-	fmt.Fprintf(&b, "MAMMOTH_DD_IMAGE_BYTES=%s\n", fmt.Sprintf("%d", in.ImageSizeBytes))
+	// stream hash stands alone. EMITTED ONLY WHEN NON-ZERO: a "0" line
+	// passes the runtime's non-empty guard and trips a zero-byte read-back
+	// (sha of the empty string) — every bare-inline dd boot would fail
+	// verification exactly there (office-PC 2026-11-16, four rounds).
+	if in.ImageSizeBytes > 0 {
+		fmt.Fprintf(&b, "MAMMOTH_DD_IMAGE_BYTES=%d\n", in.ImageSizeBytes)
+	}
 	fmt.Fprintf(&b, "MAMMOTH_COMPLETE_URL=%s\n", shQuote(in.CompleteURL))
 	fmt.Fprintf(&b, "MAMMOTH_LOG_URL=%s\n", shQuote(in.AgentLogURL))
 	return b.String()

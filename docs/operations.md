@@ -698,6 +698,42 @@ MAMMOTH_PXE_WOL_PROXY_TOKEN=<t>        # 与代理 --wol-token 同值(入脱敏�
 不可用时无解(退路 U 盘人工装机/带 BMC 机型)。BIOS 一次性 PXE 残留
 (Pxe/Once)无害——引导项释放后无条目即回固件引导序。
 
+**4.8.1 办公 PC 真机全链路实录(2026-11-13 ~ 11-16,enroll→claim→
+install→dd 直写全通)**
+
+首台消费级 headless 机器端到端交付,沿途沉淀(§13 设计的"真机窗口"
+就此关闭;诊断流程见 runbooks/pxe-strand-diagnosis.md):
+
+1. **严格型消费 ROM + 池段共存**:proxyDHCP 分体 OFFER 被拒、必须
+   一体(v1.4.4 pool+enroll);站点 DHCP scope 与池段重叠时引导期竞速
+   引擎大概率赢,生产段仍建议网管侧排除(§共存节)。
+2. **miniproot(v1.4.10-21)**:apk 在 initramfs 内静默失败(--quiet +
+   alpine init `eend $?` 串扰)→ 新根无 init → 全部引导卡死。解法 =
+   追加 cpio 段整体替换 /init:busybox+musl(自载体抽取,架构/库天然
+   匹配)+ rcS 探针/agent 载体,无 alpine init、无 openrc、无 apk。
+   存储驱动从 modloop(7z 解 SquashFS)打入段内,依赖序 insmod +
+   不动点扫描(字母序单遍必败:scsi_common 在 scsi_mod 之后)。
+3. **可见性三件套**:VGAConsole(console 翻转+quiet)、
+   MAMMOTH_PROBE_DEBUG(tty2 shell)、探针日志走引擎 syslog sink
+   (logger -h 引擎 -P 514)——无串口无操作员机器引擎侧可定障。
+4. **NFS 导出网段前提**(4.7 的补充):装机介质 NFS 根默认只导出
+   装机段;办公网段机器走装机时必须把该网段加入 /etc/exports
+   (真机实录:casper 网络挂载 Permission denied → 180s 窗口耗尽落
+   shell)。同语义适用于 /media 的任何新来源网段。
+5. **WoL 实战边界**:`MAMMOTH_PXE_WOL_BROADCAST=<装机段定向广播>`
+   开启引擎直发;**ErP/S5 深睡是独立开关且默认杀 WoL**(S5 下网卡
+   断电,magic packet 无人收)——"网络唤醒"开了不等于 WoL 可用,
+   两项必须同核;装机流程的引导证据窗口无总超时,WoL 失败后人工
+   上电任务自愈(实测多轮)。
+6. **dd 直写的镜像契约**(docs/09 的运行面补充):镜像必须自带 GPT
+   + 尾部 ≥16MiB CIDATA 槽分区,无槽镜像在 seed 注入处按契约拒绝
+   (正确行为);bare-inline spec 无 size_bytes 时流哈希独立生效,
+   IMAGE_BYTES=0 字面量已修(v1.4.21,零字节读回误报)。
+7. **目标盘硬件边际**:入门 OEM SSD(LITEON CV8-CE128)在 3.9GB
+   持续直写下从总线掉线(write ~200MB 后 read-back 全零),小镜像
+   (16-64MB)无恙——批量 dd 直写前先盘查目标盘等级,或分批限速;
+   该盘换 SATA 线缆/供电后复测的窗口保留。
+
 ## 4.9 虚拟控制台(BMC web 反代,2026-11-06)
 
 机器详情页「控制台」按钮的统一入口(`GET /machines/{id}/console`,

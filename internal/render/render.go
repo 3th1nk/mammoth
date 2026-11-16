@@ -876,6 +876,27 @@ func FamilyOf(d OSDriver) string {
 	return ""
 }
 
+// UserFacingDriver is the optional capability marking a driver selectable
+// as a distro in client surfaces (the console install wizard's distro
+// dropdown). Pathway drivers that are frozen (bootc) or lack a matching
+// client form model (alpine agent — the wizard's library/inline image
+// section can't express a package-pool install) opt out: they stay
+// registered and API-servable, and the support matrix keeps reporting
+// them — only the surface carries user_facing=false so clients filter.
+type UserFacingDriver interface {
+	UserFacing() bool
+}
+
+// IsUserFacing reports whether a driver should surface as a selectable
+// distro. Undeclared = user-facing (third-party drivers keep compiling
+// and surfacing unchanged).
+func IsUserFacing(d OSDriver) bool {
+	if uf, ok := d.(UserFacingDriver); ok {
+		return uf.UserFacing()
+	}
+	return true
+}
+
 // Registry routes specs to drivers by distro.
 type Registry struct {
 	mu      sync.RWMutex

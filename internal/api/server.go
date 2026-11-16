@@ -345,6 +345,13 @@ func (s *Server) GetCapabilities(ctx context.Context, _ gen.GetCapabilitiesReque
 			if family := render.FamilyOf(d); family != "" {
 				entry.Family = (*gen.DistroSupportFamily)(&family)
 			}
+			// UserFacingDriver opt-out (bootc frozen, alpine agent without a
+			// client form model): the matrix keeps reporting the distro, the
+			// flag just tells clients not to offer it as selectable.
+			if !render.IsUserFacing(d) {
+				uf := false
+				entry.UserFacing = &uf
+			}
 			distros = append(distros, entry)
 		}
 	}

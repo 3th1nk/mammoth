@@ -234,6 +234,12 @@ type OSDriver interface {
 - 可选能力 `FamilyDriver{Family() string}`:支持矩阵导出安装家族
   (`GET /api/v1` 的 `distros[].family`),供集成方判断该发行版走哪条安装
   路径。
+- 可选能力 `UserFacingDriver{UserFacing() bool}`(缺省 true,2026-11-16):
+  声明该驱动是否作为**可选发行版**出现在客户端表面(console 装机向导的
+  发行版下拉)——冻结通路(bootc,docs/09 下一阶段 16 复议定案)与暂无
+  客户端表单形态的通路(alpine agent,docs/12)标 false 退出:驱动保持
+  注册、API 提交不受影响,仅 `GET /api/v1` 的 `distros[].user_facing=false`
+  提示集成方过滤;重开 = 删方法,客户端按标记自愈、无需改码。
 
 **声明化评估结论(2026-09-18 决策记录)**:曾落地 Cobbler 式
 `distros.json` 声明文件(12 发行版的家族/布局/池能力/代差参数全量

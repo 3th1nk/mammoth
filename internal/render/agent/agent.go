@@ -63,6 +63,14 @@ func (d *Driver) NetbootPool() render.NetbootPool { return render.NetbootPoolNon
 // boot media.
 func (d *Driver) AgentInstaller() bool { return true }
 
+// UserFacing: the pathway is real and API-served (docs/12-agent-initramfs,
+// qemu 全链 + 真机闭环), but no client form model exists yet — the console
+// wizard's image section (library/inline) can't express a package-pool
+// install, and the pilot scope (plain disks, ext4/vfat/swap, no bond/vlan)
+// has no form surface either. Hidden from selectable surfaces until a
+// wizard form lands; API submissions keep working unchanged.
+func (d *Driver) UserFacing() bool { return false }
+
 // supportedFilesystems — everything else is rejected at render with a clear
 // message (the agent's mkfs tooling comes from the pool; growing the set is
 // a driver change plus a package-presence check, not a silent surprise).

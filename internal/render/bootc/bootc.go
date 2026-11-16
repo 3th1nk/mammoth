@@ -34,6 +34,13 @@ func (d *Driver) SupportedArchs() []render.Arch {
 
 func (d *Driver) Family() string { return "bootc" }
 
+// UserFacing: the pathway is FROZEN (docs/09-roadmap.md 下一阶段 16 复议
+// 定案) — submissions are refused at validateBootc with a pointer back to
+// the dd pathway, so client surfaces must not offer it as a selectable
+// distro. Reopening the pathway = deleting this method; clients pick the
+// flag up from capabilities with no client-side change.
+func (d *Driver) UserFacing() bool { return false }
+
 func (d *Driver) KeepPartitionSupport() render.SupportLevel { return render.SupportNone }
 
 func (d *Driver) PXESupport() render.SupportLevel { return render.SupportFull }

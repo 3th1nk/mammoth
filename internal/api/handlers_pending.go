@@ -153,7 +153,7 @@ func hardwareFromReport(report json.RawMessage) *bmc.HardwareView {
 		return nil
 	}
 	hw := &bmc.HardwareView{Coverage: bmc.CoveragePartial,
-		CoverageNotes: []string{"facts from the enrollment probe's /sys scan; controller-only fields absent (headless machine)"}}
+		CoverageNotes: []string{"facts from the enrollment probe's /sys scan; controller-only fields absent (machine has no BMC, protocol none)"}}
 	for _, d := range probe.Disks {
 		if d.Device == "" {
 			continue

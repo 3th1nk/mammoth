@@ -54,7 +54,7 @@ func (e *Executor) armHeadless(ctx context.Context, b *bootSession) error {
 	macs := ictx.Netboot.ArmedMACs()
 	if len(macs) == 0 {
 		return classifiedErr("NETBOOT_MAC_UNAVAILABLE", false,
-			"headless machine %s has no armed MACs (the netboot registry is keyed by MAC)", task.MachineID)
+			"machine %s has no BMC (protocol none) and no armed MACs (the netboot registry is keyed by MAC)", task.MachineID)
 	}
 
 	// The evidence watermark predates arm slightly: a DISCOVER that raced

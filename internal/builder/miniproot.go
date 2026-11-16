@@ -205,12 +205,22 @@ OUT=/tmp/probe.json
 		case "$n" in loop*|ram*|sr*|fd*|dm-*|md*) continue ;; esac
 		[ -r "$d/size" ] || continue
 		s=$(cat "$d/size") || continue
+		# Serial sourcing, per bus (no smartmontools — the kernel sysfs
+		# already exports every identifier the disk inventory needs):
+		#   ATA/SATA (libata): device/serial + device/model
+		#   NVMe:              device/serial (kernel nvme core exports it
+		#                      on the block device's device dir too)
+		#   everything else:   device/wwid (SCSI layer unique id — USB
+		#                      bridges, SAS expanders; not a vendor serial
+		#                      but still a stable unique discriminator)
 		model=$(sed 's/[\\"]//g; s/^ *//; s/ *$//' "$d/device/model" 2>/dev/null)
-		serial=$(sed 's/[\\"]//g' "$d/device/serial" 2>/dev/null)
+		serial=$(sed 's/[\\"]//g; s/^ *//; s/ *$//' "$d/device/serial" 2>/dev/null)
+		wwid=$(sed 's/[\\"]//g' "$d/device/wwid" 2>/dev/null)
 		[ $first -eq 1 ] && first=0 || printf ','
 		printf '{"device":"%%s","size_bytes":%%d' "$n" $((s * 512))
 		[ -n "$model" ] && printf ',"model":"%%s"' "$model"
 		[ -n "$serial" ] && printf ',"serial":"%%s"' "$serial"
+		[ -n "$wwid" ] && printf ',"wwid":"%%s"' "$wwid"
 		printf '}'
 	done
 	printf '],"nics":['

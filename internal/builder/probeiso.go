@@ -274,9 +274,14 @@ scan() {
 		[ "$sect" -gt 0 ] 2>/dev/null || continue
 		model=$(json_escape "$(cat "$d/device/model" 2>/dev/null | tr -s ' \t' ' ' | sed 's/^ //; s/ $//')")
 		serial=$(json_escape "$(cat "$d/device/serial" 2>/dev/null)")
+		wwid=$(json_escape "$(cat "$d/device/wwid" 2>/dev/null)")
 		line="\"device\":\"$name\",\"size_bytes\":$((sect * 512))"
 		[ -n "$model" ]  && line="$line,\"model\":\"$model\""
 		[ -n "$serial" ] && line="$line,\"serial\":\"$serial\""
+		# wwid: the SCSI-layer unique id — USB bridges and SAS expanders
+		# expose no vendor serial but always carry a wwid; a stable unique
+		# discriminator beats absence.
+		[ -n "$wwid" ] && line="$line,\"wwid\":\"$wwid\""
 		h=$(disk_health "$name")
 		[ -n "$h" ] && line="$line,\"health\":\"$h\""
 		line="$line,\"partitions\":["

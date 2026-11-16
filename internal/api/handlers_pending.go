@@ -138,6 +138,7 @@ func hardwareFromReport(report json.RawMessage) *bmc.HardwareView {
 			Device    string `json:"device"`
 			SizeBytes int64  `json:"size_bytes"`
 			Serial    string `json:"serial"`
+			WWID      string `json:"wwid"`
 			Model     string `json:"model"`
 		} `json:"disks"`
 		NICs []struct {
@@ -158,8 +159,17 @@ func hardwareFromReport(report json.RawMessage) *bmc.HardwareView {
 		if d.Device == "" {
 			continue
 		}
+		// Serial: vendor serial from the kernel sysfs (ATA device/serial,
+		// NVMe device/serial). Disks whose bus exposes no vendor serial
+		// (USB bridges, SAS expanders) fall back to the SCSI wwid — not a
+		// vendor serial but a stable unique discriminator; serial-style
+		// consumers (spec selectors, acceptance diff) key on uniqueness.
+		serial := d.Serial
+		if serial == "" {
+			serial = d.WWID
+		}
 		hw.Disks = append(hw.Disks, bmc.DiskView{
-			Name: d.Device, Serial: d.Serial, SizeBytes: d.SizeBytes,
+			Name: d.Device, Serial: serial, SizeBytes: d.SizeBytes,
 		})
 	}
 	for _, n := range probe.NICs {

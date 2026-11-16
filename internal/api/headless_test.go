@@ -267,3 +267,25 @@ func TestHardwareFromReportNumericLinkUp(t *testing.T) {
 		t.Fatalf("nics = %+v", hw.NICs)
 	}
 }
+
+// wwid fallback: disks whose bus exposes no vendor serial (USB bridges,
+// SAS expanders) carry a SCSI wwid instead — the projection promotes it to
+// the serial slot (spec selectors and acceptance diff key on uniqueness).
+func TestHardwareFromReportWWIDFallback(t *testing.T) {
+	hw := hardwareFromReport([]byte(`{"disks":[` +
+		`{"device":"sda","size_bytes":128035676160,"serial":"LITEON-TEST","model":"CV8"},` +
+		`{"device":"sdb","size_bytes":500107862016,"wwid":"eui.0025388b7100ce9e","model":"Samsung"}],` +
+		`"nics":[]}`))
+	if hw == nil {
+		t.Fatal("nil projection")
+	}
+	if len(hw.Disks) != 2 {
+		t.Fatalf("disks = %+v", hw.Disks)
+	}
+	if hw.Disks[0].Serial != "LITEON-TEST" {
+		t.Errorf("serial disk: serial = %q, want the vendor serial", hw.Disks[0].Serial)
+	}
+	if hw.Disks[1].Serial != "eui.0025388b7100ce9e" {
+		t.Errorf("wwid disk: serial = %q, want the promoted wwid", hw.Disks[1].Serial)
+	}
+}

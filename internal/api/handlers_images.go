@@ -117,6 +117,14 @@ func imageOut(im *store.Image) gen.Image {
 	if im.SizeBytes != 0 {
 		out.SizeBytes = &im.SizeBytes
 	}
+	if im.Format != "" {
+		format := gen.ImageFormat(im.Format)
+		out.Format = &format
+		out.RawSha256 = &im.RawSHA256
+	}
+	if im.RawSizeBytes != 0 {
+		out.RawSizeBytes = &im.RawSizeBytes
+	}
 	return out
 }
 
@@ -160,7 +168,7 @@ func (s *Server) resolveImageRefs(ctx context.Context, specRaw json.RawMessage) 
 	default:
 		return nil, verr("SCHEMA_INVALID_SPEC", "image %q failed to fetch: %s", im.ID, im.Error)
 	}
-	if probe.Image.Checksum != "" && probe.Image.Checksum != "sha256:"+im.SHA256 {
+	if probe.Image.Checksum != "" && probe.Image.Checksum != "sha256:"+im.SHA256 && probe.Image.Checksum != "sha256:"+im.RawSHA256 {
 		return nil, verr("SCHEMA_INVALID_SPEC",
 			"image %q: spec checksum %s conflicts with the registration's sha256:%s",
 			im.ID, probe.Image.Checksum, im.SHA256)
@@ -183,9 +191,29 @@ func (s *Server) resolveImageRefs(ctx context.Context, specRaw json.RawMessage) 
 	if d, _ := img["distro"].(string); d == "dd" {
 		base := strings.TrimSuffix(s.ExternalURL, "/")
 		img["source"] = base + "/api/v1/images/" + probe.Image.Id + "/file"
-		// The runtime's read-back verification spans exactly the registered
-		// image — the size rides the resolved spec.
-		img["size_bytes"] = im.SizeBytes
+		// The runtime verifies the UNCOMPRESSED stream (write-stream hash +
+		// read-back span), so the resolution carries the uncompressed face
+		// the fetch worker hashed out of the cache file — for raw files it
+		// equals the registration's; legacy rows without detection fall
+		// back to it (the only sound case there is an uncompressed image).
+		rawSHA, rawSize := im.RawSHA256, im.RawSizeBytes
+		if rawSHA == "" {
+			rawSHA, rawSize = im.SHA256, im.SizeBytes
+		}
+		img["checksum"] = "sha256:" + rawSHA
+		img["size_bytes"] = rawSize
+		// Format is the runtime's decompressor choice: an explicit declaration
+		// conflicting with the cache file's sniffed compression is a rejection
+		// (the declared gunzip would corrupt the write stream); an omission
+		// inherits the registration's detected format — facts beat defaults.
+		if declared, _ := img["format"].(string); declared != "" && im.Format != "" && declared != im.Format {
+			return nil, verr("SCHEMA_INVALID_SPEC",
+				"image %q: spec format %s conflicts with the registered image's compression %s — the write stream is verified against the real bytes",
+				im.ID, declared, im.Format)
+		}
+		if im.Format != "" {
+			img["format"] = im.Format
+		}
 	} else {
 		img["source"] = im.FilePath
 	}

@@ -820,6 +820,22 @@ subiquity 的镜像探测在**安装器环境无网/探测失败**时会回落�
    InstallerAutoReboot(agent 报告后自重启的事实,完成尾不再 cycle 正在
    首启的机器);windows apply 的 boot-two 原路径不动。**遗留**:
    真实可引导镜像端到端待镜像到场。
+   **库镜像压缩识别(2026-11-16)**——压缩整盘镜像(如 NVIDIA Jetson 的
+   `ubuntu-24.04-preinstalled-server-arm64+tegra-jetson.img.xz`)走库引用
+   曾有个语义断层:注册 sha256 门禁与缓存的是**压缩文件**字节,而运行时
+   校验的是**未压缩流**(写盘流哈希 + 读回跨度)——image.id 解析曾把压缩
+   摘要塞给 spec,校验必挂(真机验证过的全链用的 raw 未压缩镜像,没踩到)。
+   定案:fetch worker 落盘后按 magic bytes 识别压缩格式(gzip `1f 8b` /
+   xz `FD 37 7A 58 5A 00`,确定性零成本;gzip=stdlib,xz=ulikunitz 纯 Go),
+   压缩件流式解压一遍算出**未压缩 sha256 + 字节跨度**落库(format /
+   raw_sha256 / raw_size_bytes,迁移 00016);image.id 解析(dd 分支)改携
+   未压缩摘要/跨度,显式声明的 format 与识别冲突即 422、缺省则继承识别值
+   (事实压过缺省);目录扫描器导入同一段落库。distro/version 对 dd 仍不
+   识别(NVIDIA 的 `+tegra` 只是文件名命名惯例,机器可读元信息不存在;
+   识别成 ubuntu 会把整盘镜像误路由进 autoinstall 通路)——注册时人工填
+   `distro=dd` 的约定不变,控制台装机向导的压缩格式选择器随注册件扩展名
+   预置(.img.xz → raw.xz),dd 选库镜像不再强制切内联(引擎 file 端点
+   本来就面向机器拉流)。
 
 ## 已评估并排除的方向(决策记录,避免重新论证)
 

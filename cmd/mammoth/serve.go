@@ -571,6 +571,12 @@ func serve(args []string) error {
 			Logger: logger,
 		}
 		go func() { _ = scanner.Run(ctx) }()
+		// Compression-facts backfill (docs/09「镜像直写通路」库镜像压缩识别):
+		// ready rows that predate format detection get one pass at boot —
+		// a legacy compressed dd image without its uncompressed digest would
+		// resolve into a spec the runtime can never verify. Off-ground
+		// goroutine: a multi-gigabyte xz pass must not delay startup.
+		go images.BackfillFormats(ctx, imageRepo, logger)
 	}
 
 	// Runner facet (execution plane).

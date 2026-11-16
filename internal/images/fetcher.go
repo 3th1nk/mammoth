@@ -87,6 +87,12 @@ func (f *Fetcher) process(ctx context.Context, im *store.Image) {
 				log.Warn("dedupe inherit detection failed", "err", derr.Error())
 			}
 		}
+		// same bytes → same compression facts; carry them over so the dd
+		// resolution sees the uncompressed digest without a re-hash pass
+		if ferr := f.Repo.SetDetectedFormat(ctx, im.ID, shared.Format, shared.RawSHA256, shared.RawSizeBytes); ferr != nil {
+			log.Warn("dedupe inherit format failed", "err", ferr.Error())
+		}
+		im.Format, im.RawSHA256, im.RawSizeBytes = shared.Format, shared.RawSHA256, shared.RawSizeBytes
 		if serr := f.Repo.SetReady(ctx, im.ID, shared.SizeBytes, shared.FilePath); serr != nil {
 			log.Warn("dedupe share failed", "err", serr.Error())
 			return
@@ -130,15 +136,85 @@ func (f *Fetcher) process(ctx context.Context, im *store.Image) {
 			}
 		}
 	}
+	// Compression facts land BEFORE ready: state=ready is the gate both the
+	// dd spec resolution and the file endpoint honor, and a ready row
+	// without its uncompressed digest would resolve into a spec the runtime
+	// can never verify (the compressed file's digest ≠ the stream's).
+	landFormat(ctx, f.Repo, im, path, log)
 	if uerr := f.Repo.SetReady(ctx, im.ID, size, path); uerr != nil {
 		log.Warn("set ready row", "err", uerr.Error())
 		return
 	}
 	f.emit(ctx, "image.ready", im.ID, map[string]any{
 		"source_url": im.SourceURL, "sha256": im.SHA256, "size_bytes": size,
+		"format": im.Format, "raw_sha256": im.RawSHA256, "raw_size_bytes": im.RawSizeBytes,
 		"distro": im.Distro, "version": im.Version,
 	})
 	log.Info("image ready", "bytes", size, "path", path, "distro", im.Distro, "version", im.Version)
+}
+
+// landFormat sniffs the cache file's compression and, for gzip/xz, streams
+// one decompress pass to record the uncompressed digest + byte span — the
+// face the dd runtime verifies (docs/09「镜像直写通路」). Detection is a
+// 6-byte read; the pass costs CPU only on compressed artifacts (dd delivery
+// formats raw.gz/raw.xz), never on ISO media or uncompressed images. Shared
+// by the fetch worker and the directory scanner.
+func landFormat(ctx context.Context, repo *store.ImageRepo, im *store.Image, path string, log *slog.Logger) {
+	fh, err := os.Open(path)
+	if err != nil {
+		log.Warn("compression detect open failed", "err", err.Error())
+		return
+	}
+	format := DetectFormat(fh)
+	fh.Close()
+	if format == "" {
+		return
+	}
+	rawSHA, rawSize := im.SHA256, im.SizeBytes
+	if format == FormatRawGZ || format == FormatRawXZ {
+		fh, oerr := os.Open(path)
+		if oerr != nil {
+			log.Warn("compression hash open failed", "err", oerr.Error())
+			return
+		}
+		raw, size, herr := UncompressedDigest(ctx, fh, format)
+		fh.Close()
+		if herr != nil {
+			log.Warn("uncompressed digest failed", "format", format, "err", herr.Error())
+			return
+		}
+		rawSHA, rawSize = raw, size
+	}
+	if ferr := repo.SetDetectedFormat(ctx, im.ID, format, rawSHA, rawSize); ferr != nil {
+		log.Warn("format persist failed", "err", ferr.Error())
+		return
+	}
+	im.Format, im.RawSHA256, im.RawSizeBytes = format, rawSHA, rawSize
+	log.Info("image compression facts landed", "format", format, "raw_size_bytes", rawSize)
+}
+
+// BackfillFormats lands compression facts on ready rows that predate the
+// detection (docs/09「镜像直写通路」库镜像压缩识别, migration 00016): one
+// pass at boot — rows already carrying a format skip for an open+6-byte
+// read, and rows without a cache file stay the scanner's business. Without
+// this a legacy compressed dd image would resolve into a spec the runtime
+// can never verify (the compressed file's digest ≠ the write stream's).
+func BackfillFormats(ctx context.Context, repo *store.ImageRepo, log *slog.Logger) {
+	rows, err := repo.List(ctx)
+	if err != nil {
+		log.Warn("compression backfill: list failed", "err", err.Error())
+		return
+	}
+	for i := range rows {
+		row := &rows[i]
+		if row.State != "ready" || row.Format != "" || row.FilePath == "" {
+			continue
+		}
+		if _, err := os.Stat(row.FilePath); err != nil {
+			continue
+		}
+		landFormat(ctx, repo, row, row.FilePath, log)
+	}
 }
 
 func (f *Fetcher) emit(ctx context.Context, typ, id string, payload map[string]any) {

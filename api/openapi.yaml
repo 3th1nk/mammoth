@@ -1884,6 +1884,15 @@ components:
             agent path renders the spec. Absent for third-party drivers
             without the capability.
           enum: [kickstart, autoinstall, preseed, agent]
+        user_facing:
+          type: boolean
+          description: >
+            Whether client surfaces should offer this distro as a selectable
+            install target (the console install wizard filters on it).
+            Absent (= true) for regular distros. False marks pathway drivers
+            that are frozen (bootc — submissions refused) or lack a matching
+            client form model (alpine agent) — the drivers stay registered
+            and API-servable; only the selectable surface hides them.
 
     Problem:
       type: object
@@ -3998,6 +4007,27 @@ components:
           type: integer
           format: int64
           description: Cached file size; set when ready.
+        format:
+          type: string
+          enum: [raw, raw.gz, raw.xz]
+          description: >
+            Compression the fetch worker sniffed from the cache file's magic
+            bytes (docs/09「镜像直写通路」). Present from detection on; absent
+            on legacy rows fetched before the field existed (treat as raw).
+        raw_sha256:
+          type: string
+          description: >
+            The UNCOMPRESSED image's sha256 — the digest the dd pathway's
+            write-stream hash and read-back verification see. Equals sha256
+            for uncompressed images; spec resolution over image.id carries
+            it so compressed library images stay verifiable. Rides with
+            format.
+        raw_size_bytes:
+          type: integer
+          format: int64
+          description: >
+            The uncompressed image's byte span (the read-back verification
+            span for the dd pathway). Rides with format.
         state:
           type: string
           enum: [fetching, ready, failed, missing]

@@ -19,26 +19,36 @@ func NewImageRepo(db *sql.DB) *ImageRepo { return &ImageRepo{db: db} }
 // FilePath points at the content-addressed cache file once ready
 // (MediaDir/images/<sha256>.iso — several rows may share one file when the
 // same bytes were registered twice).
+//
+// Format/RawSHA256/RawSizeBytes describe the dd pathway's compression facts
+// (docs/09「镜像直写通路」): SHA256/SizeBytes gate and span the REGISTERED
+// bytes (the compressed file), while the runtime verifies the UNCOMPRESSED
+// stream — RawSHA256/RawSizeBytes carry that face when the cache file is
+// gzip/xz (Format raw.gz/raw.xz). Format ” means undetected (pre-detection
+// rows); treat it as raw at resolution.
 type Image struct {
-	ID        string
-	Name      string
-	SourceURL string
-	SHA256    string
-	Distro    string
-	Version   string
-	SizeBytes int64
-	State     string // fetching | ready | failed
-	Error     string
-	FilePath  string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID           string
+	Name         string
+	SourceURL    string
+	SHA256       string
+	Distro       string
+	Version      string
+	Format       string // '' | raw | raw.gz | raw.xz (magic-byte sniff of the cache file)
+	RawSHA256    string // uncompressed-image digest; = SHA256 when Format is raw/''
+	RawSizeBytes int64  // uncompressed-image byte span
+	SizeBytes    int64
+	State        string // fetching | ready | failed
+	Error        string
+	FilePath     string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 func (r *ImageRepo) Create(ctx context.Context, im *Image) error {
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO images (id, name, source_url, sha256, distro, version, state)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		im.ID, im.Name, im.SourceURL, im.SHA256, im.Distro, im.Version, im.State)
+		INSERT INTO images (id, name, source_url, sha256, distro, version, format, raw_sha256, raw_size_bytes, state)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		im.ID, im.Name, im.SourceURL, im.SHA256, im.Distro, im.Version, im.Format, im.RawSHA256, im.RawSizeBytes, im.State)
 	if isUniqueViolation(err) {
 		return ErrConflict
 	}
@@ -46,13 +56,13 @@ func (r *ImageRepo) Create(ctx context.Context, im *Image) error {
 }
 
 const imageSelect = `
-	SELECT id, name, source_url, sha256, distro, version, size_bytes, state, error, file_path, created_at, updated_at
+	SELECT id, name, source_url, sha256, distro, version, format, raw_sha256, raw_size_bytes, size_bytes, state, error, file_path, created_at, updated_at
 	FROM images`
 
 func scanImage(row interface{ Scan(...any) error }) (*Image, error) {
 	var im Image
 	err := row.Scan(&im.ID, &im.Name, &im.SourceURL, &im.SHA256, &im.Distro, &im.Version,
-		&im.SizeBytes, &im.State, &im.Error, &im.FilePath, &im.CreatedAt, &im.UpdatedAt)
+		&im.Format, &im.RawSHA256, &im.RawSizeBytes, &im.SizeBytes, &im.State, &im.Error, &im.FilePath, &im.CreatedAt, &im.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -109,6 +119,18 @@ func (r *ImageRepo) SetDetected(ctx context.Context, id, distro, version string)
 		  version = COALESCE(NULLIF(version, ''), NULLIF($3, ''), version),
 		  updated_at = now()
 		WHERE id = $1`, id, distro, version)
+	return err
+}
+
+// SetDetectedFormat lands the compression facts the fetch worker sniffed and
+// hashed out of the cache file (docs/09「镜像直写通路」): format plus the
+// uncompressed digest/byte span the dd runtime verifies against. Unlike
+// SetDetected these have no registrant face — the bytes are the only truth —
+// so they overwrite wholesale (a re-detect after a cache change re-lands).
+func (r *ImageRepo) SetDetectedFormat(ctx context.Context, id, format, rawSHA256 string, rawSizeBytes int64) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE images SET format = $2, raw_sha256 = $3, raw_size_bytes = $4, updated_at = now()
+		WHERE id = $1`, id, format, rawSHA256, rawSizeBytes)
 	return err
 }
 

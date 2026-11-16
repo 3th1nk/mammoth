@@ -239,6 +239,11 @@ func (s *DirectoryScanner) importFile(ctx context.Context, path, name, sha strin
 			log.Warn("detection persist failed", "image", im.ID, "err", derr.Error())
 		}
 	}
+	// Compression facts before ready, same contract as the fetch worker: a
+	// ready row resolves into dd specs, and those verify the uncompressed
+	// stream — the digest must be on the row by then.
+	im.SizeBytes = size
+	landFormat(ctx, s.Repo, im, canonical, log)
 	if rerr := s.Repo.SetReady(ctx, im.ID, size, canonical); rerr != nil {
 		return rerr
 	}

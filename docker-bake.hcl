@@ -10,7 +10,7 @@ target "common" {
 
 target "mammoth" {
   inherits = ["common"]
-  dockerfile = "Dockerfile.api"
+  dockerfile = "Dockerfile"
   context = "."
   tags = ["mammoth:dev"]
 }

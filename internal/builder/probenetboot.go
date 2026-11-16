@@ -138,7 +138,11 @@ func BuildProbeNetboot(ctx context.Context, opt ProbeNetbootOptions) (BootTree, 
 	if rerr != nil {
 		return BootTree{}, fmt.Errorf("builder: miniproot: carrier initramfs: %w", rerr)
 	}
-	mp, merr := miniprootSegment(initrd, opt.ReportURL, flavor, opt.DebugShell)
+	storage, serr := storageDriverEntries(filepath.Join(tree.Dir, "modloop"))
+	if serr != nil {
+		// best-effort: NIC-only reporting degrades gracefully (empty disks in the report)
+	}
+	mp, merr := miniprootSegment(initrd, storage, opt.ReportURL, flavor, opt.DebugShell)
 	if merr != nil {
 		return BootTree{}, merr
 	}

@@ -226,3 +226,44 @@ func fakeMachineGetter(t *testing.T, machines map[string]*store.Machine) *store.
 	}
 	return repo
 }
+
+// flexBool: probe scripts build JSON in busybox sh — booleans arrive as
+// numeric 0/1 as well as true/false; both must parse (office-PC 2026-11-13:
+// "link_up":1 failed the strict *bool unmarshal, silently nil-ing the whole
+// hardware projection).
+func TestFlexBool(t *testing.T) {
+	var r struct {
+		LinkUp *flexBool `json:"link_up"`
+	}
+	for _, tc := range []struct {
+		in   string
+		want bool
+	}{
+		{`{"link_up":1}`, true},
+		{`{"link_up":0}`, false},
+		{`{"link_up":true}`, true},
+		{`{"link_up":false}`, false},
+		{`{}`, false},
+	} {
+		if err := json.Unmarshal([]byte(tc.in), &r); err != nil {
+			t.Fatalf("unmarshal %s: %v", tc.in, err)
+		}
+		if r.LinkUp == nil {
+			continue // absent: no fact, no conclusion
+		}
+		if bool(*r.LinkUp) != tc.want {
+			t.Errorf("link_up %s = %v, want %v", tc.in, *r.LinkUp, tc.want)
+		}
+	}
+}
+
+// The office-PC report shape (numeric link_up, one NIC) must project.
+func TestHardwareFromReportNumericLinkUp(t *testing.T) {
+	hw := hardwareFromReport([]byte(`{"captured_at":"2026-11-16T09:43:52Z","disks":[],"nics":[{"link_up":1,"mac":"c8:d9:d2:21:23:03","name":"eth0"}],"source":"ramdisk"}`))
+	if hw == nil {
+		t.Fatal("hardwareFromReport returned nil — numeric link_up must not abort the projection")
+	}
+	if len(hw.NICs) != 1 || hw.NICs[0].MAC != "c8:d9:d2:21:23:03" {
+		t.Fatalf("nics = %+v", hw.NICs)
+	}
+}

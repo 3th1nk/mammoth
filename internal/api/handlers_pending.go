@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/bmc"
@@ -109,6 +110,23 @@ func (s *Server) FetchNetbootEnrollFile(ctx context.Context, request gen.FetchNe
 	}, nil
 }
 
+// flexBool tolerates boolean JSON in both proper (true/false) and shell-
+// generated (0/1) forms — probe scripts build the JSON in busybox sh where
+// booleans are naturally numeric (office-PC 2026-11-13: "link_up":1 failed
+// the strict *bool unmarshal, silently nil-ing the whole hardware view).
+type flexBool bool
+
+func (b *flexBool) UnmarshalJSON(data []byte) error {
+	s := strings.Trim(string(data), `"`)
+	switch s {
+	case "1", "true":
+		*b = true
+	default:
+		*b = false
+	}
+	return nil
+}
+
 // hardwareFromReport projects an enrollment probe's /sys scan onto the
 // machine's hardware view. Tolerant by design: a report without nics (old
 // probes) still projects its disks; malformed JSON or an empty scan yields
@@ -123,9 +141,9 @@ func hardwareFromReport(report json.RawMessage) *bmc.HardwareView {
 			Model     string `json:"model"`
 		} `json:"disks"`
 		NICs []struct {
-			Name   string `json:"name"`
-			MAC    string `json:"mac"`
-			LinkUp *bool  `json:"link_up"`
+			Name   string    `json:"name"`
+			MAC    string    `json:"mac"`
+			LinkUp *flexBool `json:"link_up"`
 		} `json:"nics"`
 	}
 	if json.Unmarshal(report, &probe) != nil {
@@ -151,7 +169,7 @@ func hardwareFromReport(report json.RawMessage) *bmc.HardwareView {
 		}
 		nic := bmc.NICView{Name: n.Name, MAC: mac}
 		if n.LinkUp != nil {
-			nic.LinkUp = *n.LinkUp
+			nic.LinkUp = bool(*n.LinkUp)
 		}
 		hw.NICs = append(hw.NICs, nic)
 	}

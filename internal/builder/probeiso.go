@@ -312,7 +312,8 @@ scan() {
 		case "$mac" in ""|"00:00:00:00:00:00") continue ;; esac
 		nline="\"name\":\"$name\",\"mac\":\"$mac\""
 		carrier=$(cat "$n/carrier" 2>/dev/null)
-		case "$carrier" in 0|1) nline="$nline,\"link_up\":$carrier" ;; esac
+		lu=true; [ "$carrier" = "0" ] && lu=false
+		nline="$nline,\"link_up\":$lu"
 		[ $nfirst -eq 1 ] && nfirst=0 || printf ',' >> "$OUT"
 		printf '{%s}' "$nline" >> "$OUT"
 	done

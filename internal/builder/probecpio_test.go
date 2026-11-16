@@ -54,7 +54,7 @@ func TestMiniprootSegment(t *testing.T) {
 	gw.Write(carrier)
 	gw.Close()
 
-	seg, err := miniprootSegment(gz.Bytes(),
+	seg, err := miniprootSegment(gz.Bytes(), nil,
 		"http://10.0.0.1:8080/netboot/enroll/tok", "lts", false)
 	if err != nil {
 		t.Fatalf("miniprootSegment: %v", err)

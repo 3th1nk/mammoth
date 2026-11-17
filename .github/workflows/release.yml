@@ -20,7 +20,7 @@ jobs:
           # 全部历史 tag 才能解析 previous(<unknown> 会让 changelog 区间退化
           # 成全仓历史,v1.3.0 的 384 行发布体就是这一坑的产物)。
           fetch-tags: true
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26"
       - uses: goreleaser/goreleaser-action@v6

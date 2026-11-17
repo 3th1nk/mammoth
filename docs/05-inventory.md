@@ -84,7 +84,7 @@ POST /machines/{id}/actions {"type": "discover", "probe": "ramdisk"}
   RAMDISK_CONFIRM_REQUIRED`:显式 `"confirm": true` 重提(运营已确认接管该机),
   或先用电源动作关机再提;
 - 有在途 install/rescue/decommission 任务的机器 → `409 JOB_MACHINE_BUSY`
-  (探针会以 probe 条目覆盖按 MAC 武装的 PXE 安装条目并重启机器);
+  (探针会以 probe 条目覆盖按 MAC 装载的 PXE 安装条目并重启机器);
 - 补偿关机落地后回写 `power_state=off`,被探过的机器重提不再误拦;
 - `auto` / `redfish` / `inband_ssh` 盘查纯只读,注册自动盘查与快照刷新(§5)
   不受此门禁影响;CLI 侧对应 `mammoth machines discover --probe ramdisk --confirm`。

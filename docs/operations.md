@@ -232,9 +232,11 @@ iPXE 脚本),默认关闭。启用清单:
   台账里存在,首次 DISCOVER 即由 sighting 前置落账)同样获得"租约+引导
   信息"一体 OFFER——严格型消费 ROM 只认这种形态(见 §共存节 2026-11-12
   办公 PC 实录);从未 PXE 过的普通客户端依旧拒答,池子不为办公网的
-  打印机/笔记本服务。登记过的机器走原 armed 门禁,语义不变。
+  打印机/笔记本服务。登记过的机器走原「引导条目已装载」门禁,语义不变。
+  (术语:装载引导条目 = 代码中的 arm/armed——引擎把该 MAC 的 netboot
+  引导条目写入注册表就位;日志/接口/字段里的 `armed` 原词保持英文。)
 - **PROXY 模式(有站点 DHCP)**:站点 DHCP 继续分配地址;mammoth(或
-  网段代理 edge(原 edge) / 外置 dnsmasq)只补 PXE 引导选项(67/4011),
+  网段代理 edge / 外置 dnsmasq)只补 PXE 引导选项(67/4011),
   真机在 spec 里声明静态地址(routes 形态 netplan)。**注意 ROM 兼容性**:
   分体 OFFER(proxy 只发引导信息)依赖 ROM 做 offer 合并——服务器级网卡
   实现完整,消费级 UEFI ROM 常拒收,失败签名与处置见 §共存节。
@@ -659,7 +661,7 @@ curl -X POST "$API/pending-machines/aa:bb:cc:dd:ee:01/claim" \
   -d '{"bmc":{"protocol":"none","address":"none://aa:bb:cc:dd:ee:01","credential_id":""},
        "ssh":{"address":"192.168.1.50"}}'
 # claim 把探针报告固化为首份 layout 快照(source=ramdisk)与 hardware 视图
-# (coverage=partial)——PXE 观测与 netboot 按 MAC 武装都以它为键。
+# (coverage=partial)——PXE 观测与 netboot 按 MAC 装载引导条目都以它为键。
 
 # 通路 B · 手工注册(兜底;POC fake 变通即本通路的临时实现)
 curl -X POST "$API/machines" \
@@ -678,7 +680,7 @@ media/BIOS/擦盘)与同步 BMC 读(console/BIOS 表/drives/health/SEL)一律
 提交期门禁:boot.strategy 必须
 `pxe`(无 BMC 挂介质)、hardware RAID 拒绝(任务级预失败,不阻塞同批)。
 
-**boot 阶段(证据驱动)**:netboot 武装(prepare)后,boot 不做电源序列,
+**boot 阶段(证据驱动)**:netboot 装载引导条目(prepare)后,boot 不做电源序列,
 改为:①装好的机器(SSH 可达)带内优雅重启;②WoL magic packet;③等待
 引导证据(arm 后的 PXE sighting);④窗口(boot.evidence_wait_seconds,
 默认 600s)无证据 → WARN + `task.boot_manual_required` 事件 → **继续等**

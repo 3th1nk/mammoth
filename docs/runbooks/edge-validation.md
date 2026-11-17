@@ -1,4 +1,4 @@
-# edge(原 edge) 真机验证矩阵(proxyDHCP + 不可控站点 DHCP 共存)
+# edge 真机验证矩阵(proxyDHCP + 不可控站点 DHCP 共存)
 
 背景与机制:docs/operations.md §edge(站点 DHCP 共存节)、
 docs/11-pxe-walkthrough.md §4。目的:把"edge + 站点 DHCP 不可控"
@@ -15,7 +15,7 @@ Proxy DHCP 消息,RackN KB-00043 / RH Bugzilla #1809246)要求按机型固件
   bind 冲突);`--next-server` = 该 L2 本机地址;
 - 引擎机器面 8080(TCP)从装机 VLAN 可路由(kit 同步 + sightings 回传 +
   iPXE 脚本 fetch 共用);
-- 引擎侧已武装 netboot 条目(或开 `MAMMOTH_PXE_ENROLL`)。
+- 引擎侧已装载 netboot 引导条目(或开 `MAMMOTH_PXE_ENROLL`)。
 
 ## 实验矩阵(按序执行,前一步通过才进下一步)
 

@@ -331,7 +331,7 @@ func (s *Server) fetchPoolStoreFile(c *gin.Context, sha, rest string) error {
 }
 
 // serveExternalKit streams the exported external PXE kit
-// (MediaDir/netboot/external-tftp) as a tar archive: edge(原 edge) instances on
+// (MediaDir/netboot/external-tftp) as a tar archive: edge instances on
 // the provisioning VLANs sync their TFTP root from here, so a kit refresh on
 // the engine reaches every VLAN agent without a manual copy. Public like the
 // other /netboot machine-face routes (the kit holds public NBP binaries and

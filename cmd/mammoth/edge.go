@@ -25,8 +25,8 @@ import (
 // subcommand: proxyDHCP answers (67/4011) + TFTP (69) serving the exported
 // external kit, kit auto-sync from the engine, the Wake-on-LAN relay
 // (--wol-listen) and PXE sighting feedback (observe) — the engine's
-// per-segment deputy on any host in the machine VLAN (renamed from
-// pxe-proxy: the duties outgrew the boot-server proxy the name described).
+// per-segment deputy on any host in the machine VLAN (the duties outgrew
+// the boot-server proxy the original subcommand name described).
 // All install decisions stay with the mammoth engine (the kit's boot.ipxe
 // chains to the engine's per-MAC script over HTTP) — one binary per
 // provisioning VLAN replaces a hand-tuned dnsmasq for cross-subnet

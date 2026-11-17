@@ -4,7 +4,7 @@
 > (2026-11-04;触发记录见 09-roadmap "办公/无 BMC 批量装机分场景重审
 > 定案")。切片一/二/三的主体已按本稿落地(实施映射见 §8),剩余:
 > 工控机真机端到端(注册→claim→PXE 装机→WoL 唤醒)与 qemu 验证轮。
-> 首个用例:工控机 POC(x86_64,Ubuntu 24.04,单网段,edge(原 edge)/池
+> 首个用例:工控机 POC(x86_64,Ubuntu 24.04,单网段,edge/池
 > 双兼容)。
 
 ## 1. 目标与非目标
@@ -144,16 +144,16 @@ Intel 专项:vPro/AMT 平台**不属于 headless 场景**(ME 固件自带带外�
 - POC 确认清单增列 WoL 支持确认项(BIOS WoL/PME Wake 选项存在性、
   ErP 可关),与 C4(来电自启)并列;不做也不阻塞(人工重启 C1 本身
   是兜底,headlessArm 的 WoL 失败仅 WARN 落人工路径);
-- 装好的系统固化 NIC armed:装后配置 systemd .link `WakeOnLan=magic`
-  (ethtool 语义),保证软关机后的重装/唤醒场景仍可 WoL——装机流程走
-  reboot 不软关机,影响面小,属打磨项。
+- 装好的系统固化网卡唤醒(NIC WoL armed):装后配置 systemd .link
+  `WakeOnLan=magic`(ethtool 语义),保证软关机后的重装/唤醒场景仍可
+  WoL——装机流程走 reboot 不软关机,影响面小,属打磨项。
 
 ## 8. 实施记录(2026-11-04,feat/headless 分支)
 
 | 切片 | 内容 | 落点 |
 |---|---|---|
 | 一 | protocol=none 契约(迁移 00011 / BMCProtocol 枚举 / none://<mac> 身份 / claim 显式确认) | b9891ca |
-| 一 | enroll 探针 NIC 采集 + claim 固化 hardware 视图(coverage=partial;PXE 观测与 netboot 武装的承重墙) | 952f245 |
+| 一 | enroll 探针 NIC 采集 + claim 固化 hardware 视图(coverage=partial;PXE 观测与 netboot 引导条目装载的承重墙) | 952f245 |
 | 一 | boot none 语义(headlessArm:证据驱动 / 带内优雅重启 / 人工兜底自愈 / BOOT_EVIDENCE_TIMEOUT);顺带修迁移遗漏的 scanMachine NULL 扫描 | 0fb6130 |
 | 二 | WoL 全链:AMD magic packet(golden)+ 引擎直发(MAMMOTH_PXE_WOL_BROADCAST)+ edge 代发端点(--wol-listen,跨网段) | f2ba497 |
 | 三 | 能力降级门禁:控制器动作/同步 BMC 读 422 BMC_ABSENT(2026-11-16 更名,原 HEADLESS_UNSUPPORTED——"headless"是圈内黑话,直白描述是"机器没有 BMC");提交期 PXE-only 与 hardware-RAID 拒绝(任务级预失败,不阻塞同批) | cce0293 |

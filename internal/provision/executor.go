@@ -175,7 +175,7 @@ type Executor struct {
 	// 13-headless-design.md §4). Zero applies the default (10m).
 	HeadlessBootWait time.Duration
 	// WakeOnLAN, when configured, wakes a headless machine with magic
-	// packets (engine direct-send today, the edge(原 edge) relay in the
+	// packets (engine direct-send today, the edge relay in the
 	// cross-segment shape). Nil = WoL unavailable; the manual power-on
 	// fallback stays.
 	WakeOnLAN func(mac string) error

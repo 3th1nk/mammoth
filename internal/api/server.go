@@ -198,7 +198,7 @@ func New(d Deps, apiToken string) *gin.Engine {
 			writeError(c, err)
 		}
 	})
-	// The external kit as a single download: edge(原 edge) instances on the
+	// The external kit as a single download: edge instances on the
 	// provisioning VLANs sync their TFTP root from here (same public
 	// machine-face credentialing as the other /netboot routes). Streamed
 	// tar of the exported kit directory; 404 when the engine never

@@ -1003,7 +1003,7 @@ resource from iMana),不再依赖人开 KVM。诊断增强候选,不值得单独
 
 ## Insyde UEFI PXE 栈的 TFTP 形态(tsize 必答、blksize 不可协商,2026-11-04 真机定案)
 
-edge(原 edge) + 不可控站点 DHCP 拓扑(dnsmasq 模拟,192.168.1.x)真机两阶段定位,
+edge + 不可控站点 DHCP 拓扑(dnsmasq 模拟,192.168.1.x)真机两阶段定位,
 2288H V5 的 Insyde UEFI PXE 固件栈(与 Huawei X722 NIC shim 的"不 ACK OACK"
 同族、更重):
 

@@ -35,6 +35,11 @@ type ProbeNetbootOptions struct {
 	// ReportURL is the machine-face endpoint the probe POSTs its findings to
 	// (baked into the overlay — the probe never reads kernel args for it).
 	ReportURL string
+	// SyslogPort is the UDP port the engine's log sink binds on the engine
+	// host (MAMMOTH_PXE_SYSLOG_PORT, default 514). miniproot milestones go
+	// there via busybox logger, targeted at the ReportURL host — derived,
+	// never a hardcoded address.
+	SyslogPort int
 	// StaticCIDR / StaticGateway are the probe's DHCP fallbacks (same
 	// semantics as the virtual-media carrier).
 	StaticCIDR    string
@@ -142,7 +147,7 @@ func BuildProbeNetboot(ctx context.Context, opt ProbeNetbootOptions) (BootTree, 
 	if serr != nil {
 		// best-effort: NIC-only reporting degrades gracefully (empty disks in the report)
 	}
-	mp, merr := miniprootSegment(initrd, storage, opt.ReportURL, flavor, opt.DebugShell)
+	mp, merr := miniprootSegment(initrd, storage, opt.ReportURL, flavor, opt.DebugShell, opt.SyslogPort)
 	if merr != nil {
 		return BootTree{}, merr
 	}

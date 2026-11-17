@@ -135,6 +135,7 @@ func (e *Executor) probeRamdisk(ctx context.Context, task *store.Task, usePXE bo
 			ApksISOPath:   carrierISO,
 			DestDir:       filepath.Join(e.BootTreeDir, pctx.Token),
 			ReportURL:     e.ExternalURL + "/render/" + pctx.Token + "/probe-report",
+			SyslogPort:    e.SyslogPort,
 			StaticCIDR:    staticCIDR,
 			StaticGateway: gateway,
 			ModloopURL:    strings.TrimSuffix(e.ExternalURL, "/") + "/netboot/files/" + pctx.Token + "/modloop",

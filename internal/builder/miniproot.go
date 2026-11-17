@@ -27,6 +27,7 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,7 +43,7 @@ const miniprootFile = "miniproot.cpio.gz"
 // musl loader are extracted from it, so the segment always matches the
 // carrier's architecture and libc; the NIC driver modules already live in
 // the main initramfs and are insmod'd by the /init script.
-func miniprootSegment(initrd []byte, storage []cpioEntry, reportURL, flavor string, debugShell bool) ([]byte, error) {
+func miniprootSegment(initrd []byte, storage []cpioEntry, reportURL, flavor string, debugShell bool, syslogPort int) ([]byte, error) {
 	src := initrd
 	if zr, zerr := gzip.NewReader(bytes.NewReader(initrd)); zerr == nil {
 		if plain, rerr := io.ReadAll(zr); rerr == nil {
@@ -73,7 +74,7 @@ func miniprootSegment(initrd []byte, storage []cpioEntry, reportURL, flavor stri
 		return nil, fmt.Errorf("builder: miniproot: no musl loader in the carrier initramfs")
 	}
 	seg := []cpioEntry{
-		{Name: "init", Mode: 0o100755, Body: []byte(miniprootInitScript(reportURL, flavor, debugShell))},
+		{Name: "init", Mode: 0o100755, Body: []byte(miniprootInitScript(reportURL, flavor, debugShell, syslogPort))},
 		{Name: "bin/", Mode: 0o040755},
 		{Name: "bin/busybox", Mode: 0o100755, Body: busybox},
 		{Name: "bin/sh", Mode: 0o120777, Link: "busybox"},
@@ -108,11 +109,24 @@ func miniprootSegment(initrd []byte, storage []cpioEntry, reportURL, flavor stri
 // in a shell on the console (tty0 under VGAConsole) instead of an
 // invisible serial line. Milestones go to the engine's syslog sink too —
 // a machine with no serial and no operator is still diagnosed engine-side.
-// Sprintf verbs, in order: flavor, debug-line, report URL.
-func miniprootInitScript(reportURL, flavor string, debugShell bool) string {
+// Sprintf verbs, in order: flavor, debug-line, logd-line, report URL.
+func miniprootInitScript(reportURL, flavor string, debugShell bool, syslogPort int) string {
 	debugLine := ""
 	if debugShell {
 		debugLine = "/bin/sh < /dev/tty2 > /dev/tty2 2>&1 &\n"
+	}
+	// The sink host is the engine the reportURL points at — the same machine
+	// the report POST reaches. An earlier hardcoded address shipped probe
+	// boots that announced their milestones to a foreign engine's sink (the
+	// .250 machine-room host) from every other test segment. Hostless
+	// report URL → milestones stay console-only.
+	logd := `LOGD() { echo "[miniproot] $*"; }`
+	if u, err := url.Parse(reportURL); err == nil && u.Hostname() != "" {
+		if syslogPort == 0 {
+			syslogPort = 514
+		}
+		logd = fmt.Sprintf(`LOGD() { logger -h %s -P %d -t miniproot "$*" 2>/dev/null; echo "[miniproot] $*"; }`,
+			u.Hostname(), syslogPort)
 	}
 	return fmt.Sprintf(`#!/bin/sh
 # mammoth miniproot /init (%s kernel): standalone probe boot — no alpine
@@ -125,7 +139,7 @@ export PATH=/bin:/sbin
 /bin/busybox mount -t sysfs sysfs /sys
 /bin/busybox mount -t devtmpfs devtmpfs /dev 2>/dev/null
 /bin/busybox --install -s /bin
-LOGD() { logger -h 172.16.20.250 -P 514 -t miniproot "$*" 2>/dev/null; echo "[miniproot] $*"; }
+%s
 LOGD "init: pseudo-fs mounted, applets linked"
 %s
 
@@ -254,7 +268,7 @@ while [ $try -lt 20 ]; do
 done
 echo "[miniproot] report failed — shell below"
 exec /bin/sh
-`, flavor, debugLine, reportURL)
+`, flavor, debugLine, logd, reportURL)
 }
 
 // storageDriverEntries extracts the storage module set from the boot tree's

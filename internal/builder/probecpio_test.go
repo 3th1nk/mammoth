@@ -55,7 +55,7 @@ func TestMiniprootSegment(t *testing.T) {
 	gw.Close()
 
 	seg, err := miniprootSegment(gz.Bytes(), nil,
-		"http://10.0.0.1:8080/netboot/enroll/tok", "lts", false)
+		"http://10.0.0.1:8080/netboot/enroll/tok", "lts", false, 514)
 	if err != nil {
 		t.Fatalf("miniprootSegment: %v", err)
 	}
@@ -95,5 +95,30 @@ func TestMiniprootSegment(t *testing.T) {
 	}
 	if !strings.Contains(init, "[miniproot]") {
 		t.Error("/init must carry [miniproot] log lines for console diagnosis")
+	}
+	if !strings.Contains(init, "logger -h 10.0.0.1 -P 514 -t miniproot") {
+		t.Error("syslog sink must target the report URL host — the engine this boot serves")
+	}
+	if bytes.Contains([]byte(init), []byte("172.16.20")) {
+		t.Error("/init must never carry a hardcoded foreign-engine address")
+	}
+}
+
+// TestMiniprootInitSyslogFollowsReportURL: the syslog sink derives from the
+// report URL (the engine this boot serves) — a hardcoded address sent
+// probe milestones from every test segment to one foreign engine's sink.
+func TestMiniprootInitSyslogFollowsReportURL(t *testing.T) {
+	hostless := miniprootInitScript("", "lts", false, 0)
+	if strings.Contains(hostless, "logger -h") {
+		t.Error("hostless report URL must not render a logger target")
+	}
+	if !strings.Contains(hostless, `echo "[miniproot] $*"`) {
+		t.Error("console-only LOGD must keep the [miniproot] echo")
+	}
+	if got := miniprootInitScript("http://192.168.1.132:8080/render/t/probe-report", "lts", false, 5514); !strings.Contains(got, "logger -h 192.168.1.132 -P 5514 -t miniproot") {
+		t.Error("syslog target must follow the report URL host and the configured sink port")
+	}
+	if got := miniprootInitScript("http://192.168.1.132:8080/render/t/probe-report", "lts", false, 0); !strings.Contains(got, "logger -h 192.168.1.132 -P 514 -t miniproot") {
+		t.Error("zero sink port must default to 514")
 	}
 }

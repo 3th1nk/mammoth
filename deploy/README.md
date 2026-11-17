@@ -14,7 +14,9 @@
 | `compose.edge.yml` + `edge.env.example` | **每装机 VLAN 一个**的 Go 原生网段代理(proxyDHCP + TFTP,host 网络):中心引擎不在该 L2 时的 PXE 投递(§4.5.1 edge 节) |
 | `Dockerfile.nfsd` + `nfsd/` | 内核 nfsd 管理 sidecar(管理**宿主机内核**的 nfsd 单例;privileged + host 网络) |
 | `Dockerfile.samba` + `samba/` | guest 只读 SMB2 sidecar(Windows wimboot setup 通路的安装源;bridge 网络 + 445 即可) |
-| `mammoth.env.example` | 全量环境变量模板(`.env` 放同目录即被 compose 读取) |
+| `mammoth.env.example` | 全量环境变量模板,**按部署形态分 9 段**(段内 builtin / 跨网段 external / 认领 / 探针 / 介质 / 执行面…),每段标注适用形态与校验红线;注释行展示默认值(`.env` 放同目录即被 compose 读取) |
+| `edge.env.example` | edge 侧全量模板(引擎地址 / next-server / UEFI NBP 判据 / kit 同步语义 / WoL 中继),注释行同样展示默认值 |
+| [docs/env-vars.md](../docs/env-vars.md) | **逐变量完整释义**:全部 `MAMMOTH_*` 变量的默认值 / 适用形态 / 消费者(两个 env 模板与本文矩阵的词典) |
 
 两个可选 sidecar 在两个拓扑 compose 里同名同 profile,**默认不启动**:
 
@@ -26,6 +28,32 @@
 ```sh
 docker compose -f compose.all-in-one.yml --profile nfs --profile samba up -d
 ```
+
+## env 怎么配:变量 × 形态矩阵
+
+变量多、形态多,漏配/错配的高发点是"PXE 段配错形态"。速查(`mammoth.env.example`
+的段号):
+
+| env 段 | 形态 A 单网段(all-in-one) | 形态 B faceted | 形态 C 跨网段(external + edge) | edge 主机 |
+|---|---|---|---|---|
+| 1 Core | ✅ | ✅(MASTER_KEY 跨节点同值) | ✅ | — |
+| 2 Storage(NFS/vMedia) | 带 BMC 机器要 | 同左 | BMC 可路由才要 | — |
+| 3 PXE·段内(builtin 池) | ✅ | ✅ 只配 api | **禁**(红线 1) | — |
+| 4 PXE·跨网段(external) | ❌ | ❌ | ✅ | — |
+| 5 无带外认领(enroll) | 可选 | 可选 | 可选 | — |
+| 6 探针资产 | 认领/探针要 | 同左 | 认领要 | — |
+| 7 发行版介质 | 按装机矩阵 | 同左 | 同左 | — |
+| 8 执行面(BMC) | ✅ | 只配 runner | runner | — |
+| 9 队列/观测 | 默认 | 默认 | 默认 | — |
+| EDGE_* | — | — | — | ✅(见 edge.env.example) |
+
+三条校验红线(config 校验层强制,违反即拒启):external + `DHCP_POOL`;
+`UEFI_NBP=ipxe` + external(external 不发 DHCP 应答,NBP 在 edge 或站点
+DHCP 配);`ENROLL` 开而无 `ENROLL_TOKEN`。
+
+PXE 面落点一句话:形态 A/B 引擎必须驻留机器 L2(host/macvlan 网络,每 L2
+一个应答者);形态 C 引擎零 UDP,引导归每装机 VLAN 一台的 edge,地址归该段
+站点 DHCP。端到端照抄样本见离线部署套件 compose/multi-segment/参数样本.md。
 
 ## 两种拓扑怎么选
 

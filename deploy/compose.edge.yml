@@ -12,7 +12,6 @@
 # The image builds from the repo Dockerfile.api (distroless, static binary —
 # the edge facet needs no media toolchain) and runs `mammoth edge`; the
 # synced kit lives on a mounted volume so it survives recreation.
-# (v1.4.0 renamed the subcommand: it used to be `pxe-proxy`.)
 name: mammoth-edge
 services:
   edge:

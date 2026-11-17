@@ -27,6 +27,7 @@ Mammoth 是一个自包含的裸金属服务器安装/重装引擎:以 `{带外�
 | [12-agent-initramfs.md](12-agent-initramfs.md) | agent initramfs 安装路径试点:动机、架构、qemu 双固件验证结论、后续边界 |
 | [13-headless-design.md](13-headless-design.md) | 无带外机器形态(headless)设计草案:protocol=none 契约、enroll→claim、boot 等待引导语义、WoL、切片(评审稿) |
 | [operations.md](operations.md) | 运维手册:备份恢复、介质服务形态、部署注意 |
+| [env-vars.md](env-vars.md) | 环境变量参考:引擎 + edge 全量 `MAMMOTH_*` 变量的默认值、适用形态与消费者(权威定义 internal/config/config.go) |
 | [security-baseline.md](security-baseline.md) | 安全基线:鉴权、凭证加密、介质生命周期、审查余项 |
 | [compat/patterns.md](compat/patterns.md) | 跨厂商装机共性模式(P1 控制器卷名/P2 DHCP 竞态/P3 参数截断…)——新机型/新方言自查清单 |
 | [runbooks/test-baselines.md](runbooks/test-baselines.md) | 整机回归基线:主流服务器镜像矩阵/镜像类型×载体法则/寻址核对单/通过标准 |

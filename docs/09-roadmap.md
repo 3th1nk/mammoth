@@ -402,7 +402,7 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
      ③安装器驱动盘注入(anaconda inst.dd / dracut DD 进 initrd,装前
      生效,prepare 阶段构建)。触发器:真实机型因驱动缺失装机失败且
      载体切换不可行,届时从①起步逐档评估;
-   - **启动时 DHCP 探测自检(候选,2026-11-03 立项)**——netboot/edge(原 edge)
+   - **启动时 DHCP 探测自检(候选,2026-11-03 立项)**——netboot/edge
      启动时主动发探测 DISCOVER,按应答分类本网段地址服务形态(站点 DHCP
      有/无/多个、应答是否携带引导选项),据此校验模式配置并给出可操作告警:
      池模式撞站点 DHCP = 双地址权威租约打架;proxy 模式无站点 DHCP = 客户端
@@ -615,6 +615,42 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
     探针(lspci class / NUMA 入档案,驱动预装经 package_source+scripts
     已可达;AI 机群趋势,等真实机群);装机容量轮(并发 vMedia 会话上限、
     数百台级压测);DPU 装机(MAAS BlueField-3 风向,等硬件)。
+20. **硬件老化/验收测试包(burn-in)**(P1 候选,2026-11-17 竞品增量扫描
+    立项;related-work §8.1#1;MAAS testing scripts 同型的可执行半边)
+    ——验收探针(第 12 项)只读采集之上的动作化扩展:机器级动作
+    run_diagnostics,agent 内存态跑 stress-ng/memtest/fio/(GPU 机型)
+    nvidia-smi 压测,结果入 acceptance_reports 同表(采集+老化共用
+    落档),测试集与时长按 profile 声明;数据中心实践为上架必做 4~24h
+    (Zenlayer QC:普通机 ≥4h、GPU 机 24h 分档)。载体/互斥门复用 rescue
+    同型;验收 fake+qemu,不占真机窗口。
+21. **BMC 凭证轮换动作** (P1 候选,2026-11-17 立项;related-work §8.1#2;
+    DMTF 安全实践,华为 iBMC 官方同操作)——Redfish ManagerAccount
+    Password PATCH 标准操作之上的动作 rotate_credential:新密码只写
+    永不回显语义不变,两段式确认沿 BIOS/ERASE 先例,批量轮换走既有
+    批量 job;等保/信创合规刚需。风险注意:改密后旧会话失效的任务
+    时序(先验证新凭证可登录再落终态)。
+22. **发现规则/自动 claim 策略** (P1 候选,2026-11-17 立项;related-work
+    §8.1#3;Foreman Discovery Rules/Metal3 HostDeployPolicy/DRP
+    classification 同型)——零注册 pending_machines→claim 的人工升格
+    之上:claim 规则(按 MAC 前缀/机型/固件底座匹配→自动升格+赋标签/
+    BIOS profile),纯策略层不动契约;与第 13 项 BIOS profile、第 19 项
+    批量扇出联动。
+23. **硬件画像自动标签** (P1 候选,2026-11-17 立项;related-work §8.1#4;
+    MAAS auto-tag/DRP classification 同型)——batch-labels 之上的规则化:
+    盘查 schema 简单谓词→自动打标(gpu/nvme-raid/10gbe 等);是第 19 项
+    批量扇出与第 20 项 GPU 机群分组的前置。
+24. **P2 候选组(2026-11-17 竞品增量扫描,条件触发)**(related-work
+    §8.2/§8.3)——AI/GPU 机群 bring-up 模板(GPU 健康面 ECC/温度入盘查
+    + 第 20 项 GPU 压测 + 驱动/CUDA 经 package_source+scripts 打包为
+    可复用模板,NVIDIA BCM 同型语义;等真实机群);带内硬 RAID(agent
+    storcli payload:BMC VolumeCreator OEM 面窄的机型 + headless 也可
+    配 RAID,渲染即拒面收窄;等真实机型);库存导出目标 NetBox DCIM
+    (webhook 已有加适配器,"工作缓存→权威资产库"的采集器角色,符合
+    非目标边界;等真实 NetBox 用户);自定义 iPXE 引导脚本逃生门
+    (netboot 树暴露引导项覆盖端点,Latitude.sh 同型);重置密码动作
+    (rescue flow 同型 one-shot payload,云厂商标配)。场景观察不立项:
+    多站点管理面/白盒交换机 ZTP/无盘常驻节点/TPM 远程度量认证/SEL
+    带外健康 watch(见 related-work §8.3)。
 
 ## 长期方向(不承诺排期)
 
@@ -658,7 +694,7 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
    状态机——DISCOVER≥3 次/3 分钟窗口无地址后续 → 根因行("no DHCP
    answered on this segment";proxy 形态=网段无地址服务,pool 形态=站点
    侧静默);地址 REQUEST(option 50/ciaddr/bound-ip)= 健康对照信号清态;
-   归因链复用引导条目注册表的 TaskID(武装 MAC 才有归属,外来客户端
+   归因链复用引导条目注册表的 TaskID(装载了引导条目的 MAC 才有归属,外来客户端
    纯引擎日志);抑制窗 5 分钟防刷屏;任务日志经 TaskLogTee 落 task_logs;
 2. **装机后离线观测**(installed-orphan):reaper 孤儿清扫删条目前先向
    Observer 注记 MAC→终态任务;此后该 MAC 的 DISCOVER = "刚装的机器无
@@ -671,7 +707,7 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
    ——警告的受众就是零声明形态);
 5. **净boot 无库依赖**:Observer 不碰数据库——归因走回调链(默认 =
    注册表),reaper 交接经内存注记;Tests:五态单测(阈值/对照清态/
-   外来无归属/orphan 武装/窗口重置)+ PG 预检(警告落行/声明豁免/
+   外来无归属/orphan 装载条目/窗口重置)+ PG 预检(警告落行/声明豁免/
    非阻塞)。
    **边缘实时门控**(定稿后半:实时引擎查询 + fail-closed + TTL 负缓存)
    设计保留备用——触发条件:edge 跨网段部署出现"未登记 MAC 白吃地址"
@@ -695,7 +731,7 @@ cancel 旧作业再重跑;用户脚本(spec.scripts 前后置)接入已单列,�
 edge 架构下引擎本就是引导链的硬依赖(trampoline 实时按 MAC 拉配置),
 对"是否发租约"加实时引擎查询不引入新的可用性依赖——比定时同步更优(无
 陈旧窗口)。设计要点:查询预算 1-2s(DHCP 客户端 4s/8s 重试容忍);
-引擎超时 fail-closed + 短 TTL 负缓存(防外部客户端重试风暴);判定武装后
+引擎超时 fail-closed + 短 TTL 负缓存(防外部客户端重试风暴);判定引导条目已装载后
 正缓存覆盖装机期;续租按本地已授租约表应答(引擎中途宕机不影响在装任务)。
 可选端点:复用 script 端点作 oracle,或专用 GET /netboot/armed/{mac}。
 

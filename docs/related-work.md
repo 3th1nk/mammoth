@@ -15,7 +15,8 @@ Tinkerbell 换用 agent 工作流哲学,Pixiecore 只做引导层。
 > **2026-11-07 现状注记**:Foreman 3.17 季度节奏活跃(继续对照);Cobbler
 > 维护缓慢(仅参考);**xCAT 已 EOL 归档(2023-12),移出竞品清单**;
 > Tinkerbell 进 CNCF Sandbox 且 tink/boots/smee 已并入单仓 monorepo。
-> 完整扫描见 §7。
+> **2026-11-17 增量**:RackShift(国内唯一开源裸金属平台)2023-12 起停更
+> 确认,国内服务端开源位空缺(§8.4);完整扫描见 §7、§8。
 
 ## 借鉴清单(按 roadmap 对应)
 
@@ -267,3 +268,109 @@ ubuntu late-commands 同步补容忍清除(双方言对称);
 全部落 roadmap 11~19 项(P1:rescue mode → 装后验收探针 → BIOS 基线
 巡检 → CLI/Terraform;P2:固件升级 → bootc → TPM-LUKS → 生命周期收尾;
 P3:批量扇出/GPU 探针/容量轮/DPU,条件触发)。本节不另立行动项。
+
+## 8. 竞品增量扫描(2026-11-17:特性面补扫 + GitHub 全量补扫)
+
+> §7 之后的一轮增量调研,只列 §7 未覆盖的候选,分两半:①特性面补扫
+> (Digital Rebar/NVIDIA BCM/SUSE Elemental/Talos Omni/NetBox 生态/
+> 云厂商 BMS/数据中心 burn-in 实践/BMC 凭证轮换);②GitHub 装机相关
+> 热门项目全量补扫(同域漏网引擎 + 邻域生态 + 淘汰名单)。
+> 行动项落 roadmap 20~24,本节沉淀证据,不重复展开。
+
+### 8.1 特性面增量(P1,纯既有能力组合)
+
+| # | 候选特性 | 竞品原型 | mammoth 对应面 | 落地形态 |
+|---|---|---|---|---|
+| 1 | 硬件老化/验收测试包(burn-in) | MAAS testing scripts 的"可执行"半边;数据中心实践上架必做 4~24h 老化([Zenlayer QC:普通机 ≥4h、GPU 机 24h](https://docs.console.zenlayer.com/welcome/bare-metal/best-practice/bare-metal-cloud-server-quality-control)),GPU 集群验收普遍含 burn-in([1Legion](https://1legion.com/burn-in-and-acceptance)) | 第 12 项验收探针只做了"只读采集"半边;ramdisk 探针是载荷载体(rescue/agent 同型),spec.scripts 前后置已有 | 机器级动作 run_diagnostics:agent 内存态跑 stress-ng/memtest/fio/(GPU 机型)nvidia-smi 压测,结果入 acceptance_reports 同表——与验收探针拼成"验收=采集+老化" |
+| 2 | BMC 凭证轮换动作 | DMTF 安全实践:per-BMC 唯一随机密码 + vault 驱动轮换,Redfish `ManagerAccount.Password` PATCH 是标准操作([Redfish 安全文](https://safeguard.sh/resources/blog/redfish-explained-dmtf-server-management-api-and-how-to-secure-your-bmc)、[华为 iBMC 官方同操作](https://support.huawei.com/enterprise/en/doc/EDOC1100266817/8d3a25ef/changing-the-bmc-administrator-account-and-password)) | credentials 只写永不回显已有;等保/信创合规是目标用户群刚需 | 动作 rotate_credential(新密码只写语义不变,两段式确认沿 BIOS/ERASE 先例);批量轮换走既有批量 job;注意改密后旧会话失效的任务时序 |
+| 3 | 发现规则/自动 claim 策略 | Foreman Discovery Rules、Metal3 HostDeployPolicy、DRP classification——"零注册之后不该停"三者共同验证 | 零注册 pending_machines→claim 已落地,但 claim 是人工的 | claim 规则(按 MAC 前缀/机型/固件底座匹配→自动升格+赋标签/BIOS profile),纯策略层不动契约 |
+| 4 | 硬件画像自动标签 | MAAS 按 commissioning 事实自动打 tag(XPath 匹配硬件)、DRP profile classification | batch-labels 已有,缺"按盘查事实规则自动打标" | 标签规则面(盘查 schema 简单谓词,如 gpu/nvme-raid/10gbe),是 GPU 机群分组扇出(roadmap 19)的天然前置 |
+
+### 8.2 特性面增量(P2,条件触发)
+
+- **AI/GPU 机群 bring-up 模板**——[NVIDIA Base Command Manager](https://www.nvidia.com/en-us/data-center/base-command-manager)
+  是 AI 机群装机标杆(软件镜像蓝图+驱动/CUDA+节点健康门禁+Slurm/K8s);
+  mammoth 不学平台面,组合既有件即可:GPU 探针(roadmap 19 已列)→ 增量 =
+  GPU 健康面(ECC/温度)入盘查 → 8.1#1 老化包(GPU 压测)→ 驱动/CUDA 经
+  package_source+scripts(已可达)→ 打包为可复用 bring-up 模板(8.1#4
+  标签做分组)。装机速度 SLA 化是 AI 机群趋势,六阶段耗时统计已有数据基础。
+- **带内硬 RAID(agent storcli payload)**——HookOS/IPA 均在内存系统做
+  RAID(storcli/megacli),不依赖 BMC OEM;configure_raid 现走 BMC
+  VolumeCreator(OEM 面窄,华为 OEM 回退已实录)。agent initramfs 第三
+  payload 载体可承载 storcli:BMC 不支持 VolumeCreator 的机型 +
+  **headless 机器也能配 RAID**(与 headless 形态协同),渲染即拒面可收窄。
+- **库存导出目标(NetBox DCIM)**——[NetBox](https://netboxlabs.com/products/netbox)
+  是私有化机房事实标准 DCIM/NSoT 但无装机能力,与 mammoth"工作缓存"
+  定位天然互补:webhook 投递器已有,加 NetBox 适配器(机器/网卡/盘→
+  NetBox device/component)。符合非目标边界:mammoth 仍不做权威资产
+  管理,只做采集器角色。
+- **自定义 iPXE 引导脚本逃生门**——Latitude.sh 等裸金属云的 custom
+  iPXE script:netboot iPXE 树+per-MAC 注册已有,暴露"引导项覆盖"端点
+  即可,token 生命周期沿任务先例。
+- **重置密码动作**——华为云/阿里云 EBM 均有一键重置密码(§7.3 已记未
+  立项):rescue flow 同型 one-shot agent payload(内存态 chroot 改密),
+  复用载体/互斥门,不进安装流水线。
+
+### 8.3 场景观察(只记录,不建议立项)
+
+- **多站点管理面**(DRP Multi-Site Manager:站点自治+工作流全局同步)
+  ——edge 代理只管到网段级;多机房统一面与单二进制边界冲突,等私有化
+  多机房真实客户。
+- **白盒交换机 ZTP**(ONIE/SONiC)——netboot 基建(proxyDHCP+TFTP+HTTP)
+  完全可复用,但跨域;机架级交付场景提及即可。
+- **无盘常驻节点**(Warewulf 谱系,HPC 内存盘节点)——与"落盘安装"
+  哲学相反,观察(Warewulf 4 由 CIQ 维护,活跃,见 §8.4)。
+- **TPM 远程度量认证**(Keylime 式)——roadmap 17(TPM2+LUKS sealed key)
+  之上的延伸,观察。
+- **SEL 带外健康 watch**(BMC SEL 轮询→事件→webhook)——注意与已排除
+  的"常驻**带内**故障感知"的边界:带外 BMC 轮询不在排除范围,SEL 读
+  已有,成本极低,可作健康面小补充。
+- **Elemental/Omni 的不可变 OS 舰队管理**——OS 级范式(A/B 升级),
+  mammoth 装完即交棒,不跟。
+
+### 8.4 GitHub 全量补扫(装机相关热门项目,star 数 2026-11-17 实测 GitHub API)
+
+**同域漏网引擎**(均未进本清单,按热度):
+
+| 项目 | 热度/状态 | 说明与处置 |
+|------|------|------|
+| [Ventoy](https://github.com/ventoy/Ventoy) | 80.9k★ 活跃 | USB 多 ISO 启动,装机类全 GitHub 热度之王;个人装机 UX 方向标(免烧录、链式引导任意 ISO 与 builder 介质重打包同源),与机房批量范式相反,记录 |
+| [netboot.xyz](https://github.com/netbootxyz/netboot.xyz) | 12.6k★ 活跃 | iPXE 菜单聚合全发行版安装器;"菜单即入口"体验可对照零注册 pending 机器 console 面 |
+| [Rescuezilla](https://github.com/rescuezilla/rescuezilla) | 2.8k★ 活跃 | Clonezilla GUI 化;rescue 场景消费级 UX 参照(boot_rescue 已落地) |
+| [FOG](https://github.com/FOGProject/fogproject) | 1.7k★ 活跃 | PC 克隆/镜像管理;已排除领域(范围 B),活跃度佐证排除决策 |
+| [Matchbox](https://github.com/poseidon/matchbox) | 1.4k★ 活跃 | Flatcar/CoreOS 声明式 PXE profile+ignition;与 netboot_entries 同型,对照 |
+| [Warewulf 4](https://github.com/warewulf/warewulf) | 673★ 活跃(CIQ) | HPC 无盘容器 OS 供给;§8.3 无盘场景的真实标的 |
+| [RackShift](https://github.com/fit2cloud/rackshift) | 643★ **2023-12 停更** | 国内唯一开源裸金属平台事实弃维护——**国内开源位空缺**;功能面可当中文市场用户预期清单 |
+| [FAI](https://github.com/faiproject/fai) | 415★ 活跃 | 德系老牌无人值守安装(NFS+class 体系);class 分组组织方式可参考 |
+| [Stacki](https://github.com/Teradata/stacki) | 237★ 2023 停更 | Teradata 装机引擎,半弃维护 |
+| [ezio](https://github.com/tjjh89017/ezio) | 228★ 活跃 | **BitTorrent 分发装机**;大规模 dd 批量装机的带宽优化思路,挂接 roadmap 19 容量轮 |
+| [Grendel](https://github.com/ubccr/grendel) | 72★ 活跃 | HPC 装机单二进制 Go(DHCP/DNS/PXE 一体);哲学同款,小众 |
+
+**淘汰名单**(佐证赛道淘汰率,移出扫描):Razor(Puppet,2020 归档)、
+Fuel(Mirantis,2019)、Mayu(Giant Swarm,2023)、tink 旧仓(并入
+monorepo)、xCAT(2023-12 EOL,已移出)。
+
+**邻域生态**(装机周边,按场景记名):**Beaker**(Red Hat 硬件实验室
+调度)+LAVA(Linaro)+**Labgrid**(552★)——**硬件 CI 场景**(申请机器→
+装机→跑测试→还机),信创适配实验室可能即此用户群,API-first 引擎可作
+其执行层(本轮新发现场景);Packer+packer-maas/osbuild/mkosi/
+ignition-butane——金镜像路线工厂引擎(已排除路线,bootc 重开时的
+工具链);Mender(1.2k★)/Kairos(1.9k★)/balena/RAUC——边缘舰队 OTA
+(工控 Day-2,交付边界外,客户可能问);OSDCloud(254★)——Windows
+社区 WinPE 云镜像装机(§6 三路线之外的第四实践,驱动包管理可参考);
+ShredOS/nwipe——擦盘启动盘行业惯例(decommission 已落地,生态位
+记录);OpenBMC(2.6k★)——compat 三底座之一,非竞品;
+[awesome-baremetal](https://github.com/alexellis/awesome-baremetal)——
+新项目发现源,收藏。
+
+### 8.5 行动清单
+
+拟落 roadmap 20~24(P1:burn-in 测试包 → BMC 凭证轮换 → 发现规则 →
+硬件画像自动标签;P2 候选组:AI bring-up 模板/带内 RAID/NetBox 导出/
+自定义 iPXE/重置密码,条件触发)。本节不另立行动项。
+
+**结论三条**:①同域无新威胁,有价值的反倒是叙事证据(RackShift 停更
++Stacki 衰落+淘汰名单→独立引擎生态位成立);②中文服务端装机开源生态
+位空缺(RackShift 停更后,consumer 端全是 Ventoy 类 U 盘工具);③特性
+面真正的差距在验收测试的可执行半边/安全合规动作/发现自动化/AI
+bring-up 组合件/资产生态输出——均为既有件组合,成本低。

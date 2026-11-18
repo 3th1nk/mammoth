@@ -145,7 +145,10 @@ Ack 包回 Video Ack（`BEEF 00 00 00 10` + 首字节 20）。
   Login Name 字段完整回显 `Mammoth-Paste_0`（framebuffer PNG 目视核验）；
   取消（真实按键中止 60 字符注入于 11/60）与单飞同轮验证。节奏
   10ms 按住 + 25ms 间隔两代固件均不掉键，无需放宽。已知 DCUI 渲染
-  quirk（与本通路无关）：ESC 关对话框后主屏以反转配色重绘。
+  quirk（与本通路无关）：ESC 关对话框后主屏以反转配色重绘；**画面
+  重绘滞后数秒**——按键/对话框状态实际秒级生效，帧滞后易被误判为
+  键盘失灵（浏览器真机测试时以注入日志和 3~5s 等待为准）。DCUI
+  登录框 Login Name 字段上限约 22 字符，超长按键主机静默丢弃。
 - **会话生命周期**：一个 websocket = 一次 /data/login + 一条 5900 会话，
   关闭即 logout（防会话槽泄漏，对照 huawei.md §会话模型）。
 - **virtual media 不在此通路**：走既有 Redfish MountMedia（driver 已有）。

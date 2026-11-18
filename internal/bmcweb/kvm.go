@@ -89,7 +89,17 @@ func (p *Proxy) kvmPage(c *gin.Context, machineID string) {
 			"detail": "console session missing or for another machine"})
 		return
 	}
-	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(kvmHTML(machineID)))
+	// Paste injection rides the avct keyboard pipeline, so it exists where
+	// kvmWS builds that bridge — anything not H3C (h3c.go: the RFB bridge is
+	// a transparent pass-through whose far end has no cut-text consumer).
+	// Unknown machine still gets the page, just without paste.
+	paste := false
+	if p.Machines != nil {
+		if m, err := p.Machines.Get(c.Request.Context(), machineID); err == nil {
+			paste = !isH3C(m)
+		}
+	}
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(kvmHTML(machineID, paste)))
 }
 
 // kvmWS upgrades to a websocket and bridges it to the machine's console:
@@ -347,9 +357,11 @@ func (p *Proxy) kvmMedia(c *gin.Context, machineID string) {
 // kvmHTML is the noVNC shell with the operator menu: power actions and
 // virtual media through the engine (gate-cookie trust domain), hotkeys
 // (held modifiers / combos / custom) and view scaling through the noVNC
-// API. Functions that need AMI's proprietary IVTP channel (video
-// recording, mouse-sync modes) are not on the RFB path — noted in the menu.
-func kvmHTML(machineID string) string {
+// API, plus paste injection (ClientCutText → avct keystroke loop) where
+// the machine's console transport supports it. Functions that need AMI's
+// proprietary IVTP channel (video recording, mouse-sync modes) are not on
+// the RFB path — noted in the menu.
+func kvmHTML(machineID string, paste bool) string {
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="zh-cn">
 <head>
@@ -374,18 +386,22 @@ func kvmHTML(machineID string) string {
   .menu .items button:hover { background: #2a2e36; }
   .menu .items button.held { color: #5fd08a; }
 
-  dialog#custom-dialog { background: #1d2026; color: #d7dce3; border: 1px solid #2a2e36;
+  dialog#custom-dialog, dialog#paste-dialog { background: #1d2026; color: #d7dce3; border: 1px solid #2a2e36;
                  border-radius: 8px; padding: 16px 18px; width: 360px; }
-  dialog#custom-dialog::backdrop { background: rgba(0,0,0,.55); }
-  dialog#custom-dialog label { font-size: 13px; color: #8a94a3; display: block; margin-bottom: 8px; }
+  dialog#custom-dialog::backdrop, dialog#paste-dialog::backdrop { background: rgba(0,0,0,.55); }
+  dialog#custom-dialog label, dialog#paste-dialog label { font-size: 13px; color: #8a94a3; display: block; margin-bottom: 8px; }
   dialog#custom-dialog input { width: 100%%; box-sizing: border-box; padding: 7px 10px;
                  background: #14161a; color: #d7dce3; border: 1px solid #2a2e36;
                  border-radius: 5px; font: 13px inherit; }
-  dialog#custom-dialog .dlg-actions { display: flex; gap: 8px; margin-top: 12px; justify-content: flex-end; }
-  dialog#custom-dialog .dlg-actions button { padding: 6px 16px; border-radius: 5px; border: 0;
+  dialog#paste-dialog textarea { width: 100%%; box-sizing: border-box; padding: 7px 10px;
+                 background: #14161a; color: #d7dce3; border: 1px solid #2a2e36;
+                 border-radius: 5px; font: 13px/1.5 ui-monospace, monospace; resize: vertical; }
+  dialog#paste-dialog .warn { color: #f5b95f; }
+  dialog#custom-dialog .dlg-actions, dialog#paste-dialog .dlg-actions { display: flex; gap: 8px; margin-top: 12px; justify-content: flex-end; }
+  dialog#custom-dialog .dlg-actions button, dialog#paste-dialog .dlg-actions button { padding: 6px 16px; border-radius: 5px; border: 0;
                  cursor: pointer; font: inherit; background: #2a2e36; color: #d7dce3; }
-  dialog#custom-dialog .dlg-actions button.primary { background: #3b82f6; color: #fff; }
-  dialog#custom-dialog .hint { font-size: 11px; color: #8a94a3; margin: 10px 0 0; }
+  dialog#custom-dialog .dlg-actions button.primary, dialog#paste-dialog .dlg-actions button.primary { background: #3b82f6; color: #fff; }
+  dialog#custom-dialog .hint, dialog#paste-dialog .hint { font-size: 11px; color: #8a94a3; margin: 10px 0 0; }
   dialog#custom-dialog #custom-captured { min-height: 44px; background: #14161a; border: 1px solid #2a2e36;
                  border-radius: 5px; padding: 8px 10px; display: flex; gap: 6px; align-items: center;
                  flex-wrap: wrap; margin-bottom: 12px; }
@@ -413,12 +429,14 @@ const base = '/bmcweb/' + id + '/kvm';
 const logEl = document.getElementById('log');
 const log = (m, cls) => { logEl.innerHTML = m; logEl.className = cls ?? ''; };
 let rfb = null;
+let connected = false;
 try {
   rfb = new RFB(document.getElementById('screen'), base + '/ws');
   rfb.scaleViewport = true;
   rfb.background = '#000';
-  rfb.addEventListener('connect', () => log('控制台已连接', 'ok'));
+  rfb.addEventListener('connect', () => { connected = true; log('控制台已连接', 'ok'); });
   rfb.addEventListener('disconnect', (e) => {
+    connected = false;
     const d = e.detail && e.detail.reason ? e.detail.reason : '';
     log('连接断开 ' + d, 'err');
   });
@@ -598,6 +616,44 @@ document.getElementById('screenshot').onclick = () => {
   log('截图已保存', 'ok');
 };
 
+// ── 粘贴注入：文本经 ClientCutText 交给引擎，逐键打给主机 ──
+const PASTE_OK = %t;
+const PASTE_BAD = /[^\t\n\x20-\x7e]/g;
+const pdlg = document.getElementById('paste-dialog');
+const ptext = document.getElementById('paste-text');
+const pinfo = document.getElementById('paste-info');
+const psend = document.getElementById('paste-send');
+if (!PASTE_OK) document.getElementById('paste-open').style.display = 'none';
+const pasteEstimate = (t) => {
+  const enters = (t.match(/\n/g) || []).length;
+  return Math.max(1, Math.round(((t.length - (t.match(PASTE_BAD) || []).length) * 35 + enters * 60) / 1000));
+};
+ptext.addEventListener('input', () => {
+  const t = ptext.value;
+  const bad = (t.match(PASTE_BAD) || []).length;
+  psend.disabled = !t;
+  if (!t) { pinfo.textContent = ''; return; }
+  pinfo.textContent = '将注入 ' + (t.length - bad) + ' 字符，约 ' + pasteEstimate(t) + ' 秒' +
+    (bad ? '，剔除 ' + bad + ' 个非 ASCII 字符' : '');
+  pinfo.className = 'hint' + (bad ? ' warn' : '');
+});
+document.getElementById('paste-open').onclick = () => {
+  ptext.value = '';
+  ptext.dispatchEvent(new Event('input'));
+  pdlg.showModal();
+  ptext.focus();
+};
+document.getElementById('paste-clear').onclick = () => { ptext.value = ''; ptext.dispatchEvent(new Event('input')); ptext.focus(); };
+document.getElementById('paste-cancel').onclick = () => pdlg.close();
+psend.onclick = () => {
+  if (!rfb || !connected) return log('控制台未连接', 'err');
+  const t = ptext.value.replace(PASTE_BAD, '');
+  if (!t) return;
+  try { rfb.clipboardPasteFrom(t); } catch (e) { return log('注入失败：' + e.message, 'err'); }
+  pdlg.close();
+  log('注入中：约 ' + pasteEstimate(t) + ' 秒（' + t.length + ' 字符，在控制台按任意键可中止）', 'ok');
+};
+
 // ── 自定义组合键弹窗：键盘捕获 ──
 const dlg = document.getElementById('custom-dialog');
 const capBox = document.getElementById('custom-captured');
@@ -707,6 +763,7 @@ document.getElementById('media-eject').onclick = async () => {
     <summary>视图</summary>
     <div class="items" id="view-items"></div>
   </details>
+  <button class="plain" id="paste-open">粘贴</button>
   <button class="plain" id="screenshot">截屏</button>
   <details>
     <summary>虚拟介质</summary>
@@ -731,6 +788,17 @@ document.getElementById('media-eject').onclick = async () => {
   </div>
   <p class="hint">直接按下要发送的按键，逐键捕获；<br>Backspace 回退，Esc 关闭，Ctrl+Alt+Del 请用预置按钮。</p>
 </dialog>
+<dialog id="paste-dialog">
+  <label>粘贴文本到控制台</label>
+  <textarea id="paste-text" rows="6" placeholder="在此粘贴或输入要注入的文本（Ctrl+V）"></textarea>
+  <div id="paste-info" class="hint"></div>
+  <div class="dlg-actions">
+    <button id="paste-clear">清空</button>
+    <button id="paste-send" class="primary" disabled>注入</button>
+    <button id="paste-cancel">关闭</button>
+  </div>
+  <p class="hint">文本按 US 键盘布局逐键注入，换行即回车；<br>非 ASCII 字符会被剔除；注入过程中在控制台按任意键可中止。</p>
+</dialog>
 </body>
-</html>`, html.EscapeString(machineID), machineID, html.EscapeString(machineID))
+</html>`, html.EscapeString(machineID), machineID, paste, html.EscapeString(machineID))
 }

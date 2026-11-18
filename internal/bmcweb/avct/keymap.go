@@ -139,72 +139,50 @@ var asciiUsage = func() [128]uint16 {
 	m['\\'] = hidBSlash
 	m[';'] = hidSemi
 	m['\''] = hidQuote
+	m['`'] = hidGrave
 	m[','] = hidComma
 	m['.'] = hidDot
 	m['/'] = hidSlash
 	return m
 }()
 
-// KeysymToUsage resolves an X11 keysym to its USB HID usage.
+// shiftedUsage maps shifted ASCII punctuation to its base key; the paste
+// injector presses Shift itself around it (the KeyEvent path gets Shift as
+// separate keysyms from the client, so it never needed this table).
+var shiftedUsage = map[byte]uint16{
+	'!': hidOne, '@': hidOne + 1, '#': hidOne + 2, '$': hidOne + 3,
+	'%': hidOne + 4, '^': hidOne + 5, '&': hidOne + 6, '*': hidOne + 7,
+	'(': hidOne + 8, ')': hidZero, '_': hidMinus, '+': hidEqual,
+	'{': hidLBrack, '}': hidRBrack, '|': hidBSlash, ':': hidSemi,
+	'"': hidQuote, '~': hidGrave, '<': hidComma, '>': hidDot, '?': hidSlash,
+}
+
+// CharUsage maps a printable ASCII char to (base usage, needs shift) —
+// the typed-paste face of the keymap: unlike KeyEvent, paste synthesises
+// Shift itself, so the two facts must come out separately. Returns usage
+// 0 when the char has no key.
+func CharUsage(ch byte) (uint16, bool) {
+	if u := asciiUsage[ch]; u != 0 {
+		return u, false
+	}
+	if ch >= 'A' && ch <= 'Z' {
+		return hidA + uint16(ch-'A'), true
+	}
+	return shiftedUsage[ch], true
+}
+
+// KeysymToUsage resolves an X11 keysym to its USB HID usage. The bool is
+// the found-flag, not a shift request: shifted characters arrive as their
+// base key plus a separate Shift keysym from the client.
 func KeysymToUsage(keysym uint32) (uint16, bool) {
 	if u, ok := keysymUsage[keysym]; ok {
 		return u, true
 	}
-	// Printable ASCII keysyms (0x20..0x7E) carry their own code — for the
-	// shifted punctuation we map to the base key: the appliance keys the
-	// usage; the Shift modifier rides separately from the client.
+	// Printable ASCII keysyms (0x20..0x7E) carry their own code; CharUsage
+	// knows the base key (and the shift, which this path ignores).
 	if keysym >= 0x20 && keysym <= 0x7E {
-		ch := byte(keysym)
-		switch ch {
-		case '!':
-			return hidOne, true
-		case '@':
-			return hidOne + 1, true
-		case '#':
-			return hidOne + 2, true
-		case '$':
-			return hidOne + 3, true
-		case '%':
-			return hidOne + 4, true
-		case '^':
-			return hidOne + 5, true
-		case '&':
-			return hidOne + 6, true
-		case '*':
-			return hidOne + 7, true
-		case '(':
-			return hidOne + 8, true
-		case ')':
-			return hidZero, true
-		case '_':
-			return hidMinus, true
-		case '+':
-			return hidEqual, true
-		case '{':
-			return hidLBrack, true
-		case '}':
-			return hidRBrack, true
-		case '|':
-			return hidBSlash, true
-		case ':':
-			return hidSemi, true
-		case '"':
-			return hidQuote, true
-		case '~':
-			return hidGrave, true
-		case '<':
-			return hidComma, true
-		case '>':
-			return hidDot, true
-		case '?':
-			return hidSlash, true
-		}
-		if u := asciiUsage[ch]; u != 0 {
+		if u, _ := CharUsage(byte(keysym)); u != 0 {
 			return u, true
-		}
-		// Upper-case letters share the base usage.
-		if ch >= 'A' && ch <= 'Z' {
-			return hidA + uint16(ch-'A'), true
 		}
 	}
 	return 0, false

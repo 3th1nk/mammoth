@@ -91,6 +91,7 @@ func (b *RFBBridge) Serve(conn net.Conn) error {
 	cctx := conn // deadline-based stop channel is via Close on the conn
 	go c.updateLoop(cctx)
 	err := c.readLoop()
+	c.cancelPaste() // the session is over; stop any in-flight injection
 	if err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
@@ -115,6 +116,11 @@ type rfbClient struct {
 	notify chan struct{}
 
 	wheelMask uint8
+
+	// Paste injection state (paste.go): the injector runs off-loop so
+	// readLoop keeps dispatching — a real key press is the cancel signal.
+	pasteMu     sync.Mutex
+	pasteCancel chan struct{}
 }
 
 // handshake: RFB 3.8 with the None security type (the websocket + gate
@@ -242,6 +248,9 @@ func (c *rfbClient) readLoop() error {
 			if _, err := io.ReadFull(c.rd, b[:]); err != nil {
 				return err
 			}
+			if b[0] != 0 {
+				c.cancelPaste() // any real key press aborts an in-flight paste
+			}
 			if c.bridge.Input == nil {
 				continue
 			}
@@ -292,7 +301,7 @@ func (c *rfbClient) readLoop() error {
 			if err := c.bridge.Input.Pointer(buttons, x, y, wheel); err != nil {
 				c.bridge.Logger.Printf("avct: pointer: %v", err)
 			}
-		case 6: // ClientCutText
+		case 6: // ClientCutText — the paste injector (paste.go) types it out
 			var b [7]byte
 			if _, err := io.ReadFull(c.rd, b[:]); err != nil {
 				return err
@@ -301,9 +310,11 @@ func (c *rfbClient) readLoop() error {
 			if n > 1<<20 {
 				return errors.New("cut text too large")
 			}
-			if _, err := io.CopyN(io.Discard, c.rd, int64(n)); err != nil {
+			text := make([]byte, n)
+			if _, err := io.ReadFull(c.rd, text); err != nil {
 				return err
 			}
+			c.startPaste(text)
 		default:
 			return fmt.Errorf("unknown rfb message type %d", t)
 		}

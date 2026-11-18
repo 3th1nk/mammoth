@@ -134,6 +134,18 @@ Ack 包回 Video Ack（`BEEF 00 00 00 10` + 首字节 20）。
   忽略（RFB 规范允许服务器保留格式，noVNC 按 ServerInit 渲染）。
 - **更新合并**：framebuffer 累积 damage，RFB 侧 40ms 周期 Drain 合帧，
   RAW rect 按 ServerInit 的 32bpp 发送（RFBBridge.updateLoop）。
+- **粘贴注入**：设备侧没有剪贴板通道（BMC 只仿真 USB 键盘），"粘贴"
+  即打字——工具栏「粘贴」文本经 RFB ClientCutText 交给引擎，avct 侧
+  按 US 键盘逐键注入（约 28 字符/s，Enter 加长间歇）；任意真实按键
+  中止注入，单飞（进行中新粘贴被忽略），64KB 上限。仅 ASCII 可注入
+  （非 Latin-1 由页面剔除）；H3C 透传通路无注入器，页面按机型隐藏
+  入口（paste.go）。
+  真机 E2E（paste_e2e_test.go，R620/iDRAC7 + R730/iDRAC8 双机通过）：
+  15 字符含 Shift 合成（大写/下划线）零掉键——证据是 DCUI 登录对话框
+  Login Name 字段完整回显 `Mammoth-Paste_0`（framebuffer PNG 目视核验）；
+  取消（真实按键中止 60 字符注入于 11/60）与单飞同轮验证。节奏
+  10ms 按住 + 25ms 间隔两代固件均不掉键，无需放宽。已知 DCUI 渲染
+  quirk（与本通路无关）：ESC 关对话框后主屏以反转配色重绘。
 - **会话生命周期**：一个 websocket = 一次 /data/login + 一条 5900 会话，
   关闭即 logout（防会话槽泄漏，对照 huawei.md §会话模型）。
 - **virtual media 不在此通路**：走既有 Redfish MountMedia（driver 已有）。

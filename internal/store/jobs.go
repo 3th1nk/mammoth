@@ -459,6 +459,15 @@ func (r *JobRepo) RecomputeJob(ctx context.Context, jobID string) error {
 	state := "running"
 	allSettled := s.Running == 0 && s.Pending == 0 && s.Interrupted == 0
 	switch {
+	case s.Total == 0:
+		// Zero tasks: the job has nothing left to run. This shape arises
+		// when the tasks vanished out-of-band (machine delete cascades
+		// tasks.machine_id away) — the cancel handler recomputes exactly
+		// then, and the pending==total branch below would read 0==0 and
+		// re-pin the job to 'pending' forever: cancel could never settle
+		// it (real-hardware: three zombie 排队中 jobs on the office-PC
+		// engine). Settle instead.
+		state = "canceled"
 	case s.Pending == s.Total:
 		state = "pending"
 	case !allSettled:

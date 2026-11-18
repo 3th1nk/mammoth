@@ -323,6 +323,21 @@ func (s *Server) BatchUpdateMachineLabels(ctx context.Context, request gen.Batch
 }
 
 func (s *Server) DeleteMachine(ctx context.Context, request gen.DeleteMachineRequestObject) (gen.DeleteMachineResponseObject, error) {
+	// tasks.machine_id is ON DELETE CASCADE: deleting a machine with
+	// unfinished tasks would silently erase the queued/running work AND
+	// strand its job as a zero-task zombie that cancel can never settle
+	// (RecomputeJob 0==0 re-pinned 'pending'; real-hardware: the
+	// office-PC round). Gate like the submit-side busy gate — settle the
+	// jobs first, then delete.
+	busy, err := s.Jobs.ActiveBlockingTasksByMachines(ctx, []string{string(request.Id)})
+	if err != nil {
+		return nil, err
+	}
+	if ref, ok := busy[string(request.Id)]; ok {
+		return nil, verrStatus(http.StatusConflict, "JOB_MACHINE_BUSY",
+			"machine %s has an unfinished %s task (%s, job %s) — cancel the job first (POST /jobs/%s/cancel)",
+			string(request.Id), ref.FlowName, ref.ID, ref.JobID, ref.JobID)
+	}
 	if err := s.Machines.Delete(ctx, string(request.Id)); err != nil {
 		return nil, err
 	}

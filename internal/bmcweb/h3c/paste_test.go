@@ -366,3 +366,201 @@ func (l *capLog) canceledCount() int {
 	}
 	return n
 }
+
+// readOneMessage reads exactly one client message the filter forwarded and
+// returns its full wire bytes (device side).
+func readOneMessage(t *testing.T, dev net.Conn) []byte {
+	t.Helper()
+	var tb [1]byte
+	if _, err := io.ReadFull(dev, tb[:]); err != nil {
+		t.Fatalf("device read type: %v", err)
+	}
+	sizes := map[byte]int{0: 19, 3: 9, 4: 7, 5: 5}
+	if n, ok := sizes[tb[0]]; ok {
+		b := make([]byte, n)
+		if _, err := io.ReadFull(dev, b); err != nil {
+			t.Fatalf("device read body: %v", err)
+		}
+		return append([]byte{tb[0]}, b...)
+	}
+	switch tb[0] {
+	case 2: // pad+count, then 4n
+		b := make([]byte, 3)
+		if _, err := io.ReadFull(dev, b); err != nil {
+			t.Fatal(err)
+		}
+		n := int(binary.BigEndian.Uint16(b[1:]))
+		enc := make([]byte, n*4)
+		if _, err := io.ReadFull(dev, enc); err != nil {
+			t.Fatal(err)
+		}
+		return append(append([]byte{2}, b...), enc...)
+	case 6: // cut text — must NEVER arrive (intercepted)
+		t.Fatal("ClientCutText leaked to the device")
+	case 150: // enable continuous updates
+		b := make([]byte, 12)
+		if _, err := io.ReadFull(dev, b); err != nil {
+			t.Fatal(err)
+		}
+		return append([]byte{150}, b...)
+	case 248: // fence: pad3 flags4 len1 payload
+		b := make([]byte, 8)
+		if _, err := io.ReadFull(dev, b); err != nil {
+			t.Fatal(err)
+		}
+		p := make([]byte, b[7])
+		if _, err := io.ReadFull(dev, p); err != nil {
+			t.Fatal(err)
+		}
+		return append(append([]byte{248}, b...), p...)
+	case 250: // xvp
+		b := make([]byte, 2)
+		if _, err := io.ReadFull(dev, b); err != nil {
+			t.Fatal(err)
+		}
+		return append([]byte{250}, b...)
+	case 251: // set desktop size
+		b := make([]byte, 6)
+		if _, err := io.ReadFull(dev, b); err != nil {
+			t.Fatal(err)
+		}
+		s := make([]byte, int(b[4])*16)
+		if _, err := io.ReadFull(dev, s); err != nil {
+			t.Fatal(err)
+		}
+		return append(append([]byte{251}, b...), s...)
+	case 255: // QEMU extended
+		sub := make([]byte, 1)
+		if _, err := io.ReadFull(dev, sub); err != nil {
+			t.Fatal(err)
+		}
+		n := 10 // keyboard: down(2)+keysym(4)+keycode(4)
+		if sub[0] == 1 {
+			n = 7 // pointer: pad(2)+mask(1)+x(2)+y(2)
+		}
+		b := make([]byte, n)
+		if _, err := io.ReadFull(dev, b); err != nil {
+			t.Fatal(err)
+		}
+		return append(append([]byte{255}, sub...), b...)
+	}
+	t.Fatalf("device got unexpected message type %d", tb[0])
+	return nil
+}
+
+// TestBridgeRFBViewerExtensions drives the filter with the extension
+// message set a real noVNC sends once the AMI HDM acknowledges the QEMU
+// extended keyboard pseudo-encoding: from then on keystrokes ride message
+// type 255, and a filter that drops or mangles them kills the session on
+// the operator's first key press (the v1.5.0-10 regression).
+func TestBridgeRFBViewerExtensions(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	ws, wst := net.Pipe()
+	defer wst.Close()
+	log := &capLog{}
+	go func() { _ = BridgeRFB(ws, ln.Addr().String(), "vncpass", log) }()
+
+	devc := make(chan net.Conn, 1)
+	go func() { devc <- fakeDeviceHandshake(t, ln, "vncpass") }()
+	clientHandshake(t, wst)
+	var dev net.Conn
+	select {
+	case dev = <-devc:
+	case <-time.After(5 * time.Second):
+		t.Fatal("device handshake never completed")
+	}
+
+	// QEMU extended keyboard: type 255, sub 0, down u16, keysym, keycode.
+	qemuKey := func(sym uint32, down bool) {
+		b := []byte{255, 0}
+		if down {
+			b = binary.BigEndian.AppendUint16(b, 1)
+		} else {
+			b = binary.BigEndian.AppendUint16(b, 0)
+		}
+		b = binary.BigEndian.AppendUint32(b, sym)
+		b = binary.BigEndian.AppendUint32(b, 0x26) // XT scancode for 'a'-ish
+		if _, err := wst.Write(b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wantQEMU := func(sym uint32, down bool) {
+		t.Helper()
+		got := readOneMessage(t, dev)
+		want := []byte{255, 0}
+		if down {
+			want = binary.BigEndian.AppendUint16(want, 1)
+		} else {
+			want = binary.BigEndian.AppendUint16(want, 0)
+		}
+		want = binary.BigEndian.AppendUint32(want, sym)
+		want = binary.BigEndian.AppendUint32(want, 0x26)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("forwarded QEMU key = % x, want % x", got, want)
+		}
+	}
+
+	qemuKey(0xFFBF, true) // F2 down
+	wantQEMU(0xFFBF, true)
+	qemuKey(0xFFBF, false)
+	wantQEMU(0xFFBF, false)
+
+	// Fence and continuous updates ride through byte-faithful too.
+	fence := []byte{248, 0, 0, 0, 0, 0, 0, 1, 3, 'a', 'b', 'c'}
+	if _, err := wst.Write(fence); err != nil {
+		t.Fatal(err)
+	}
+	if got := readOneMessage(t, dev); !bytes.Equal(got, fence) {
+		t.Fatalf("forwarded fence = % x, want % x", got, fence)
+	}
+	cont := []byte{150, 1, 0, 0, 0, 0, 0, 10, 0, 20, 0, 30, 0}
+	if _, err := wst.Write(cont); err != nil {
+		t.Fatal(err)
+	}
+	if got := readOneMessage(t, dev); !bytes.Equal(got, cont) {
+		t.Fatalf("forwarded continuous-updates = % x, want % x", got, cont)
+	}
+
+	// And the QEMU down event cancels a running paste — the real-viewer
+	// cancel path, distinct from the plain-KeyEvent one covered above.
+	if err := cutText(wst, strings.Repeat("a", 40)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	// The injector is mid-typing plain KeyEvents when the QEMU frames land;
+	// its tail frames interleave, so wait for the exact frames instead of
+	// asserting strict order.
+	waitQEMU := func(sym uint32, down bool) {
+		t.Helper()
+		want := []byte{255, 0}
+		if down {
+			want = binary.BigEndian.AppendUint16(want, 1)
+		} else {
+			want = binary.BigEndian.AppendUint16(want, 0)
+		}
+		want = binary.BigEndian.AppendUint32(want, sym)
+		want = binary.BigEndian.AppendUint32(want, 0x26)
+		for i := 0; i < 300; i++ {
+			got := readOneMessage(t, dev)
+			if bytes.Equal(got, want) {
+				return
+			}
+			if got[0] == 255 { // QEMU frames come only from this test
+				t.Fatalf("unexpected QEMU frame % x", got)
+			}
+		}
+		t.Fatalf("QEMU frame % x never forwarded", want)
+	}
+	qemuKey('x', true)
+	waitQEMU('x', true)
+	qemuKey('x', false)
+	waitQEMU('x', false)
+	if !log.waitFor("canceled after", 5*time.Second) {
+		t.Fatalf("QEMU key press did not cancel the paste: %v", log.ls)
+	}
+}

@@ -184,80 +184,145 @@ func BridgeRFB(ws net.Conn, deviceAddr, vncPassword string, log interface {
 
 // clientToDevice reads whole client messages from the viewer and forwards
 // them verbatim, except ClientCutText: that becomes a paste injection. An
-// unknown message type tears the session down — the RFB client message set
-// is small and closed, and after a desync the byte stream is meaningless.
+// unknown message type tears the session down — after a desync the byte
+// stream is uninterpretable garbage.
+//
+// The set is everything real viewers send once extensions are negotiated,
+// not just the six core RFB messages: noVNC requests QEMUExtendedKeyEvent
+// (-261) in SetEncodings and AMI HDMs acknowledge it — from then on every
+// keystroke rides message type 255, NOT plain KeyEvent. Passing 255
+// through verbatim is what the pre-filter passthrough did implicitly; a
+// filter that doesn't know it kills the session on the operator's first
+// key press.
 func clientToDevice(ws, dev net.Conn, devMu *sync.Mutex, paste *pasteState) error {
+	readN := func(n int) ([]byte, error) {
+		b := make([]byte, n)
+		if _, err := io.ReadFull(ws, b); err != nil {
+			return nil, err
+		}
+		return b, nil
+	}
 	var typ [1]byte
 	for {
 		if _, err := io.ReadFull(ws, typ[:]); err != nil {
 			return err
 		}
+		var msg []byte
+		cancelPaste := false
 		switch typ[0] {
-		case 0: // SetPixelFormat — 19 bytes follow
-			b := make([]byte, 19)
-			if _, err := io.ReadFull(ws, b); err != nil {
+		case 0: // SetPixelFormat — pad(3) + pixel format(16)
+			b, err := readN(19)
+			if err != nil {
 				return err
 			}
-			if err := deviceWrite(dev, devMu, append([]byte{0}, b...)); err != nil {
-				return err
-			}
-		case 2: // SetEncodings
-			var hb [3]byte
-			if _, err := io.ReadFull(ws, hb[:]); err != nil {
+			msg = append([]byte{0}, b...)
+		case 2: // SetEncodings — pad(1) + count(2) + encodings(4n)
+			hb, err := readN(3)
+			if err != nil {
 				return err
 			}
 			n := int(binary.BigEndian.Uint16(hb[1:]))
-			enc := make([]byte, n*4)
-			if _, err := io.ReadFull(ws, enc); err != nil {
+			enc, err := readN(n * 4)
+			if err != nil {
 				return err
 			}
-			msg := append([]byte{2}, hb[1:]...)
-			if err := deviceWrite(dev, devMu, append(msg, enc...)); err != nil {
+			msg = append(append([]byte{2}, hb...), enc...)
+		case 3: // FramebufferUpdateRequest — 9 bytes
+			b, err := readN(9)
+			if err != nil {
 				return err
 			}
-		case 3: // FramebufferUpdateRequest — 9 bytes follow
-			b := make([]byte, 9)
-			if _, err := io.ReadFull(ws, b); err != nil {
-				return err
-			}
-			if err := deviceWrite(dev, devMu, append([]byte{3}, b...)); err != nil {
-				return err
-			}
+			msg = append([]byte{3}, b...)
 		case 4: // KeyEvent — a real key press also cancels a running paste
-			b := make([]byte, 7)
-			if _, err := io.ReadFull(ws, b); err != nil {
+			b, err := readN(7)
+			if err != nil {
 				return err
 			}
-			if b[0] != 0 {
-				paste.cancelNow()
-			}
-			if err := deviceWrite(dev, devMu, append([]byte{4}, b...)); err != nil {
+			cancelPaste = b[0] != 0
+			msg = append([]byte{4}, b...)
+		case 5: // PointerEvent — 5 bytes
+			b, err := readN(5)
+			if err != nil {
 				return err
 			}
-		case 5: // PointerEvent — 5 bytes follow
-			b := make([]byte, 5)
-			if _, err := io.ReadFull(ws, b); err != nil {
-				return err
-			}
-			if err := deviceWrite(dev, devMu, append([]byte{5}, b...)); err != nil {
-				return err
-			}
+			msg = append([]byte{5}, b...)
 		case 6: // ClientCutText — intercepted, never forwarded
-			var hb [7]byte
-			if _, err := io.ReadFull(ws, hb[:]); err != nil {
+			hb, err := readN(7)
+			if err != nil {
 				return err
 			}
 			n := binary.BigEndian.Uint32(hb[3:])
 			if n > 1<<20 {
 				return fmt.Errorf("rfb: cut text too large")
 			}
-			text := make([]byte, n)
-			if _, err := io.ReadFull(ws, text); err != nil {
+			text, err := readN(int(n))
+			if err != nil {
 				return err
 			}
 			paste.start(text)
+			continue
+		case 150: // EnableContinuousUpdates — enable(1) + rect(8)
+			b, err := readN(12)
+			if err != nil {
+				return err
+			}
+			msg = append([]byte{150}, b...)
+		case 248: // ClientFence — pad(3) + flags(4) + length(1) + payload(n)
+			b, err := readN(8)
+			if err != nil {
+				return err
+			}
+			payload, err := readN(int(b[7]))
+			if err != nil {
+				return err
+			}
+			msg = append(append([]byte{248}, b...), payload...)
+		case 250: // xvp — version(1) + op(1)
+			b, err := readN(2)
+			if err != nil {
+				return err
+			}
+			msg = append([]byte{250}, b...)
+		case 251: // SetDesktopSize — pad(1) + width(2) + height(2) + screens(1) + pad(1) + screens(n·16)
+			hb, err := readN(6)
+			if err != nil {
+				return err
+			}
+			screens, err := readN(int(hb[4]) * 16)
+			if err != nil {
+				return err
+			}
+			msg = append(append([]byte{251}, hb...), screens...)
+		case 255: // QEMU extended — sub(1); 0=keyboard: down(2)+keysym(4)+keycode(4); 1=pointer: pad(2)+mask(1)+x(2)+y(2)
+			sub, err := readN(1)
+			if err != nil {
+				return err
+			}
+			switch sub[0] {
+			case 0:
+				b, err := readN(10)
+				if err != nil {
+					return err
+				}
+				cancelPaste = binary.BigEndian.Uint16(b[0:2]) != 0
+				msg = append([]byte{255, 0}, b...)
+			case 1:
+				b, err := readN(7)
+				if err != nil {
+					return err
+				}
+				msg = append([]byte{255, 1}, b...)
+			default:
+				return fmt.Errorf("rfb: unknown QEMU extended sub message %d", sub[0])
+			}
 		default:
 			return fmt.Errorf("rfb: unknown client message type %d", typ[0])
+		}
+		if cancelPaste {
+			paste.cancelNow()
+		}
+		if err := deviceWrite(dev, devMu, msg); err != nil {
+			return err
 		}
 	}
 }

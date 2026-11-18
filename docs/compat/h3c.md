@@ -76,8 +76,14 @@ refused)、超时 10 分钟、最大会话 4。**HDM 同时暴露独立的 VNC �
   引擎用 RSA 会话自动设置一次(POST,cc=0)。
 - **桥形态**:握手段消息级(设备 security types → 引擎向 noVNC 谎报
   Security None → 引擎对设备选 type 2 并用凭据密码代答 DES → 合成
-  SecurityResult OK),ClientInit/ServerInit 透传,之后**字节直通**
-  (noVNC 与设备同 RFB 3.8,编码/输入全由两端协商)。
+  SecurityResult OK),ClientInit/ServerInit 透传。此后**定向处理**:
+  device → client 字节直通;client → device 走 RFB 消息过滤器——
+  ClientCutText 被拦截,由桥按 keysym 逐键注入(约 28 字符/s;keysym
+  自带大小写,无需 Shift 合成,与 avct/Dell 的 HID 注入不同),任意
+  真实按键中止,单飞,64KB 上限;其余消息(KeyEvent/Pointer/
+  SetEncodings 等)字节保真转发,未知类型断链。注入与转发共享 device
+  写锁,RFB 消息不交错(rfbbridge.go + paste.go,单测覆盖握手代填/
+  转发保真/注入/取消/单飞)。
 - **viewer.html 的自主登录形态**(`?u=<hex>&p=<hex>&kvm_mode=<n>`,
   viewer 自带 RSAKey/会话序列)同样验证可行——是"不改设备配置时的
   备选通路"(操作员可达 BMC 网络时 viewer 直连专用端口 7578)。

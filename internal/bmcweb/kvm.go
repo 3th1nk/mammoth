@@ -89,17 +89,7 @@ func (p *Proxy) kvmPage(c *gin.Context, machineID string) {
 			"detail": "console session missing or for another machine"})
 		return
 	}
-	// Paste injection rides the avct keyboard pipeline, so it exists where
-	// kvmWS builds that bridge — anything not H3C (h3c.go: the RFB bridge is
-	// a transparent pass-through whose far end has no cut-text consumer).
-	// Unknown machine still gets the page, just without paste.
-	paste := false
-	if p.Machines != nil {
-		if m, err := p.Machines.Get(c.Request.Context(), machineID); err == nil {
-			paste = !isH3C(m)
-		}
-	}
-	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(kvmHTML(machineID, paste)))
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(kvmHTML(machineID)))
 }
 
 // kvmWS upgrades to a websocket and bridges it to the machine's console:
@@ -357,11 +347,11 @@ func (p *Proxy) kvmMedia(c *gin.Context, machineID string) {
 // kvmHTML is the noVNC shell with the operator menu: power actions and
 // virtual media through the engine (gate-cookie trust domain), hotkeys
 // (held modifiers / combos / custom) and view scaling through the noVNC
-// API, plus paste injection (ClientCutText → avct keystroke loop) where
-// the machine's console transport supports it. Functions that need AMI's
-// proprietary IVTP channel (video recording, mouse-sync modes) are not on
-// the RFB path — noted in the menu.
-func kvmHTML(machineID string, paste bool) string {
+// API, plus paste injection — both console transports (avct keystroke
+// loop, h3c message filter) type ClientCutText out as real keystrokes.
+// Functions that need AMI's proprietary IVTP channel (video recording,
+// mouse-sync modes) are not on the RFB path — noted in the menu.
+func kvmHTML(machineID string) string {
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="zh-cn">
 <head>
@@ -617,13 +607,11 @@ document.getElementById('screenshot').onclick = () => {
 };
 
 // ── 粘贴注入：文本经 ClientCutText 交给引擎，逐键打给主机 ──
-const PASTE_OK = %t;
 const PASTE_BAD = /[^\t\n\x20-\x7e]/g;
 const pdlg = document.getElementById('paste-dialog');
 const ptext = document.getElementById('paste-text');
 const pinfo = document.getElementById('paste-info');
 const psend = document.getElementById('paste-send');
-if (!PASTE_OK) document.getElementById('paste-open').style.display = 'none';
 const pasteEstimate = (t) => {
   const enters = (t.match(/\n/g) || []).length;
   return Math.max(1, Math.round(((t.length - (t.match(PASTE_BAD) || []).length) * 35 + enters * 60) / 1000));
@@ -800,5 +788,5 @@ document.getElementById('media-eject').onclick = async () => {
   <p class="hint">文本按 US 键盘布局逐键注入，换行即回车；<br>非 ASCII 字符会被剔除；注入过程中在控制台按任意键可中止。</p>
 </dialog>
 </body>
-</html>`, html.EscapeString(machineID), machineID, paste, html.EscapeString(machineID))
+</html>`, html.EscapeString(machineID), machineID, html.EscapeString(machineID))
 }

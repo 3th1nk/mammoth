@@ -2,22 +2,22 @@
 // a standard RFB 3.8 server with VNC (DES challenge) authentication — real
 // run 2026-11-14, docs/compat/h3c.md §KVM. The bridge dials it, performs
 // the VNC authentication on behalf of the browser (the VNC password is the
-// credential password, truncated to the RFB 8-byte limit), and then passes
-// bytes straight through between the noVNC websocket and the device.
-//
-// The handshake is message-level (version, security choice, the forged
-// challenge/result pair for noVNC's state machine, ClientInit/ServerInit);
-// after ServerInit the two byte streams are piped verbatim — noVNC and the
-// device speak the same RFB 3.8, so every pixel encoding, input message and
-// pseudo-encoding flows through unchanged.
+// credential password, truncated to the RFB 8-byte limit), and then pipes
+// the two directions differently: device → client verbatim, client →
+// device through a message filter (paste.go) that turns ClientCutText into
+// typed keystrokes — the HDM has no cut-text consumer, dead bytes would go
+// nowhere. Everything else (pixel encodings, input, pseudo-encodings)
+// flows through unchanged.
 
 package h3c
 
 import (
 	"crypto/des"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -164,19 +164,111 @@ func BridgeRFB(ws net.Conn, deviceAddr, vncPassword string, log interface {
 		return err
 	}
 
-	log.Printf("avct: rfb passthrough connected (device %s)", deviceAddr)
+	log.Printf("rfb passthrough connected (device %s)", deviceAddr)
 
-	// ── byte passthrough both ways after the handshake ──
+	// ── filtered passthrough: device → client stays verbatim; client →
+	// device goes through the message filter so a ClientCutText becomes
+	// typed keystrokes (paste.go) instead of dead bytes the HDM drops ──
+	devMu := new(sync.Mutex)
+	paste := &pasteState{dev: dev, devMu: devMu, log: log}
 	errc := make(chan error, 2)
 	go func() {
 		_, err := io.Copy(ws, dev)
 		errc <- err
 	}()
 	go func() {
-		_, err := io.Copy(dev, ws)
-		errc <- err
+		errc <- clientToDevice(ws, dev, devMu, paste)
 	}()
 	return <-errc
+}
+
+// clientToDevice reads whole client messages from the viewer and forwards
+// them verbatim, except ClientCutText: that becomes a paste injection. An
+// unknown message type tears the session down — the RFB client message set
+// is small and closed, and after a desync the byte stream is meaningless.
+func clientToDevice(ws, dev net.Conn, devMu *sync.Mutex, paste *pasteState) error {
+	var typ [1]byte
+	for {
+		if _, err := io.ReadFull(ws, typ[:]); err != nil {
+			return err
+		}
+		switch typ[0] {
+		case 0: // SetPixelFormat — 19 bytes follow
+			b := make([]byte, 19)
+			if _, err := io.ReadFull(ws, b); err != nil {
+				return err
+			}
+			if err := deviceWrite(dev, devMu, append([]byte{0}, b...)); err != nil {
+				return err
+			}
+		case 2: // SetEncodings
+			var hb [3]byte
+			if _, err := io.ReadFull(ws, hb[:]); err != nil {
+				return err
+			}
+			n := int(binary.BigEndian.Uint16(hb[1:]))
+			enc := make([]byte, n*4)
+			if _, err := io.ReadFull(ws, enc); err != nil {
+				return err
+			}
+			msg := append([]byte{2}, hb[1:]...)
+			if err := deviceWrite(dev, devMu, append(msg, enc...)); err != nil {
+				return err
+			}
+		case 3: // FramebufferUpdateRequest — 9 bytes follow
+			b := make([]byte, 9)
+			if _, err := io.ReadFull(ws, b); err != nil {
+				return err
+			}
+			if err := deviceWrite(dev, devMu, append([]byte{3}, b...)); err != nil {
+				return err
+			}
+		case 4: // KeyEvent — a real key press also cancels a running paste
+			b := make([]byte, 7)
+			if _, err := io.ReadFull(ws, b); err != nil {
+				return err
+			}
+			if b[0] != 0 {
+				paste.cancelNow()
+			}
+			if err := deviceWrite(dev, devMu, append([]byte{4}, b...)); err != nil {
+				return err
+			}
+		case 5: // PointerEvent — 5 bytes follow
+			b := make([]byte, 5)
+			if _, err := io.ReadFull(ws, b); err != nil {
+				return err
+			}
+			if err := deviceWrite(dev, devMu, append([]byte{5}, b...)); err != nil {
+				return err
+			}
+		case 6: // ClientCutText — intercepted, never forwarded
+			var hb [7]byte
+			if _, err := io.ReadFull(ws, hb[:]); err != nil {
+				return err
+			}
+			n := binary.BigEndian.Uint32(hb[3:])
+			if n > 1<<20 {
+				return fmt.Errorf("rfb: cut text too large")
+			}
+			text := make([]byte, n)
+			if _, err := io.ReadFull(ws, text); err != nil {
+				return err
+			}
+			paste.start(text)
+		default:
+			return fmt.Errorf("rfb: unknown client message type %d", typ[0])
+		}
+	}
+}
+
+// deviceWrite sends one whole message under the lock the injector shares —
+// RFB messages must not interleave on the device connection.
+func deviceWrite(dev net.Conn, mu *sync.Mutex, b []byte) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := dev.Write(b)
+	return err
 }
 
 // wsReadCounted reads one u8 count followed by that many bytes (RFB

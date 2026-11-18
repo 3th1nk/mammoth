@@ -21,7 +21,7 @@ Mammoth 是一个自包含的裸金属服务器安装/重装引擎:以 `{带外�
 | [06-install-pipeline.md](06-install-pipeline.md) | 安装流水线:介质策略、应答文件渲染、分区校验、发行版驱动 |
 | [07-bmc.md](07-bmc.md) | BMC 驱动层:统一带外资源模型、Redfish/IPMI 适配、兼容矩阵 |
 | [08-data-model.md](08-data-model.md) | 内部数据模型:表结构、索引、保留策略 |
-| [09-roadmap.md](09-roadmap.md) | 演进路线:里程碑划分、当前状态与各阶段验收标准 |
+| [09-roadmap.md](09-roadmap.md) | 演进路线:已交付台账、下一阶段优先级、真机回归清单、dd 镜像封装规范与决策记录 |
 | [10-tech-stack.md](10-tech-stack.md) | 技术栈选型、决策记录、依赖树与仓库布局约定 |
 | [11-pxe-walkthrough.md](11-pxe-walkthrough.md) | PXE 导览:两条入门路径对比、完整引导接力链、零注册入门、跨网段/Relay |
 | [12-agent-initramfs.md](12-agent-initramfs.md) | agent initramfs 安装路径试点:动机、架构、qemu 双固件验证结论、后续边界 |

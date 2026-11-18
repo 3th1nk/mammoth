@@ -2,7 +2,8 @@
 
 > 状态:试点已落地并通过 qemu 全链验证(2026-09-18,BIOS + UEFI 双固件)。
 > 本文是该试点的结论记录:动机、架构、实现边界、验证证据与后续判断。
-> 决策出处:docs/09-roadmap.md "下一阶段"第 1 项;docs/related-work.md §1
+> 决策出处:docs/09-roadmap.md(已交付台账 agent initramfs;整理前版本
+> 为"下一阶段"第 1 项);docs/related-work.md §1
 > 修正结论(行业绕开"安装器内联跑")与 §3 行动清单 ③。
 
 ## 1. 动机与问题定义
@@ -97,8 +98,9 @@ keep 任何形态(SupportLevel=none,提交门禁即拒)、xfs 等 ext4/vfat/swap
    linux-lts/grub)。"从池装系统"必须用 **extended ISO**(158+ 包,含
    内核/grub-bios/grub-efi/mkinitfs/dosfstools)。这与 debian netinst 池
    缺 netboot udeb(kernel-image-di)是同型发现:**镜像的随附池只覆盖
-   它自己引导所需,不覆盖"用它装系统"所需**。签名声明化(roadmap 第 3
-   项)需要给池能力建模(boot_pool vs system_pool)。
+   它自己引导所需,不覆盖"用它装系统"所需**。签名声明化(roadmap
+   "已评估并排除"节的发行版接入声明化条目)需要给池能力建模(boot_pool
+   vs system_pool)。
 2. **DetectLayout 不识别 alpine**(探针 ISO 一直绕过通用 BuildBootISO
    直调 rebuildPatchedISO)。补齐后 alpine 成为一等布局家族——这也是
    distro 签名声明化的方向验证:布局知识应该数据化。

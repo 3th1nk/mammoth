@@ -62,7 +62,7 @@ Reset 拒绝时以 `ForceRestart` 重试重启类动作;自签名 TLS 经
 | 电源控制 | ✅ `ComputerSystem.Reset`(拒绝时 ForceRestart 回退) | ✅ `chassis power` |
 | 引导设备 | ✅ `BootSourceOverride` | ✅ `chassis bootdev` |
 | 虚拟介质 | ✅ `InsertMedia`;未通告时回退 OEM 动作(华为 VmmControl 已实装,NFS/CIFS) | ⚠️ 厂商私有(OEM 命令) |
-| KVM | ⚠️ OEM 领地(Redfish 无标准资源);**OEM 映射未实装**——真机定案裸路径 URL 直开不可用,需 SSO 直链(§5、compat/huawei.md),现返回 `BMC_UNSUPPORTED` | ❌(仅 SOL 串口) |
+| KVM | ⚠️ 驱动面 `ConsoleURL` 未实装(Redfish 无标准资源,OEM 领地;华为 SSO 深链待)——**引擎面已落地双厂商控制台**:`/bmcweb/{id}/kvm`(Dell avct 自研桥 + H3C RFB 直通桥,粘贴注入;compat/{dell,h3c}.md) | ❌(仅 SOL 串口) |
 | 硬件盘查 | ✅ Storage/Ethernet/Processor/Memory(宽容解析违规固件) | ⚠️ 有限(FRU 已实装;传感器无 SDR 栈) |
 | RAID 卷管理 | ✅ `VolumeCreator`(标准载荷被拒时走 OEM 载荷,如华为 DriveID) | ❌ |
 | 固件清单 | ✅ `FirmwareInventoryProvider`(UpdateService/FirmwareInventory,宽容解析,缺链接/坏条目降级) | ❌(能力缺失即无数据,盘查不失败) |
@@ -167,7 +167,7 @@ BiosSetter 单机写之上的编排面——纯既有能力组合,无新 BMC 面
    console/bios 同步读先例(422 缺能力 / 502 BMC 错);IPMI 不实现
    (goipmi 命令栈无 SDR/SEL,先例:固件清单——真机全走 redfish);
 4. **边界**:周期带外巡检(异常→事件→webhook)是有状态服务化能力,
-   等真实需求触发再排(roadmap 第 9 项);本节只交付按需读。
+   等真实需求触发再排(roadmap 候选组);本节只交付按需读。
 
 ### 6.5 boot_rescue 救援动作(内存修复系统,非破坏性)
 

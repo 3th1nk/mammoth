@@ -89,6 +89,15 @@ refused)、超时 10 分钟、最大会话 4。**HDM 同时暴露独立的 VNC �
   备选通路"(操作员可达 BMC 网络时 viewer 直连专用端口 7578)。
 - E2E 实录:引擎启动(manommoth-engine)→ 统一入口 → noVNC 出图
   (ESXi DCUI,色彩/文本正确,与操作员直连画面一致)。
+- **粘贴真机实录(2026-11-18,R4900 G3)**:VNC 服务 live(裸连 5900
+  即回 `RFB 003.008`)、BridgeRFB DES 代填认证通过(凭据密码前 8 字符)、
+  ServerInit 640x400(server name = 整机序列号)。粘贴注入 15 字符
+  (含大小写/下划线)送达(`typed 15 chars, skipped 0`),转发通道
+  (F2/字符键)同轮验证。**屏幕回显目视核验暂缺**:当前主机开机但
+  无显示输出——non-incremental FBUR 下设备仅回 DesktopSize 伪编码
+  (无任何像素 rect,RAW 与 AMI JPEG(-239)协商均如此),采集芯片
+  无信号属硬件状态非通路缺陷;主机有 console 输出时重跑
+  paste_e2e_test.go 即可补齐(E2E 已就绪,MAMMOTH_H3C_E2E 门控)。
 
 ## 原始文档推演(真机复核前的对号,保留供对照)
 

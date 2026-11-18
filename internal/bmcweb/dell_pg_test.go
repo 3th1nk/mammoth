@@ -123,7 +123,17 @@ func TestDellKVMPageServesNoVNCShell(t *testing.T) {
 		t.Fatalf("kvm page = %d %q", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
-	for _, want := range []string{"rfb.js", "/bmcweb/" + machineID + "/kvm/ws", "scaleViewport"} {
+	// The ws URL is assembled at runtime since the console-menu rebuild
+	// (8ea2fb2): the page injects the machine id and wires the socket as
+	// base + '/ws' — assert those load-bearing fragments, not the
+	// concatenated literal.
+	for _, want := range []string{
+		"const id = '" + machineID + "'",
+		"const base = '/bmcweb/' + id + '/kvm'",
+		"base + '/ws'",
+		"rfb.js",
+		"scaleViewport",
+	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("kvm page missing %q", want)
 		}

@@ -964,18 +964,29 @@ func resolveDiskScript(dyn []dynDisk, serialSizes map[string]int64) string {
     raw = open("/autoinstall.yaml").read()
 except OSError:
     sys.exit(0)
+# Serial vocabulary: subiquity's probe (probert/storage.py) reads the udev
+# database with ID_SERIAL preferred over ID_SERIAL_SHORT — the config serial
+# is matched against that value verbatim. lsblk's SERIAL column prefers
+# ID_SERIAL_SHORT (the opposite order), so the serial comes from udevadm
+# here; naa./wwid forms never match this probe (LITEON office PC: naa. and
+# the raw serial both died with "matched no disk", only ID_SERIAL can land).
 devs = []
-for ln in subprocess.run(["lsblk", "-dnb", "-o", "NAME,SIZE,SERIAL"],
+for ln in subprocess.run(["lsblk", "-dnb", "-o", "NAME,SIZE"],
                          capture_output=True, text=True).stdout.splitlines():
-    parts = ln.strip().split(None, 2)
+    parts = ln.strip().split(None, 1)
     if len(parts) < 2:
         continue
     try:
         sz = int(parts[1])
     except ValueError:
         continue
-    sr = parts[2] if len(parts) == 3 else ""
-    devs.append(("/dev/" + parts[0], sz, sr))
+    ids = {}
+    for pl in subprocess.run(["udevadm", "info", "--query=property", "--name", parts[0]],
+                             capture_output=True, text=True).stdout.splitlines():
+        for key in ("ID_SERIAL", "ID_SERIAL_SHORT"):
+            if pl.startswith(key + "="):
+                ids.setdefault(key, pl[len(key) + 1:])
+    devs.append(("/dev/" + parts[0], sz, ids.get("ID_SERIAL") or ids.get("ID_SERIAL_SHORT") or ""))
 probed = set(sr for _, _, sr in devs if sr)
 def pick(size):
     if size > 0:

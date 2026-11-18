@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -20,6 +21,7 @@ import (
 	"github.com/3th1nk/mammoth/internal/api/gen"
 	"github.com/3th1nk/mammoth/internal/netboot"
 	"github.com/3th1nk/mammoth/internal/obs"
+	"github.com/3th1nk/mammoth/internal/store"
 )
 
 // ── machine-facing netboot surface (docs/06-install-pipeline.md §3.3) ──────
@@ -41,6 +43,21 @@ func (s *Server) GetNetbootScript(ctx context.Context, request gen.GetNetbootScr
 	e, err := s.Netboot.Entry(ctx, mac)
 	if err != nil {
 		return nil, err
+	}
+	// Stale-entry self-heal: netboot_entries carries no FK to tasks or
+	// machines, so an out-of-band task removal (machine delete cascades
+	// tasks.machine_id away) strands its armed entry — every subsequent PXE
+	// then serves an install whose task and answer no longer exist, fails,
+	// and falls through to the disk (real-hardware: the office-PC round,
+	// 2026-11-18). A task that no longer exists disarms the entry: purge it
+	// and take the no-entry path (enroll probe / exit to firmware).
+	if e != nil && e.TaskID != "" {
+		if _, terr := s.Jobs.GetTask(ctx, e.TaskID); errors.Is(terr, store.ErrNotFound) {
+			purged, perr := s.NetbootRepo.DeleteByMAC(ctx, mac)
+			obs.FromContext(ctx).WarnContext(ctx, "stale netboot entry disarmed — owning task is gone",
+				"mac", mac, "task", e.TaskID, "kind", e.Kind, "purged", purged, "purge_err", perr)
+			e = nil
+		}
 	}
 	if e == nil {
 		// Zero-registration entry (docs/09-roadmap.md): when enrollment is

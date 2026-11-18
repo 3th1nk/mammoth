@@ -151,6 +151,21 @@ func (r *NetbootRepo) DeleteByTask(ctx context.Context, taskID string) (bool, er
 	return n > 0, err
 }
 
+// DeleteByMachine drops every armed entry of one machine — the machine
+// delete path's companion write. netboot_entries carries no FK to tasks or
+// machines (the boot chain must survive transient task states), so without
+// this purge a deleted machine's armed entry outlives the cascade and
+// hijacks the MAC's every subsequent PXE boot into an install whose task
+// and answer no longer exist.
+func (r *NetbootRepo) DeleteByMachine(ctx context.Context, machineID string) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `DELETE FROM netboot_entries WHERE machine_id = $1`, machineID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // DeletedTree is an entry removed by the orphan sweep; the caller removes
 // its boot tree directory (the store knows nothing of the filesystem).
 type DeletedTree struct {

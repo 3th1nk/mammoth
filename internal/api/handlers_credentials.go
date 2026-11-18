@@ -341,6 +341,12 @@ func (s *Server) DeleteMachine(ctx context.Context, request gen.DeleteMachineReq
 	if err := s.Machines.Delete(ctx, string(request.Id)); err != nil {
 		return nil, err
 	}
+	// Armed netboot entries have no FK: purge them explicitly or the
+	// deleted machine's MAC keeps booting the dead install on every PXE
+	// (the script endpoint's stale-entry self-heal is the second line).
+	if _, err := s.NetbootRepo.DeleteByMachine(ctx, string(request.Id)); err != nil {
+		return nil, err
+	}
 	s.Events.Append(ctx, "machine", string(request.Id), "machine.deleted", nil)
 	return gen.DeleteMachine204Response{}, nil
 }

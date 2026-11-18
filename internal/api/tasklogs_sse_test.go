@@ -223,3 +223,131 @@ func TestStreamJobTaskLogsResume(t *testing.T) {
 		t.Fatal("visitor did not return after context cancel")
 	}
 }
+
+// TestStreamJobTaskLogsTail: `tail` bounds a fresh subscription's replay to
+// the newest N lines — the console's open-page bootstrap skips the whole
+// history without naming an explicit resume point.
+func TestStreamJobTaskLogsTail(t *testing.T) {
+	db, job, task := seedTaskLogs(t)
+	s := &Server{Deps{Jobs: store.NewJobRepo(db), Logs: store.NewTaskLogRepo(db)}}
+
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	tail := 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := gen.StreamJobTaskLogsRequestObject{
+		Id:     gen.JobId(job),
+		TaskId: gen.TaskId(task),
+		Params: gen.StreamJobTaskLogsParams{Tail: &tail},
+	}
+	vis, err := s.StreamJobTaskLogs(ctx, req)
+	if err != nil {
+		t.Fatalf("stream handler: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- vis.VisitStreamJobTaskLogsResponse(sseConnWriter{conn: server}) }()
+
+	stream := readUntil(t, client, "second line")
+	if strings.Contains(stream, "first line") {
+		t.Errorf("tail=1 replayed the first line: %q", stream)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("visitor did not return after context cancel")
+	}
+}
+
+// TestListJobTaskLogsDesc: desc pages backward from the newest line and
+// next_cursor continues the backward walk (the load-older handoff).
+func TestListJobTaskLogsDesc(t *testing.T) {
+	db, job, task := seedTaskLogs(t)
+	s := &Server{Deps{Jobs: store.NewJobRepo(db), Logs: store.NewTaskLogRepo(db)}}
+	ctx := context.Background()
+
+	pageSize := gen.PageSize(1)
+	desc := gen.ListJobTaskLogsParamsOrderDesc
+	first, err := s.ListJobTaskLogs(ctx, gen.ListJobTaskLogsRequestObject{
+		Id: gen.JobId(job), TaskId: gen.TaskId(task),
+		Params: gen.ListJobTaskLogsParams{
+			PageSize: &pageSize,
+			Order:    &desc,
+		},
+	})
+	if err != nil {
+		t.Fatalf("desc page 1: %v", err)
+	}
+	page1 := first.(gen.ListJobTaskLogs200JSONResponse)
+	if len(page1.Items) != 1 || page1.Items[0].Message != "second line" {
+		t.Fatalf("desc page 1 = newest-first page: %+v", page1.Items)
+	}
+	if page1.NextCursor == nil {
+		t.Fatal("desc page 1 missing next_cursor")
+	}
+
+	cursor := *page1.NextCursor
+	second, err := s.ListJobTaskLogs(ctx, gen.ListJobTaskLogsRequestObject{
+		Id: gen.JobId(job), TaskId: gen.TaskId(task),
+		Params: gen.ListJobTaskLogsParams{
+			PageSize: &pageSize,
+			Order:    &desc,
+			Cursor:   &cursor,
+		},
+	})
+	if err != nil {
+		t.Fatalf("desc page 2: %v", err)
+	}
+	page2 := second.(gen.ListJobTaskLogs200JSONResponse)
+	if len(page2.Items) != 1 || page2.Items[0].Message != "first line" {
+		t.Fatalf("desc page 2 = the older line: %+v", page2.Items)
+	}
+	if page2.NextCursor != nil {
+		t.Fatalf("exhausted desc walk should carry no next_cursor: %v", *page2.NextCursor)
+	}
+}
+
+// TestListEventsDesc: desc reads the newest event first and pages backward
+// — the fresh-subscription watermark direction (the asc default's
+// page_size=1 returns the OLDEST event, the console watermark bug).
+func TestListEventsDesc(t *testing.T) {
+	dsn := os.Getenv("MAMMOTH_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("MAMMOTH_TEST_PG_DSN not set; skipping events suite")
+	}
+	db, err := store.Open(dsn)
+	if err != nil {
+		t.Fatalf("open pg: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := store.Migrate(context.Background(), db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	events := store.NewEventRepo(db)
+	events.Append(context.Background(), "task", "evt-desc-t1", "task.alpha", nil)
+	events.Append(context.Background(), "task", "evt-desc-t1", "task.omega", nil)
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM events WHERE resource_id = 'evt-desc-t1'`)
+	})
+	s := &Server{Deps{Events: events}}
+	ctx := context.Background()
+
+	pageSize := gen.PageSize(1)
+	desc := gen.ListEventsParamsOrderDesc
+	first, err := s.ListEvents(ctx, gen.ListEventsRequestObject{
+		Params: gen.ListEventsParams{
+			PageSize: &pageSize,
+			Order:    &desc,
+		},
+	})
+	if err != nil {
+		t.Fatalf("desc page 1: %v", err)
+	}
+	page1 := first.(gen.ListEvents200JSONResponse)
+	if len(page1.Items) == 0 || page1.Items[0].Type != "task.omega" {
+		t.Fatalf("desc page 1 should lead with the newest event: %+v", page1.Items)
+	}
+}

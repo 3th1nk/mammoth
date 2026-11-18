@@ -37,6 +37,10 @@ func taskLogOut(l store.TaskLogRecord) gen.TaskLog {
 	}
 }
 
+// maxTailParam caps the stream `tail` bootstrap — the contract mirror of
+// the largest page the list endpoint serves (200).
+const maxTailParam = 200
+
 // StreamJobTaskLogs tails one task's execution log as SSE (docs/03-api.md):
 // backlog replay after the resume point, live lines as they land, and a
 // terminal `eos` frame once the task is terminal (succeeded/failed/canceled)
@@ -62,6 +66,30 @@ func (s *Server) StreamJobTaskLogs(ctx context.Context, request gen.StreamJobTas
 			return nil, verr("SCHEMA_INVALID_CURSOR", "after must be a task log id")
 		}
 		resume = v
+	}
+	// `tail` bounds a FRESH subscription's replay (no explicit resume point):
+	// resume after newest-tail instead of the task's first line. An install
+	// log is an hours-long trail (syslog sink files every installer journal
+	// line) — a viewer opening the page wants the tail rendered instantly,
+	// not a 200-lines/s crawl of the whole history. Contract clamps to
+	// 0..200 like page_size.
+	if resume == 0 && request.Params.Tail != nil {
+		tail := *request.Params.Tail
+		if tail < 0 {
+			tail = 0
+		}
+		if tail > maxTailParam {
+			tail = maxTailParam
+		}
+		if tail > 0 {
+			last, err := s.Logs.LastID(ctx, task.ID)
+			if err != nil {
+				return nil, err
+			}
+			if last > int64(tail) {
+				resume = last - int64(tail)
+			}
+		}
 	}
 	return &taskLogStream{server: s, ctx: ctx, taskID: task.ID, resume: resume}, nil
 }
@@ -101,8 +129,9 @@ func (t *taskLogStream) VisitStreamJobTaskLogsResponse(w http.ResponseWriter) er
 	})
 }
 
-// ListJobTaskLogs returns one task's execution trail in write order. The
-// task must belong to the path job (same rule as getJobTask).
+// ListJobTaskLogs returns one task's execution trail, asc (default) in
+// write order or desc newest-first (the load-older direction). The task
+// must belong to the path job (same rule as getJobTask).
 func (s *Server) ListJobTaskLogs(ctx context.Context, request gen.ListJobTaskLogsRequestObject) (gen.ListJobTaskLogsResponseObject, error) {
 	task, err := s.Jobs.GetTask(ctx, string(request.TaskId))
 	if err != nil {
@@ -111,14 +140,18 @@ func (s *Server) ListJobTaskLogs(ctx context.Context, request gen.ListJobTaskLog
 	if task.JobID != string(request.Id) {
 		return nil, store.ErrNotFound
 	}
-	after := int64(0)
+	// Cursor means "continue from here" in the ACTIVE direction: asc pages
+	// forward after it, desc pages backward before it — one opaque token
+	// serves both, the client just passes it back with the same order.
+	var cursor int64
 	if p := request.Params.Cursor; p != nil && *p != "" {
 		v, err := strconv.ParseInt(string(*p), 10, 64)
 		if err != nil {
 			return nil, verr("SCHEMA_INVALID_CURSOR", "cursor must be a task log id")
 		}
-		after = v
+		cursor = v
 	}
+	desc := derefOr(request.Params.Order, gen.ListJobTaskLogsParamsOrderAsc) == gen.ListJobTaskLogsParamsOrderDesc
 	// page_size defaults and clamps exactly like every other list endpoint
 	// (contract: 1..200, default 50).
 	pageSize := int(derefOr(request.Params.PageSize, gen.PageSize(50)))
@@ -128,11 +161,13 @@ func (s *Server) ListJobTaskLogs(ctx context.Context, request gen.ListJobTaskLog
 	if pageSize > 200 {
 		pageSize = 200
 	}
-	logs, err := s.Logs.List(ctx, store.TaskLogFilter{
-		TaskID:  task.ID,
-		AfterID: after,
-		Limit:   pageSize + 1,
-	})
+	filter := store.TaskLogFilter{TaskID: task.ID, Desc: desc, Limit: pageSize + 1}
+	if desc {
+		filter.BeforeID = cursor
+	} else {
+		filter.AfterID = cursor
+	}
+	logs, err := s.Logs.List(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -142,6 +177,9 @@ func (s *Server) ListJobTaskLogs(ctx context.Context, request gen.ListJobTaskLog
 	}
 	if len(page.Items) > pageSize {
 		page.Items = page.Items[:pageSize]
+		// The trimmed page's last element is the continuation point in both
+		// directions: asc → the page's largest id (continue after it),
+		// desc → the page's smallest id (continue before it).
 		next := strconv.FormatInt(page.Items[len(page.Items)-1].Id, 10)
 		page.NextCursor = &next
 	}

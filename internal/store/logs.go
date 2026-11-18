@@ -40,15 +40,21 @@ type TaskLogRecord struct {
 	TS      time.Time       `json:"ts"`
 }
 
-// TaskLogFilter narrows a task's log query; zero AfterID means "from the
-// beginning" (docs/03-api.md §1 cursor pagination).
+// TaskLogFilter narrows a task's log query. Asc (default) is write order
+// with AfterID as the exclusive lower bound — zero means "from the
+// beginning" (docs/03-api.md §1 cursor pagination). Desc walks backward
+// from the newest line with BeforeID as the exclusive upper bound — the
+// load-older direction for tail-first viewers (docs/03-api.md list order).
 type TaskLogFilter struct {
-	TaskID  string
-	AfterID int64
-	Limit   int
+	TaskID   string
+	AfterID  int64
+	BeforeID int64
+	Desc     bool
+	Limit    int
 }
 
-// List returns one task's lines in write order.
+// List returns one task's lines in the filter's order (write order asc by
+// default; newest first under Desc).
 func (r *TaskLogRepo) List(ctx context.Context, f TaskLogFilter) ([]TaskLogRecord, error) {
 	limit := f.Limit
 	if limit <= 0 {
@@ -58,12 +64,21 @@ func (r *TaskLogRepo) List(ctx context.Context, f TaskLogFilter) ([]TaskLogRecor
 		SELECT id, task_id, level, COALESCE(stage, ''), message, attrs, ts
 		FROM task_logs WHERE task_id = $1`
 	args := []any{f.TaskID}
-	if f.AfterID > 0 {
-		args = append(args, f.AfterID)
-		query += fmt.Sprintf(" AND id > $%d", len(args))
+	if f.Desc {
+		if f.BeforeID > 0 {
+			args = append(args, f.BeforeID)
+			query += fmt.Sprintf(" AND id < $%d", len(args))
+		}
+		args = append(args, limit)
+		query += fmt.Sprintf(" ORDER BY id DESC LIMIT $%d", len(args))
+	} else {
+		if f.AfterID > 0 {
+			args = append(args, f.AfterID)
+			query += fmt.Sprintf(" AND id > $%d", len(args))
+		}
+		args = append(args, limit)
+		query += fmt.Sprintf(" ORDER BY id ASC LIMIT $%d", len(args))
 	}
-	args = append(args, limit)
-	query += fmt.Sprintf(" ORDER BY id ASC LIMIT $%d", len(args))
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -83,6 +98,17 @@ func (r *TaskLogRepo) List(ctx context.Context, f TaskLogFilter) ([]TaskLogRecor
 		out = append(out, l)
 	}
 	return out, rows.Err()
+}
+
+// LastID returns the task's newest log id (0 when the task has no lines).
+// The stream `tail` bootstrap resolves its resume point from it: a fresh
+// subscriber asking for the last N lines resumes after lastID-N instead of
+// replaying the whole history.
+func (r *TaskLogRepo) LastID(ctx context.Context, taskID string) (int64, error) {
+	var last int64
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(id), 0) FROM task_logs WHERE task_id = $1`, taskID).Scan(&last)
+	return last, err
 }
 
 // ExpireTaskLogs drops lines older than the retention window; the reaper

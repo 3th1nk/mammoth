@@ -34,17 +34,23 @@ func eventOut(e store.EventRecord) gen.Event {
 	}
 }
 
-// ListEvents is the audit/backlog query surface (cursor over the watermark).
+// ListEvents is the audit/backlog query surface (cursor over the
+// watermark), asc (default) in watermark order or desc newest-first — the
+// direction audit views and fresh-subscription watermarks actually want.
 func (s *Server) ListEvents(ctx context.Context, request gen.ListEventsRequestObject) (gen.ListEventsResponseObject, error) {
 	p := request.Params
-	after := int64(0)
+	// Cursor means "continue from here" in the ACTIVE direction: asc pages
+	// forward after it, desc pages backward before it — one opaque token
+	// serves both, the client just passes it back with the same order.
+	var cursor int64
 	if p.Cursor != nil && *p.Cursor != "" {
-		v, err := strconv.ParseInt(string(*p.Cursor), 10, 64)
+		v, err := strconv.ParseInt(*p.Cursor, 10, 64)
 		if err != nil {
 			return nil, verr("SCHEMA_INVALID_CURSOR", "cursor must be an event id")
 		}
-		after = v
+		cursor = v
 	}
+	desc := derefOr(p.Order, gen.ListEventsParamsOrderAsc) == gen.ListEventsParamsOrderDesc
 	// page_size defaults and clamps exactly like every other list endpoint
 	// (contract: 1..200, default 50).
 	pageSize := int(derefOr(p.PageSize, gen.PageSize(50)))
@@ -54,13 +60,19 @@ func (s *Server) ListEvents(ctx context.Context, request gen.ListEventsRequestOb
 	if pageSize > 200 {
 		pageSize = 200
 	}
-	events, err := s.Events.List(ctx, store.EventFilter{
-		AfterID:      after,
+	filter := store.EventFilter{
+		Desc:         desc,
 		ResourceType: string(derefOr(p.ResourceType, gen.ListEventsParamsResourceType(""))),
 		ResourceID:   derefOr(p.ResourceId, ""),
 		Type:         derefOr(p.Type, ""),
 		Limit:        pageSize + 1,
-	})
+	}
+	if desc {
+		filter.BeforeID = cursor
+	} else {
+		filter.AfterID = cursor
+	}
+	events, err := s.Events.List(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +82,9 @@ func (s *Server) ListEvents(ctx context.Context, request gen.ListEventsRequestOb
 	}
 	if len(page.Items) > pageSize {
 		page.Items = page.Items[:pageSize]
+		// The trimmed page's last element is the continuation point in both
+		// directions: asc → the page's largest id (continue after it),
+		// desc → the page's smallest id (continue before it).
 		next := strconv.FormatInt(page.Items[len(page.Items)-1].Id, 10)
 		page.NextCursor = &next
 	}

@@ -39,23 +39,35 @@ type EventRecord struct {
 	TS           time.Time       `json:"ts"`
 }
 
-// EventFilter narrows event queries; zero AfterID means "from the beginning".
+// EventFilter narrows event queries. Asc (default) is watermark order with
+// AfterID as the exclusive lower bound — zero means "from the beginning".
+// Desc walks backward from the newest event with BeforeID as the exclusive
+// upper bound — how clients read the latest row (page_size=1 watermark) and
+// page an audit view newest-first (docs/03-api.md list order).
 type EventFilter struct {
 	AfterID      int64
+	BeforeID     int64
+	Desc         bool
 	ResourceType string
 	ResourceID   string
 	Type         string
 	Limit        int
 }
 
-// List queries events in watermark order.
+// List queries events in the filter's order (watermark order asc by
+// default; newest first under Desc).
 func (r *EventRepo) List(ctx context.Context, f EventFilter) ([]EventRecord, error) {
 	limit := f.Limit
 	if limit <= 0 {
 		limit = 100
 	}
 	where, args := []string{"1=1"}, []any{}
-	if f.AfterID > 0 {
+	if f.Desc {
+		if f.BeforeID > 0 {
+			args = append(args, f.BeforeID)
+			where = append(where, fmt.Sprintf("id < $%d", len(args)))
+		}
+	} else if f.AfterID > 0 {
 		args = append(args, f.AfterID)
 		where = append(where, fmt.Sprintf("id > $%d", len(args)))
 	}
@@ -72,10 +84,14 @@ func (r *EventRepo) List(ctx context.Context, f EventFilter) ([]EventRecord, err
 		where = append(where, fmt.Sprintf("type = $%d", len(args)))
 	}
 	args = append(args, limit)
+	order := "ASC"
+	if f.Desc {
+		order = "DESC"
+	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, resource_type, resource_id, type, payload, ts
 		FROM events WHERE `+strings.Join(where, " AND ")+`
-		ORDER BY id ASC LIMIT $`+fmt.Sprint(len(args)), args...)
+		ORDER BY id `+order+` LIMIT $`+fmt.Sprint(len(args)), args...)
 	if err != nil {
 		return nil, err
 	}

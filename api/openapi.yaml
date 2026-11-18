@@ -931,6 +931,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/pageSize'
         - $ref: '#/components/parameters/cursor'
+        - $ref: '#/components/parameters/cursorOrder'
       responses:
         '200':
           description: Task log page
@@ -965,6 +966,19 @@ paths:
           description: Replay logs after this log id.
           schema:
             type: string
+        - name: tail
+          in: query
+          description: |
+            Fresh-subscription backlog bound: replay only the last `tail`
+            lines instead of the task's full history. Ignored when
+            Last-Event-ID or `after` names an explicit resume point. The
+            console's open-page bootstrap uses it to render the tail
+            instantly instead of replaying a whole install's log at 200
+            lines/s.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 200
         - name: Last-Event-ID
           in: header
           schema:
@@ -1606,6 +1620,7 @@ paths:
             type: string
         - $ref: '#/components/parameters/pageSize'
         - $ref: '#/components/parameters/cursor'
+        - $ref: '#/components/parameters/cursorOrder'
       responses:
         '200':
           description: Event page
@@ -1697,13 +1712,6 @@ components:
       description: Opaque continuation token from a previous page (`next_cursor`).
       schema:
         type: string
-    orderBy:
-      name: order_by
-      in: query
-      schema:
-        type: string
-        enum: [created_at, updated_at]
-        default: created_at
     order:
       name: order
       in: query
@@ -1711,6 +1719,29 @@ components:
         type: string
         enum: [asc, desc]
         default: desc
+    orderBy:
+      name: order_by
+      in: query
+      schema:
+        type: string
+        enum: [created_at, updated_at]
+        default: created_at
+    cursorOrder:
+      name: order
+      in: query
+      description: |
+        Page direction over the monotonic id (no order_by pair: the sort
+        field is the id itself). `asc` (default) pages forward in write
+        order (`cursor` = continue after this id); `desc` pages backward
+        from the newest row (`cursor` = continue before this id) — the
+        load-older direction for tail-first viewers and the way to read the
+        newest row (`page_size=1&order=desc`). `next_cursor` follows the
+        active direction, so a client pages deeper by passing it back
+        unchanged with the same `order`.
+      schema:
+        type: string
+        enum: [asc, desc]
+        default: asc
     credentialId:
       name: id
       in: path

@@ -65,8 +65,8 @@ GET    /api/v1/jobs/{id}
 POST   /api/v1/jobs/{id}/cancel
 GET    /api/v1/jobs/{id}/tasks?state=failed
 GET    /api/v1/jobs/{id}/tasks/{tid}
-GET    /api/v1/jobs/{id}/tasks/{tid}/logs       # 任务执行日志(日志双写落库半边)
-GET    /api/v1/jobs/{id}/tasks/{tid}/logs/stream # 日志 SSE(回放+尾随,终态发 eos 收流)
+GET    /api/v1/jobs/{id}/tasks/{tid}/logs       # 任务执行日志(日志双写落库半边);order=desc 从最新往回翻
+GET    /api/v1/jobs/{id}/tasks/{tid}/logs/stream # 日志 SSE(回放+尾随,终态发 eos 收流);?tail=N 新订阅只回放末尾 N 条
 POST   /api/v1/jobs/{id}/tasks/{tid}/retry
 GET    /api/v1/jobs/{id}/events                 # job 级 SSE
 
@@ -157,6 +157,7 @@ task:  pending → running → succeeded | failed | canceled
 | 错误 | RFC 9457 `application/problem+json`,扩展 `code`(机器可读错误码,注册表维护)与 `retryable` |
 | 幂等 | `Idempotency-Key` header 适用于所有创建类 POST;24h 窗口内重放返回原结果 |
 | 分页 | cursor 制:`?page_size=&cursor=`,响应含 `next_cursor`;不提供 offset 深翻页 |
+| 分页方向 | 固定 id 序的列表(logs/events)支持 `?order=asc|desc`(默认 asc):desc 从最新行往回翻,`cursor` 表示"在该 id 之前继续",`next_cursor` 随方向走——审计视图看最新、日志查看器"加载更早"都走这个方向 |
 | 过滤/排序 | `?state=failed&labels=env=prod`;机器列表另有模糊搜索 `?q=`(对机器 ID、BMC 地址、序列号、厂商、型号、label 键值做大小写不敏感子串匹配,LIKE 元字符按字面处理,与其它过滤条件 AND 组合);`?order_by=created_at&order=desc`(游标键随 order_by 走) |
 | 时间 | RFC 3339 UTC;时长字段以 `_seconds` / `_duration_ms` 后缀显式标注单位 |
 | 凭证 | 只写;支持请求内联(服务端转存为 credential 资源并返回引用) |

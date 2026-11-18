@@ -121,10 +121,10 @@ func fakeDeviceHandshake(t *testing.T, ln net.Listener, password string) net.Con
 		t.Fatalf("ClientInit = %d", ci[0])
 	}
 	var si []byte
-	si = binary.BigEndian.AppendUint16(si, 64)  // width
-	si = binary.BigEndian.AppendUint16(si, 32)  // height
-	si = append(si, make([]byte, 16)...)        // pixel format (ignored by the test)
-	si = binary.BigEndian.AppendUint32(si, 5)   // name length
+	si = binary.BigEndian.AppendUint16(si, 64) // width
+	si = binary.BigEndian.AppendUint16(si, 32) // height
+	si = append(si, make([]byte, 16)...)       // pixel format (ignored by the test)
+	si = binary.BigEndian.AppendUint32(si, 5)  // name length
 	si = append(si, "hdmvd"...)
 	if _, err := dev.Write(si); err != nil {
 		t.Fatal(err)

@@ -370,13 +370,22 @@ update-grub`, in.InstalledKernelArgs, in.InstalledKernelArgs)
 	// kernel install for good on egress-limited L2s, 2026-10-30).
 	// MAMMOTH_UBUNTU_APT_MIRROR overrides for deployments that explicitly
 	// want target packages from a real mirror.
+	//
+	// security rides the same pool: without a stanza subiquity keeps
+	// security.ubuntu.com, which an offline install L2 can only hang on
+	// (connect/DNS timeouts across every apt update). Pointing it here
+	// turns the hang into a fast 404 — the pool tree carries the release
+	// pockets only, so the -security suite is knowingly dead this way and
+	// installed systems take no security updates from the install (the
+	// operator's post-install update channel covers that).
 	if in.Netboot != nil && in.Netboot.PoolURL != "" {
 		uri := in.Netboot.PoolURL
 		if in.Netboot.AptMirror != "" {
 			uri = in.Netboot.AptMirror
 		}
 		auto["apt"] = map[string]any{
-			"primary": []map[string]any{{"arches": []string{"default"}, "uri": uri}},
+			"primary":  []map[string]any{{"arches": []string{"default"}, "uri": uri}},
+			"security": []map[string]any{{"arches": []string{"default"}, "uri": uri}},
 		}
 	}
 

@@ -339,6 +339,19 @@ func TestRenderNetbootCasperArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
+	// apt.security rides the pool with primary: offline L2s hang on the
+	// default security.ubuntu.com otherwise — the pool's fast 404 beats the
+	// connect-timeout stall (render-side comment carries the tradeoff).
+	var ud string
+	for _, a := range answers {
+		if a.Name == "user-data" {
+			ud = a.Content
+		}
+	}
+	if !strings.Contains(ud, `"security": [`) ||
+		strings.Count(ud, `"uri": "http://10.0.0.1:8080/netboot/files/toku"`) < 2 {
+		t.Errorf("apt primary+security must both point at the pool:\n%s", ud)
+	}
 	if boot.NetbootKernelArgs == "" ||
 		!strings.Contains(boot.NetbootKernelArgs, "ds=nocloud-net;s=http://10.0.0.1:8080/render/toku/") ||
 		!strings.Contains(boot.NetbootKernelArgs, "boot=casper netboot=nfs nfsroot=10.0.0.1:/export/netboot/toku/iso") ||

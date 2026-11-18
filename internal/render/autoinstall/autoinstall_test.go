@@ -537,6 +537,60 @@ func TestStorageResolvesControllerVolumeBySize(t *testing.T) {
 	}
 }
 
+// A pinned serial that came from the enrollment probe's serial→wwid
+// fallback (kernel wwid "naa.…" — no BMC office PC, sysfs device/serial
+// empty, busybox probe cannot collect the udev form) matches nothing in
+// the installer: curtin matches udev ATA serials, so the LITEON round died
+// with "matched no disk" every attempt. The resolver must ship for such
+// disks and carry the serial→size ground truth so the on-machine pass
+// rewrites the pinned serial to the disk the installer actually sees.
+func TestStorageArmsSerialRepairForWwidFallbackSerial(t *testing.T) {
+	d := New("ubuntu22")
+	in := render.InstallInputs{
+		TaskToken:     "toks",
+		MachineID:     "mch_s",
+		Hostname:      "node-s1",
+		ImageSource:   "https://mirror.example/ubuntu-22.04.5-live-server-amd64.iso",
+		RootPassword:  "rRoot-pw",
+		AnswerBaseURL: "http://10.0.0.1:8080/render/toks",
+		CompleteURL:   "http://10.0.0.1:8080/render/toks/complete",
+		Disks: []render.ResolvedDisk{{
+			Device: "sda", Serial: "naa.50023031100aae91", SizeBytes: 128035676160, Wipe: true,
+			Partitions: []render.ResolvedPartition{
+				{Mount: "/boot/efi", FS: "vfat", SizeMB: 512, Flags: []string{"esp"}},
+				{Mount: "/", FS: "ext4", Grow: true},
+			},
+		}},
+	}
+	answers, _, err := d.RenderAnswers(in, render.MachineView{Hardware: &bmc.HardwareView{Disks: []bmc.DiskView{
+		{Name: "sda", Serial: "naa.50023031100aae91", SizeBytes: 128035676160},
+	}}})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	var ud, resolver string
+	for _, a := range answers {
+		switch a.Name {
+		case "user-data":
+			ud = a.Content
+		case "run/mammoth/resolve-disk.sh":
+			resolver = a.Content
+		}
+	}
+	if !strings.Contains(ud, `"serial": "naa.50023031100aae91"`) {
+		t.Errorf("pinned serial missing from the storage config:\n%s", ud)
+	}
+	if resolver == "" {
+		t.Fatal("resolve-disk.sh not rendered for a serial-pinned disk (no dyn slots)")
+	}
+	if !strings.Contains(resolver, `"naa.50023031100aae91": 128035676160`) {
+		t.Errorf("resolver missing the serial→size ground truth:\n%s", resolver)
+	}
+	if !strings.Contains(resolver, `"serial"`) || !strings.Contains(resolver, `fix_serial`) {
+		t.Errorf("resolver missing the serial repair pass:\n%s", resolver)
+	}
+}
+
 // PXE + static spec: the target's netplan is what subiquity/curtin generate
 // from the installer environment — in pool-armed installs that inheritance
 // carried the pool lease instead of the declared address (22.04-crypt round,

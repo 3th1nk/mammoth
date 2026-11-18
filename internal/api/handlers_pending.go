@@ -164,6 +164,15 @@ func hardwareFromReport(report json.RawMessage) *bmc.HardwareView {
 		// (USB bridges, SAS expanders) fall back to the SCSI wwid — not a
 		// vendor serial but a stable unique discriminator; serial-style
 		// consumers (spec selectors, acceptance diff) key on uniqueness.
+		//
+		// HAZARD past this boundary: a wwid ("naa.50023031100aae91") pinned
+		// into an installer's storage config matches nothing — curtin/
+		// subiquity match serials against the udev ATA identity (ID_SERIAL
+		// family), and the probe is a busybox ramdisk that cannot collect
+		// that form at source (real-hardware: LITEON office PC, "matched
+		// no disk" every round). resolve-disk.sh carries the repair: at
+		// install time it rewrites a pinned serial that matches no disk to
+		// the size-unique disk's udev serial (render/autoinstall).
 		serial := d.Serial
 		if serial == "" {
 			serial = d.WWID

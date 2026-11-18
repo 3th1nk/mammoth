@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 
 	"github.com/3th1nk/mammoth/internal/render"
@@ -85,7 +86,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 	}
 
 	render.NormalizeESP(in.Disks)
-	storage, dyn, err := d.storageConfig(in, m)
+	storage, dyn, serialSizes, err := d.storageConfig(in, m)
 	if err != nil {
 		return nil, render.BootParams{}, err
 	}
@@ -285,17 +286,25 @@ update-grub`, in.InstalledKernelArgs, in.InstalledKernelArgs)
 			host, port))
 	}
 	// Controller-named volumes whose kernel name mammoth cannot know (the
-	// snapshot itself carries the controller view): subiquity rewrites
+	// snapshot itself carries the same controller view): subiquity rewrites
 	// nothing, so an early command resolves the device ON THE MACHINE by
 	// size and patches /autoinstall.yaml before storage applies — the
 	// autoinstall twin of the debian resolve-disk.sh early_command (the
 	// kickstart dialect has the %pre equivalent). Real-hardware: curtin
 	// "matched no disk" on /dev/LogicalDrive0 three times over.
+	//
+	// The same resolver repairs PINNED SERIALS that match no installer-side
+	// disk (serialSizes): the enrollment probe's serial→wwid fallback means
+	// the pinned value can be a kernel wwid (naa.…) while curtin matches
+	// udev ATA serials — the LITEON office-PC round ("matched no disk",
+	// serial 'naa.50023031100aae91' vs ID_SERIAL 'LITEON CVB-CE128-HP …').
+	// The probe is a busybox ramdisk (no udev/lsblk) and cannot collect the
+	// udev form at source, so the repair runs where the udev view lives.
 	var resolveAnswers []render.AnswerFile
-	if len(dyn) > 0 {
+	if len(dyn) > 0 || len(serialSizes) > 0 {
 		resolveAnswers = []render.AnswerFile{{
 			Name:    "run/mammoth/resolve-disk.sh",
-			Content: resolveDiskScript(dyn),
+			Content: resolveDiskScript(dyn, serialSizes),
 		}}
 		early = append(early, resolveDiskEarlyCommand(in))
 	}
@@ -548,7 +557,7 @@ func sizeWithinTolerance(a, b int64) bool {
 // storageConfig builds the curtin storage config (autoinstall.storage).
 // Wiped disks get the full disk→partition→format→mount chain; kept disks are
 // simply absent (curtin never touches them) — the partial keep semantics.
-func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (map[string]any, []dynDisk, error) {
+func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (map[string]any, []dynDisk, map[string]int64, error) {
 	config := []map[string]any{}
 	rendered := 0
 	// Controller-named volumes the render side cannot resolve to a kernel
@@ -573,7 +582,7 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 		for _, pv := range vg.PVs {
 			if pv.RaidName != "" {
 				if pv.RaidMode != "hardware" {
-					return nil, nil, fmt.Errorf(
+					return nil, nil, nil, fmt.Errorf(
 						"%s: software RAID volume %s cannot back a volume group (curtin renders no md arrays); use disks or a hardware RAID volume", d.distro, pv.RaidName)
 				}
 				raidPV[pv.RaidName] = true
@@ -600,7 +609,7 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 			continue
 		}
 		if len(disk.Baseline) > 0 || len(disk.Remove) > 0 || hasPreserve(disk.Partitions) {
-			return nil, nil, fmt.Errorf(
+			return nil, nil, nil, fmt.Errorf(
 				"%s: keep: partitions is not supported on this distro (partial); submit without preserve", d.distro)
 		}
 		targets = append(targets, diskTarget{id: "disk-" + disk.Device, device: disk.Device,
@@ -630,7 +639,7 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 					}
 				}
 				if hi < 0 {
-					return nil, nil, fmt.Errorf(
+					return nil, nil, nil, fmt.Errorf(
 						"%s: volume group %s PV holder %s is not among the declared disks", d.distro, vg.Name, pv.Device)
 				}
 				targets[hi].partitions = append(targets[hi].partitions, render.ResolvedPartition{
@@ -641,6 +650,22 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 			targets = append(targets, diskTarget{id: fmt.Sprintf("pv-%s-%d", vg.Name, pi),
 				device: pv.Device, serial: pv.Serial, wipe: true,
 				sizeBytes: pv.SizeBytes, pvOnly: true})
+		}
+	}
+
+	// serialSizes: every pinned serial → the target's disk size — the
+	// on-machine serial repair's ground truth (resolve-disk.sh rewrites a
+	// pinned serial that matches no installer-side disk). Serials enter this
+	// map from the hardware view verbatim, and the enrollment probe's
+	// serial→wwid fallback (handlers_pending.go) means the value can be a
+	// kernel wwid (naa.…) while the installer matches udev ATA serials —
+	// the exact "matched no disk" that killed the LITEON office-PC round.
+	// Every target size is a disk-true size: preserved holders never reach
+	// targets (keep: disk skips them, keep: partitions is rejected).
+	serialSizes := map[string]int64{}
+	for _, t := range targets {
+		if t.serial != "" && t.sizeBytes > 0 {
+			serialSizes[t.serial] = t.sizeBytes
 		}
 	}
 
@@ -661,6 +686,12 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 			entry["wipe"] = "superblock"
 		}
 		if disk.serial != "" {
+			// Pinned verbatim from the hardware view — but the value can be
+			// the enrollment probe's serial→wwid fallback (a kernel wwid,
+			// not a udev serial), which curtin matches against nothing
+			// ("matched no disk", LITEON office PC). serialSizes hands it
+			// to resolve-disk.sh, which repairs such serials on the machine
+			// by size before storage applies.
 			entry["serial"] = disk.serial
 		} else {
 			// Kernel names take the path form. A controller-named volume
@@ -697,20 +728,20 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 		if len(disk.partitions) == 0 {
 			if disk.pvOnly {
 				if !disk.wipe {
-					return nil, nil, fmt.Errorf("%s: disk %s must declare wipe or keep", d.distro, disk.device)
+					return nil, nil, nil, fmt.Errorf("%s: disk %s must declare wipe or keep", d.distro, disk.device)
 				}
 				if err := emitDiskEntry(disk, false, false); err != nil {
-					return nil, nil, err
+					return nil, nil, nil, err
 				}
 			}
 			continue
 		}
 		if !disk.wipe {
-			return nil, nil, fmt.Errorf("%s: disk %s must declare wipe or keep", d.distro, disk.device)
+			return nil, nil, nil, fmt.Errorf("%s: disk %s must declare wipe or keep", d.distro, disk.device)
 		}
 		diskBytes := disk.sizeBytes
 		if err := emitDiskEntry(disk, true, false); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 
 		// Pre-compute grow sizes: rest takes the remainder minus a 1MiB gap
@@ -806,13 +837,13 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 		if vg.KeepVG {
 			for pi, pv := range vg.PVs {
 				if pv.Device == "" {
-					return nil, nil, fmt.Errorf(
+					return nil, nil, nil, fmt.Errorf(
 						"%s: kept group %s has a PV with no holding device — re-run discover", d.distro, vg.Name)
 				}
 				holderID := fmt.Sprintf("keepdisk-%s-%d", pv.Device, pi)
 				holder := diskTarget{id: holderID, device: pv.Device, serial: pv.Serial}
 				if err := emitDiskEntry(holder, false, true); err != nil {
-					return nil, nil, err
+					return nil, nil, nil, err
 				}
 				refID := holderID
 				if pv.PartitionNumber > 0 {
@@ -834,7 +865,7 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 			rendered++
 			for _, lv := range vg.Preserved {
 				if lv.FS == "" {
-					return nil, nil, fmt.Errorf(
+					return nil, nil, nil, fmt.Errorf(
 						"%s: kept logical volume %s/%s has no known filesystem — declare preserve.fs (the snapshot carries no fstype)", d.distro, vg.Name, lv.Name)
 				}
 				lvID := fmt.Sprintf("lv-%s-%s", vg.Name, lv.Name)
@@ -892,9 +923,9 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 		}
 	}
 	if rendered == 0 {
-		return nil, nil, fmt.Errorf("%s: storage config is empty", d.distro)
+		return nil, nil, nil, fmt.Errorf("%s: storage config is empty", d.distro)
 	}
-	return map[string]any{"version": 1, "config": config}, dyn, nil
+	return map[string]any{"version": 1, "config": config}, dyn, serialSizes, nil
 }
 
 // dynDisk is a storage target whose path carries a controller name — the
@@ -908,25 +939,38 @@ type dynDisk struct {
 // resolveDiskScript renders the on-machine resolver: patch every
 // controller-named path in /autoinstall.yaml to the device lsblk finds by
 // size (±1%; an unknown size falls back to the sole disk — the single-volume
-// shape this dialect targets). Runs as an early command, before storage.
-func resolveDiskScript(dyn []dynDisk) string {
+// shape this dialect targets), and repair every pinned serial that matches
+// no installer-side disk by rewriting it to the size-unique disk's udev
+// serial (the vocabulary the installer's own probe reports, so curtin's
+// exact serial match lands). Runs as an early command, before storage.
+func resolveDiskScript(dyn []dynDisk, serialSizes map[string]int64) string {
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
-	b.WriteString("# mammoth: resolve controller-named disk paths to kernel names, on the machine.\n")
+	b.WriteString("# mammoth: resolve controller-named disk paths and repair serials that\n")
+	b.WriteString("# match no disk here, on the machine.\n")
 	b.WriteString("python3 - <<'PY'\nimport re, subprocess, sys\n")
 	b.WriteString(fmt.Sprintf("SIZES = %s\n", dynLiteral(dyn)))
+	b.WriteString(fmt.Sprintf("SERIALS = %s\n", dynLiteralSizes(serialSizes)))
 	b.WriteString(`try:
     raw = open("/autoinstall.yaml").read()
 except OSError:
     sys.exit(0)
 devs = []
-for ln in subprocess.run(["lsblk", "-dnb", "-o", "NAME,SIZE"],
+for ln in subprocess.run(["lsblk", "-dnb", "-o", "NAME,SIZE,SERIAL"],
                          capture_output=True, text=True).stdout.splitlines():
-    n, _, s = ln.partition(" ")
-    devs.append(("/dev/" + n, int(s)))
+    parts = ln.strip().split(None, 2)
+    if len(parts) < 2:
+        continue
+    try:
+        sz = int(parts[1])
+    except ValueError:
+        continue
+    sr = parts[2] if len(parts) == 3 else ""
+    devs.append(("/dev/" + parts[0], sz, sr))
+probed = set(sr for _, _, sr in devs if sr)
 def pick(size):
     if size > 0:
-        m = [p for p, sz in devs if abs(sz - size) * 100 <= size]
+        m = [p for p, sz, _ in devs if abs(sz - size) * 100 <= size]
         if len(m) == 1:
             return m[0]
         return None
@@ -940,7 +984,19 @@ def repl(m):
         sys.stderr.write("no unique device matches %s (%d bytes)\n" % (m.group(2), d))
         sys.exit(1)
     return m.group(1) + dev + m.group(3)
+def fix_serial(m):
+    s = m.group(2)
+    if s == "" or s in probed or s not in SERIALS:
+        return m.group(0)
+    size = SERIALS[s]
+    cands = set(sr for _, sz, sr in devs if sr and abs(sz - size) * 100 <= size)
+    if len(cands) != 1:
+        sys.stderr.write("no unique serial matches %s (%d bytes)\n" % (s, size))
+        sys.exit(1)
+    sys.stderr.write("rewriting serial %s -> %s\n" % (s, tuple(cands)[0]))
+    return m.group(1) + tuple(cands)[0] + m.group(3)
 new = re.sub(r'("path"\s*:\s*"|path:\s*)/dev/([A-Za-z0-9_.\-]+)("?)', repl, raw)
+new = re.sub(r'("serial"\s*:\s*"|serial:\s*)([^"\s]+)("?)', fix_serial, new)
 open("/autoinstall.yaml", "w").write(new)
 PY
 `)
@@ -952,6 +1008,22 @@ func dynLiteral(dyn []dynDisk) string {
 	parts := make([]string, 0, len(dyn))
 	for _, d := range dyn {
 		parts = append(parts, fmt.Sprintf("%q: %d", d.name, d.size))
+	}
+	return "{" + strings.Join(parts, ", ") + "}"
+}
+
+// dynLiteralSizes renders a serial→size map the same way. Keys are sorted:
+// the script rides in answer files that the acceptance tests diff verbatim,
+// so a map-order flare would make every render nondeterministic.
+func dynLiteralSizes(m map[string]int64) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%q: %d", k, m[k]))
 	}
 	return "{" + strings.Join(parts, ", ") + "}"
 }

@@ -616,6 +616,13 @@ const pasteEstimate = (t) => {
   const enters = (t.match(/\n/g) || []).length;
   return Math.max(1, Math.round(((t.length - (t.match(PASTE_BAD) || []).length) * 35 + enters * 60) / 1000));
 };
+const doPaste = (raw) => {
+  if (!rfb || !connected) return log('控制台未连接', 'err');
+  const t = raw.replace(PASTE_BAD, '');
+  if (!t) return log('粘贴内容无有效 ASCII 字符', 'err');
+  try { rfb.clipboardPasteFrom(t); } catch (err) { return log('注入失败：' + err.message, 'err'); }
+  log('注入中：约 ' + pasteEstimate(t) + ' 秒（' + t.length + ' 字符，按任意键可中止）。主机输入框可能有长度上限，超长部分会被丢弃；画面刷新也可能滞后几秒', 'ok');
+};
 ptext.addEventListener('input', () => {
   const t = ptext.value;
   const bad = (t.match(PASTE_BAD) || []).length;
@@ -632,15 +639,36 @@ document.getElementById('paste-open').onclick = () => {
   ptext.focus();
 };
 document.getElementById('paste-clear').onclick = () => { ptext.value = ''; ptext.dispatchEvent(new Event('input')); ptext.focus(); };
-document.getElementById('paste-cancel').onclick = () => pdlg.close();
+document.getElementById('paste-cancel').onclick = () => { pdlg.close(); rfb.focus(); };
 psend.onclick = () => {
-  if (!rfb || !connected) return log('控制台未连接', 'err');
-  const t = ptext.value.replace(PASTE_BAD, '');
+  const t = ptext.value;
   if (!t) return;
-  try { rfb.clipboardPasteFrom(t); } catch (e) { return log('注入失败：' + e.message, 'err'); }
+  doPaste(t);
   pdlg.close();
-  log('注入中：约 ' + pasteEstimate(t) + ' 秒（' + t.length + ' 字符，在控制台按任意键可中止）', 'ok');
+  rfb.focus(); // 对话框关闭会把焦点还给按钮——还给画布，否则键盘事件进不了控制台
 };
+
+// ── 控制台内直接 Cmd/Ctrl+V ──
+// 键盘焦点在画面上时，组合键由 #screen 的捕获阶段截住：stopPropagation
+// 让 noVNC 不把 Cmd/Ctrl+V 转发给主机，但不 preventDefault——浏览器照常
+// 派发 paste 事件（免权限，HTTP 页面可用），文本从事件里取。mac 的 ⌘V
+// 同样走这条路。对话框与输入框在 #screen 之外，粘贴行为不受影响。
+let vPending = false;
+const screen = document.getElementById('screen');
+screen.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'v' || e.key === 'V')) {
+    vPending = true;
+    e.stopPropagation();
+    setTimeout(() => { vPending = false; }, 500);
+  }
+}, true);
+screen.addEventListener('paste', (e) => {
+  if (!vPending) return;
+  vPending = false;
+  e.preventDefault();
+  const t = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+  if (t) doPaste(t);
+}, true);
 
 // ── 自定义组合键弹窗：键盘捕获 ──
 const dlg = document.getElementById('custom-dialog');
@@ -707,9 +735,10 @@ sendBtn.onclick = () => {
     log('已发送 ' + captured.join('+'), 'ok');
     dlg.close();
     clearCaptured();
+    rfb.focus();
   } catch (e) { log('发送失败：' + e.message, 'err'); }
 };
-document.getElementById('custom-cancel').onclick = () => { dlg.close(); clearCaptured(); };
+document.getElementById('custom-cancel').onclick = () => { dlg.close(); clearCaptured(); rfb.focus(); };
 
 // ── CD 镜像（虚拟媒体）──
 document.getElementById('media-mount').onclick = async () => {
@@ -785,7 +814,7 @@ document.getElementById('media-eject').onclick = async () => {
     <button id="paste-send" class="primary" disabled>注入</button>
     <button id="paste-cancel">关闭</button>
   </div>
-  <p class="hint">文本按 US 键盘布局逐键注入，换行即回车；<br>非 ASCII 字符会被剔除；注入过程中在控制台按任意键可中止。</p>
+  <p class="hint">文本按 US 键盘布局逐键注入，换行即回车；<br>非 ASCII 字符会被剔除；注入过程中按任意键可中止。<br>快捷方式：画面聚焦时直接 Cmd/Ctrl+V。<br>注意：BIOS/DCUI 输入框常有长度上限（如登录框约 20 字符），<br>超长部分会被主机静默丢弃；老机型的画面重绘可能滞后数秒。</p>
 </dialog>
 </body>
 </html>`, html.EscapeString(machineID), machineID, html.EscapeString(machineID))

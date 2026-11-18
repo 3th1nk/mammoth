@@ -333,6 +333,7 @@ func TestE2EPasteInjection(t *testing.T) {
 	// first and retries F2 if the dialog did not appear.
 	time.Sleep(2 * time.Second)
 	before, _ := snapPNG(t, fb, png("4-before-f2"))
+	var afterF2 *image.RGBA
 	openDialog := func() int {
 		if err := keyEvent(tc, 0xFFBF, true); err != nil { // F2
 			t.Fatalf("key: %v", err)
@@ -342,6 +343,7 @@ func TestE2EPasteInjection(t *testing.T) {
 		}
 		time.Sleep(3 * time.Second)
 		img, _ := snapPNG(t, fb, png("5-f2-dialog"))
+		afterF2 = img
 		return diffCount(before, img)
 	}
 	d := openDialog()
@@ -381,10 +383,16 @@ func TestE2EPasteInjection(t *testing.T) {
 		t.Fatalf("key: %v", err)
 	}
 	time.Sleep(2 * time.Second)
-	_, nEsc := snapPNG(t, fb, png("7-restored"))
+	afterEsc, _ := snapPNG(t, fb, png("7-restored"))
 	// The post-ESC repaint may show the console in inverted colours — a
-	// DCUI rendering quirk, not a keyboard-path problem; report only.
-	t.Logf("after ESC: nonBlack=%d (dialog closed, console back on its main screen)", nEsc)
+	// DCUI rendering quirk; either way the screen CHANGES when ESC works.
+	// A near-zero diff means ESC was dead after the paste — the stuck-
+	// modifier failure mode a dropped Shift release produces.
+	if d := diffCount(afterF2, afterEsc); d < 500 {
+		t.Errorf("ESC after paste changed nothing (diff %d px vs dialog-open) — keys dead after injection", d)
+	} else {
+		t.Logf("ESC works after paste (diff %d px vs dialog-open)", d)
+	}
 
 	if err := tc.Close(); err != nil {
 		t.Fatalf("close viewer: %v", err)

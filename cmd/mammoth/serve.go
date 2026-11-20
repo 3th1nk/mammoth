@@ -679,23 +679,11 @@ func serve(args []string) error {
 			exec.DHCPLeaseFor = dhcpPool.LeaseFor
 			// The arm-time reservation pins an address up front so the
 			// installer can boot with a static ip= (boot-time DHCP is racy).
-			// The probe skips silently-occupied addresses: static devices
-			// that never speak DHCP but answer ping or resolve in ARP share
-			// the wire (2288H machine room: a VMware VM held .191, and two
-			// ICMP-blackholed hosts sat on .194/.195 — ping alone misses
-			// those, the neighbour-table check after the ping catches them).
-			probeAlive := func(ip net.IP) bool {
-				_ = osexec.Command("ping", "-c1", "-W1", ip.String()).Run()
-				out, err := osexec.Command("ip", "neigh", "show", ip.String()).Output()
-				if err != nil {
-					return false
-				}
-				line := string(out)
-				return strings.Contains(line, "REACHABLE") || strings.Contains(line, "STALE") ||
-					strings.Contains(line, "DELAY") || strings.Contains(line, "PROBE")
-			}
+			// The probe (netboot.ProbeAlive, shared with the edge pool)
+			// skips silently-occupied addresses: static devices that never
+			// speak DHCP but answer ping or resolve in ARP share the wire.
 			exec.DHCPReserveFor = func(mac string) (ip, router net.IP, mask net.IPMask) {
-				reserved, ok := dhcpPool.ReserveFree(mac, probeAlive)
+				reserved, ok := dhcpPool.ReserveFree(mac, netboot.ProbeAlive)
 				if !ok {
 					return nil, nil, nil
 				}

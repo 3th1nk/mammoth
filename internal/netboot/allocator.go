@@ -36,6 +36,11 @@ type DHCPPool struct {
 	mu     sync.Mutex
 	next   uint32
 	leases map[string]dhcpLease
+	// probe, when set via SetProbe, gates fresh (non-sticky) allocations:
+	// addresses a static device answers on (ping/ARP) are phantom-leased
+	// and skipped, so a pool range overlapping static LAN devices never
+	// hands out a conflicting address.
+	probe func(net.IP) bool
 }
 
 type dhcpLease struct {
@@ -161,32 +166,73 @@ func isDigits(s string) bool {
 // lease returns the address for a MAC, reserving the next free one on
 // first sight and keeping the assignment sticky afterwards (a PXE client
 // DISCOVERs, then REQUESTs, then the installer renews — same MAC, same IP).
+// SetProbe installs the liveness gate applied to fresh (non-sticky)
+// allocations: addresses a static device answers on (ping/ARP) are
+// phantom-leased and skipped. nil clears the gate.
+func (p *DHCPPool) SetProbe(probe func(net.IP) bool) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.probe = probe
+}
+
+// lease allocates (or renews) the sticky address for mac on the DHCP read
+// path. The pool's probe gate (SetProbe) applies to fresh allocations only —
+// a sticky hit renews without probing (the arm-time reservation already
+// vetted the address; the office-PC re-arm must not re-ping a machine that
+// is mid-reboot).
 func (p *DHCPPool) lease(mac string) net.IP {
 	if p == nil {
 		return nil
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	now := time.Now()
-	if l, ok := p.leases[mac]; ok && now.Before(l.expires) {
-		l.expires = now.Add(dhcpLeaseTTL)
-		p.leases[mac] = l
-		return l.ip
+	return p.allocateLocked(mac, p.probe)
+}
+
+// candidateTaken reports whether ip is live-leased to another MAC (phantom
+// keys included — they hold the probe results alive past the call).
+func (p *DHCPPool) candidateTaken(ip net.IP, mac string, now time.Time) bool {
+	for m, l := range p.leases {
+		if m != mac && l.ip.Equal(ip) && now.Before(l.expires) {
+			return true
+		}
 	}
+	return false
+}
+
+// allocateLocked is the single allocation path behind lease (DHCP read
+// path) and ReserveFree (arm-time reservation): sticky-first, then a
+// candidate walk (list or range) that skips live leases of other MACs and,
+// when probe is set, addresses a static device answers on — those are
+// recorded as phantom leases under a synthetic key so the probe result
+// outlives the call. probe may be nil (no liveness gate).
+func (p *DHCPPool) allocateLocked(mac string, probe func(net.IP) bool) net.IP {
+	now := time.Now()
+	want := normalizeMAC(mac)
+	// Sticky assignment wins without probing.
+	for m, l := range p.leases {
+		if normalizeMAC(m) == want && now.Before(l.expires) {
+			l.expires = now.Add(dhcpLeaseTTL)
+			p.leases[m] = l
+			return l.ip
+		}
+	}
+	key := normalizeMAC(mac)
 	if p.addrs != nil {
 		// List mode: first address not live-leased to another MAC.
 		for _, ip := range p.addrs {
-			taken := false
-			for m, l := range p.leases {
-				if m != mac && l.ip.Equal(ip) && now.Before(l.expires) {
-					taken = true
-					break
-				}
+			if p.candidateTaken(ip, mac, now) {
+				continue
 			}
-			if !taken {
-				p.leases[mac] = dhcpLease{ip: ip, expires: now.Add(dhcpLeaseTTL)}
-				return ip
+			if probe != nil && probe(ip) {
+				p.leases["probe:"+ip.String()] = dhcpLease{ip: ip, expires: now.Add(dhcpLeaseTTL)}
+				continue
 			}
+			p.leases[key] = dhcpLease{ip: ip, expires: now.Add(dhcpLeaseTTL)}
+			return ip
 		}
 		return nil
 	}
@@ -199,12 +245,10 @@ func (p *DHCPPool) lease(mac string) net.IP {
 	}
 	for {
 		ip := ipFromBinary(n)
-		taken := false
-		for m, l := range p.leases {
-			if l.ip.Equal(ip) && m != mac && now.Before(l.expires) {
-				taken = true
-				break
-			}
+		taken := p.candidateTaken(ip, mac, now)
+		if !taken && probe != nil && probe(ip) {
+			p.leases["probe:"+ip.String()] = dhcpLease{ip: ip, expires: now.Add(dhcpLeaseTTL)}
+			taken = true // the address is claimed for this TTL; move on
 		}
 		n++
 		if n > end {
@@ -212,7 +256,7 @@ func (p *DHCPPool) lease(mac string) net.IP {
 		}
 		if !taken {
 			p.next = n
-			p.leases[mac] = dhcpLease{ip: ip, expires: now.Add(dhcpLeaseTTL)}
+			p.leases[key] = dhcpLease{ip: ip, expires: now.Add(dhcpLeaseTTL)}
 			return ip
 		}
 		if n == start { // full wrap without a free address
@@ -286,68 +330,10 @@ func (p *DHCPPool) ReserveFree(mac string, probe func(net.IP) bool) (net.IP, boo
 	if p == nil {
 		return nil, false
 	}
-	want := normalizeMAC(mac)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	now := time.Now()
-	// Sticky assignment for this MAC wins without probing.
-	for m, l := range p.leases {
-		if normalizeMAC(m) == want && now.Before(l.expires) {
-			l.expires = now.Add(dhcpLeaseTTL)
-			p.leases[m] = l
-			return l.ip, true
-		}
-	}
-	if p.addrs != nil {
-		for _, ip := range p.addrs {
-			taken := false
-			for m, l := range p.leases {
-				if m != mac && l.ip.Equal(ip) && now.Before(l.expires) {
-					taken = true
-					break
-				}
-			}
-			if taken || probe != nil && probe(ip) {
-				continue
-			}
-			p.leases[mac] = dhcpLease{ip: ip, expires: now.Add(dhcpLeaseTTL)}
-			return ip, true
-		}
-		return nil, false
-	}
-	start, end := binaryIP(p.start), binaryIP(p.end)
-	n := p.next
-	if n < start || n > end {
-		n = start
-	}
-	for {
-		ip := ipFromBinary(n)
-		taken := false
-		for m, l := range p.leases {
-			if l.ip.Equal(ip) && m != mac && now.Before(l.expires) {
-				taken = true
-				break
-			}
-		}
-		n++
-		if n > end {
-			n = start
-		}
-		if !taken && probe != nil && probe(ip) {
-			// Phantom-lease the live address under a synthetic key so the
-			// probe result outlives this call.
-			p.leases["probe:"+ip.String()] = dhcpLease{ip: ip, expires: now.Add(dhcpLeaseTTL)}
-			continue
-		}
-		if !taken {
-			p.leases[mac] = dhcpLease{ip: ip, expires: now.Add(dhcpLeaseTTL)}
-			p.next = n
-			return ip, true
-		}
-		if n == start {
-			return nil, false
-		}
-	}
+	ip := p.allocateLocked(mac, probe)
+	return ip, ip != nil
 }
 
 // Mask and Router are the lease parameters handed to clients.

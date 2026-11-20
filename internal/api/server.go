@@ -213,6 +213,14 @@ func New(d Deps, apiToken string) *gin.Engine {
 	router.POST("/netboot/observe", func(c *gin.Context) {
 		srv.ObservePXEClient(c)
 	})
+	// The edge-pool lease gate's data source: armed + enroll-eligible MACs
+	// the edge's DHCP gates its leases on — decision on the engine,
+	// execution on the edge. Public like the other /netboot machine-face
+	// routes; the etag makes the edge's poll a no-op when nothing armed
+	// changed.
+	router.GET("/netboot/pool-manifest.json", func(c *gin.Context) {
+		srv.servePoolManifest(c)
+	})
 	// The same single-param limitation hits the answer scripts on the netboot
 	// carrier: hooks are named run/mammoth/*.sh (multi-segment) and the
 	// generated /render/{token}/{file} route can't match them — the installer's

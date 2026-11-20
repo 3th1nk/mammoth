@@ -81,6 +81,7 @@ replaces a hand-tuned dnsmasq; the kit is exported by the engine
 	pf.IntVar(&o.ProxyPort, "proxy-port", envInt("MAMMOTH_EDGE_PROXY_PORT", 4011), "PXE boot-server discovery port")
 	pf.IntVar(&o.TFTPPort, "tftp-port", envInt("MAMMOTH_EDGE_TFTP_PORT", 69), "TFTP port")
 	pf.IntVar(&o.SyslogPort, "syslog-port", envInt("MAMMOTH_EDGE_SYSLOG_PORT", 514), "installer-log sink port (bind failure degrades to a warning)")
+	pf.StringVar(&o.DHCPPool, "dhcp-pool", envOr("MAMMOTH_EDGE_DHCP_POOL", ""), `lease pool for segments with NO site DHCP (range "10.0.0.10-50" or comma list; empty = pure proxyDHCP, the site DHCP owns addresses). The engine's lease gate rides along: armed/enroll MACs are synced from /netboot/pool-manifest.json and only they get a lease — unknown MACs stay silent, the pool never serves ordinary hosts. Fresh allocations are liveness-probed (ping + ARP) so a range overlapping static devices is skipped`)
 	pf.StringVar(&o.WoLListen, "wol-listen", envOr("MAMMOTH_EDGE_WOL_LISTEN", ""), `HTTP listen address for the Wake-on-LAN relay (e.g. ":9100", empty = off) — the engine calls POST /wol {"mac": ...} for cross-segment headless boots: WoL is an L2 broadcast and the engine is not on the machine's segment, this proxy is`)
 	pf.StringVar(&o.WoLToken, "wol-token", envOr("MAMMOTH_EDGE_WOL_TOKEN", ""), "bearer token required on /wol requests (empty = unauthenticated; the provisioning L2 is the trust boundary, same as the kit)")
 	pf.StringVar(&o.WoLBroadcast, "wol-broadcast", envOr("MAMMOTH_EDGE_WOL_BROADCAST", "255.255.255.255"), "broadcast address the relay sends magic packets to (the provisioning segment's directed broadcast is the precise form)")
@@ -97,6 +98,7 @@ type edgeOptions struct {
 	ProxyPort    int
 	TFTPPort     int
 	SyslogPort   int
+	DHCPPool     string
 	SyncInterval time.Duration
 	KitToken     string
 	Segment      string
@@ -118,6 +120,28 @@ func runEdge(o edgeOptions) error {
 	if err := syncKit(o); err != nil {
 		return fmt.Errorf("edge: initial kit sync: %w", err)
 	}
+	// edge-pool (segments with no site DHCP): the lease gate rides the
+	// engine's manifest — armed/enroll MACs synced on the same ticker as
+	// the kit. The gate starts empty and initial sync failure is fatal: a
+	// pool without its manifest is a dead pool, and dead must be loud (the
+	// kit-sync precedent). Fresh allocations are liveness-probed so a pool
+	// range overlapping static devices never hands out a conflict.
+	var gate *netboot.ManifestGate
+	if o.DHCPPool != "" {
+		ns := net.ParseIP(strings.TrimSpace(o.NextServer))
+		pool, perr := netboot.ParseDHCPPool(o.DHCPPool, ns)
+		if perr != nil {
+			return fmt.Errorf("edge: --dhcp-pool: %w", perr)
+		}
+		pool.SetProbe(netboot.ProbeAlive)
+		gate = netboot.NewManifestGate()
+		if err := syncManifest(o, gate); err != nil {
+			return fmt.Errorf("edge: initial pool manifest sync: %w", err)
+		}
+		opts.DHCP = pool
+		opts.Resolver = gate
+		opts.EnrollEligible = gate.EnrollEligible
+	}
 	if o.SyncInterval > 0 {
 		go func() {
 			t := time.NewTicker(o.SyncInterval)
@@ -125,6 +149,11 @@ func runEdge(o edgeOptions) error {
 			for range t.C {
 				if err := syncKit(o); err != nil {
 					fmt.Fprintf(os.Stderr, "edge: kit re-sync: %v\n", err)
+				}
+				if gate != nil {
+					if err := syncManifest(o, gate); err != nil {
+						fmt.Fprintf(os.Stderr, "edge: pool manifest re-sync: %v\n", err)
+					}
 				}
 			}
 		}()
@@ -135,10 +164,12 @@ func runEdge(o edgeOptions) error {
 	}
 	// Startup DHCP probe — the edge IS the segment's pair of eyes (the
 	// sightingFeed comment): a silent site DHCP strands machines the engine
-	// only sees as DISCOVER storms. Fixed proxy shape — the edge never owns
-	// a pool. Local stderr like the kit re-sync / WoL degrade paths: the
-	// edge has no DB and no events, and a segment-level report endpoint is
-	// a maybe-later, not this probe's business.
+	// only sees as DISCOVER storms. Mode follows the pool: proxy shape
+	// expects a site DHCP to answer, pool shape (edge-pool) expects to BE
+	// the segment's only address service. Local stderr like the kit
+	// re-sync / WoL degrade paths: the edge has no DB and no events, and a
+	// segment-level report endpoint is a maybe-later, not this probe's
+	// business.
 	go func() {
 		bcast := o.WoLBroadcast
 		if bcast == "" {
@@ -153,7 +184,11 @@ func runEdge(o edgeOptions) error {
 			fmt.Fprintf(os.Stderr, "edge: dhcp probe never reached the wire: %v\n", perr)
 			return
 		}
-		v := netboot.Classify(netboot.ProbeModeProxy, offers)
+		mode := netboot.ProbeModeProxy
+		if gate != nil {
+			mode = netboot.ProbeModePool
+		}
+		v := netboot.Classify(mode, offers)
 		fmt.Fprintf(os.Stderr, "edge: dhcp probe: %s\n", v.Detail)
 	}()
 	if o.WoLListen != "" {
@@ -339,6 +374,49 @@ func syncKit(o edgeOptions) error {
 	_ = os.RemoveAll(previous)
 	if etag := resp.Header.Get("ETag"); etag != "" {
 		_ = os.WriteFile(etagFile, []byte(strings.TrimSpace(etag)), 0o644)
+	}
+	return nil
+}
+
+// syncManifest refreshes the lease-gate snapshot from the engine's
+// pool-manifest endpoint — the same ETag shape as the kit sync, the etag
+// file sitting beside the tftp root. 304 → nothing changed; 200 → the body
+// replaces the gate snapshot (a broken download keeps the previous one).
+func syncManifest(o edgeOptions, gate *netboot.ManifestGate) error {
+	url := strings.TrimSuffix(o.BaseURL, "/") + "/netboot/pool-manifest.json"
+	etagFile := o.TFTPRoot + ".manifest.etag"
+	known, _ := os.ReadFile(etagFile)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	if o.KitToken != "" {
+		req.Header.Set("Authorization", "Bearer "+o.KitToken)
+	}
+	if len(known) > 0 {
+		req.Header.Set("If-None-Match", strings.TrimSpace(string(known)))
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("manifest fetch: %w", err)
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusNotModified:
+		return nil // unchanged since the last sync — nothing to do
+	case http.StatusOK:
+	default:
+		return fmt.Errorf("manifest fetch: HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("manifest read: %w", err)
+	}
+	if err := gate.Load(body); err != nil {
+		return fmt.Errorf("manifest parse: %w", err)
+	}
+	if etag := resp.Header.Get("ETag"); etag != "" {
+		_ = os.WriteFile(etagFile, []byte(etag), 0o644)
 	}
 	return nil
 }

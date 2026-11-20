@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -446,6 +447,97 @@ func kitFingerprint(root string) (string, error) {
 		return "", werr
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// poolManifest is the edge-pool lease gate's data source: armed entries
+// (netboot_entries) plus enroll-eligible MACs (pending sightings no
+// registered machine owns), in the exact shapes the edge's ManifestGate
+// gates on — the decision stays on the engine, the execution rides the
+// edge (docs/09-roadmap.md edge-pool). ETag = sha256(body); edges poll on
+// their kit-sync ticker, so an unchanged manifest costs one hash.
+type poolManifest struct {
+	Armed  []poolManifestEntry `json:"armed"`
+	Enroll []poolManifestMAC   `json:"enroll"`
+}
+
+type poolManifestEntry struct {
+	MAC        string `json:"mac"`
+	Kind       string `json:"kind"`
+	TaskID     string `json:"task_id,omitempty"`
+	Kernel     string `json:"kernel,omitempty"`
+	Initrd     string `json:"initrd,omitempty"`
+	KernelArgs string `json:"kernel_args,omitempty"`
+	Token      string `json:"token,omitempty"`
+}
+
+type poolManifestMAC struct {
+	MAC string `json:"mac"`
+}
+
+// servePoolManifest streams the lease-gate manifest. Stale armed rows
+// (owning task gone — the script endpoint's self-heal predicate) are
+// excluded read-only: the purge there stays the single writer. Enroll MACs
+// pass the engine's own enrollEligible predicate (unregistered + sighted);
+// a machine-repo failure excludes conservatively, matching the engine's
+// err→false semantics.
+func (s *Server) servePoolManifest(c *gin.Context) {
+	ctx := c.Request.Context()
+	manifest := poolManifest{}
+	if s.NetbootRepo != nil {
+		entries, err := s.NetbootRepo.List(ctx)
+		if err != nil {
+			writeError(c, verrStatus(http.StatusInternalServerError, "NETBOOT_LIST_FAILED",
+				"pool manifest: armed entries: %s", err.Error()))
+			return
+		}
+		for _, e := range entries {
+			if e.TaskID != "" {
+				if _, terr := s.Jobs.GetTask(ctx, e.TaskID); errors.Is(terr, store.ErrNotFound) {
+					continue
+				}
+			}
+			manifest.Armed = append(manifest.Armed, poolManifestEntry{
+				MAC: netboot.NormalizeMAC(e.MAC), Kind: e.Kind, TaskID: e.TaskID,
+				Kernel: e.Kernel, Initrd: e.Initrd, KernelArgs: e.KernelArgs, Token: e.Token,
+			})
+		}
+	}
+	if s.Pending != nil {
+		pendings, err := s.Pending.List(ctx)
+		if err != nil {
+			writeError(c, verrStatus(http.StatusInternalServerError, "NETBOOT_LIST_FAILED",
+				"pool manifest: pending sightings: %s", err.Error()))
+			return
+		}
+		for _, p := range pendings {
+			mac := netboot.NormalizeMAC(p.MAC)
+			owned := false
+			if s.Machines != nil {
+				var herr error
+				owned, herr = s.Machines.HasMAC(ctx, mac)
+				if herr != nil {
+					continue // the engine's gate treats repo errors as false
+				}
+			}
+			if owned {
+				continue
+			}
+			manifest.Enroll = append(manifest.Enroll, poolManifestMAC{MAC: mac})
+		}
+	}
+	body, err := json.Marshal(manifest)
+	if err != nil {
+		writeError(c, verrStatus(http.StatusInternalServerError, "NETBOOT_LIST_FAILED",
+			"pool manifest: marshal: %s", err.Error()))
+		return
+	}
+	etag := hex.EncodeToString(func() []byte { h := sha256.Sum256(body); return h[:] }())
+	if c.GetHeader("If-None-Match") == etag {
+		c.Status(http.StatusNotModified)
+		return
+	}
+	c.Header("ETag", etag)
+	c.Data(http.StatusOK, "application/json", body)
 }
 
 // ObservePXEClient records a PXE sighting reported by a provisioning-VLAN

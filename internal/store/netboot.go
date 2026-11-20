@@ -121,6 +121,26 @@ func (r *NetbootRepo) ByMAC(ctx context.Context, mac string) (*NetbootEntry, err
 	return e, err
 }
 
+// List returns every armed entry — the edge-pool manifest's data source.
+// Row count equals the currently armed NIC count (a handful during a real
+// install window), so an unpaginated read is fine.
+func (r *NetbootRepo) List(ctx context.Context) ([]*NetbootEntry, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+netbootCols+` FROM netboot_entries ORDER BY mac`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*NetbootEntry
+	for rows.Next() {
+		e, err := scanNetboot(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // ByToken resolves a boot tree request (the token names the directory).
 func (r *NetbootRepo) ByToken(ctx context.Context, token string) (*NetbootEntry, error) {
 	e, err := scanNetboot(r.db.QueryRowContext(ctx,

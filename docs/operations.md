@@ -365,7 +365,21 @@ MAMMOTH_EDGE_BASE_URL=http://<engine>:8080 mammoth edge --tftp-root /var/lib/mam
 `MediaDir/netboot/external-tftp`),各段 edge 周期同步——引擎段机器由引擎的
 proxyDHCP/池直服,其他段由各自 edge 接客;地址服务按段各管(引擎 pool 只
 服务引擎段,池预留的静态 `ip=` 只写给本段机器,跨段机器回落 `ip=dhcp` 由
-该段站点 DHCP 应答)。远段无站点 DHCP 的缺口见 roadmap「edge-pool」候选。
+该段站点 DHCP 应答)。
+
+**edge-pool(本段无站点 DHCP 时的地址服务,2026-11-20)**:`--dhcp-pool`
+(语法同引擎 `MAMMOTH_PXE_DHCP_POOL`:区间或逗号列表)把 edge 从纯
+proxyDHCP 升级为本段唯一地址服务——租约+引导一体 OFFER(引擎 pool+enroll
+同款形态)。门控决策留在引擎:armed/enroll MAC 清单从引擎
+`/netboot/pool-manifest.json` 周期同步(与 kit 同一 ticker、同 ETag 形态;
+初始同步失败拒绝启动,死池必须大声),只有清单上的 MAC(装机条目已装载
+的 + enroll 台账里的未注册 sighting)拿到租约,陌生 MAC 静默——池不为
+办公网的打印机/笔记本服务。新分配地址先做存活探测(ping + ARP 表,与
+引擎 arm 预留同源 `ProbeAlive`):池范围撞上段内静态设备时自动跳过
+(phantom 租约,TTL 内不再发)。与引擎池的差异:静态 `ip=` 预留只在引擎
+侧做(预留与 DHCP 应答同池同源),edge 场景 ubuntu 装机期走 boot-time
+DHCP 或 spec 声明静态网。启动探测随池形态分型:有池时按 POOL 判定
+(收到应答 = 段内有站点 DHCP = 双地址服务,告警)。
 
 外置 dnsmasq 形态仍受支持(示例配置在 kit 的 dnsmasq.conf.example),
 edge 是它的免配置替代。qemu 同型验证(网桥 + dnsmasq + UEFI guest 经此链完成 alpine agent 全装)

@@ -353,3 +353,65 @@ func pool2(t *testing.T) *DHCPPool {
 	}
 	return p
 }
+
+// TestDHCPPoolProbeGate pins the liveness gate: fresh allocations skip
+// addresses a static device answers on (phantom-leased so the probe result
+// outlives the call), sticky renewals never re-probe, and a nil probe keeps
+// the plain range walk.
+func TestDHCPPoolProbeGate(t *testing.T) {
+	probeCalls := map[string]int{}
+	probe := func(ip net.IP) bool {
+		probeCalls[ip.String()]++
+		return ip.String() == "192.168.77.201" // the printer nobody DHCPs
+	}
+	pool, err := NewDHCPPool(net.IPv4(192, 168, 77, 200), net.IPv4(192, 168, 77, 203), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.SetProbe(probe)
+
+	// Fresh allocation: the live .201 is phantom-skipped, the MAC lands on
+	// the next free address.
+	a := pool.lease("52:54:00:00:00:01")
+	if a == nil || !a.Equal(net.IPv4(192, 168, 77, 200)) {
+		t.Fatalf("first lease = %v, want range start (.201 not probed yet)", a)
+	}
+	// The next fresh MAC walks onto the live .201 and must skip it.
+	b := pool.lease("52:54:00:00:00:02")
+	if b == nil || !b.Equal(net.IPv4(192, 168, 77, 202)) {
+		t.Fatalf("lease = %v, want .202 (the live .201 phantom-skipped)", b)
+	}
+	if probeCalls["192.168.77.201"] == 0 {
+		t.Error("the live address was never probed")
+	}
+
+	// Sticky renewal: no re-probe — the arm-time reservation already vetted
+	// the address, and re-pinging a machine mid-reboot would misfire.
+	calls := probeCalls["192.168.77.202"]
+	if again := pool.lease("52:54:00:00:00:02"); again == nil || !again.Equal(b) {
+		t.Fatalf("sticky renewal lost: %v", again)
+	}
+	if probeCalls["192.168.77.202"] != calls {
+		t.Error("sticky renewal must not re-probe")
+	}
+
+	// The phantom lease holds .201 out of reach for other MACs.
+	if ip := pool.lease("52:54:00:00:00:03"); ip == nil || !ip.Equal(net.IPv4(192, 168, 77, 203)) {
+		t.Fatalf("lease = %v, want .203 (phantom .201 still held)", ip)
+	}
+}
+
+// TestDHCPPoolNilProbeKeepsPlainWalk pins the nil-probe compatibility: no
+// gate set → the plain range walk, no probing.
+func TestDHCPPoolNilProbeKeepsPlainWalk(t *testing.T) {
+	pool, err := NewDHCPPool(net.IPv4(10, 0, 0, 10), net.IPv4(10, 0, 0, 12), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ip := pool.lease("52:54:00:00:00:01"); ip == nil || !ip.Equal(net.IPv4(10, 0, 0, 10)) {
+		t.Fatalf("lease = %v, want range start", ip)
+	}
+	if ip := pool.lease("52:54:00:00:00:02"); ip == nil || !ip.Equal(net.IPv4(10, 0, 0, 11)) {
+		t.Fatalf("lease = %v, want sequential walk", ip)
+	}
+}

@@ -55,7 +55,7 @@ MAMMOTH_DATABASE_URL='postgres://mammoth:mammoth@localhost:55432/windows_e2e?ssl
 MAMMOTH_HTTP_ADDR=":$HTTP_PORT" MAMMOTH_API_TOKEN=devtoken MAMMOTH_MASTER_KEY="$KEY" \
 MAMMOTH_MEDIA_DIR="$WORK/media" \
 MAMMOTH_EXTERNAL_URL="http://$BRIDGE_IP:$HTTP_PORT" \
-MAMMOTH_PXE_ENABLED=true MAMMOTH_PXE_MODE=external \
+MAMMOTH_PXE_MODE=external \
 MAMMOTH_WINDOWS_INSTALL_SMB_UNC='\\192.168.77.1\mammoth-media' \
 ${AGENT:+MAMMOTH_WINDOWS_APPLY_ALPINE_ISO="$ALPINE_ISO"} \
 "$WORK/mammoth" serve --mode=all >"$WORK/logs/server.log" 2>&1 &

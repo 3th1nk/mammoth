@@ -81,7 +81,7 @@ services:
       # container ON the provisioning L2 (host or macvlan networking — the
       # bridge port mapping below cannot carry DHCP broadcasts) and
       # CAP_NET_BIND_SERVICE for the privileged UDP ports. Off by default.
-      MAMMOTH_PXE_ENABLED: ${MAMMOTH_PXE_ENABLED:-false}
+      MAMMOTH_PXE_MODE: ${MAMMOTH_PXE_MODE:-off}
       MAMMOTH_PXE_NEXT_SERVER: ${MAMMOTH_PXE_NEXT_SERVER:-}
       # Pool mode (docs/operations.md §4.5): mammoth leases addresses ONLY
       # to machines with an armed install task — coexists with a site DHCP

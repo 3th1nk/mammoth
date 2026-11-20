@@ -134,7 +134,7 @@ iPXE 脚本),默认关闭。启用清单:
    casper/subiquity 与 d-i 为 syslog=;vMedia 与 PXE 都带,2026-09-24 起)。
    归因:PXE 池租约反查 → spec 声明静态地址注册表(boot 阶段注册、TTL
    =任务预算+1h、释放即 Forget)→ 都未命中只记源 IP(site-DHCP 动态地址
-   属此类)。`MAMMOTH_PXE_ENABLED=false` 的纯 vMedia 部署以 sink-only 形态
+   属此类)。`MAMMOTH_PXE_MODE=off` 的纯 vMedia 部署以 sink-only 形态
    独立起 514(不绑 DHCP/TFTP/HTTP);514 被占(如站点 rsyslogd)仅告警
    降级,不阻塞——日志是诊断,不是命脉。
 3. **地址来源(二选一)**:
@@ -273,14 +273,14 @@ webhook/SSE 自动跟进);探测失败(如 :68 绑定被占)只降级 warn,永�
 
 ### 4.5.1 外部 DHCP+TFTP 逃生门(MAMMOTH_PXE_MODE=external)
 
-mammoth 不可能总当 PXE 服务:容器化部署拿不到特权 UDP、或站点网络归运维
-团队管。external 模式把 mammoth 缩到纯 HTTP 面,UDP 侧(真 DHCP + TFTP)
-交給站点 dnsmasq——**mammoth 零 UDP 绑定**,引导项注册、per-MAC 决策、
- enrollment、装机链路全部不变。
+mammoth 不可能总当 PXE 服务:站点网络归运维团队管、或引擎不驻装机段时
+不想给它特权 UDP 面(引擎绑 67/69 需 host/macvlan 网络 + CAP_NET_BIND_SERVICE,
+见 §4.5 的端口与权限)。external 模式把 mammoth 缩到纯 HTTP 面,UDP 侧
+(真 DHCP + TFTP)交給站点 dnsmasq 或 edge——**mammoth 零 UDP 绑定**,
+引导项注册、per-MAC 决策、enrollment、装机链路全部不变。
 
 ```sh
-MAMMOTH_PXE_ENABLED=true
-MAMMOTH_PXE_MODE=external        # builtin(默认)| external
+MAMMOTH_PXE_MODE=external        # builtin | external | off(默认 off)
 # MAMMOTH_PXE_NEXT_SERVER 与 MAMMOTH_PXE_DHCP_POOL 在此模式下不需要(也不允许)
 ```
 
@@ -359,6 +359,13 @@ MAMMOTH_EDGE_BASE_URL=http://<engine>:8080 mammoth edge --tftp-root /var/lib/mam
 - 逐项说明:防火墙放行 67/69/4011(UDP)与 8080(TCP,引擎机器面——kit 同步与 sightings 回传);UEFI 机型
   的 Secure Boot 边界见下方共存节(默认 shim 链签名有效,proxy 拓扑受
   grub2 上游缺陷约束);装机段地址避开占址设备(先 ARP/ping 探测)。
+
+**混合拓扑(引擎段 builtin 直服 + 其他段 edge,2026-11-20 起)**:kit 由
+引擎统一导出(`MAMMOTH_PXE_MODE=builtin|external` 都导出
+`MediaDir/netboot/external-tftp`),各段 edge 周期同步——引擎段机器由引擎的
+proxyDHCP/池直服,其他段由各自 edge 接客;地址服务按段各管(引擎 pool 只
+服务引擎段,池预留的静态 `ip=` 只写给本段机器,跨段机器回落 `ip=dhcp` 由
+该段站点 DHCP 应答)。远段无站点 DHCP 的缺口见 roadmap「edge-pool」候选。
 
 外置 dnsmasq 形态仍受支持(示例配置在 kit 的 dnsmasq.conf.example),
 edge 是它的免配置替代。qemu 同型验证(网桥 + dnsmasq + UEFI guest 经此链完成 alpine agent 全装)

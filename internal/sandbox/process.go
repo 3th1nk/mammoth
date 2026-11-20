@@ -195,7 +195,7 @@ func startServer(exe string, token string, dir string, logPath string) (int, err
 		"MAMMOTH_MASTER_KEY":   mustSecret(),
 		"MAMMOTH_MEDIA_DIR":    filepath.Join(dir, "media"),
 		"MAMMOTH_EXTERNAL_URL": externalURL(),
-		"MAMMOTH_PXE_ENABLED":  "false",
+		"MAMMOTH_PXE_MODE":     "off",
 		// the virtual_media carrier needs a BMC-reachable media base URI —
 		// with it empty the boot stage fails on "boot ISO URI is empty" (the
 		// same variable scripts/agent-dev/run.sh sets). The fake BMC never

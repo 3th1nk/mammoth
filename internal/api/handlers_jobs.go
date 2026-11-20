@@ -1309,7 +1309,7 @@ func (s *Server) validateBootStrategy(specRaw json.RawMessage) error {
 	}
 	if !s.NetbootEnabled {
 		return verr("SCHEMA_UNSUPPORTED_BOOT_STRATEGY",
-			"boot.strategy=pxe needs the netboot service enabled on this deployment (MAMMOTH_PXE_ENABLED)")
+			"boot.strategy=pxe needs the netboot service enabled on this deployment (MAMMOTH_PXE_MODE=builtin|external)")
 	}
 	driver, err := s.Render.For(spec.Image.Distro)
 	if err != nil {

@@ -32,13 +32,13 @@
 | `MAMMOTH_MEDIA_WORKDIR` | 空 | A/B/C | 构建 scratch;空 = 紧邻介质目录的 `work/` |
 | `MAMMOTH_MEDIA_BASE_URI` | 空 | A/B/C | 介质 NFS 导出地址,单旋钮双消费者(BMC vMedia 与 ubuntu casper nfsroot 必须同一服务端);空 = 不声明 NFS 源,vMedia 不可用;C 要求 BMC↔引擎可路由 |
 
-## 3. PXE · 段内形态(builtin 池模式;与 §4 互斥)
+## 3. PXE · 部署形态(MAMMOTH_PXE_MODE 单开关,三值)
+
 
 | 变量 | 默认值 | 形态 | 说明 |
 |---|---|---|---|
-| `MAMMOTH_PXE_ENABLED` | `false` | A/B | proxyDHCP + TFTP + (可选池)总开关;引擎必须驻留机器 L2(host/macvlan 网络);`BOOT_STRATEGY=pxe` 依赖它 |
-| `MAMMOTH_PXE_MODE` | `builtin` | A/B/C | `builtin`(引擎持有 UDP)\\|`external`(零 UDP,引导归 edge);**external + DHCP_POOL 拒启**(红线 1) |
-| `MAMMOTH_PXE_NEXT_SERVER` | 空 | A/B | 发给客户端的 next-server(须可达本机 HTTP);builtin 必需——EXTERNAL_URL 为 IP 字面量时自动派生;**external 不允许**(红线 1 同族) |
+| `MAMMOTH_PXE_MODE` | `off` | A/B/C | **PXE 面单开关**:`builtin`(引擎托管 UDP——proxyDHCP+TFTP,设 `DHCP_POOL` 则池模式发租约;引擎须驻留机器 L2,host/macvlan 网络)\|`external`(引擎零 UDP,kit 照常导出,引导归站点 dnsmasq 或 edge,bridge 网络即可)\|`off`(纯 vMedia,仅 syslog sink);`BOOT_STRATEGY=pxe` 要求 builtin\|external;**external/off + DHCP_POOL 拒启**(红线 1) |
+| `MAMMOTH_PXE_NEXT_SERVER` | 空 | A/B | 发给客户端的 next-server(须可达本机 HTTP);builtin 必需——EXTERNAL_URL 为 IP 字面量时自动派生;external 不使用(引导方在 edge/站点配置) |
 | `MAMMOTH_PXE_DHCP_POOL` | 空 | A/B | 引导期地址池(逗号分隔;只对引导条目已装载/已 enroll 的 MAC 发租约);空 = 纯 proxyDHCP 不发租约;与站点 DHCP 并存 = pool+enroll 一体 OFFER(有竞速) |
 | `MAMMOTH_PXE_DHCP_ROUTER` | 空 | A/B | 池租约网关;空 = NEXT_SERVER |
 | `MAMMOTH_PXE_BROADCAST_ADDR` | 空 | A/B | PXE 应答广播地址;空 = 255.255.255.255;定向广播替换用于 macOS/vmnet 桥接(qemu 验证),Linux 无需 |
@@ -48,12 +48,15 @@
 | `MAMMOTH_PXE_SYSLOG_PORT` | `514` | A/B/C | 安装器/探针日志 sink(UDP);0 = 按 514;绑不上仅降级警告;装机段防火墙须放行到引擎 |
 | `MAMMOTH_PXE_UEFI_NBP` | `shim` | A/B | UEFI NBP 链:`shim`(签名,SB 有效)\\|`ipxe`(裸 iPXE,SB 须关——proxy 拓扑 UEFI 机型的 grub2 缺陷绕行);**external 下配 ipxe 拒启**(红线 2,该决策归 edge/站点 DHCP) |
 
-## 4. PXE · 跨网段形态(external;与 §3 互斥)
+## 4. PXE · 跨网段形态(edge 接客;与 §3 组合)
+
+混合拓扑成立:引擎段 `builtin` 直服 + 其他装机段各放一台 edge——kit 由引擎统一
+导出(`MediaDir/netboot/external-tftp`),edge 周期同步;地址服务按段各管(引擎
+pool 只服务引擎段,edge 段归该段站点 DHCP;引擎池预留只写给本段机器)。远段无
+站点 DHCP 的缺口 = edge-pool 候选(roadmap)。
 
 | 变量 | 默认值 | 形态 | 说明 |
 |---|---|---|---|
-| `MAMMOTH_PXE_ENABLED` | `false` | C | external 模式的 kit 导出开关(置 true;edge 同步与蹦床链都依赖导出) |
-| `MAMMOTH_PXE_MODE` | `builtin` | C | 置 `external`:引擎零 DHCP/TFTP 绑定,bridge 网络即可 |
 | `MAMMOTH_PXE_WOL_PROXY_URL` | 空 | C | 跨段 WoL:引擎 boot 阶段 POST `{URL}/wol` 由 edge 代发 magic packet;空 = 不代发(人工上电自愈) |
 | `MAMMOTH_PXE_WOL_PROXY_TOKEN` | 空 | C | 上面的 Bearer token,**与 edge `MAMMOTH_EDGE_WOL_TOKEN` 同值**(入脱敏表) |
 

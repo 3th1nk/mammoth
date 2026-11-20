@@ -353,14 +353,14 @@ func (s *Server) fetchPoolStoreFile(c *gin.Context, sha, rest string) error {
 // the engine reaches every VLAN agent without a manual copy. Public like the
 // other /netboot machine-face routes (the kit holds public NBP binaries and
 // a trampoline whose engine URL is the deployment's own, docs/operations.md
-// §pxe-external). 404 when the engine never exported a kit (PXEMode !=
-// external and no directory on disk).
+// §pxe-external). 404 when the engine never exported a kit (PXEMode off and
+// no directory on disk).
 func (s *Server) serveExternalKit(c *gin.Context) {
 	root := filepath.Join(s.MediaDir, "netboot", "external-tftp")
 	st, err := os.Stat(root)
 	if err != nil || !st.IsDir() {
 		writeError(c, verrStatus(http.StatusNotFound, "RENDER_UNKNOWN_FILE",
-			"no external kit exported — set MAMMOTH_PXE_MODE=external so the engine materializes MediaDir/netboot/external-tftp"))
+			"no PXE kit exported — the engine materializes MediaDir/netboot/external-tftp when MAMMOTH_PXE_MODE is builtin|external"))
 		return
 	}
 	// The fingerprint (names+sizes+mtimes of the tree) doubles as the ETag:

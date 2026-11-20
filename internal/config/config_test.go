@@ -91,3 +91,51 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+func TestPXEModeValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		env     map[string]string
+		wantErr []string // empty = must succeed
+	}{
+		{"default is off", nil, nil},
+		{"explicit off accepts", map[string]string{"MAMMOTH_PXE_MODE": "off"}, nil},
+		{"off rejects pool", map[string]string{"MAMMOTH_PXE_MODE": "off", "MAMMOTH_PXE_DHCP_POOL": "10.0.0.10-10.0.0.20"}, []string{"off owns no PXE face"}},
+		{"off rejects next-server", map[string]string{"MAMMOTH_PXE_MODE": "off", "MAMMOTH_PXE_NEXT_SERVER": "10.0.0.1"}, []string{"off owns no PXE face"}},
+		{"invalid value", map[string]string{"MAMMOTH_PXE_MODE": "turbo"}, []string{"want builtin|external|off"}},
+		{"external rejects pool", map[string]string{"MAMMOTH_PXE_MODE": "external", "MAMMOTH_PXE_DHCP_POOL": "10.0.0.10-10.0.0.20"}, []string{"owns no DHCP"}},
+		{"builtin requires next-server", map[string]string{"MAMMOTH_PXE_MODE": "builtin", "MAMMOTH_EXTERNAL_URL": "http://mammoth.example:8080"}, []string{"MAMMOTH_PXE_NEXT_SERVER"}},
+		{"builtin derives next-server from an IP-literal ExternalURL", map[string]string{"MAMMOTH_PXE_MODE": "builtin", "MAMMOTH_EXTERNAL_URL": "http://192.168.1.7:8080"}, nil},
+		{"pxe strategy requires a live mode", map[string]string{"MAMMOTH_BOOT_STRATEGY": "pxe"}, []string{"MAMMOTH_PXE_MODE=builtin|external"}},
+		{"pxe strategy ok with external", map[string]string{"MAMMOTH_BOOT_STRATEGY": "pxe", "MAMMOTH_PXE_MODE": "external"}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("MAMMOTH_DATABASE_URL", "postgres://x/db")
+			for k, v := range c.env {
+				t.Setenv(k, v)
+			}
+			cfg, err := FromEnv()
+			if len(c.wantErr) == 0 {
+				if err != nil {
+					t.Fatalf("want success, got %v", err)
+				}
+				if c.env == nil && cfg.PXEMode != "off" {
+					t.Fatalf("default PXEMode = %q, want off", cfg.PXEMode)
+				}
+				if c.env["MAMMOTH_PXE_MODE"] == "builtin" && cfg.PXENextServer != "192.168.1.7" {
+					t.Fatalf("derived next-server = %q, want 192.168.1.7", cfg.PXENextServer)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("want error, got nil")
+			}
+			for _, want := range c.wantErr {
+				if !contains(err.Error(), want) {
+					t.Errorf("error should mention %q: %v", want, err)
+				}
+			}
+		})
+	}
+}

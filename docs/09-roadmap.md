@@ -85,7 +85,10 @@
 - **PXE 工程**:外部 DHCP+TFTP 逃生门(`MAMMOTH_PXE_MODE=external`)、
   arm64 引导链(qemu SB 验证,投递层待 ARM 真机)、proxy 模式 UEFI NBP
   链选择(`shim|ipxe`)、agent PXE 载体 modloop 修复(4b75b7b;miniproot
-  载体换代真机收口)
+  载体换代真机收口)、**配置面收敛**(2026-11-20:`MAMMOTH_PXE_ENABLED`
+  并入 `MAMMOTH_PXE_MODE` 三值 builtin|external|off——4 态含死态收敛为
+  3 态全有效;kit 导出解耦出 external,builtin+edge 混合拓扑解锁;池预留
+  段守卫——静态 `ip=` 只写本段机器,跨段机器回落段内站点 DHCP)
 
 ### dd 镜像封装规范(构建方契约,保留)
 
@@ -140,7 +143,14 @@ apk add xz);无槽镜像 + seed 意图 = 任务失败(错误点名契约)。
   + burn-in 压测 + 驱动/CUDA 经 package_source+scripts 模板化);带内硬
   RAID(agent storcli payload);库存导出 NetBox DCIM(webhook 已有加
   适配器);自定义 iPXE 引导脚本逃生门;重置密码动作(rescue 同型
-  one-shot payload)。
+  one-shot payload);**edge-pool**(2026-11-20 立项)——远段无站点
+  DHCP 的地址服务缺口:引擎新增 armed/enroll MAC 清单导出端点,edge 周期
+  同步(复用 kit 同步 ETag 机制),edge 加 `--dhcp-pool` 后按清单门控发
+  一体 OFFER(租约+引导)——决策留在引擎、执行搬到 edge,与 proxyDHCP
+  per-MAC script 同构,池不为陌生客户端服务的纪律不破;注意:引擎静态
+  `ip=` 预留依赖预留与 DHCP 应答同池同源,edge 场景不做该优化,ubuntu
+  装机期走 boot-time DHCP 或 spec 声明静态网;触发 = 真实出现无站点
+  DHCP 的跨网段段。
 - **场景观察,不立项**:多站点管理面 / 白盒交换机 ZTP / 无盘常驻节点 /
   TPM 远程度量认证 / SEL 带外健康 watch / 周期带外巡检(异常→事件→
   webhook)——等真实需求触发(related-work §8.3)。

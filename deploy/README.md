@@ -82,7 +82,7 @@ visibility timeout + reaper 兜底)保证多 runner 消费不重不悬;api 无�
    2026-10-27 注)。
 3. **api 前面挂 LB**(任意四层/七层轮询即可,机器面都是一次性拉取无会话),
    所有节点 `MAMMOTH_EXTERNAL_URL` 指向 LB VIP。
-4. **PXE 每 L2 一个应答者**:目标 L2 上的节点开 `MAMMOTH_PXE_ENABLED`
+4. **PXE 每 L2 一个应答者**:目标 L2 上的节点设 `MAMMOTH_PXE_MODE=builtin`
    (api 面,需 host/macvlan 网络,§4.5);其余 VLAN 用 `compose.edge.yml`。
 5. `MAMMOTH_BMC_TIMEOUT` 等执行面参数在 runner 上调整;控制面 api 不发起
    BMC 调用。

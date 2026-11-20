@@ -63,7 +63,7 @@ func (e *Executor) bootStrategyFor(spec *installSpecView) (bootStrategy, error) 
 	}
 	if name == strategyPXE && e.Netboot == nil {
 		return nil, classifiedErr("NETBOOT_UNAVAILABLE", false,
-			"boot.strategy=pxe needs the netboot service (MAMMOTH_PXE_ENABLED) on this runner")
+			"boot.strategy=pxe needs the netboot service (MAMMOTH_PXE_MODE=builtin|external) on this runner")
 	}
 	if name == strategyPXE {
 		return &pxeStrategy{e: e}, nil

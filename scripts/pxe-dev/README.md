@@ -25,7 +25,7 @@ qemu guest (tap-pxe → br-pxe)
 sudo scripts/pxe-dev/net.sh up
 
 # 2. mammoth(root 或 setcap cap_net_bind_service=+ep;67/69/4011 是特权端口)
-sudo env MAMMOTH_PXE_ENABLED=true \
+sudo env MAMMOTH_PXE_MODE=builtin \
     MAMMOTH_PXE_NEXT_SERVER=192.168.77.1 \
     MAMMOTH_EXTERNAL_URL=http://192.168.77.1:8080 \
     MAMMOTH_DATABASE_URL='postgres://…' \

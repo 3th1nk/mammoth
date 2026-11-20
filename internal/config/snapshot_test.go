@@ -63,6 +63,7 @@ func TestSnapshotValuesAndUnsetRedacted(t *testing.T) {
 		BiosConfirmRequired:  true,
 		EraseConfirmRequired: false,
 		VerifyReadyWait:      10 * time.Minute,
+		PXEMode:              "off",
 		// Everything SMB/relay/enroll left zero → unset redacted keys.
 	}
 	snap := cfg.Snapshot()
@@ -87,7 +88,7 @@ func TestSnapshotValuesAndUnsetRedacted(t *testing.T) {
 		"MAMMOTH_BMC_TLS_INSECURE":   "true",
 		"MAMMOTH_BIOS_CONFIRM":       "required",
 		"MAMMOTH_ERASE_CONFIRM":      "optional",
-		"MAMMOTH_PXE_ENABLED":        "false",
+		"MAMMOTH_PXE_MODE":           "off",
 	}
 	for key, want := range checks {
 		got, ok := snap[key].(string)

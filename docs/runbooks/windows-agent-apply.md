@@ -67,7 +67,7 @@
 >   env 路径是旧的 /tmp/mammoth.env,实际用 /root/mammoth.env);
 >   **248 现行二进制 = HEAD(89bd602,含 auto 判定+capabilities+v10 网关幂等),与 HEAD 同步**;
 > - **248 跑 builtin netboot 栈**(mammoth 自持 UDP 67/69/4011,
->   `MAMMOTH_PXE_ENABLED=true`),proxyDHCP 按 entry kind 自动发 NBP
+>   `MAMMOTH_PXE_MODE=builtin`),proxyDHCP 按 entry kind 自动发 NBP
 >   (agent 条目→shim 链,wimboot 条目→plain ipxe-amd64.efi),二段切换
 >   全自动零配置;external dnsmasq 仅是别处的逃生门;
 > - alpine extended ISO 在 248:/data/os_iso/alpine/,env 已配

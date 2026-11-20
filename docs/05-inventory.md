@@ -96,7 +96,7 @@ POST /machines/{id}/actions {"type": "discover", "probe": "ramdisk"}
 | `MAMMOTH_RAMDISK_ENABLED` | 总是 | 特性总开关(缺省关闭;未开启时任务以 `BMC_UNSUPPORTED` 拒绝) |
 | `MAMMOTH_PROBE_ALPINE_ISO` | 总是 | 载体原料,本地路径或 URL;**须 standard 版 + lts 内核**(§下文) |
 | `MAMMOTH_EXTERNAL_URL` | 总是 | 机器侧上报 URL 的基地址(与安装路径同源依赖,须机房可达) |
-| `MAMMOTH_PXE_ENABLED` | `boot:pxe` | 本 runner 的 netboot 服务 |
+| `MAMMOTH_PXE_MODE` | `boot:pxe` | 本 runner 的 netboot 服务(builtin|external) |
 | `MAMMOTH_PROBE_ALPINE_NETBOOT` | `boot:pxe` | NETBOOT tarball(standard ISO 的 initramfs 缺机房网卡驱动) |
 | `MAMMOTH_PROBE_WAIT` | 可选 | 上报等待预算(默认 10m) |
 | `MAMMOTH_PROBE_STATIC_CIDR` / `_GATEWAY` / `_PREFIX` | 无 DHCP 机房 | 静态兜底三级;注册了 `ssh.address` 的机器以它为权威,免全局配置 |

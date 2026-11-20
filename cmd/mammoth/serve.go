@@ -276,7 +276,7 @@ func serve(args []string) error {
 	// the fixed-path grub.cfg render (and the installer-log attribution)
 	// still resolve the machine (nil = pool mode, macFor covers it).
 	var leaseSnoop *netboot.LeaseSnoop
-	if cfg.PXEEnabled && cfg.Mode.RunsNetboot() {
+	if cfg.PXEMode != "off" && cfg.Mode.RunsNetboot() {
 		// Reclaim shared pool trees no install has touched past the TTL
 		// (startup-time GC — a crashed runner never owns a shared tree, so
 		// age since last use is the only lifecycle signal there is).
@@ -326,18 +326,21 @@ func serve(args []string) error {
 			}
 			return ""
 		})
-		// Escape-hatch mode (MAMMOTH_PXE_MODE=external): materialize the
-		// static TFTP kit the site dnsmasq serves — NBP binaries, grub
-		// modules, and the two self-identifying trampolines. Export failure
-		// is fatal: an incomplete kit strands machines at the PXE prompt
-		// exactly like a failed bind would in builtin mode.
-		if cfg.PXEMode == "external" {
+		// Materialize the static TFTP kit — NBP binaries, grub modules, and
+		// the two self-identifying trampolines — for every PXE-capable mode:
+		// external serves it from the site dnsmasq, and edge instances on
+		// other provisioning VLANs sync it from /netboot/external-kit.tar
+		// even when the engine itself runs builtin on its own L2 (the mixed
+		// topology). Export failure is fatal: an incomplete kit strands
+		// machines at the PXE prompt exactly like a failed bind would.
+		if cfg.PXEMode != "off" {
 			kitDir := filepath.Join(cfg.MediaDir, "netboot", "external-tftp")
 			if kerr := netboot.ExportExternalKit(kitDir, pxe.Files, strings.TrimSuffix(cfg.ExternalURL, "/")); kerr != nil {
 				return fmt.Errorf("netboot: external kit export: %w", kerr)
 			}
-			logger.InfoContext(ctx, "external PXE kit exported",
-				"dir", kitDir, "note", "serve this directory from the site TFTP; dnsmasq.conf.example inside is ready to edit")
+			logger.InfoContext(ctx, "PXE kit exported",
+				"dir", kitDir, "mode", cfg.PXEMode,
+				"note", "site TFTP serves it (external) and every edge syncs it; dnsmasq.conf.example inside is ready to edit")
 		}
 		// Pool-mode lease gate for the zero-registration entry (docs/
 		// 13-headless-design.md §3.1): sighted unknown MACs get lease and
@@ -532,7 +535,7 @@ func serve(args []string) error {
 		MediaDir:              cfg.MediaDir,
 		ExternalURL:           strings.TrimSuffix(cfg.ExternalURL, "/"),
 		BootStrategyDefault:   cfg.BootStrategyDefault,
-		NetbootEnabled:        cfg.PXEEnabled && cfg.Mode.RunsNetboot(),
+		NetbootEnabled:        cfg.PXEMode != "off" && cfg.Mode.RunsNetboot(),
 		WindowsInstallSMBUNC:  cfg.WindowsInstallSMBUNC != "",
 		WindowsAgentInstaller: cfg.ProbeAlpineNetboot != "" && cfg.WindowsApplyAlpineISO != "",
 		BiosConfirmRequired:   cfg.BiosConfirmRequired,

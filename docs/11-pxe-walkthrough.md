@@ -195,9 +195,10 @@ running 不落账(JOB_MACHINE_BUSY),对同一 job 再打一次 cancel 即结算�
 
 ## 5. 外部 DHCP+TFTP:逃生门形态(2026-09-18)
 
-builtin 模式的接力链(mammoth 亲历三跳:proxyDHCP→TFTP→HTTP)在 mammoth
-拿不到特权 UDP 的部署形态下走不通。external 模式(`MAMMOTH_PXE_MODE=
-external`)把前三跳交给站点 dnsmasq,mammoth 只剩 HTTP;接力点用**客户端
+builtin 模式的接力链(mammoth 亲历三跳:proxyDHCP→TFTP→HTTP)在站点
+网络归运维团队管、或引擎不驻装机段(不想给它特权 UDP 面)的部署形态下
+不适用。external 模式(`MAMMOTH_PXE_MODE=external`)把前三跳交给站点
+dnsmasq,mammoth 只剩 HTTP;接力点用**客户端
 自报身份**缝合——静态 TFTP 蹦床(iPXE `${net0/mac}`、grub
 `${net_default_mac}`)把 MAC 带进 URL,落回 builtin 的同两个 HTTP 端点。
 部署细节与模式代价(option 93 观测失效)见

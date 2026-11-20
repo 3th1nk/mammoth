@@ -63,7 +63,7 @@ services:
       # (host or macvlan networking — bridge port mappings cannot carry DHCP
       # broadcasts; ops.md §4.5) and only ONE responder per L2 — run
       # compose.edge.yml on the edge of every other VLAN instead.
-      MAMMOTH_PXE_ENABLED: ${MAMMOTH_PXE_ENABLED:-false}
+      MAMMOTH_PXE_MODE: ${MAMMOTH_PXE_MODE:-off}
       MAMMOTH_PXE_NEXT_SERVER: ${MAMMOTH_PXE_NEXT_SERVER:-}
       MAMMOTH_PXE_SYSLOG_PORT: "5514"
     command: ["serve", "--mode=api"]

@@ -112,7 +112,6 @@ func (c Config) Snapshot() map[string]any {
 	str("MAMMOTH_OTEL_EXPORTER_ENDPOINT", c.OTELExporterEndpoint)
 	str("MAMMOTH_METRICS_ADDR", c.MetricsAddr)
 	str("MAMMOTH_EXTERNAL_URL", c.ExternalURL)
-	bol("MAMMOTH_PXE_ENABLED", c.PXEEnabled)
 	str("MAMMOTH_PXE_NEXT_SERVER", c.PXENextServer)
 	str("MAMMOTH_PXE_MODE", c.PXEMode)
 	str("MAMMOTH_PXE_UEFI_NBP", c.PXEUEFINBP)

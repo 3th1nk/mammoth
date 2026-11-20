@@ -1743,6 +1743,20 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 					continue
 				}
 				ip, router, mask := e.DHCPReserveFor(n.MAC)
+				// Segment guard: the pool serves the engine's own L2 only.
+				// A machine whose BMC address resolves into a different
+				// subnet is served by an edge on its own segment — a
+				// foreign-segment static ip= would strand the installer; it
+				// falls back to ip=dhcp and that segment's site DHCP
+				// answers. Unresolvable BMC addresses (the headless
+				// none:// scheme, no IP to judge) keep the reservation —
+				// the office-PC finding (casper boot-time DHCP racy) must
+				// not regress.
+				if bmcIP := net.ParseIP(m.BMCAddress); bmcIP != nil && !sameSegment(ip, bmcIP, mask) {
+					obs.FromContext(ctx).WarnContext(ctx, "pool reservation skipped — machine is off-segment",
+						"mac", n.MAC, "reserved", ip.String(), "bmc", m.BMCAddress)
+					break
+				}
 				obs.FromContext(ctx).InfoContext(ctx, "reservation result", "mac", n.MAC, "ip", ip)
 				if ip == nil {
 					break
@@ -2800,6 +2814,21 @@ func netmaskString(mask net.IPMask) string {
 		return ""
 	}
 	return fmt.Sprintf("%d.%d.%d.%d", mask[0], mask[1], mask[2], mask[3])
+}
+
+// sameSegment reports whether addr falls inside ip's subnet under mask.
+// The pool-reservation guard uses it to keep foreign-segment machines off
+// the engine's pool (edge-served segments take their addresses from their
+// own site DHCP). Non-v4 inputs report false.
+func sameSegment(ip, addr net.IP, mask net.IPMask) bool {
+	if ip == nil || addr == nil || len(mask) != 4 {
+		return false
+	}
+	ip4, a4 := ip.To4(), addr.To4()
+	if ip4 == nil || a4 == nil {
+		return false
+	}
+	return ip4.Mask(mask).Equal(a4.Mask(mask))
 }
 
 // declaredNetworkAddr reads the job's resolved spec and returns the first

@@ -602,7 +602,7 @@ func (e *Executor) runDiscover(ctx context.Context, task *store.Task, job *store
 		}
 		if usePXE && e.Netboot == nil {
 			return classifiedErr("NETBOOT_UNAVAILABLE", false,
-				"probe boot=pxe needs the netboot service (MAMMOTH_PXE_ENABLED) on this runner")
+				"probe boot=pxe needs the netboot service (MAMMOTH_PXE_MODE=builtin|external) on this runner")
 		}
 		return e.probeRamdisk(ctx, task, usePXE)
 	}

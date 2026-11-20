@@ -35,7 +35,7 @@ func TestBootStrategyFor(t *testing.T) {
 	t.Run("pxe without the netboot repo fails fast", func(t *testing.T) {
 		if _, err := (&Executor{}).bootStrategyFor(specWith("pxe")); err == nil {
 			t.Fatal("want NETBOOT_UNAVAILABLE")
-		} else if !strings.Contains(err.Error(), "MAMMOTH_PXE_ENABLED") {
+		} else if !strings.Contains(err.Error(), "MAMMOTH_PXE_MODE") {
 			t.Fatalf("unhelpful error: %v", err)
 		}
 	})

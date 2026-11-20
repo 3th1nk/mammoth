@@ -164,21 +164,20 @@ type Config struct {
 	ExternalURL string
 
 	// PXE network boot services (docs/06-install-pipeline.md §3.3, M7).
-	// PXEEnabled turns on proxyDHCP + TFTP (MAMMOTH_PXE_ENABLED); binding
-	// privileged ports and sharing the provisioning L2 with the site DHCP
-	// are deployment concerns — see docs/operations.md.
-	PXEEnabled    bool
-	PXENextServer string // mammoth's IPv4 on the provisioning L2 (DHCP next-server); derived from ExternalURL when it is an IP literal
-	// PXEMode selects who owns the UDP side of PXE (MAMMOTH_PXE_MODE):
-	// builtin (default) — mammoth's proxyDHCP+TFTP; external — the escape
-	// hatch for shapes where mammoth cannot be the PXE service (site
-	// dnsmasq owns DHCP+TFTP, mammoth serves HTTP only; the static kit is
-	// exported to MediaDir/netboot/external-tftp at startup,
-	// docs/operations.md §pxe-external).
+	// PXEMode is the single switch for the whole PXE face
+	// (MAMMOTH_PXE_MODE): builtin — mammoth hosts the UDP boot services
+	// (proxyDHCP+TFTP; PXEDHCPPool turns it into a lease-granted DHCP);
+	// external — mammoth binds no UDP, the site dnsmasq or an edge owns
+	// DHCP+TFTP, and the static kit is exported to
+	// MediaDir/netboot/external-tftp for them; off — pure virtual-media
+	// deployment, syslog sink only. Binding privileged ports and sharing
+	// the provisioning L2 with the site DHCP are deployment concerns —
+	// see docs/operations.md.
 	PXEMode        string
-	PXEDHCPPort    int // proxyDHCP listen (default 67)
-	PXETFTPPort    int // NBP transfer (default 69)
-	PXEBootSrvPort int // PXE boot-server discovery (default 4011)
+	PXENextServer  string // mammoth's IPv4 on the provisioning L2 (DHCP next-server); derived from ExternalURL when it is an IP literal
+	PXEDHCPPort    int    // proxyDHCP listen (default 67)
+	PXETFTPPort    int    // NBP transfer (default 69)
+	PXEBootSrvPort int    // PXE boot-server discovery (default 4011)
 	// PXESyslogPort is the installer-log sink port (MAMMOTH_PXE_SYSLOG_PORT,
 	// default 514): d-i forwards its ramfs syslog here via the syslog= kernel
 	// argument, and lines that resolve to an armed task land in task_logs —
@@ -242,7 +241,8 @@ type Config struct {
 	// docs/09-roadmap.md): unknown MACs are offered the shared enrollment
 	// payload — an alpine probe environment that scans /sys and reports
 	// into pending_machines. Needs the alpine NETBOOT tarball
-	// (MAMMOTH_PROBE_ALPINE_NETBOOT); usually enabled alongside PXEEnabled.
+	// (MAMMOTH_PROBE_ALPINE_NETBOOT); usually enabled alongside PXEMode
+	// builtin.
 	PXEEnroll bool
 	// PXEEnrollToken is the enrollment endpoint's credential
 	// (MAMMOTH_PXE_ENROLL_TOKEN) — required when PXEEnroll is on, a mismatch
@@ -250,7 +250,7 @@ type Config struct {
 	PXEEnrollToken string
 	// BootStrategyDefault is the carrier used when a job spec does not name
 	// one (MAMMOTH_BOOT_STRATEGY: virtual_media | pxe). pxe additionally
-	// requires PXEEnabled on the deployment.
+	// requires PXEMode builtin|external on the deployment.
 	BootStrategyDefault string
 }
 
@@ -387,7 +387,6 @@ func FromEnv() (Config, error) {
 		errs = append(errs, fmt.Errorf("MAMMOTH_ERASE_CONFIRM must be required|optional"))
 	}
 	applyBool(&c.RamdiskEnabled, "MAMMOTH_RAMDISK_ENABLED", &errs)
-	applyBool(&c.PXEEnabled, "MAMMOTH_PXE_ENABLED", &errs)
 	applyString(&c.PXEMode, "MAMMOTH_PXE_MODE", &errs)
 	applyString(&c.PXENextServer, "MAMMOTH_PXE_NEXT_SERVER", &errs)
 	applyString(&c.PXEDHCPPool, "MAMMOTH_PXE_DHCP_POOL", &errs)
@@ -412,10 +411,10 @@ func FromEnv() (Config, error) {
 	}
 	switch c.PXEMode {
 	case "":
-		c.PXEMode = "builtin"
-	case "builtin", "external":
+		c.PXEMode = "off"
+	case "builtin", "external", "off":
 	default:
-		return c, fmt.Errorf("config: invalid MAMMOTH_PXE_MODE %q (want builtin|external)", c.PXEMode)
+		return c, fmt.Errorf("config: invalid MAMMOTH_PXE_MODE %q (want builtin|external|off)", c.PXEMode)
 	}
 	switch c.PXEUEFINBP {
 	case "":
@@ -430,19 +429,26 @@ func FromEnv() (Config, error) {
 	if c.PXEMode == "external" && c.PXEDHCPPool != "" {
 		return c, fmt.Errorf("config: MAMMOTH_PXE_MODE=external owns no DHCP — unset MAMMOTH_PXE_DHCP_POOL (the site dnsmasq serves leases)")
 	}
+	if c.PXEMode == "off" {
+		// off owns no PXE face at all — point the operator at the mode that
+		// matches their intent instead of silently ignoring the knobs.
+		if c.PXEDHCPPool != "" || c.PXENextServer != "" {
+			return c, fmt.Errorf("config: MAMMOTH_PXE_MODE=off owns no PXE face — unset MAMMOTH_PXE_DHCP_POOL/MAMMOTH_PXE_NEXT_SERVER, or set MAMMOTH_PXE_MODE=builtin|external")
+		}
+	}
 	// PXE needs an IPv4 next-server for the DHCP replies. Derive it from
 	// ExternalURL when that is an IP literal; otherwise require it — a
 	// hostname cannot go into siaddr/option 66, and failing at configure
 	// time beats failing on the first PXE boot. External mode never speaks
 	// DHCP (the site server fills next-server), so no requirement there.
-	if c.PXEEnabled && c.PXEMode == "builtin" && c.PXENextServer == "" {
+	if c.PXEMode == "builtin" && c.PXENextServer == "" {
 		if host, _, splitErr := net.SplitHostPort(strings.TrimSuffix(c.ExternalURL, "/")); splitErr == nil {
 			c.PXENextServer = host
 		} else if u, uerr := url.Parse(c.ExternalURL); uerr == nil {
 			c.PXENextServer = u.Hostname()
 		}
 		if net.ParseIP(c.PXENextServer) == nil || net.ParseIP(c.PXENextServer).To4() == nil {
-			return c, fmt.Errorf("config: MAMMOTH_PXE_ENABLED requires MAMMOTH_PXE_NEXT_SERVER (an IPv4 address on the provisioning L2); ExternalURL host %q is not an IPv4 literal", c.PXENextServer)
+			return c, fmt.Errorf("config: MAMMOTH_PXE_MODE=builtin requires MAMMOTH_PXE_NEXT_SERVER (an IPv4 address on the provisioning L2); ExternalURL host %q is not an IPv4 literal", c.PXENextServer)
 		}
 	}
 	switch c.BootStrategyDefault {
@@ -450,8 +456,8 @@ func FromEnv() (Config, error) {
 		c.BootStrategyDefault = "virtual_media"
 	case "virtual_media":
 	case "pxe":
-		if !c.PXEEnabled {
-			return c, fmt.Errorf("config: MAMMOTH_BOOT_STRATEGY=pxe requires MAMMOTH_PXE_ENABLED (the netboot service must run somewhere)")
+		if c.PXEMode == "off" {
+			return c, fmt.Errorf("config: MAMMOTH_BOOT_STRATEGY=pxe requires MAMMOTH_PXE_MODE=builtin|external (the netboot service must run somewhere)")
 		}
 	default:
 		return c, fmt.Errorf("config: MAMMOTH_BOOT_STRATEGY %q is not one of virtual_media|pxe", c.BootStrategyDefault)

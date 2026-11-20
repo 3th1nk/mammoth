@@ -1605,10 +1605,10 @@ paths:
       parameters:
         - name: resource_type
           in: query
-          description: "`pending` covers zero-registration sightings; `webhook` webhook lifecycle; `image` artifact-library fetch outcomes."
+          description: "`pending` covers zero-registration sightings; `webhook` webhook lifecycle; `image` artifact-library fetch outcomes; `netboot` service-level diagnostics (the startup DHCP probe)."
           schema:
             type: string
-            enum: [job, task, machine, credential, pending, webhook, image]
+            enum: [job, task, machine, credential, pending, webhook, image, netboot]
         - name: resource_id
           in: query
           schema:

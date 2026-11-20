@@ -425,6 +425,50 @@ func serve(args []string) error {
 				logger.Warn("netboot service stopped", "err", serr.Error())
 			}
 		}()
+
+		// Startup DHCP probe (docs/operations.md §4.5.0): one plain DISCOVER
+		// right after the responders bind, OFFERs classified against this
+		// engine's own mode — a pool-mode engine must be the segment's ONLY
+		// address service, proxy/external modes need a site DHCP to answer.
+		// The runtime per-MAC observer attributes failures after real
+		// machines are hurt; this catches the broken topology at startup.
+		// Syslog-sink degradation semantics: a failed probe is a warn, never
+		// fatal (multi-homed engines should aim MAMMOTH_PXE_BROADCAST_ADDR
+		// at the provisioning L2 — the limited broadcast leaves via the
+		// default interface, same caveat as the reply path).
+		go func() {
+			mode := netboot.ProbeModeProxy
+			switch {
+			case cfg.PXEMode == "external":
+				mode = netboot.ProbeModeExternal
+			case dhcpPool != nil:
+				mode = netboot.ProbeModePool
+			}
+			target := cfg.PXEBroadcastAddr
+			if target == "" {
+				target = "255.255.255.255"
+			}
+			offers, perr := netboot.Probe(context.Background(), netboot.ProbeOptions{
+				Target:     &net.UDPAddr{IP: net.ParseIP(target), Port: cfg.PXEDHCPPort},
+				SourcePort: 68,
+				Window:     3 * time.Second,
+			})
+			if perr != nil {
+				logger.Warn("dhcp probe never reached the wire — segment shape unknown", "target", target, "err", perr.Error())
+				return
+			}
+			v := netboot.Classify(mode, offers)
+			args := []any{"mode", string(mode), "servers", netboot.ServerIDs(offers), "detail", v.Detail}
+			if v.Level == "warn" {
+				logger.Warn("dhcp address-service probe", args...)
+			} else {
+				logger.Info("dhcp address-service probe", args...)
+			}
+			pctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			eventRepo.Append(pctx, "netboot", nextServer.String(), "netboot.dhcp_probe",
+				map[string]any{"mode": string(mode), "verdict": string(v.Kind), "servers": netboot.ServerIDs(offers), "detail": v.Detail})
+		}()
 	} else if cfg.Mode.RunsNetboot() {
 		// Pure virtual-media deployment (PXE off): no PXE ownership, but the
 		// syslog channel — inst.syslog=/syslog= now rides every carrier —

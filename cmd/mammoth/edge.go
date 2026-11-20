@@ -133,6 +133,29 @@ func runEdge(o edgeOptions) error {
 	if err != nil {
 		return err
 	}
+	// Startup DHCP probe — the edge IS the segment's pair of eyes (the
+	// sightingFeed comment): a silent site DHCP strands machines the engine
+	// only sees as DISCOVER storms. Fixed proxy shape — the edge never owns
+	// a pool. Local stderr like the kit re-sync / WoL degrade paths: the
+	// edge has no DB and no events, and a segment-level report endpoint is
+	// a maybe-later, not this probe's business.
+	go func() {
+		bcast := o.WoLBroadcast
+		if bcast == "" {
+			bcast = "255.255.255.255"
+		}
+		offers, perr := netboot.Probe(mustContext(), netboot.ProbeOptions{
+			Target:     &net.UDPAddr{IP: net.ParseIP(bcast), Port: o.DHCPPort},
+			SourcePort: 68,
+			Window:     3 * time.Second,
+		})
+		if perr != nil {
+			fmt.Fprintf(os.Stderr, "edge: dhcp probe never reached the wire: %v\n", perr)
+			return
+		}
+		v := netboot.Classify(netboot.ProbeModeProxy, offers)
+		fmt.Fprintf(os.Stderr, "edge: dhcp probe: %s\n", v.Detail)
+	}()
 	if o.WoLListen != "" {
 		go serveWoLRelay(o)
 	}

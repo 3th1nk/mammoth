@@ -252,6 +252,25 @@ iPXE 脚本),默认关闭。启用清单:
 决策树(POOL/PROXY/跨网段 relay 的完整形态)与外部 dnsmasq 部署见
 4.5.1;edge(每装机 VLAN 一个 Go 原生网段代理)见 §edge。
 
+**启动 DHCP 探测自检(2026-11-20)**:引擎与 edge 在 netboot 服务起立后
+各发一次 plain DHCPDISCOVER(无 PXEClient vendor class——引擎自身的
+应答门与 OnObserve 对它静默,不写 pending 台账;站点 DHCP 无此门,
+正常应答),收集 3s 窗口内的 OFFER 并按本机形态分类:
+
+| 本机形态 | 探测结果 | 判定 |
+|---|---|---|
+| POOL(`MAMMOTH_PXE_DHCP_POOL` 已设) | 收到 OFFER | **双地址服务竞争**——撤 `PXEDHCPPool` 走 PROXY,或移除该段站点 DHCP |
+| POOL | 无应答 | 健康(引擎是该段唯一地址服务) |
+| PROXY(默认) | 收到 OFFER | 健康(地址 + PXE 按设计分属两侧) |
+| PROXY | 无应答 | **网段无地址服务**——机器拿不到 IP;设 `PXEDHCPPool` 走 POOL 或修站点 DHCP |
+| external | 无应答 | **站点 DHCP 缺失**——external 假定站点拥有寻址 |
+
+结论进启动日志与 `netboot.dhcp_probe` 事件(resource_type=`netboot`,
+webhook/SSE 自动跟进);探测失败(如 :68 绑定被占)只降级 warn,永不
+致命(syslog sink 同款语义)。edge 侧结论在本地 stderr(edge 无事件面)。
+注意:有限广播从默认接口发出,多腿部署用 `MAMMOTH_PXE_BROADCAST_ADDR`
+指向装机段定向广播——与应答路径的广播覆盖同款注意。
+
 ### 4.5.1 外部 DHCP+TFTP 逃生门(MAMMOTH_PXE_MODE=external)
 
 mammoth 不可能总当 PXE 服务:容器化部署拿不到特权 UDP、或站点网络归运维

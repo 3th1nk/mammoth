@@ -78,7 +78,10 @@
 - **装前硬件健康门禁**(2026-09-24,探针 smartctl/nvme 采集 +
   `policy.health_gate` off|report|block)
 - **观测面**:安装器 syslog 通道(vMedia/PXE 双路,2026-09-24)、装机网段
-  地址服务可观测 + edge 饥饿上报 + 提交预检(2026-11-07)
+  地址服务可观测 + edge 饥饿上报 + 提交预检(2026-11-07)、启动 DHCP
+  探测自检(2026-11-20:plain DISCOVER 无 opt60——引擎应答门与
+  OnObserve 天然静默,防自答与 pending 污染;POOL/PROXY/external 三形态
+  分类矩阵,log + events 双通道,serve/edge 双挂点;operations §4.5.0)
 - **PXE 工程**:外部 DHCP+TFTP 逃生门(`MAMMOTH_PXE_MODE=external`)、
   arm64 引导链(qemu SB 验证,投递层待 ARM 真机)、proxy 模式 UEFI NBP
   链选择(`shim|ipxe`)、agent PXE 载体 modloop 修复(4b75b7b;miniproot
@@ -162,10 +165,6 @@ apk add xz);无槽镜像 + seed 意图 = 任务失败(错误点名契约)。
     但 sanboot 引导的是 ISO 自带引导器(内核参数/应答无法注入),适用
     面 = rescue/live 介质、自带应答机制的原盘、vMedia 死路机型逃生门;
     UEFI 侧支持度未验证且 SB 不可用(裸 iPXE);触发 = 真实 rescue 场景;
-  - **启动时 DHCP 探测自检**(2026-11-03 立项)——netboot/edge 启动主动
-    发探测 DISCOVER,按应答分类本网段地址服务形态并给出可操作告警
-    (池模式撞站点 DHCP / proxy 模式无站点 DHCP);与已落地的运行时
-    per-MAC 观测互补;随 edge 跨网段回归窗口顺带;
   - **边缘地址服务实时门控**——fail-closed + TTL 负缓存设计已定稿
     (本文整理前版本);触发 = edge 出现"未登记 MAC 白吃地址"的真实
     问题;当前 dnsmasq allowlist 已覆盖第一层;

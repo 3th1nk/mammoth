@@ -2458,7 +2458,12 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 							e.rebootBestEffort(watchCtx, task)
 						}()
 					}
-					res, degraded, perr := e.waitForNewSystem(ctx, m.SSHAddress, cred)
+					res, degraded, perr := e.waitForNewSystem(ctx, task.ID, m.SSHAddress, cred)
+					if perr != nil && IsCanceled(perr) {
+						// Cancel short-circuits the address-drift retry chain
+						// below — no point probing the next address.
+						return perr
+					}
 					if perr != nil {
 						// Retry chain for address drift. The recorded address
 						// can be stale in two directions: a DECLARED-static
@@ -2472,14 +2477,20 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 						if declared, ok := e.declaredNetworkAddr(job.SpecResolved); ok && declared != m.SSHAddress {
 							obs.FromContext(ctx).WarnContext(ctx, "verify_ready recorded address unreachable; retrying against the declared static address",
 								"machine", task.MachineID, "recorded", m.SSHAddress, "declared", declared)
-							res, degraded, perr = e.waitForNewSystem(ctx, declared, cred)
+							res, degraded, perr = e.waitForNewSystem(ctx, task.ID, declared, cred)
+							if perr != nil && IsCanceled(perr) {
+								return perr
+							}
 						}
 					}
 					if perr != nil {
 						if addr, ok := e.dhcpLeaseAddr(m.Hardware); ok {
 							obs.FromContext(ctx).WarnContext(ctx, "verify_ready static address unreachable; retrying against the DHCP lease",
 								"machine", task.MachineID, "static", m.SSHAddress, "lease", addr)
-							res, degraded, perr = e.waitForNewSystem(ctx, addr, cred)
+							res, degraded, perr = e.waitForNewSystem(ctx, task.ID, addr, cred)
+							if perr != nil && IsCanceled(perr) {
+								return perr
+							}
 						}
 					}
 					if perr != nil {
@@ -2733,7 +2744,7 @@ func (e *Executor) windowsInstall(ctx context.Context, task *store.Task, job *st
 // false positive out, and the loop keeps polling until the real system
 // shows up. Auth rejections surface immediately: waiting cannot heal them
 // (the installer env accepts passwords the provisioned system refuses).
-func (e *Executor) waitForNewSystem(ctx context.Context, addr string, cred inbandssh.Credentials) (*inbandssh.Result, bool, error) {
+func (e *Executor) waitForNewSystem(ctx context.Context, taskID, addr string, cred inbandssh.Credentials) (*inbandssh.Result, bool, error) {
 	wait := e.verifyReadyWait()
 	deadline := time.Now().Add(wait)
 	for {
@@ -2765,6 +2776,13 @@ func (e *Executor) waitForNewSystem(ctx context.Context, addr string, cred inban
 		case <-ctx.Done():
 			return nil, false, ctx.Err()
 		case <-time.After(10 * time.Second):
+		}
+		// Cooperative cancel must not ride out the wait budget (default
+		// 10min — the budget can burn twice more on the address-drift
+		// retries): a cancel flag set mid-wait is observed here instead of
+		// only at the next task retry round.
+		if cancelReq, _ := e.Jobs.IsCancelRequested(ctx, taskID); cancelReq {
+			return nil, false, ErrCanceled
 		}
 	}
 }

@@ -1775,8 +1775,12 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 	// variant repo (packages); the machine reaches it over the network with
 	// the static ip= arguments the driver bakes. Runs before the render —
 	// the URL is FINAL at render time (docs/04-install-spec.md §5.0).
+	// Excluded: nfs:// sources (the driver's nfs --server/--dir scan) and
+	// http(s) TREE urls (no .iso suffix — already an installable source
+	// shape; staging would download the directory index and fail).
 	if name, _ := effectiveStrategyName(e, spec); name == strategyVirtualMedia {
-		if driver0, derr := e.Render.For(spec.Image.Distro); derr == nil && render.FamilyOf(driver0) == "kickstart" && !strings.HasPrefix(spec.Image.Source, "nfs://") {
+		if driver0, derr := e.Render.For(spec.Image.Distro); derr == nil && render.FamilyOf(driver0) == "kickstart" &&
+			!strings.HasPrefix(spec.Image.Source, "nfs://") && !render.HTTPTreeSource(spec.Image.Source) {
 			distroISO, ferr := builder.EnsureISOVerified(ctx, spec.Image.Source, spec.Image.Checksum, e.MediaDir)
 			if ferr != nil {
 				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,

@@ -225,6 +225,21 @@ func IsAgentInstaller(d OSDriver) bool {
 	return ok && a.AgentInstaller()
 }
 
+// HTTPTreeSource reports whether the install source is an http(s) TREE url
+// (no .iso suffix) — an anaconda-installable shape on its own (boot.iso media
+// with network packages), so the kickstart driver keeps the url command and
+// prepare must not stage it as an ISO (staging would download the directory
+// index and fail the unpack). The suffix check strips a query/fragment first:
+// a .iso url carrying a token parameter is still an ISO file, not a tree.
+// ISO files, engine-local cache paths, nfs:// and bare paths are not tree urls.
+func HTTPTreeSource(source string) bool {
+	if i := strings.IndexAny(source, "?#"); i >= 0 {
+		source = source[:i]
+	}
+	return (strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://")) &&
+		!strings.HasSuffix(source, ".iso")
+}
+
 // ── resolved inputs (produced by verify_layout / orchestration) ─────────────
 
 // ResolvedDisk is a selector-resolved install target.

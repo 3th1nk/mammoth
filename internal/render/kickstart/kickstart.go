@@ -1098,8 +1098,7 @@ func (d *Driver) RenderAnswers(in render.InstallInputs, m render.MachineView) ([
 			repoCmd = fmt.Sprintf("nfs --server=%s --dir=%s", u[:i], path.Dir(u[i:]))
 		}
 	case in.Netboot == nil:
-		if (strings.HasPrefix(in.ImageSource, "http://") || strings.HasPrefix(in.ImageSource, "https://")) &&
-			!strings.HasSuffix(in.ImageSource, ".iso") {
+		if render.HTTPTreeSource(in.ImageSource) {
 			vMediaTreeSource = true // tree url kept: network packages
 		} else {
 			repoCmd = "cdrom"

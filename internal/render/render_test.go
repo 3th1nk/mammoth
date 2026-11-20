@@ -167,3 +167,29 @@ func TestSyslogTarget(t *testing.T) {
 		}
 	}
 }
+
+// TestHTTPTreeSource pins the tree-url predicate shared by the kickstart
+// driver (vMediaTreeSource: the url command stays, network packages) and
+// prepareMedia (skip pool-tree staging — staging a tree url downloads the
+// directory index and fails the unpack).
+func TestHTTPTreeSource(t *testing.T) {
+	cases := []struct {
+		source string
+		want   bool
+	}{
+		{"http://mirror.example/rocky9/tree/", true},
+		{"https://mirror.example/BaseOS/x86_64/os", true},
+		{"http://mirror.example/rocky9.iso", false},
+		{"https://mirror.example/rocky9.iso?token=abc", false}, // query stripped before the suffix check
+		{"http://mirror.example/rocky9.iso#sha256", false},
+		{"nfs://198.51.100.248/data/os_iso/rocky9.iso", false},
+		{"file:///media/images/abc.iso", false},
+		{"/media/images/abc.iso", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := HTTPTreeSource(c.source); got != c.want {
+			t.Errorf("HTTPTreeSource(%q) = %v, want %v", c.source, got, c.want)
+		}
+	}
+}

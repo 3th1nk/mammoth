@@ -37,11 +37,21 @@
   受理层验证)、agent apply-image 真机闭环 ×5 轮、用户脚本前后置接入
   (代码落地,验证随窗口)、渲染即拒边界(SupportNone 范式)+ spec 通用
   硬化(checksum 强制 / min_size_gb floor / 静默语义全改渲染即拒)
+- **库引用装机源闭环**(2026-11-03,9eded37)——image.id + vMedia 组合
+  (库 FilePath / http-ISO URL 对 anaconda 是死源;2288H dracut emergency
+  定位):vMedia×kickstart 的 prepare 暂存池树 + PoolTreeURL,渲染三分支
+  互斥(nfs 特判 / 池树 / http 真树直通),PXE 侧池树全覆盖;构建期门禁
+  兜底(inst.repo=cdrom 即拒)。真树 URL 直通曾被 prepare 暂存误伤
+  (目录索引当 ISO 必败),HTTPTreeSource 共享判定补齐。定案:池树暂存
+  成本为定案(nfs-ISO loop-mount 流真机不稳定,7c0e751);库行不承载
+  nfs:// 源(注册门禁 + fetcher 状态机,绕行 spec 内联 nfs:// 成本低)
 - **headless 无带外形态**(2026-11-04 代码:protocol=none + enroll→claim +
-  WoL;docs/13;真机/qemu 验证轮待)
+  WoL;docs/13;2026-11-16 办公 PC 真机全链收口——enroll→claim→install 全通,
+  operations §4.8.1)
 - **装后软件源渲染 package_source**(2026-09-24,四方言)
-- **发行版/复验矩阵**:rocky9 / ubuntu22/24 / debian13(双载体真机)、
-  uniontechos(1050u2a)、windows2019/2022、22.04-crypt 复验(2026-10-28)
+- **发行版/复验矩阵**:rocky9 / ubuntu22/24/26 / debian13(双载体真机)、
+  uniontechos(双通路真机复核,复验口径已改最新 ISO)、windows2019/2022/
+  2025、kylin V11 / rocky10(vMedia UEFI)、22.04-crypt 复验(2026-10-28)
 
 ### BMC 能力面
 
@@ -59,7 +69,7 @@
 ### 生命周期与运维
 
 - **rescue mode**(2026-11-07,vMedia+PXE 双载体,agent 内存系统 + sshd;
-  遗留 qemu 全链轮)
+  真机两轮已修复报告预算与 PXE 载体 plan 404,遗留全链闭环实录)
 - **装后验收探针**(2026-11-07,acceptance_reports 判定 pass/degraded/fail,
   永不门禁)
 - **decommission 生命周期动作**(2026-11-07,擦盘→证据采集→retired;
@@ -71,7 +81,8 @@
   地址服务可观测 + edge 饥饿上报 + 提交预检(2026-11-07)
 - **PXE 工程**:外部 DHCP+TFTP 逃生门(`MAMMOTH_PXE_MODE=external`)、
   arm64 引导链(qemu SB 验证,投递层待 ARM 真机)、proxy 模式 UEFI NBP
-  链选择(`shim|ipxe`)、agent PXE 载体 modloop 修复(4b75b7b)
+  链选择(`shim|ipxe`)、agent PXE 载体 modloop 修复(4b75b7b;miniproot
+  载体换代真机收口)
 
 ### dd 镜像封装规范(构建方契约,保留)
 
@@ -163,29 +174,30 @@ apk add xz);无槽镜像 + seed 意图 = 任务失败(错误点名契约)。
 
 ### 真机窗口回归清单(已交付项的遗留验证,汇总)
 
+> 2026-11-20 核实收敛:headless 真机全链(enroll→claim→install→WoL,
+> operations §4.8.1)、dd 真机端到端(2288H 六轮 + 办公 PC 直写)、
+> ubuntu26 确认门、UOS 双通路复核、kylin V11 / rocky10(vMedia)、
+> agent PXE 载体(miniproot 换代)均已真机收口,移出本清单。
+
 - relay 跨网段真机回归(等网络设备 ip helper 协调窗口;giaddr 应答已有
-  单测,11-pxe-walkthrough §4)
-- agent PXE 载体 modloop 修复复验(commit 4b75b7b)+ ubuntu26 subiquity
-  确认门定案(待装机环境 /proc/cmdline 实证;已排除 DHCP 因素)
+  单测,11-pxe-walkthrough §4;edge 跨网段形态已真机全链,仅 relay/giaddr
+  形态待)
 - Windows 用户脚本前后置 qemu/真机验证;package_source 四方言真机回归
-- 健康门禁探针 smartctl/nvme 采集核验;BIOS 漂移读(2288H 顺带);
-  decommission 真机轮(DriveEraser 对 LSI 卷支持度已有真机结论)
-- rescue qemu 全链轮(真引导→agent 报告→释放);验收探针 qemu+真机轮
-- headless 真机/qemu 验证轮;dd 真实可引导镜像端到端(待镜像到场)
-- 复验轮:Kylin / rocky10-PXE / 22.04-crypt 的 bond 声明(等 eno2 接线);
-  UOS 1050u2a 复验与 PXE 复核;2288H 单机轮装顺序覆盖(22/24/rocky9 已
-  证明可行)
+- 健康门禁探针 smartctl/nvme 采集核验;BIOS 漂移巡检真机扇出(BiosSetter
+  活读/写形态 2288H 已实录);decommission 真机轮(擦盘→证据采集→retired;
+  DriveEraser 对 LSI 卷支持度已有真机结论)
+- rescue 全链闭环实录(真引导已真机实证,两轮真机修复报告预算与 PXE
+  载体 plan 404 后,报告→释放未实录);验收探针 qemu+真机轮
+- 复验轮:rocky10-PXE 复核 / kylin V10 受限项(静态网 NM 卡死)/
+  22.04-crypt 的 bond 声明(等 eno2 接线);2288H 单机轮装顺序覆盖
+  (22/24/rocky9 已证明可行)
 - arm64 投递层真机(等 ARM 机器;SB 签名链 qemu 已验,投递层与 x64 共享
   代码 + opt 93=11 单测覆盖)
+- 附带:LITEON 目标盘换线后复测窗口保留(dd 直写硬件边际,operations
+  §4.8.1)
 
 ### 已知缺口(待修)
 
-- **库镜像引用 × anaconda inst.repo**(2026-10-27 新环境实录)——
-  kickstart 驱动把 ImageSource 原样拼进 inst.repo:库引用解析出的本地
-  FilePath 与 http-ISO URL 都是 anaconda 不收的形态(仅
-  `nfs:host:/path.iso` / 真树 URL / cdrom 可用,nfs 特判已有)。正式
-  修法 = prepare 阶段派生 nfs repo 形态并(按需)经 relay 中继源盘,或
-  库行直接承载 nfs 形态源。当前绕行:nfs:// 源(源盘驻 nfsd)。
 - **MediaBaseURI 单旋钮双消费者**(部署约束,非缺陷)——该 base 同时
   派生 BMC vMedia 的 media_uri 与 casper/安装器的 nfsroot:部署形态必须
   让同一 NFS 服务端同时可达两者(引擎主机内核 nfsd 导出 MediaDir 为

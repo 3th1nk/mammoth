@@ -118,39 +118,50 @@ flowchart TD
 ### 跨网段部署 —— 一个引擎,多个网段代理
 
 生产机房是跨网段的:引擎在管理网,每个装机网段都需要自己网线上的 PXE
-第一跳。`mammoth edge(原 edge)` 就是这个第一跳的单二进制实现——proxyDHCP
+第一跳。`mammoth edge` 就是这个第一跳的单二进制实现——proxyDHCP
 应答、TFTP 引导链、PXE sightings 回传引擎——配置只有引擎地址一项。它
 替代了逐网段手工调教的 dnsmasq(配置漂移与 kit 手工同步正是它要消灭
 的故障形态)。
 
-两种寻址形态覆盖所有机房。**无站点 DHCP** → POOL 模式:引擎 builtin 的
-DHCP 只对已登记装机任务的机器从声明池发地址。**有站点 DHCP** → PROXY 模式:
-站点继续分配地址,`edge`(或外置 dnsmasq)只在代理层的 L2 上补
-PXE 引导选项。跨 VLAN 机房部署 DHCP relay(ip helper),TFTP/HTTP 路由
-到引擎——详见 [docs/operations.md](docs/operations.md) §4.5.0。
+寻址按网段各管,两种形态可组合(混合拓扑):引擎所在网段由引擎直服
+(`MAMMOTH_PXE_MODE=builtin`——proxyDHCP + 内建 DHCP 池,池预留的静态
+ip= 只写本网段机器),其余每个装机网段各放一台 `edge` 第一跳。有站点
+DHCP 的 edge 网段:站点继续分配地址,edge 只补 PXE 引导选项;**无站点
+DHCP** 的网段,`--dhcp-pool` 让 edge 成为该段唯一地址服务——租约按引擎
+清单门控(armed 装机条目 + enroll 未注册 sighting 周期同步,新分配地址
+先做存活探测),陌生 MAC 保持静默。跨 VLAN 机房也可部署 DHCP relay
+(ip helper),TFTP/HTTP 路由到引擎——详见 [docs/operations.md](docs/operations.md) §4.5.0。
 
 ```mermaid
-flowchart TD
-    eng["mammoth 引擎<br/>(管理网)"]
-    subgraph V1["装机网段 1"]
-        a1["edge<br/>proxyDHCP + TFTP<br/>(sightings 回传引擎)"]
-        m1["裸金属机器"]
+flowchart LR
+    subgraph L2A["引擎所在网段 —— builtin 直服(MAMMOTH_PXE_MODE=builtin)"]
+        eng["mammoth 引擎<br/>api · 决策面 · 零注册 enroll<br/>DHCP 池——仅本网段 · TFTP<br/>kit + 租约清单导出"]
+        mA["裸金属机器"]
     end
-    subgraph VN["装机网段 N"]
-        aN["edge<br/>proxyDHCP + TFTP<br/>(sightings 回传引擎)"]
-        mN["裸金属机器"]
+    subgraph L2B["装机网段 —— edge 第一跳(每网段一台)"]
+        edge["edge<br/>proxyDHCP + TFTP · kit 同步<br/>无站点 DHCP 网段的 edge-pool<br/>sightings → pending_machines"]
+        sdhcp["站点 DHCP(可选)<br/>存在时:地址归它"]
+        mB["裸金属机器"]
     end
-    eng -->|kit 同步 + 观测回传| a1
-    eng --> aN
-    a1 --> m1
-    aN --> mN
+
+    eng -->|"proxyDHCP + 池租约(仅本网段)<br/>TFTP:NBP 引导链"| mA
+    mA -->|"per-MAC 脚本 · 内核/initrd · 应答文件<br/>安装器 syslog :514——全部 HTTP 回引擎"| eng
+    mA -.->|"未知 MAC:enroll 探针引导<br/>探针上报 → pending_machines → claim"| eng
+    eng -.->|"kit 包 + 租约清单<br/>ETag 同步 · 未变零下载"| edge
+    edge -->|"proxyDHCP + 清单门控池租约(armed + enroll)<br/>TFTP:NBP 引导链"| mB
+    sdhcp -.->|"地址(存在时:归站点)"| mB
+    mB -->|"per-MAC 脚本 · 内核/initrd · 应答文件<br/>安装器 syslog :514——全部 HTTP 回引擎"| eng
+    mB -.->|"未知 MAC:enroll 探针引导<br/>探针上报 → pending_machines → claim"| eng
+    edge -.->|"PXE sightings"| eng
 ```
 
-部署 = 一个二进制 + 每网段代理一行
-(`mammoth edge --base-url …`);kit 自动同步,sightings 进引擎的
-pending_machines 台账。防火墙:代理放行 UDP 67/69/4011,装机网段须可
-达引擎 TCP 8080。完整实施手册——含 Secure Boot 与装机段占址注意事项
-——见 [docs/operations.md](docs/operations.md) §4.5.0。
+部署 = 一个二进制 + 每网段代理一行(`mammoth edge --base-url …`;无站点
+DHCP 的网段加 `--dhcp-pool`)。edge 网段的零注册是"两次 DISCOVER"的
+节奏:第一次 sighting 进 pending_machines,下一次清单同步放行该 MAC,
+第二次 DISCOVER 即得"租约+探针载荷"一体 OFFER(严格型消费 ROM 的硬要求)。
+防火墙:代理放行 UDP 67/69/4011(容器内需 CAP_NET_BIND_SERVICE——镜像
+非 root 运行),装机网段须可达引擎 TCP 8080。完整实施手册——含 Secure
+Boot 与装机段占址注意事项——见 [docs/operations.md](docs/operations.md) §4.5.0。
 ### 发行版适配矩阵 —— 什么载体用什么镜像
 
 | 发行版 | 方言 | virtual_media 镜像 | PXE 镜像 | PXE 安装源 | 真机 |
@@ -379,7 +390,7 @@ flowchart LR
     edge -.->|"sightings"| api
 ```
 
-- 单网段(builtin)形态:引擎内建 proxyDHCP + TFTP + DHCP 池直答(仅对已登记装机任务发址);跨网段(external)形态:每装机 VLAN 一台 `edge` 代理(同镜像单子命令),kit 自动同步、sightings 回传进 pending_machines 台账、安装器日志经 :514 汇入任务日志
+- 引擎段直服(builtin):引擎内建 proxyDHCP + TFTP + DHCP 池直答(仅本网段、仅已登记装机任务;池预留静态 ip= 有段守卫);跨网段:每装机 VLAN 一台 `edge` 代理(同镜像单子命令),kit/租约清单自动同步、sightings 回传进 pending_machines 台账、安装器日志经 :514 汇入任务日志;无站点 DHCP 的网段 edge 加 `--dhcp-pool`(清单门控 + 存活探测)
 - 状态流转与队列操作共享同一事务域;reaper 将失联任务标记为 `interrupted`(可重试)——runner 崩溃也不会让任务永久挂起;`fake` BMC 驱动用于开发与 CI
 - 交付镜像:**`mammoth`(alpine + xorriso/wimlib/7z;all / runner——装机部署的实际形态**,介质组装与引导 kit 经外部命令;builder/prober 占位模式已于 v1.4.2 移除)· `mammoth-api`(distroless 静态;仅纯 api 控制面,无介质组装能力)
 - 部署:`docker compose -f deploy/compose.all-in-one.yml up -d`(1×all + PG)或 `compose.faceted.yml`(1×api + N×runner);受限网络 `--build-arg RUNTIME_IMAGE=<mirror>/distroless/static-debian12:nonroot` + `GOPROXY=https://goproxy.cn,direct`

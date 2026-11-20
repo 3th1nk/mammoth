@@ -167,43 +167,57 @@ SSH probe with the provisioned key. See
 
 Production rooms are cross-subnet: the engine lives in the management
 network, and every provisioning VLAN needs a PXE first hop on its own wire.
-`mammoth edge(原 edge)` is that first hop as a single static binary — proxyDHCP
+`mammoth edge` is that first hop as a single static binary — proxyDHCP
 answers, TFTP for the boot chain, PXE sightings reported back — configured
 with just the engine URL. It replaces a hand-tuned per-VLAN dnsmasq
 (config drift and kit-sync copy-paste were the failure modes it exists to
 remove).
 
-Two addressing modes cover every room. **No site DHCP** → POOL mode: the
-engine's built-in DHCP hands out addresses from a declared pool, only to
-machines with an armed install. **Site DHCP present** → PROXY mode: the
-site keeps assigning addresses, and `edge` (or an external dnsmasq)
-adds only the PXE boot options on the agent's L2. Cross-VLAN rooms deploy
-a DHCP relay (ip helper) and route TFTP/HTTP to the engine — details in
+Addressing is per segment, and the two shapes compose (the mixed topology):
+the engine serves its own L2 directly (`MAMMOTH_PXE_MODE=builtin` —
+proxyDHCP + the built-in pool, whose static-ip= reservations only ever
+target machines on that L2), while every other VLAN rides an `edge` first
+hop. On an edge VLAN **with a site DHCP**, the site keeps assigning
+addresses and the edge adds only the PXE boot options; on a VLAN with **no
+site DHCP**, `--dhcp-pool` turns the edge into the segment's sole address
+service — leases are manifest-gated (armed install entries + enroll-eligible
+sightings synced from the engine, fresh allocations liveness-probed) and
+unknown MACs stay silent. Cross-VLAN rooms can also deploy a DHCP relay
+(ip helper) and route TFTP/HTTP to the engine — details in
 [docs/operations.md](docs/operations.md) §edge.
 
 ```mermaid
-flowchart TD
-    eng["mammoth engine<br/>(management network)"]
-    subgraph V1["provisioning VLAN 1"]
-        a1["edge<br/>proxyDHCP + TFTP<br/>(sightings → engine)"]
-        m1["bare-metal machines"]
+flowchart LR
+    subgraph L2A["engine's L2 — builtin direct serve (MAMMOTH_PXE_MODE=builtin)"]
+        eng["mammoth engine<br/>api · decision plane · zero-registration enroll<br/>DHCP pool — this L2 only · TFTP<br/>kit + lease-manifest export"]
+        mA["bare-metal machines"]
     end
-    subgraph V2["provisioning VLAN N"]
-        aN["edge<br/>proxyDHCP + TFTP<br/>(sightings → engine)"]
-        mN["bare-metal machines"]
+    subgraph L2B["provisioning VLAN — edge first hop (one per VLAN)"]
+        edge["edge<br/>proxyDHCP + TFTP · kit sync<br/>edge-pool for no-site-DHCP segments<br/>sightings → pending_machines"]
+        sdhcp["site DHCP (optional)<br/>present: it owns addressing"]
+        mB["bare-metal machines"]
     end
-    eng -->|kit sync + observe POST| a1
-    eng --> aN
-    a1 --> m1
-    aN --> mN
+
+    eng -->|"proxyDHCP + pool lease (this L2)<br/>TFTP: NBP boot chain"| mA
+    mA -->|"per-MAC script · kernel/initrd · answers<br/>installer syslog :514 — all HTTP to engine"| eng
+    mA -.->|"unknown MAC: enroll probe boot<br/>probe report → pending_machines → claim"| eng
+    eng -.->|"kit tar + lease manifest<br/>ETag sync · unchanged = no-op"| edge
+    edge -->|"proxyDHCP + manifest-gated pool lease (armed + enroll)<br/>TFTP: NBP boot chain"| mB
+    sdhcp -.->|"addresses (present: site owns them)"| mB
+    mB -->|"per-MAC script · kernel/initrd · answers<br/>installer syslog :514 — all HTTP to engine"| eng
+    mB -.->|"unknown MAC: enroll probe boot<br/>probe report → pending_machines → claim"| eng
+    edge -.->|"PXE sightings"| eng
 ```
 
-Setup is one binary plus one line per VLAN proxy
-(`mammoth edge --base-url …`); the kit syncs itself and sightings feed
-the engine's pending_machines ledger. Firewall: UDP 67/69/4011 open on the
-agent, TCP <engine>:8080 reachable from the VLAN. Full runbook — including
-the Secure Boot and address-squatting notes — lives in
-[docs/operations.md](docs/operations.md) §edge.
+Setup is one binary plus one line per VLAN proxy (`mammoth edge --base-url
+…`; add `--dhcp-pool` on no-site-DHCP segments). Zero-registration on an
+edge VLAN is a two-DISCOVER rhythm: the first sighting lands in
+pending_machines, the next manifest sync admits the MAC, and the second
+DISCOVER gets lease + probe payload in one OFFER (what strict consumer ROMs
+demand). Firewall: UDP 67/69/4011 open on the agent (`CAP_NET_BIND_SERVICE`
+in the container — the image runs non-root), TCP <engine>:8080 reachable
+from the VLAN. Full runbook — including the Secure Boot and
+address-squatting notes — lives in [docs/operations.md](docs/operations.md) §edge.
 
 ## Quick start (all-in-one)
 

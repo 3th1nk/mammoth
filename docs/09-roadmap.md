@@ -196,14 +196,6 @@ apk add xz);无槽镜像 + seed 意图 = 任务失败(错误点名契约)。
 - 附带:LITEON 目标盘换线后复测窗口保留(dd 直写硬件边际,operations
   §4.8.1)
 
-### 已知缺口(待修)
-
-- **MediaBaseURI 单旋钮双消费者**(部署约束,非缺陷)——该 base 同时
-  派生 BMC vMedia 的 media_uri 与 casper/安装器的 nfsroot:部署形态必须
-  让同一 NFS 服务端同时可达两者(引擎主机内核 nfsd 导出 MediaDir 为
-  定案;nfsx 对华为 iBMC 不兼容,compat/huawei.md vMedia 节;.5 边缘
-  节点只承担 PXE 的 dnsmasq/TFTP)。
-
 ## 长期方向(不承诺排期)
 
 - 跨机器 Raid/LVM 拓扑编排(单机 storage.lvm 已落地,docs/04 §5.1.1;
@@ -258,6 +250,20 @@ apk add xz);无槽镜像 + seed 意图 = 任务失败(错误点名契约)。
   文件是假性降本。保留收益:`distros[].family` 契约导出、ubuntu 架构
   修正(amd64-only)。完整决策记录见 docs/06 §6;池能力建模(boot_pool
   vs system_pool)结论留在 docs/12 §6 备用。
+
+- **MediaBaseURI 拆旋钮 / vMedia 换协议(2026-11-20 评估后维持现状)**——
+  该 base 同时派生 BMC 面的 media_uri(vMedia/rescue/probe,客户端是
+  BMC,管理网段)与安装器面的 casper nfsroot(客户端是 dracut,装机
+  网段),部署须让同一 NFS 服务端可达两段(内核 nfsd 导出 MediaDir
+  定案;nfsx 对华为 iBMC 不兼容,compat/huawei.md §6;.5 边缘节点只承担
+  PXE 的 dnsmasq/TFTP)。评估:两消费面同根(同一 MediaDir 的不同子
+  目录)、同协议(NFSv3)、同服务端,单导出面即同时满足;跨段可达 =
+  一次性路由配置(跨网段实测定案);拆旋钮(独立 nfsroot base)收益
+  仅限"两段异构 NFS 服务端"场景,成本 = 配置/文档/测试面 +1,且
+  windows 通路 SMBShare 独立旋钮先例确立"协议不同才拆"的边界;
+  HTTPS 直挂超主力机型(iDRAC6/7/8、iBMC 6.41)能力面,进程内 NFS
+  已实测否定。曾计入「已知缺口」属归档错位(2026-10-27 入册时性质为
+  部署注意记账);部署操作与排障清单以 operations §4.7 为权威。
 
 ## 版本策略
 

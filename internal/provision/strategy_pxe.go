@@ -198,7 +198,7 @@ func (s *pxeStrategy) prepare(ctx context.Context, b *bootSession) error {
 			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 				"distro ISO hash failed: %s", err.Error())
 		}
-		poolDir, perr := EnsurePoolTree(ctx, e, distroISO, sha, pool, nil)
+		poolDir, perr := EnsurePoolTree(ctx, e, distroISO, sha, pool, nil, 0)
 		if perr != nil {
 			return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true,
 				"%s", perr.Error())

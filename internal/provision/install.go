@@ -1804,7 +1804,14 @@ func (e *Executor) prepareMedia(ctx context.Context, task *store.Task, job *stor
 			if herr != nil {
 				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true, "distro ISO hash failed: %s", herr.Error())
 			}
-			if _, perr := EnsurePoolTree(ctx, e, distroISO, sha, render.NetbootPoolPlain, nil); perr != nil {
+			// The boot ISO the strategy assembles next is prechecked at
+			// distro-ISO size — reserve that much here or the extract eats
+			// the free space first (2026-11-22 rocky 9.8 round).
+			extra := int64(0)
+			if st, serr := os.Stat(distroISO); serr == nil {
+				extra = st.Size()
+			}
+			if _, perr := EnsurePoolTree(ctx, e, distroISO, sha, render.NetbootPoolPlain, nil, extra); perr != nil {
 				return classifiedErr("INSTALL_MEDIA_BUILD_FAILED", true, "%s", perr.Error())
 			}
 			in.PoolTreeURL = fmt.Sprintf("%s/netboot/store/%s/iso", strings.TrimSuffix(e.ExternalURL, "/"), sha)

@@ -42,7 +42,7 @@ func TestEnsurePoolTreeBuildOnce(t *testing.T) {
 	extract, calls := fakeExtract("tree-bytes")
 
 	first, err := EnsurePoolTree(context.Background(), e, "/tmp/unused.iso",
-		"aa", render.NetbootPoolNFS, extract)
+		"aa", render.NetbootPoolNFS, extract, 0)
 	if err != nil {
 		t.Fatalf("first build: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestEnsurePoolTreeBuildOnce(t *testing.T) {
 	}
 
 	second, err := EnsurePoolTree(context.Background(), e, "/tmp/unused.iso",
-		"aa", render.NetbootPoolNFS, extract)
+		"aa", render.NetbootPoolNFS, extract, 0)
 	if err != nil {
 		t.Fatalf("reuse: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestEnsurePoolTreeFailureLeavesNothing(t *testing.T) {
 				return err
 			}
 			return errors.New("xorriso died half-way")
-		}); err == nil {
+		}, 0); err == nil {
 		t.Fatal("want extraction failure")
 	}
 	if _, err := os.Stat(filepath.Join(e.MediaDir, PoolStoreDirName, "bb", "iso")); !os.IsNotExist(err) {
@@ -106,7 +106,7 @@ func TestEnsurePoolTreeAdoptsWinner(t *testing.T) {
 	got, err := EnsurePoolTree(context.Background(), e, "iso", "cc",
 		render.NetbootPoolNFS, func(ctx context.Context, iso, dest string) error {
 			return nil
-		})
+		}, 0)
 	if err != nil {
 		t.Fatalf("adopt: %v", err)
 	}

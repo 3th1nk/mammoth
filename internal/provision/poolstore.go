@@ -59,7 +59,14 @@ var poolStoreMu sync.Mutex
 // Reuse only touches the tree's mtime; first build extracts and — for the
 // d-i HTTP pool — stages the signed mirror. extract allows tests to stand in
 // for the xorriso-backed extraction.
-func EnsurePoolTree(ctx context.Context, e *Executor, isoPath, sha string, pool render.NetbootPool, extract func(ctx context.Context, isoPath, destDir string) error) (string, error) {
+// extraNeed reserves free space beyond the extraction itself: the vMedia
+// kickstart round copies a boot ISO of the same order as the distro ISO
+// onto this same volume right after the extract (strategy_virtualmedia
+// prechecks it at ISO size), so the reservation must cover it here —
+// otherwise the extract eats the free space and the round dies at the
+// boot-ISO check after minutes of extraction (2026-11-22 rocky 9.8: 15G
+// tree + 14.5G boot-ISO upper bound vs 26G free). PXE rounds pass 0.
+func EnsurePoolTree(ctx context.Context, e *Executor, isoPath, sha string, pool render.NetbootPool, extract func(ctx context.Context, isoPath, destDir string) error, extraNeed int64) (string, error) {
 	storeDir := filepath.Join(e.MediaDir, PoolStoreDirName, sha)
 	final := filepath.Join(storeDir, "iso")
 
@@ -80,9 +87,9 @@ func EnsurePoolTree(ctx context.Context, e *Executor, isoPath, sha string, pool 
 	// 15G DVD start an extraction it could never finish: 2026-11-21 rocky
 	// round, the volume filled mid-extract and the failed tmp tree took
 	// another cleanup pass).
-	need := int64(poolStoreMinFree)
+	need := int64(poolStoreMinFree) + extraNeed
 	if st, err := os.Stat(isoPath); err == nil {
-		if want := st.Size() + int64(poolStoreMinFree); want > need {
+		if want := st.Size() + int64(poolStoreMinFree) + extraNeed; want > need {
 			need = want
 		}
 	}
@@ -196,41 +203,90 @@ func SweepPoolStore(mediaDir string, log *slog.Logger) {
 	}
 }
 
-// pinTreeinfoVariant rewrites a multi-variant .treeinfo down to the media's
-// own default variant ([general] variant): the [tree] variants list is
-// pinned to that single variant and the other [variant-*] sections are
-// dropped (minimal media list BaseOS first with an empty Packages dir —
+// pinTreeinfoVariant drops stub variants from a multi-variant .treeinfo so
+// anaconda can resolve the tree. A stub is a variant whose Packages dir
+// EXISTS and is EMPTY — minimal media list BaseOS first with one, and
 // anaconda resolves the source to it and dies on "Error setting up software
-// source", real-hardware 2288H). Variant sections are otherwise left
-// untouched — wire-verified: injecting an arch line the media itself does
-// not carry breaks anaconda's variant resolution on 9.3 (2026-11-03).
-// No .treeinfo (non-RHEL media) is a no-op.
+// source" (real-hardware 2288H). Every non-stub variant survives with its
+// section byte-identical — wire-verified: injecting an arch line the media
+// itself does not carry breaks anaconda's variant resolution on 9.3
+// (2026-11-03) — and a full DVD's BaseOS+AppStream are both load-bearing
+// repos, so pinning down to the [general] variant deleted BaseOS and killed
+// the round at the spoke (2026-11-22 rocky 9.8). When nothing is a stub the
+// file is left untouched. No .treeinfo (non-RHEL media) is a no-op.
 func pinTreeinfoVariant(root string) error {
 	raw, err := os.ReadFile(filepath.Join(root, ".treeinfo"))
 	if err != nil {
 		return nil // not RHEL-lineage media: nothing to pin
 	}
 	lines := strings.Split(string(raw), "\n")
-	variant := ""
+
+	// Pass 1: map the variant sections to their packages dirs, in file
+	// order; remember the media's own default ([general] variant) — it is
+	// load-bearing by declaration and survives even when unreadable.
+	var order []string
+	pkgDirs := map[string]string{}
+	def := ""
+	section := ""
 	inGeneral := false
 	for _, ln := range lines {
 		t := strings.TrimSpace(ln)
+		if strings.HasPrefix(t, "[") {
+			section, inGeneral = t, t == "[general]"
+			continue
+		}
+		if t == "" {
+			continue
+		}
 		switch {
-		case strings.HasPrefix(t, "["):
-			inGeneral = t == "[general]"
-		case inGeneral && strings.HasPrefix(t, "variant"):
-			key, v, _ := strings.Cut(t, "=")
-			if strings.TrimSpace(key) == "variant" && strings.TrimSpace(v) != "" {
-				variant = strings.TrimSpace(v)
+		case inGeneral:
+			if key, v, ok := strings.Cut(t, "="); ok && strings.TrimSpace(key) == "variant" {
+				def = strings.TrimSpace(v)
+			}
+		case strings.HasPrefix(section, "[variant-"):
+			if key, v, ok := strings.Cut(t, "="); ok && strings.TrimSpace(key) == "packages" {
+				name := strings.TrimSuffix(strings.TrimPrefix(section, "[variant-"), "]")
+				pkgDirs[name] = strings.TrimSpace(v)
+				order = append(order, name)
 			}
 		}
 	}
-	if variant == "" {
-		return nil // single/unknown variant layout: the treeinfo is fine as-is
+	if len(order) == 0 {
+		return nil // no variant sections to reason about
 	}
+
+	drop := map[string]bool{}
+	for _, name := range order {
+		if name == def || pkgDirs[name] == "" {
+			continue // the default survives by declaration; unprovable — keep
+		}
+		entries, err := os.ReadDir(filepath.Join(root, filepath.FromSlash(pkgDirs[name])))
+		if err != nil || len(entries) > 0 {
+			continue // missing dir or populated: not provably a stub — keep
+		}
+		drop[name] = true
+	}
+	if len(drop) == 0 {
+		return nil
+	}
+	var kept []string
+	for _, name := range order {
+		if !drop[name] {
+			kept = append(kept, name)
+		}
+	}
+	if len(kept) == 0 {
+		return nil // nothing usable to pin down to — keep the file as-is
+	}
+
 	keep := func(t string) bool {
-		return !strings.HasPrefix(t, "[variant-") || t == "[variant-"+variant+"]"
+		if !strings.HasPrefix(t, "[variant-") {
+			return true
+		}
+		name := strings.TrimSuffix(strings.TrimPrefix(t, "[variant-"), "]")
+		return !drop[name]
 	}
+	pinned := strings.Join(kept, ",")
 	var b strings.Builder
 	inDropped := false
 	for _, ln := range lines {
@@ -248,7 +304,7 @@ func pinTreeinfoVariant(root string) error {
 		}
 		if strings.HasPrefix(t, "variants") {
 			if _, _, ok := strings.Cut(t, "="); ok {
-				ln = "variants = " + variant
+				ln = "variants = " + pinned
 			}
 		}
 		b.WriteString(ln)

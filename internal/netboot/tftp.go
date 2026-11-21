@@ -48,7 +48,7 @@ const (
 // ctx ends. One datagram socket is shared for RRQ reception; each transfer
 // moves to its own ephemeral socket — the client locks onto the source port
 // of the first reply, so sessions never interleave.
-func serveTFTP(ctx context.Context, conn *net.UDPConn, files fs.FS, render func(string, net.IP) []byte, log func(format string, args ...any)) {
+func serveTFTP(ctx context.Context, conn *net.UDPConn, files fs.FS, render func(string, net.IP) []byte, log func(format string, args ...any), sessions func(port int, live bool)) {
 	// Session sockets bind the same local address as the listener — on a
 	// multi-addressed host an unbound socket can pick a source the client's
 	// RPF drops, and it also pins the source family (no v4-vs-[::] drift).
@@ -73,10 +73,22 @@ func serveTFTP(ctx context.Context, conn *net.UDPConn, files fs.FS, render func(
 		if cerr != nil {
 			continue
 		}
-		go func() {
-			defer c.Close()
-			transferTFTP(c, addr, files, render, name, opts, log)
-		}()
+		if sessions != nil {
+			port := c.LocalAddr().(*net.UDPAddr).Port
+			sessions(port, true)
+			go func() {
+				defer func() {
+					sessions(port, false)
+					c.Close()
+				}()
+				transferTFTP(c, addr, files, render, name, opts, log)
+			}()
+		} else {
+			go func() {
+				defer c.Close()
+				transferTFTP(c, addr, files, render, name, opts, log)
+			}()
+		}
 	}
 }
 

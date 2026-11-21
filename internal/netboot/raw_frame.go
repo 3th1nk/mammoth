@@ -20,20 +20,16 @@ import (
 // exactly once regardless of how the client's firmware computes its
 // checksums.
 
-const (
-	udpProto = 17 // IP protocol number for UDP
+const udpProto = 17 // IP protocol number for UDP
 
-	dhcpPort      = 67   // where DISCOVERs land (and the built-in DHCP listens)
-	proxyDHCPPort = 4011 // PXE boot-server discovery port
-	tftpPort      = 69   // NBP transfer (fixed default; configurable ports need ParseFrame adjusted)
-)
-
-// ParseFrame decodes an ethernet frame into a UDP datagram addressed to one
-// of the responder ports (67/4011/69). It returns ok=false for anything
-// else, and checksumOK=true for datagrams whose UDP checksum validates
-// (the kernel's UDP socket already owns those). VLAN-tagged frames are not
-// handled here — the AF_PACKET socket is opened with ETH_P_IP, which does
-// not see 802.1Q frames.
+// ParseFrame decodes an ethernet frame into ANY IPv4 UDP datagram. The raw
+// channel (rawrecv_linux.go) decides by dstPort what to do with it: 67/4011
+// go to the DHCP handler, ports registered by live TFTP sessions are
+// re-injected with a repaired checksum, everything else is skipped. It
+// returns ok=false for non-IPv4/UDP frames, and checksumOK=true for
+// datagrams whose UDP checksum validates (the kernel's UDP socket already
+// owns those). VLAN-tagged frames are not handled here — the AF_PACKET
+// socket is opened with ETH_P_IP, which does not see 802.1Q frames.
 func ParseFrame(frame []byte) (payload []byte, srcIP net.IP, dstPort int, checksumOK bool) {
 	// Ethernet II header: dst(6) src(6) type(2).
 	if len(frame) < 14 {
@@ -64,9 +60,6 @@ func ParseFrame(frame []byte) (payload []byte, srcIP net.IP, dstPort int, checks
 		return nil, nil, 0, false
 	}
 	dstPort = int(binary.BigEndian.Uint16(udp[2:4]))
-	if dstPort != dhcpPort && dstPort != proxyDHCPPort && dstPort != tftpPort {
-		return nil, nil, 0, false
-	}
 	udpLen := int(binary.BigEndian.Uint16(udp[4:6]))
 	if udpLen < 8 || udpLen > len(udp) {
 		return nil, nil, 0, false

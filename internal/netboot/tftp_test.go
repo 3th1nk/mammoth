@@ -24,7 +24,7 @@ func startTestTFTP(t *testing.T, files fs.FS, render func(string, net.IP) []byte
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() { cancel(); conn.Close() })
-	go serveTFTP(ctx, conn, files, render, discardUDPLog)
+	go serveTFTP(ctx, conn, files, render, discardUDPLog, nil)
 	return conn.LocalAddr().(*net.UDPAddr)
 }
 

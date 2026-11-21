@@ -186,11 +186,17 @@ func grubConfigFor(opts Options, ctx context.Context, name string, remoteIP net.
 
 // Server is one running netboot service (proxyDHCP + TFTP).
 type Server struct {
-	opts    Options
-	log     *slog.Logger
-	nbpOK   map[string]bool
-	done    chan error
-	closers []ioCloser
+	// tftpSessionPorts tracks the local ports of live TFTP transfer
+	// sessions: the raw receive channel re-injects checksum-broken client
+	// datagrams (broken PXE firmwares) to those ports so mid-transfer ACKs
+	// reach their session sockets despite the kernel dropping them.
+	tftpSessionMu    sync.Mutex
+	tftpSessionPorts map[int]struct{}
+	opts             Options
+	log              *slog.Logger
+	nbpOK            map[string]bool
+	done             chan error
+	closers          []ioCloser
 	// observer watches per-MAC DHCP discovery patterns (address-service
 	// observability); nil when Options.TaskFor is unset.
 	observer *Observer
@@ -348,7 +354,13 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 	}
 	go func() {
 		defer close(tftpDone)
-		serveTFTP(ctx, tftpConn, opts.NBPs, render, udpLog)
+		serveTFTP(ctx, tftpConn, opts.NBPs, render, udpLog, func(port int, live bool) {
+			if live {
+				s.registerTFTPSession(port)
+			} else {
+				s.unregisterTFTPSession(port)
+			}
+		})
 	}()
 	go func() {
 		<-ctx.Done()
@@ -374,6 +386,32 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 		"tftp_port", opts.TFTPPort, "next_server", opts.NextServer.String(),
 		"base_url", opts.BaseURL)
 	return s, nil
+}
+
+// registerTFTPSession records a live TFTP session's local port so the raw
+// receive channel can route checksum-broken client datagrams to it.
+func (s *Server) registerTFTPSession(port int) {
+	if s.tftpSessionPorts == nil {
+		s.tftpSessionPorts = map[int]struct{}{}
+	}
+	s.tftpSessionMu.Lock()
+	s.tftpSessionPorts[port] = struct{}{}
+	s.tftpSessionMu.Unlock()
+}
+
+// unregisterTFTPSession drops a finished session's port.
+func (s *Server) unregisterTFTPSession(port int) {
+	s.tftpSessionMu.Lock()
+	delete(s.tftpSessionPorts, port)
+	s.tftpSessionMu.Unlock()
+}
+
+// tftpSessionPort reports whether port belongs to a live TFTP session.
+func (s *Server) tftpSessionPort(port int) bool {
+	s.tftpSessionMu.Lock()
+	defer s.tftpSessionMu.Unlock()
+	_, ok := s.tftpSessionPorts[port]
+	return ok
 }
 
 // Wait reports how the server ended (nil on clean shutdown via ctx).

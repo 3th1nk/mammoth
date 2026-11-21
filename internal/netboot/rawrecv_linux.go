@@ -88,42 +88,50 @@ func (s *Server) serveRaw(ctx context.Context, fd int, inject *net.UDPConn, dhcp
 			}
 			ifindex = ll.Ifindex
 		}
-		// TFTP (69): the datagrams belong to live transfer sessions — their
-		// session sockets are bound to this host and the kernel dropped the
-		// datagrams for the broken checksum. Re-inject the datagram through
-		// an ordinary UDP socket to the same local port: the kernel computes
-		// a valid checksum, the session socket receives it, and the transfer
-		// resumes. The transfer logic reads the opcode (ACK block) without
-		// checking the source address, so the injection source (this host)
-		// is transparent to it.
-		if dstPort == tftpPort {
+		switch {
+		case dstPort == optsDHCPPort(s.opts) || dstPort == optsProxyPort(s.opts):
+			// DHCP: stateless single-datagram handling (armed/enroll gate,
+			// boot reply) — same handle the UDP sockets feed.
+			reply, to := s.handle(payload, dstPort, &net.UDPAddr{IP: src, Port: 68})
+			if reply == nil || to == nil {
+				continue
+			}
+			// Same visibility as the UDP path — the raw channel's handling
+			// must be observable in the log like every other decision.
+			s.logf("dhcp: raw request from %s (ifindex %d) -> reply to %s", src, ifindex, to)
+			// Reply through the ordinary UDP socket — the kernel computes
+			// the UDP checksum on transmit, and forcing the egress
+			// interface to the arrival one matches the UDP path's PKTINFO
+			// behaviour.
+			pc := dhcpPC
+			if dstPort == optsProxyPort(s.opts) {
+				pc = proxyPC
+			}
+			if _, err := pc.WriteTo(reply, &ipv4.ControlMessage{IfIndex: ifindex}, to); err != nil {
+				s.logf("dhcp: raw-channel reply to %s: %v", to, err)
+			}
+		case s.tftpSessionPort(dstPort):
+			// TFTP session datagrams (ACKs mid-transfer) — their session
+			// sockets are bound to this host and the kernel dropped the
+			// datagrams for the broken checksum. Re-inject through an
+			// ordinary UDP socket to the same local port: the kernel
+			// computes a valid checksum, the session socket receives it,
+			// and the transfer resumes. The transfer reads the opcode
+			// without checking the source, so the injection source (this
+			// host) is transparent to it.
 			if inject != nil {
 				if _, werr := inject.WriteTo(payload, &net.UDPAddr{IP: net.IP(frame[30:34]).To4(), Port: dstPort}); werr != nil {
 					s.logf("tftp: raw re-inject to local session port %d: %v", dstPort, werr)
 				}
 			}
-			continue
-		}
-		reply, to := s.handle(payload, dstPort, &net.UDPAddr{IP: src, Port: 68})
-		if reply == nil || to == nil {
-			continue
-		}
-		pc := dhcpPC
-		if dstPort == proxyDHCPPort {
-			pc = proxyPC
-		}
-		// Same visibility as the UDP path — the raw channel's handling must
-		// be observable in the log like every other responder decision.
-		ifindexOut := ifindex
-		s.logf("dhcp: raw request from %s (ifindex %d) -> reply to %s", src, ifindexOut, to)
-		// Reply through the ordinary UDP socket — the kernel computes the
-		// UDP checksum on transmit, and forcing the egress interface to
-		// the arrival one matches the UDP path's PKTINFO behaviour.
-		if _, err := pc.WriteTo(reply, &ipv4.ControlMessage{IfIndex: ifindex}, to); err != nil {
-			s.logf("dhcp: raw-channel reply to %s: %v", to, err)
 		}
 	}
 }
+
+// optsDHCPPort/optsProxyPort expose the responder's configured ports for
+// the raw channel's dispatch (ParseFrame no longer hardcodes them).
+func optsDHCPPort(o Options) int  { return o.DHCPPort }
+func optsProxyPort(o Options) int { return o.ProxyPort }
 
 // htons converts a host-order uint16 to network order (no-op byte swap).
 func htons(v uint16) uint16 {

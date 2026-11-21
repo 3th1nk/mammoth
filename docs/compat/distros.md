@@ -27,7 +27,7 @@
 | **Rocky 10 / RHEL 10 系** | `rocky10` | Anaconda(**UEFI-only**,上游移除 Legacy BIOS) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,机制同源) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H) |
 | **CentOS 7** | `centos7` | Anaconda 19.31(python2 世代) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H;大盘需独立 /boot,见注记) |
 | **银河麒麟 V11**(Server V11 2503) | `kylinv11` | Anaconda(现代代际) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,机制同源) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H;中文 NFS 路径全链路验证) |
-| **银河麒麟 V10**(Server V10 SP3 2403) | `kylinv10` | Anaconda(RHEL8 代际 + NM 1.18) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`) | MAC(渲染层带 NM 修复段) | ⚠️ 受限:静态网络自动化卡死在 NM(见注记);**中文 NFS 路径经 anaconda 层已验证可用** |
+| **银河麒麟 V10**(Server V10 SP3 2403) | `kylinv10` | Anaconda(RHEL8 代际 + NM 1.18) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`) | MAC(渲染层带 NM 修复段) | ✅ vMedia 真机闭环(2026-11-21,一次 TTY2 现场解;根因已定案见下注记,驱动层根治修复待办) |
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
 | Ubuntu Server 24.04 | `ubuntu24` | Subiquity | autoinstall(nocloud seed) | 同 ubuntu22 | 同 ubuntu22 | ✅ v0.3(真机复验 2026-10-29:routes 形态 netplan 落盘+全套凭据) |
 | Ubuntu Server 26.04 | `ubuntu26` | Subiquity | autoinstall(nocloud seed) | 同 ubuntu22 | 同 ubuntu22;**netplan 弃 gateway4 用 routes 形态**(26.04 的 netplan 拒绝 gateway4) | ✅ 真机闭环 2026-10-29(静态+DHCP 双形态;接口名 eno1np0 为 26.04 新 scheme) |
@@ -127,16 +127,34 @@ anaconda 19.31(python2 世代)+ util-linux 2.23 的四处方言差异,均已内�
 命令中的 UTF-8 中文目录(grub/isolinux 配置透传 → dracut → anaconda NFS
 挂载)均正常,安装源正确识别——中文目录本身不构成障碍。
 
-**V10 SP3 2403(⚠️ 静态网络自动化受限)**:V10 的 NM 为 1.18 世代,对
-"initramfs 已配置过的设备"打 `platform-init` 硬性 unmanaged 标记
-(`nmcli device set managed yes` 无法覆盖),而其 payload 又以 NM 状态为
-网络判据——**死锁**:自动安装永远停在 text 概要的 Network spoke。
-渲染层的 netRepair 段(%pre 修复 anaconda 写坏的 ifcfg:`HWADDR50:…` 缺
-`=`、UUID 段错位,再重新托管)不足以解除该标记。裸 `ip=dhcp` 回退则死在
-更早:dracut 阶段挂中文 NFS 路径失败(emergency shell)。
-**当前交付形态**:V10 SP3 需一次 TTY2 干预(按上序修 ifcfg 后
-`nmcli con reload && nmcli device connect <iface>`,回装界面按 b);
-或使用 V11 镜像(推荐,全链路验证)。
+**V10 SP3 2403(✅ 真机闭环,2026-11-21;根因定案,根治修复待办)**:V10 的 NM
+为 1.18 世代,对"initramfs 已配置过的设备"打运行态 **strict-unmanaged** 硬性
+标记,而其 payload 又以 NM 状态为网络判据——**死锁**:自动安装停在 text 概要
+的 Network spoke(`6) [!] Not connected`)。
+
+**2026-11-21 现场逐层实证(2288H,TTY2 shell)**:dracut 按 boot 参数
+`ip=192.168.1.221::…::m0:none` + `ifname=m0:<MAC>` 的静态配网**本身成功**
+(m0 UP、`.221/24`、默认路由全在),但 NM 对该口打 strict-unmanaged
+(`GENERAL.REASON: 0 (No reason given)`,`IS-SOFTWARE: no`);`/etc/NetworkManager`、
+`/run/NetworkManager`、`/usr/lib/NetworkManager`、`/var/lib/NetworkManager`
+四处**均无 unmanaged 黑名单配置**(非配置源,是 NM 运行态对"非 NM 配置的
+已配置设备"的内建策略);`nmcli general reload`、`nmcli device set managed yes`、
+`systemctl restart NetworkManager` 全部无效;文本 hub 按 `b` 被拒(spoke 未完成)。
+**现场解 = `rmmod i40e && modprobe i40e` 重枚举设备**:unmanaged 标志随旧设备
+消亡,dracut 改名规则自动恢复 `m0`,NM 读 `ifcfg-m0`(静态 profile)激活
+connected → 安装继续,508 包全部装完 + `%post` 完成回调,六阶段全绿
+(`job_a7d1db1792ae`,k10-1121,.221 在线,verify_ready 带内过)。
+
+**渲染层 netRepair 段(%pre 修复 anaconda 写坏的 ifcfg:`HWADDR50:…` 缺
+`=`、UUID 段错位,再重新托管)治不了这个**——修复对象错了:病根不是 ifcfg
+畸形,而是 dracut 静态网本身诱发的 NM 运行态标记。**根治修复方向(待办)**:
+kickstart 系(rocky9/10、kylinv10/11、uniontechos)的 boot 参数**去掉 dracut
+静态网**(`ip=`/`ifname=`/`nameserver=`),装机环境交给 kickstart
+`network --activate` + NM 全权管理,netRepair 段随之退役;ubuntu/autoinstall
+通路的 `ip=`(casper 早期依赖)不动。裸 `ip=dhcp` 回退则死在更早:dracut
+阶段挂中文 NFS 路径失败(emergency shell)。
+**当前交付形态**:vMedia 真机全绿(需一次 TTY2 干预,见上);根治修复落地后
+免干预。V11 镜像零 workaround(推荐)。
 
 ### ubuntu22(autoinstall)
 

@@ -226,9 +226,11 @@ apk add xz);无槽镜像 + seed 意图 = 任务失败(错误点名契约)。
   DriveEraser 对 LSI 卷支持度已有真机结论)
 - rescue 全链闭环实录(真引导已真机实证,两轮真机修复报告预算与 PXE
   载体 plan 404 后,报告→释放未实录);验收探针 qemu+真机轮
-- 复验轮:rocky10-PXE 复核 / kylin V10 受限项(静态网 NM 卡死)/
-  22.04-crypt 的 bond 声明(等 eno2 接线);2288H 单机轮装顺序覆盖
-  (22/24/rocky9 已证明可行)
+- 复验轮:rocky10-PXE 复核 / kylin V10 NM 卡死**真因已定案**(2026-11-21,
+  dracut 静态网 → NM 运行态 strict-unmanaged,vMedia 真机闭环实录见
+  compat/distros §kylin;根治 = kickstart 系 boot 参数去 dracut 静态网,
+  待办)/ 22.04-crypt 的 bond 声明(等 eno2 接线);2288H 单机轮装顺序
+  覆盖(22/24/rocky9 已证明可行;kylinv10 vMedia 已加入 11-21)
 - arm64 投递层真机(等 ARM 机器;SB 签名链 qemu 已验,投递层与 x64 共享
   代码 + opt 93=11 单测覆盖)
 - 附带:LITEON 目标盘换线后复测窗口保留(dd 直写硬件边际,operations

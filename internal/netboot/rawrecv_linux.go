@@ -41,6 +41,12 @@ func (s *Server) startRawRecv(ctx context.Context, dhcpConn, proxyConn, tftpConn
 	if err != nil {
 		return fmt.Errorf("raw recv: AF_PACKET socket: %w", err)
 	}
+	// The segment's unrelated broadcast chatter shares this socket's queue
+	// (no BPF here); a generous receive buffer keeps the frames that matter
+	// from being dropped by the kernel while the read loop filters in user
+	// space.
+	_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, 4<<20)
+
 	// Bind any interface (Ifindex 0): DISCOVERs arrive on whichever
 	// provisioning L2 this host sits on.
 	if err := unix.Bind(fd, &unix.SockaddrLinklayer{Protocol: htons(rawEthPAll), Ifindex: 0}); err != nil {

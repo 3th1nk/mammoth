@@ -82,6 +82,7 @@ replaces a hand-tuned dnsmasq; the kit is exported by the engine
 	pf.IntVar(&o.TFTPPort, "tftp-port", envInt("MAMMOTH_EDGE_TFTP_PORT", 69), "TFTP port")
 	pf.IntVar(&o.SyslogPort, "syslog-port", envInt("MAMMOTH_EDGE_SYSLOG_PORT", 514), "installer-log sink port (bind failure degrades to a warning)")
 	pf.StringVar(&o.DHCPPool, "dhcp-pool", envOr("MAMMOTH_EDGE_DHCP_POOL", ""), `lease pool for segments with NO site DHCP (range "10.0.0.10-50" or comma list; empty = pure proxyDHCP, the site DHCP owns addresses). The engine's lease gate rides along: armed/enroll MACs are synced from /netboot/pool-manifest.json and only they get a lease — unknown MACs stay silent, the pool never serves ordinary hosts. Fresh allocations are liveness-probed (ping + ARP) so a range overlapping static devices is skipped`)
+	pf.StringVar(&o.DHCPGateway, "dhcp-gateway", envOr("MAMMOTH_EDGE_DHCP_GATEWAY", ""), `router option handed out with pool leases (default: derived from this host's route table — the default-route via on the next-server interface, i.e. a gateway the edge host itself uses to leave the segment; no default route = leases carry NO router, same-segment engine required). Only meaningful with --dhcp-pool. Override for multi-homed hosts whose boot segment exits elsewhere, or edge-as-gateway designs`)
 	pf.StringVar(&o.WoLListen, "wol-listen", envOr("MAMMOTH_EDGE_WOL_LISTEN", ""), `HTTP listen address for the Wake-on-LAN relay (e.g. ":9100", empty = off) — the engine calls POST /wol {"mac": ...} for cross-segment headless boots: WoL is an L2 broadcast and the engine is not on the machine's segment, this proxy is`)
 	pf.StringVar(&o.WoLToken, "wol-token", envOr("MAMMOTH_EDGE_WOL_TOKEN", ""), "bearer token required on /wol requests (empty = unauthenticated; the provisioning L2 is the trust boundary, same as the kit)")
 	pf.StringVar(&o.WoLBroadcast, "wol-broadcast", envOr("MAMMOTH_EDGE_WOL_BROADCAST", "255.255.255.255"), "broadcast address the relay sends magic packets to (the provisioning segment's directed broadcast is the precise form)")
@@ -99,6 +100,7 @@ type edgeOptions struct {
 	TFTPPort     int
 	SyslogPort   int
 	DHCPPool     string
+	DHCPGateway  string
 	SyncInterval time.Duration
 	KitToken     string
 	Segment      string
@@ -129,7 +131,32 @@ func runEdge(o edgeOptions) error {
 	var gate *netboot.ManifestGate
 	if o.DHCPPool != "" {
 		ns := net.ParseIP(strings.TrimSpace(o.NextServer))
-		pool, perr := netboot.ParseDHCPPool(o.DHCPPool, ns)
+		// Lease router: DHCP server and gateway are independent roles.
+		// Default is derived from this host's own route table — the default
+		// route via on the interface that owns next-server, i.e. a gateway
+		// this host has proven to leave the segment. --dhcp-gateway
+		// overrides (multi-homed hosts whose boot segment exits elsewhere,
+		// edge-as-gateway designs with NAT/audit on the forward path). No
+		// derivation = isolated segment, the engine must be local, so no
+		// router option goes out at all (same-segment boot works, and a
+		// wrong guess would strand cross-segment traffic invisibly).
+		var router net.IP
+		switch raw := strings.TrimSpace(o.DHCPGateway); raw {
+		case "":
+			if gw, ok := netboot.DefaultGatewayFor(ns); ok {
+				router = gw
+				fmt.Fprintf(os.Stderr, "edge: pool lease router derived from default route: %s\n", gw)
+			} else {
+				fmt.Fprintf(os.Stderr, "edge: WARN no default route on the next-server interface — pool leases carry NO router option (same-segment engine required, or set --dhcp-gateway)\n")
+			}
+		default:
+			gw := net.ParseIP(raw)
+			if gw == nil || gw.To4() == nil {
+				return fmt.Errorf("edge: --dhcp-gateway: %q is not an IPv4 address", raw)
+			}
+			router = gw
+		}
+		pool, perr := netboot.ParseDHCPPool(o.DHCPPool, router)
 		if perr != nil {
 			return fmt.Errorf("edge: --dhcp-pool: %w", perr)
 		}

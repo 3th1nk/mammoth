@@ -75,8 +75,18 @@ func EnsurePoolTree(ctx context.Context, e *Executor, isoPath, sha string, pool 
 	}
 	// First build pays the disk: refuse before moving gigabytes into a full
 	// volume (the per-task boot tree got this guard after the third
-	// disk-full killed a run mid-flight).
-	if err := poolStoreHeadroom(e.MediaDir); err != nil {
+	// disk-full killed a run mid-flight). The unpacked tree is on the order
+	// of the ISO itself — scale the floor with it (a fixed 3GiB floor let a
+	// 15G DVD start an extraction it could never finish: 2026-11-21 rocky
+	// round, the volume filled mid-extract and the failed tmp tree took
+	// another cleanup pass).
+	need := int64(poolStoreMinFree)
+	if st, err := os.Stat(isoPath); err == nil {
+		if want := st.Size() + int64(poolStoreMinFree); want > need {
+			need = want
+		}
+	}
+	if err := poolStoreHeadroom(e.MediaDir, need); err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(filepath.Join(e.MediaDir, PoolStoreDirName), 0o755); err != nil {
@@ -138,15 +148,15 @@ func EnsurePoolTree(ctx context.Context, e *Executor, isoPath, sha string, pool 
 // low — with directions that fit the SHARED tree (a per-task sweep cannot
 // reclaim it; the operator deletes unused distro trees by hand, and they
 // re-extract on the next install).
-func poolStoreHeadroom(dir string) error {
+func poolStoreHeadroom(dir string, need int64) error {
 	var st unix.Statfs_t
 	if err := unix.Statfs(dir, &st); err != nil {
 		return nil // unknown volume state: let the build try and fail honestly
 	}
 	free := int64(st.Bavail) * int64(st.Bsize)
-	if free < poolStoreMinFree {
-		return fmt.Errorf("pool-store volume is low on space (%dMiB free, need %dMiB) — remove unused distro trees under %s (they re-extract on the next install of that image)",
-			free>>20, poolStoreMinFree>>20, filepath.Join(dir, PoolStoreDirName))
+	if free < need {
+		return fmt.Errorf("pool-store volume is low on space (%dMiB free, need %dMiB for this extraction) — remove unused distro trees under %s (they re-extract on the next install of that image)",
+			free>>20, need>>20, filepath.Join(dir, PoolStoreDirName))
 	}
 	return nil
 }

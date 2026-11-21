@@ -7,6 +7,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"golang.org/x/sys/unix"
 	"testing"
 	"time"
 
@@ -168,5 +171,28 @@ func TestNFSRootForRelPath(t *testing.T) {
 	}
 	if nfsRootFor("", "x") != "" || nfsRootFor("nfs://host", "x") != "" {
 		t.Fatal("empty base or export must yield empty result")
+	}
+}
+
+// The headroom gate scales with the ISO: a 15G DVD must not start an
+// extraction on a volume that is 13G free (2026-11-21 rocky round — the
+// fixed 3GiB floor let it start and the volume filled mid-extract). The
+// refusal must name the need, not just the floor.
+func TestPoolStoreHeadroomScalesWithISO(t *testing.T) {
+	dir := t.TempDir()
+	if err := poolStoreHeadroom(dir, 1<<30); err != nil {
+		t.Fatalf("a small need must pass on any writable volume: %v", err)
+	}
+	var st unix.Statfs_t
+	if err := unix.Statfs(dir, &st); err != nil {
+		t.Skipf("statfs unavailable: %v", err)
+	}
+	free := int64(st.Bavail) * int64(st.Bsize)
+	err := poolStoreHeadroom(dir, free+(1<<30))
+	if err == nil {
+		t.Fatal("need beyond free must be refused before the extraction starts")
+	}
+	if !strings.Contains(err.Error(), "for this extraction") {
+		t.Fatalf("refusal must name the scaled need: %v", err)
 	}
 }

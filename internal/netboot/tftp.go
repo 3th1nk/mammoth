@@ -64,8 +64,10 @@ func serveTFTP(ctx context.Context, conn *net.UDPConn, files fs.FS, render func(
 		}
 		name, opts, perr := parseRRQ(buf[:n])
 		if perr != nil {
+			log("tftp: RRQ parse failed from %s (%d bytes) — dropped", addr.IP, n)
 			continue // garbage: drop, the client retries
 		}
+		log("tftp: RRQ %q from %s blksize=%d tsize=%v", name, addr.IP, opts.blksize, opts.tsize)
 		// grubnet requests paths rooted at its (tftp)/grub/ prefix with a
 		// leading slash; the embedded FS is slash-less.
 		name = strings.TrimPrefix(name, "/")
@@ -177,24 +179,54 @@ func transferTFTP(c *net.UDPConn, addr *net.UDPAddr, files fs.FS, render func(st
 		}
 	}()
 
-	// tsize answer without blksize echo: the transfer stays at the classic
-	// 512 while the client still learns the size (RFC 2348 §2 — unacknowledged
-	// options keep their default; a server MAY answer only the subset it
-	// honors). Clients that ACK the OACK proceed normally; clients that stay
-	// silent on it (X722 shim, Insyde first hop) get the DATA anyway.
+	// OACK carries tsize only (the 2026-11-04 Insyde/X722 verdict: echoing
+	// blksize produces negotiated-size DATA that stalls those stacks at
+	// block 1 — the un-echoed option keeps its default per RFC 2348 §2).
+	// The block-0 ACK then decides the family: ACKed → the negotiated-size
+	// path could run, but no firmware measured so far ACKs it while also
+	// needing it, so the classic 512 serves both (Insyde clean; the iBMC
+	// LOM's block-4 stall happens with or without the echo — its own
+	// datagram-loss issue, tracked separately).
+	var oackOpts []byte
 	if opts.tsize && knowsSize {
-		var oack []byte
-		oack = binary.BigEndian.AppendUint16(oack, tftpOACK)
-		oack = binary.BigEndian.AppendUint16(oack, 0)
-		oack = append(oack, "tsize\x00"...)
-		oack = append(oack, strconv.FormatInt(size, 10)+"\x00"...)
-		if !sendExpectACKN(c, addr, oack, 0, tftpOACKRetries) {
-			log("tftp: client %s did not ack oack for %q — sending data anyway", addr.IP, name)
-		}
+		oackOpts = append(oackOpts, "tsize\x00"...)
+		oackOpts = append(oackOpts, strconv.FormatInt(size, 10)+"\x00"...)
 	}
+	// Firmware families split on the block-0 ACK of the OACK: stacks that
+	// honor the negotiation get the transfer at the negotiated blksize
+	// (RFC 2348); stacks that stay silent on the OACK (X722 shim, iBMC PXE
+	// both observed) get the classic 512 fallback — their block accounting
+	// is built for it, and negotiated-size DATA stalls them at different
+	// points (Insyde: block 1; iBMC: block 4).
+	if len(oackOpts) == 0 {
+		if err := sendFile(c, addr, r, tftpBlockSize); err != nil {
+			log("tftp: transfer of %q to %s failed: %v", name, addr.IP, err)
+		}
+		return
+	}
+	oack := binary.BigEndian.AppendUint16(nil, tftpOACK)
+	oack = binary.BigEndian.AppendUint16(oack, 0)
+	oack = append(oack, oackOpts...)
+	if sendExpectACKN(c, addr, oack, 0, tftpOACKRetries) {
+		if err := sendFile(c, addr, r, blkSizeFor(opts)); err != nil {
+			log("tftp: transfer of %q to %s failed: %v", name, addr.IP, err)
+		}
+		return
+	}
+	log("tftp: client %s did not ack oack for %q — falling back to classic 512", addr.IP, name)
 	if err := sendFile(c, addr, r, tftpBlockSize); err != nil {
 		log("tftp: transfer of %q to %s failed: %v", name, addr.IP, err)
 	}
+}
+
+// blkSizeFor resolves the transfer block size for a client that honored the
+// OACK: the requested blksize (clamped to the RFC 2348 range) when it asked
+// for one, the classic 512 otherwise.
+func blkSizeFor(opts rrqOptions) int {
+	if opts.blksize >= 8 && opts.blksize <= 65464 {
+		return opts.blksize
+	}
+	return tftpBlockSize
 }
 
 // sendFile runs the lockstep block loop (RFC 1350 §8: one DATA, wait ACK,

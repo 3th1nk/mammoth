@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -57,6 +58,11 @@ func (c *rrqClient) recv() []byte {
 	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	b := make([]byte, 65536)
 	n, from, err := c.conn.ReadFromUDP(b)
+	if testing.Verbose() {
+		t, _ := os.LookupEnv("TEST_DEBUG_FROM")
+		_ = t
+		fmt.Printf("  [recv] from=%s op=%d n=%d\n", from, b[:min(2, n)], n)
+	}
 	if err != nil {
 		panic(err)
 	}
@@ -65,6 +71,15 @@ func (c *rrqClient) recv() []byte {
 }
 
 func (c *rrqClient) fetch(to *net.UDPAddr, name string, opts ...string) []byte {
+	// Drain leftovers from earlier PXE steps on the shared client socket —
+	// a stale proxyDHCP reply here masquerades as the TFTP answer.
+	c.conn.SetReadDeadline(time.Now().Add(time.Millisecond))
+	for {
+		if _, _, err := c.conn.ReadFromUDP(make([]byte, 1500)); err != nil {
+			break
+		}
+	}
+	c.conn.SetReadDeadline(time.Time{})
 	rrq := append([]byte{0, tftpRRQ}, (name + "\x00octet\x00")...)
 	for i := 0; i+1 < len(opts); i += 2 {
 		rrq = append(rrq, (opts[i] + "\x00" + opts[i+1] + "\x00")...)
@@ -76,7 +91,7 @@ func (c *rrqClient) fetch(to *net.UDPAddr, name string, opts ...string) []byte {
 	// boot ROM measured; see tftpBlockSize).
 	first := c.recv()
 	if op := binary.BigEndian.Uint16(first[:2]); op != tftpDATA {
-		panic(fmt.Sprintf("want DATA, got op=%d", op))
+		panic(fmt.Sprintf("want DATA, got op=%d (%q)", op, first[:min(64, len(first))]))
 	}
 	wantBlock := binary.BigEndian.Uint16(first[2:4])
 	var out []byte

@@ -134,12 +134,21 @@ func (r *Reaper) sweep(ctx context.Context, limit time.Duration) {
 		if err != nil {
 			continue
 		}
-		r.Events.Append(ctx, "task", id, "task.interrupted", map[string]any{
+		// Cancel-flagged stale tasks settle as canceled (their owner runner
+		// is gone — nobody honors the flag cooperatively); the rest are the
+		// classic retryable interruption.
+		ev := "task.interrupted"
+		lvl := r.Logger.WarnContext
+		if task.State == "canceled" {
+			ev = "task.canceled"
+		}
+		r.Events.Append(ctx, "task", id, ev, map[string]any{
 			"machine_id": task.MachineID, "job_id": task.JobID,
 		})
 		_ = r.Jobs.RecomputeJob(ctx, task.JobID)
-		r.Logger.WarnContext(ctx, "task interrupted by reaper",
-			obs.FieldTaskID, id, obs.FieldMachineID, task.MachineID)
+		lvl(ctx, "task settled by reaper",
+			obs.FieldTaskID, id, obs.FieldMachineID, task.MachineID,
+			"task_state", task.State)
 	}
 	if len(ids) > 0 {
 		r.Logger.WarnContext(ctx, "reaper interrupted tasks", "count", len(ids))

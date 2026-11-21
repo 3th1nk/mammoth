@@ -380,21 +380,29 @@ func (r *JobRepo) InterruptTask(ctx context.Context, taskID string) error {
 
 // InterruptStaleTasks reaps every running task whose heartbeat is older than
 // the timeout and returns the reaped ids.
+// InterruptStaleTasks reaps every running task whose heartbeat is older than
+// the limit. Tasks carrying a cancel flag settle as canceled (their owner
+// runner is gone — nobody will honor the flag cooperatively, and leaving
+// them interrupted pins the job non-terminal forever; observed live when an
+// engine upgrade restart killed both the runner and its heartbeats while a
+// cancel was flagged). Others become retryable interrupted as before.
 func (r *JobRepo) InterruptStaleTasks(ctx context.Context, olderThan time.Duration) ([]string, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		UPDATE tasks SET state='interrupted', owner_runner = NULL, updated_at = now()
+		UPDATE tasks SET
+		  state = CASE WHEN cancel_requested THEN 'canceled' ELSE 'interrupted' END,
+		  owner_runner = NULL, updated_at = now()
 		WHERE state = 'running'
 		  AND heartbeat_at IS NOT NULL
 		  AND heartbeat_at < now() - make_interval(secs => $1)
-		RETURNING id`, olderThan.Seconds())
+		RETURNING id, state`, olderThan.Seconds())
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var ids []string
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var id, state string
+		if err := rows.Scan(&id, &state); err != nil {
 			return nil, err
 		}
 		ids = append(ids, id)

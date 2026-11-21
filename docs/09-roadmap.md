@@ -187,6 +187,13 @@ apk add xz);无槽镜像 + seed 意图 = 任务失败(错误点名契约)。
 > operations §4.8.1)、dd 真机端到端(2288H 六轮 + 办公 PC 直写)、
 > ubuntu26 确认门、UOS 双通路复核、kylin V11 / rocky10(vMedia)、
 > agent PXE 载体(miniproot 换代)均已真机收口,移出本清单。
+> 2026-11-21 增补实测:**.74 跨网段 vMedia 装机六阶段绿**(ubuntu24 库
+> 引用,BMC 挂 .250 NFS ISO,`.221` 在线;HANDOFF §装机实测会话)——
+> 顺带实证三条:iBMC PXE 固件发包缺陷(LOM1 DISCOVER UDP checksum 错,
+> 内核丢包 → Linux DHCP 服务全收不到 → PXE-E18;**待 tcpdump -v 独立
+> 复核**,修复方向 = edge raw 接收通道,候选)、console/KVM 与 boot
+> 并发的 set_boot_device 412(修复 58d3831 待部署)、spec.network
+> match.mac 必须跟实际接线口(LOM1=97,旧记 94 渲染 = 装后地址死)。
 
 - relay 跨网段真机回归(等网络设备 ip helper 协调窗口;giaddr 应答已有
   单测,11-pxe-walkthrough §4;edge 跨网段形态已真机全链,仅 relay/giaddr

@@ -199,6 +199,12 @@ apk add xz);无槽镜像 + seed 意图 = 任务失败(错误点名契约)。
 > (raw 收 DISCOVER/OFFER/租约全通——客户端 ACK 间歇丢,**SO_RCVBUF
 > 未解**,调试入口见 HANDOFF §PXE 直测会话;另证:.107 dnsmasq 与
 > edge-pool 并存的双 DHCP 混战、KVM 未开时 412 不触发)。
+> 11-21 终:**TFTP 协商分型落地**(OACK 的 block-0 ACK 分型:ACK 的
+> 固件走协商 blksize(RFC 2348),静默的回退 classic 512——Insyde 与
+> iBMC 两类固件的兼容层)+ **PXE 直测终轮**(raw/OFFER/租约/RRQ/OACK
+> 全通后,协商与 classic 双模式都卡在客户端第 5 包——固件级逐包调试
+> 待下轮,tcpdump -X 全会话窗口对齐;.107 dnsmasq 已停,双 DHCP 混战
+> 源消除)。
 
 - relay 跨网段真机回归(等网络设备 ip helper 协调窗口;giaddr 应答已有
   单测,11-pxe-walkthrough §4;edge 跨网段形态已真机全链,仅 relay/giaddr

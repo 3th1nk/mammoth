@@ -194,6 +194,11 @@ apk add xz);无槽镜像 + seed 意图 = 任务失败(错误点名契约)。
 > 复核**,修复方向 = edge raw 接收通道,候选)、console/KVM 与 boot
 > 并发的 set_boot_device 412(修复 58d3831 待部署)、spec.network
 > match.mac 必须跟实际接线口(LOM1=97,旧记 94 渲染 = 装后地址死)。
+> 11-21 续:**edge raw 接收通道落地**(AF_PACKET 67/4011 + TFTP 69
+> 会话端口注册表重注入),PXE 直测推进到 TFTP 卡 block 1-4 间歇
+> (raw 收 DISCOVER/OFFER/租约全通——客户端 ACK 间歇丢,**SO_RCVBUF
+> 未解**,调试入口见 HANDOFF §PXE 直测会话;另证:.107 dnsmasq 与
+> edge-pool 并存的双 DHCP 混战、KVM 未开时 412 不触发)。
 
 - relay 跨网段真机回归(等网络设备 ip helper 协调窗口;giaddr 应答已有
   单测,11-pxe-walkthrough §4;edge 跨网段形态已真机全链,仅 relay/giaddr

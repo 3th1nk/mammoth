@@ -317,6 +317,14 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 
 	udpLog := func(format string, args ...any) { s.logf(format, args...) }
 
+	// Raw receive channel (Linux): frames the kernel drops for an invalid
+	// UDP checksum (broken PXE firmwares — iBMC LOM observed) still reach
+	// AF_PACKET; those feed the same handler. Capability-missing degrades
+	// to a warning, checksum-clean clients are unaffected either way.
+	if rerr := s.startRawRecv(ctx, dhcpConn, proxyConn); rerr != nil {
+		s.logf("raw receive channel unavailable (%v) — checksum-broken PXE clients will not be served", rerr)
+	}
+
 	dhcpDone := make(chan struct{})
 	proxyDone := make(chan struct{})
 	tftpDone := make(chan struct{})

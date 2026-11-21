@@ -31,6 +31,12 @@ type Fetcher struct {
 	Dir    string
 	Logger *slog.Logger
 	HTTP   *http.Client
+	// CanonicalDistro maps a (distro, version) detection onto the registered
+	// driver name before it lands in the catalog's distro column — the spec
+	// fills that column verbatim, so it must store "kylinv10", not the
+	// detect token "kylin" (render.Registry.CanonicalDistro at assembly).
+	// nil keeps the raw detection.
+	CanonicalDistro func(distro, version string) string
 
 	inFlight map[string]bool
 }
@@ -81,9 +87,17 @@ func (f *Fetcher) process(ctx context.Context, im *store.Image) {
 	// no download. The first registration pays; every later one is a
 	// rename on the row.
 	if shared, err := f.Repo.ReadyBySHA(ctx, im.SHA256); err == nil && shared.ID != im.ID {
-		// inherit the shared row's identification for blank fields
+		// inherit the shared row's identification for blank fields —
+		// through the canonical map too: the shared row may predate the
+		// mapping (its distro column still reads "kylin"), and a new row
+		// inheriting that verbatim would re-plant the drift (the map is
+		// idempotent on already-canonical names).
 		if im.Distro == "" || im.Version == "" {
-			if derr := f.Repo.SetDetected(ctx, im.ID, shared.Distro, shared.Version); derr != nil {
+			sharedDistro := shared.Distro
+			if f.CanonicalDistro != nil {
+				sharedDistro = f.CanonicalDistro(shared.Distro, shared.Version)
+			}
+			if derr := f.Repo.SetDetected(ctx, im.ID, sharedDistro, shared.Version); derr != nil {
 				log.Warn("dedupe inherit detection failed", "err", derr.Error())
 			}
 		}
@@ -124,6 +138,9 @@ func (f *Fetcher) process(ctx context.Context, im *store.Image) {
 			distro, version, ok := DetectISO(fh)
 			fh.Close()
 			if ok && (im.Distro == "" || im.Version == "") {
+				if f.CanonicalDistro != nil {
+					distro = f.CanonicalDistro(distro, version)
+				}
 				if derr := f.Repo.SetDetected(ctx, im.ID, distro, version); derr == nil {
 					if im.Distro == "" && distro != "" {
 						im.Distro = distro

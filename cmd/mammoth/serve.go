@@ -601,10 +601,11 @@ func serve(args []string) error {
 		// (docs/09-roadmap.md 下一阶段 6). Single worker, like the
 		// dispatcher and the reaper.
 		fetcher := &images.Fetcher{
-			Repo:   imageRepo,
-			Events: eventRepo,
-			Dir:    filepath.Join(cfg.MediaDir, "images"),
-			Logger: logger,
+			Repo:            imageRepo,
+			Events:          eventRepo,
+			Dir:             filepath.Join(cfg.MediaDir, "images"),
+			Logger:          logger,
+			CanonicalDistro: renderReg.CanonicalDistro,
 		}
 		go func() { _ = fetcher.Run(ctx) }()
 		// Directory scanner: ISOs the operator copies into the images dir
@@ -612,10 +613,11 @@ func serve(args []string) error {
 		// rows whose cache file vanished out of band are flagged missing
 		// and auto-restored when the file returns.
 		scanner := &images.DirectoryScanner{
-			Repo:   imageRepo,
-			Events: eventRepo,
-			Dir:    filepath.Join(cfg.MediaDir, "images"),
-			Logger: logger,
+			Repo:            imageRepo,
+			Events:          eventRepo,
+			Dir:             filepath.Join(cfg.MediaDir, "images"),
+			Logger:          logger,
+			CanonicalDistro: renderReg.CanonicalDistro,
 		}
 		go func() { _ = scanner.Run(ctx) }()
 		// Compression-facts backfill (docs/09「镜像直写通路」库镜像压缩识别):

@@ -58,6 +58,10 @@ type DirectoryScanner struct {
 	// content-addressed cache the fetch worker fills.
 	Dir    string
 	Logger *slog.Logger
+	// CanonicalDistro maps a detection onto the registered driver name
+	// before the catalog's distro column stores it (mirror of Fetcher's
+	// field; nil keeps the raw detection).
+	CanonicalDistro func(distro, version string) string
 }
 
 func (s *DirectoryScanner) logger() *slog.Logger {
@@ -235,6 +239,9 @@ func (s *DirectoryScanner) importFile(ctx context.Context, path, name, sha strin
 		}
 	}
 	if distro != "" || version != "" {
+		if s.CanonicalDistro != nil {
+			distro = s.CanonicalDistro(distro, version)
+		}
 		if derr := s.Repo.SetDetected(ctx, im.ID, distro, version); derr != nil {
 			log.Warn("detection persist failed", "image", im.ID, "err", derr.Error())
 		}

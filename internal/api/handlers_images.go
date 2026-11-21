@@ -37,12 +37,21 @@ func (s *Server) CreateImage(ctx context.Context, request gen.CreateImageRequest
 		return nil, verr("SCHEMA_INTERNAL", "image library not configured")
 	}
 
+	// Normalize the hand-filled identification at the door: the catalog's
+	// distro column is what the spec fills verbatim, so a registration
+	// saying "Kylin" must land as the canonical driver name (or at least
+	// the lowercase family when no version can complete the join) — the
+	// SetDetected backfill never overwrites a non-empty column.
+	handDistro := derefOr(body.Distro, "")
+	if s.Render != nil {
+		handDistro = s.Render.CanonicalDistro(handDistro, derefOr(body.Version, ""))
+	}
 	im := &store.Image{
 		ID:        store.NewID("img"),
 		Name:      derefOr(body.Name, ""),
 		SourceURL: body.SourceUrl,
 		SHA256:    body.Sha256,
-		Distro:    derefOr(body.Distro, ""),
+		Distro:    handDistro,
 		Version:   derefOr(body.Version, ""),
 		State:     "fetching",
 	}

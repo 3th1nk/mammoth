@@ -980,3 +980,58 @@ func (r *Registry) FamilyCandidates(distro string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// CanonicalDistro maps a detection-classification (distro, version) pair —
+// or an operator's hand-filled registration — onto the registered driver
+// name the spec fills. The two namespaces had drifted: the catalog detects
+// "kylin"+"v10" while the driver is "kylinv10", "rocky"+"9.8" while the
+// driver is "rocky9" (A-step made the mismatch fail early with family
+// candidates; this closes the gap at the source — the catalog's distro
+// column now stores the name the spec can use verbatim). Resolution order:
+// exact name (case-insensitive), the family joined with the version's
+// leading number ("kylin"/"v10" → kylinv10, "rocky"/"9.8" → rocky9,
+// "ubuntu"/"24.04.1" → ubuntu24, "debian"/"13.7.0" → debian13), the
+// uos → uniontechos synonym, and finally the lower-cased input (the
+// catalog convention is lowercase tokens — "Kylin" registrations normalize
+// even without a version to join). Empty stays empty.
+func (r *Registry) CanonicalDistro(distro, version string) string {
+	if distro == "" {
+		return distro
+	}
+	fam := strings.ToLower(distro)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if _, ok := r.drivers[fam]; ok {
+		return fam
+	}
+	if fam == "uos" {
+		if _, ok := r.drivers["uniontechos"]; ok {
+			return "uniontechos"
+		}
+	}
+	if n := leadingVersionNumber(version); n != "" {
+		// both family-name shapes exist in the registry: bare ("rocky9",
+		// "ubuntu24") and v-prefixed ("kylinv10") — try both.
+		for _, cand := range []string{fam + n, fam + "v" + n} {
+			if _, ok := r.drivers[cand]; ok {
+				return cand
+			}
+		}
+	}
+	return fam
+}
+
+// leadingVersionNumber extracts the first run of digits in the version —
+// the major number the canonical family names carry ("v10" → "10",
+// "9.8" → "9", "24.04.1" → "24"). Empty when the version carries none.
+func leadingVersionNumber(version string) string {
+	digits := ""
+	for _, c := range version {
+		if c >= '0' && c <= '9' {
+			digits += string(c)
+		} else if digits != "" {
+			break
+		}
+	}
+	return digits
+}

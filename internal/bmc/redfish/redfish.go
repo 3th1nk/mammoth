@@ -423,12 +423,41 @@ func enabledFor(once bool) string {
 
 // patchSystemBoot PATCHes the Boot object, carrying the resource's ETag as
 // If-Match when the firmware publishes one (409 PreconditionFailed otherwise).
-func patchSystemBoot(c *gofish.APIClient, systemURL string, boot map[string]any) (*http.Response, error) {
+// bootPatcher is the slice of the gofish client patchSystemBoot needs — an
+// interface so the 412-retry logic is testable without a real BMC.
+type bootPatcher interface {
+	Get(url string) (*http.Response, error)
+	PatchWithHeaders(url string, payload interface{}, headers map[string]string) (*http.Response, error)
+}
+
+func patchSystemBoot(c bootPatcher, systemURL string, boot map[string]any) (*http.Response, error) {
+	resp, err := patchBootOnce(c, systemURL, boot)
+	if err != nil || resp.StatusCode != http.StatusPreconditionFailed {
+		return resp, err
+	}
+	// 412 PreconditionFailed: the ETag raced a concurrent session (a KVM or
+	// console page on the same iBMC advances the resource version between
+	// our GET and PATCH — observed live during an install while the
+	// operator watched the console page). One refresh-and-retry heals it in
+	// place; a persisting session storm falls through to the stage-level
+	// retry, which covers it (the kind stays retryable).
+	for retry := 0; retry < 2; retry++ {
+		time.Sleep(300 * time.Millisecond)
+		resp, err = patchBootOnce(c, systemURL, boot)
+		if err != nil || resp.StatusCode != http.StatusPreconditionFailed {
+			return resp, err
+		}
+	}
+	return resp, err
+}
+
+// patchBootOnce is one GET-ETag-then-PATCH round: pass the published ETag
+// through verbatim (including any weak `W/` prefix — iBMC 6.41 both
+// publishes and requires exactly this form; verified by a live 200 on the
+// value its GET returned).
+func patchBootOnce(c bootPatcher, systemURL string, boot map[string]any) (*http.Response, error) {
 	headers := map[string]string{}
 	if resp, err := c.Get(systemURL); err == nil {
-		// Pass the published ETag through verbatim (including any weak
-		// `W/` prefix — iBMC 6.41 both publishes and requires exactly this
-		// form; verified by a live 200 on the value its GET returned).
 		etag := resp.Header.Get("ETag")
 		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
@@ -436,8 +465,7 @@ func patchSystemBoot(c *gofish.APIClient, systemURL string, boot map[string]any)
 			headers["If-Match"] = etag
 		}
 	}
-	payload := map[string]any{"Boot": boot}
-	return c.PatchWithHeaders(systemURL, payload, headers)
+	return c.PatchWithHeaders(systemURL, map[string]any{"Boot": boot}, headers)
 }
 
 func bootTargetFor(d bmc.BootDevice) (redfish.BootSourceOverrideTarget, bool) {

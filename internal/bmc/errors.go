@@ -98,6 +98,12 @@ func Classify(op string, err error) *Error {
 		return opErr(op, KindAuthFailed, err, "")
 	case strings.Contains(msg, "404") || strings.Contains(strings.ToLower(msg), "not found"):
 		return opErr(op, KindProtocolError, err, "resource missing (http 404)")
+	// 412 PreconditionFailed is an If-Match/ETag race with concurrent
+	// sessions (a KVM or console page advancing the iBMC resource version
+	// between our GET and PATCH) — transient and self-healing on retry,
+	// never a network problem. Retryable by kind (ProtocolError).
+	case strings.Contains(msg, "412") || strings.Contains(strings.ToLower(msg), "precondition"):
+		return opErr(op, KindProtocolError, err, "precondition failed (etag race) — retryable")
 	default:
 		return opErr(op, KindUnreachable, err, msg)
 	}

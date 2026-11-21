@@ -201,10 +201,21 @@ apk add xz);无槽镜像 + seed 意图 = 任务失败(错误点名契约)。
 > edge-pool 并存的双 DHCP 混战、KVM 未开时 412 不触发)。
 > 11-21 终:**TFTP 协商分型落地**(OACK 的 block-0 ACK 分型:ACK 的
 > 固件走协商 blksize(RFC 2348),静默的回退 classic 512——Insyde 与
-> iBMC 两类固件的兼容层)+ **PXE 直测终轮**(raw/OFFER/租约/RRQ/OACK
-> 全通后,协商与 classic 双模式都卡在客户端第 5 包——固件级逐包调试
-> 待下轮,tcpdump -X 全会话窗口对齐;.107 dnsmasq 已停,双 DHCP 混战
-> 源消除)。
+> iBMC 两类固件的兼容层)+ **PXE 直测终局:端到端根因修复,通道复活**。
+> 双模式卡客户端第 5 包的谜底 = **edge 自身两个缺陷,固件无恙**:
+> ①raw 通道消费端判定反转——ParseFrame 的 checksumOK 被按反义消费,
+> 好包重注入(每个 ACK 到会话 socket 两份,lockstep 错乱互等)、坏
+> DISCOVER 反被跳过(raw 通道立项要救的包从未被救过);"固件 TFTP 栈
+> 缺陷、交互随机卡死"的此轮指控全部推翻;②池 router 硬绑 NextServer
+> ——DHCP 服务者与网关被武断绑死,iPXE 拿 gw=<edge> 而宿主 FORWARD
+> policy DROP,跨段 HTTP 拉脚本死;修复 = 按主机路由表推导段网关为
+> 默认(不赌 .1 惯例、不假定自网关)+ --dhcp-gateway 显式覆盖。
+> **端到端实证:.74 PXE 装机六阶段全绿**(boot/TFTP/iPXE HTTP/NFS
+> root/autoinstall/verify_ready 带内探,.221 在线)——固件在 classic
+> 512 + 单投递下与 iPXE 链完全兼容;附带包级实录:固件拒 OACK(tsize)
+> 回 ERROR(8) "User aborted the transfer",blksize-only RRQ 走纯
+> classic = 可用形态(分型已覆盖)。教训沉淀:ParseFrame 有矩阵测试
+> 而消费端无测试,判定反转带绿上线——**契约必须钉在消费侧**。
 
 - relay 跨网段真机回归(等网络设备 ip helper 协调窗口;giaddr 应答已有
   单测,11-pxe-walkthrough §4;edge 跨网段形态已真机全链,仅 relay/giaddr

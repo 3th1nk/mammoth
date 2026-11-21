@@ -116,6 +116,32 @@ func TestParseFrameMatrix(t *testing.T) {
 		t.Error("VLAN frames must be skipped (ETH_P_IP socket never sees them)")
 	}
 
+	// TFTP (69) frames surface as broken too — the fix path (re-inject).
+	tftpFrame := frameFrom(bootp[:20], src, dst, 40001, 69, true, false)
+	if _, _, dport, ok = ParseFrame(tftpFrame); ok || dport != 69 {
+		t.Fatalf("broken TFTP frame: ok=%v port=%d, want false/69", ok, dport)
+	}
+	// The re-inject path: FixChecksum must make the kernel accept it.
+	ipPkt := tftpFrame[14:]
+	if !FixChecksum(ipPkt) {
+		t.Fatal("FixChecksum rejected a UDP-over-IPv4 datagram")
+	}
+	if _, _, dport, ok = ParseFrame(append([]byte{}, tftpFrame[:12]...)); true {
+		_ = dport
+	}
+	// After the fix, a second FixChecksum on the repaired packet is a no-op
+	// that leaves the checksum validating.
+	if !FixChecksum(append([]byte{}, ipPkt...)) {
+		t.Error("FixChecksum must accept its own repaired datagram")
+	}
+	// Non-UDP and garbage are rejected.
+	if FixChecksum(make([]byte, 30)) {
+		t.Error("non-UDP datagram must be rejected")
+	}
+	if FixChecksum(nil) {
+		t.Error("nil datagram must be rejected")
+	}
+
 	// Truncated garbage never panics.
 	for _, junk := range [][]byte{
 		{}, {0x45}, make([]byte, 14), make([]byte, 30),

@@ -10,28 +10,30 @@ import (
 // V5 LOM) emit DHCP DISCOVERs with an invalid UDP checksum, and the
 // kernel silently drops those before any UDP socket can see them. The
 // AF_PACKET socket sees every frame at L2 — ParseFrame is the filter that
-// decides which frames the raw channel feeds to the DHCP handler.
+// decides which frames the raw channel feeds to the DHCP handler or
+// re-injects with a repaired checksum (TFTP sessions, FixChecksum).
 //
 // De-dup contract: frames whose UDP checksum VALIDATES are already
 // delivered by the kernel to the ordinary UDP socket — the raw channel
 // must skip them (checksumOK=true). Only frames that FAIL validation
-// (checksumOK=false) are handed to the handler, so each DISCOVER is
-// processed exactly once regardless of how the client's firmware computes
-// its checksums.
+// (checksumOK=false) are handed onward, so each datagram is processed
+// exactly once regardless of how the client's firmware computes its
+// checksums.
 
 const (
 	udpProto = 17 // IP protocol number for UDP
 
 	dhcpPort      = 67   // where DISCOVERs land (and the built-in DHCP listens)
 	proxyDHCPPort = 4011 // PXE boot-server discovery port
+	tftpPort      = 69   // NBP transfer (fixed default; configurable ports need ParseFrame adjusted)
 )
 
-// ParseFrame decodes an ethernet frame into a DHCP datagram. It returns
-// ok=false for anything that is not an IPv4 UDP datagram addressed to one
-// of the responder ports (67/4011), and checksumOK=true for datagrams
-// whose UDP checksum validates (the kernel's UDP socket already owns
-// those). VLAN-tagged frames are not handled here — the AF_PACKET socket
-// is opened with ETH_P_IP, which does not see 802.1Q frames.
+// ParseFrame decodes an ethernet frame into a UDP datagram addressed to one
+// of the responder ports (67/4011/69). It returns ok=false for anything
+// else, and checksumOK=true for datagrams whose UDP checksum validates
+// (the kernel's UDP socket already owns those). VLAN-tagged frames are not
+// handled here — the AF_PACKET socket is opened with ETH_P_IP, which does
+// not see 802.1Q frames.
 func ParseFrame(frame []byte) (payload []byte, srcIP net.IP, dstPort int, checksumOK bool) {
 	// Ethernet II header: dst(6) src(6) type(2).
 	if len(frame) < 14 {
@@ -62,14 +64,14 @@ func ParseFrame(frame []byte) (payload []byte, srcIP net.IP, dstPort int, checks
 		return nil, nil, 0, false
 	}
 	dstPort = int(binary.BigEndian.Uint16(udp[2:4]))
-	if dstPort != dhcpPort && dstPort != proxyDHCPPort {
+	if dstPort != dhcpPort && dstPort != proxyDHCPPort && dstPort != tftpPort {
 		return nil, nil, 0, false
 	}
 	udpLen := int(binary.BigEndian.Uint16(udp[4:6]))
 	if udpLen < 8 || udpLen > len(udp) {
 		return nil, nil, 0, false
 	}
-	dgram := udp[:udpLen] // UDP header + DHCP datagram
+	dgram := udp[:udpLen] // UDP header + datagram
 
 	wire := binary.BigEndian.Uint16(udp[6:8])
 	// Zero checksum means "not computed" (IPv4) — the kernel accepts it and
@@ -90,6 +92,35 @@ func ParseFrame(frame []byte) (payload []byte, srcIP net.IP, dstPort int, checks
 		return dgram[8:], srcIP, dstPort, false
 	}
 	return dgram[8:], srcIP, dstPort, true
+}
+
+// FixChecksum rewrites the UDP checksum of an IPv4 datagram in place so the
+// kernel accepts it. The raw channel uses it to re-inject checksum-broken
+// datagrams (TFTP ACK/RRQ on port 69) to their local session socket, which
+// the kernel had dropped. Returns false when the datagram is not a
+// UDP-over-IPv4 packet this function can rewrite.
+func FixChecksum(ipPkt []byte) bool {
+	if len(ipPkt) < 28 || ipPkt[0]>>4 != 4 {
+		return false
+	}
+	ihl := int(ipPkt[0]&0x0f) * 4
+	if ihl < 20 || len(ipPkt) < ihl+8 || ipPkt[9] != udpProto {
+		return false
+	}
+	udp := ipPkt[ihl:]
+	udpLen := int(binary.BigEndian.Uint16(udp[4:6]))
+	if udpLen < 8 || udpLen > len(udp) {
+		return false
+	}
+	udp[6], udp[7] = 0, 0 // zero the field before computing
+	pseudo := make([]byte, 0, 12+udpLen)
+	pseudo = append(pseudo, ipPkt[12:16]...)
+	pseudo = append(pseudo, ipPkt[16:20]...)
+	pseudo = append(pseudo, []byte{0, udpProto}...)
+	pseudo = append(pseudo, udp[4:6]...)
+	c := rawChecksum(append(pseudo, udp[:udpLen]...))
+	udp[6], udp[7] = byte(c>>8), byte(c)
+	return true
 }
 
 // rawChecksum is the internet checksum over data (which already carries the

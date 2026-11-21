@@ -80,6 +80,24 @@ func (s *Server) serveRaw(ctx context.Context, fd int, dhcpPC, proxyPC *ipv4.Pac
 			}
 			ifindex = ll.Ifindex
 		}
+		// TFTP (69): the datagrams belong to live transfer sessions — their
+		// session sockets are bound to this host and the kernel dropped the
+		// datagrams for the broken checksum. Repair the checksum and
+		// re-inject the datagram locally: the kernel delivers it to the
+		// session socket, and the transfer resumes as if nothing happened.
+		// (Re-injection must NOT change the source address — TFTP sessions
+		// are keyed on the client's addr, and the raw frame carries it.)
+		if dstPort == tftpPort {
+			ipPkt := frame[14:]
+			if FixChecksum(ipPkt) {
+				dst := &unix.SockaddrInet4{Port: dstPort}
+				copy(dst.Addr[:], frame[30:34]) // inner IP dst = this host
+				if serr := unix.Sendto(fd, ipPkt, 0, dst); serr != nil {
+					s.logf("tftp: raw re-inject to local session port %d: %v", dstPort, serr)
+				}
+			}
+			continue
+		}
 		reply, to := s.handle(payload, dstPort, &net.UDPAddr{IP: src, Port: 68})
 		if reply == nil || to == nil {
 			continue
@@ -88,8 +106,12 @@ func (s *Server) serveRaw(ctx context.Context, fd int, dhcpPC, proxyPC *ipv4.Pac
 		if dstPort == proxyDHCPPort {
 			pc = proxyPC
 		}
+		// Same visibility as the UDP path — the raw channel's handling must
+		// be observable in the log like every other responder decision.
+		ifindexOut := ifindex
+		s.logf("dhcp: raw request from %s (ifindex %d) -> reply to %s", src, ifindexOut, to)
 		// Reply through the ordinary UDP socket — the kernel computes the
-		// UDP checksum on transmit, and the forcing the egress interface to
+		// UDP checksum on transmit, and forcing the egress interface to
 		// the arrival one matches the UDP path's PKTINFO behaviour.
 		if _, err := pc.WriteTo(reply, &ipv4.ControlMessage{IfIndex: ifindex}, to); err != nil {
 			s.logf("dhcp: raw-channel reply to %s: %v", to, err)

@@ -432,25 +432,44 @@ func networkMACs(n render.NetworkEntry) []string {
 	return out
 }
 
-// kylinNetRepairScript repairs the anaconda-written ifcfg profiles (the
-// kylin writer emits `HWADDR50:…` without '=' and a malformed UUID — NM
-// refuses to load them and marks the devices strictly unmanaged, which
-// blocks the text install at the network spoke) and re-manages each NIC
-// through NM. Every step is tolerated: a failed repair leaves the install
-// at the interactive summary it would reach anyway.
+// kylinNetRepairScript clears the strict-unmanaged runtime flag the V10 NM
+// puts on any dracut-configured device. On-site matrix (2026-11-21, TTY2):
+// the dracut static config itself SUCCEEDS (link UP, address, default route
+// all present) and the flag has NO config-file source in any NM conf
+// location — REASON is 0, and nmcli general reload / device set managed yes
+// / a full NM restart are all no-ops; the text install then deadlocks at
+// the network spoke ("Not connected"). The only rescue that worked is
+// re-enumerating the NIC driver: the runtime flag dies with the old device,
+// the dracut rename rule restores the interface name, and NM activates the
+// repaired static profile on its own. Order matters: fix the anaconda
+// ifcfg malformations (`HWADDR50:…` without '=', malformed UUID) FIRST,
+// then re-enumerate — NM reads the profiles while re-adding the device.
+// Every step is tolerated: a failed repair leaves the install at the
+// interactive summary it would reach anyway.
 func kylinNetRepairScript(macs []string) string {
-	return `# kylin: repair anaconda's malformed ifcfg profiles and re-manage the NIC
+	return `# kylin V10: repair ifcfg malformations, then re-enumerate the NIC driver —
+# the NM strict-unmanaged runtime flag has no config source and survives NM
+# restart; only device re-enumeration clears it.
 iface_by_mac() { for d in /sys/class/net/*; do [ "$(cat "$d/address")" = "$1" ] && basename "$d" && return 0; done; return 1; }
-nmcli general reload 2>/dev/null || true
 for f in /etc/sysconfig/network-scripts/ifcfg-*; do
   [ -f "$f" ] || continue
   sed -i 's/^HWADDR\([^=]\)/HWADDR=\1/' "$f"
   sed -i '/^UUID=/d' "$f"
 done
+for mac in ` + strings.Join(macs, " ") + `; do
+  dev=$(iface_by_mac "$mac") || continue
+  [ -d "/sys/class/net/$dev/device/driver" ] || continue
+  drv=$(basename "$(readlink -f "/sys/class/net/$dev/device/driver")") || continue
+  rmmod "$drv" 2>/dev/null || true
+  modprobe "$drv" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -d "/sys/class/net/$dev" ] && break
+    sleep 1
+  done
+done
 nmcli general reload 2>/dev/null || true
 for mac in ` + strings.Join(macs, " ") + `; do
   dev=$(iface_by_mac "$mac") || continue
-  nmcli device set ifname "$dev" managed yes 2>/dev/null || true
   nmcli device connect "$dev" 2>/dev/null || true
 done`
 }

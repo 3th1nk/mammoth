@@ -83,8 +83,17 @@ func (s *Server) serveRaw(ctx context.Context, fd int, inject *net.UDPConn, dhcp
 			return
 		}
 		frame := buf[:n]
-		payload, src, dstPort, needsHandling := ParseFrame(frame)
-		if !needsHandling || len(payload) == 0 {
+		payload, src, dstPort, checksumOK := ParseFrame(frame)
+		// checksumOK=true means the kernel's UDP socket already received
+		// this datagram (raw_frame.go's de-dup contract) — re-handling or
+		// re-injecting it would DELIVER EVERY DATAGRAM TWICE, and the TFTP
+		// lockstep state machine reads a duplicate ACK as "the client never
+		// saw my DATA" and starts re-sending, deadlocking both sides (the
+		// 2026-11-21 .74 transfer stall: every ACK arrived twice, the
+		// server re-sent DATA in lockstep error, both sides froze). Only
+		// checksum-BROKEN datagrams — the ones the kernel silently dropped
+		// — are ours to handle.
+		if checksumOK || len(payload) == 0 {
 			continue
 		}
 		ifindex := 0

@@ -28,8 +28,11 @@ const udpProto = 17 // IP protocol number for UDP
 // re-injected with a repaired checksum, everything else is skipped. It
 // returns ok=false for non-IPv4/UDP frames, and checksumOK=true for
 // datagrams whose UDP checksum validates (the kernel's UDP socket already
-// owns those). VLAN-tagged frames are not handled here — the AF_PACKET
-// socket is opened with ETH_P_IP, which does not see 802.1Q frames.
+// owns those). VLAN-tagged frames return ok=false too — the AF_PACKET
+// socket is opened with ETH_P_ALL and does see 802.1Q frames, but their
+// inner datagram is not parsed here (the consumer skips ok=false frames).
+// The de-dup contract is enforced by the CONSUMER (serveRaw in
+// rawrecv_linux.go): checksumOK=true frames must be skipped there.
 func ParseFrame(frame []byte) (payload []byte, srcIP net.IP, dstPort int, checksumOK bool) {
 	// Ethernet II header: dst(6) src(6) type(2).
 	if len(frame) < 14 {

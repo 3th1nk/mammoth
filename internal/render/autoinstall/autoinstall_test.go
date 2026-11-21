@@ -994,8 +994,12 @@ func TestRenderLvm(t *testing.T) {
 	if m := byID["mnt-lv-vg0-root"]; m == nil || m["path"] != "/" {
 		t.Errorf("LV mount entry wrong: %v", m)
 	}
-	if m := byID["mnt-lv-vg0-swap"]; m != nil {
-		t.Errorf("swap LV must carry no mount entry: %v", m)
+	// The swap mount entry is what makes curtin write the fstab swap line;
+	// its path is the swap convention "none" (2026-11-22: dropping the
+	// entry left the declared swap formatted but never activated —
+	// subiquity's fallback swapfile replaced the declared intent).
+	if m := byID["mnt-lv-vg0-swap"]; m == nil || m["path"] != "none" {
+		t.Errorf("swap LV mount entry must exist with path none: %v", m)
 	}
 
 	// software raid PV: curtin renders no md arrays — reject at render.

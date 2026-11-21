@@ -29,6 +29,21 @@ type Driver struct {
 // currently has a single member, "ubuntu22").
 func New(distro string) *Driver { return &Driver{distro: distro} }
 
+// curtinMountPath maps a declared mount point to the curtin mount path.
+// A declared "swap" mount renders as path "none": the mount ENTRY is what
+// makes curtin write the /etc/fstab swap line, and "none" is the swap
+// convention there. The old rendering dropped swap mount entries outright —
+// the partition came out formatted but never activated, subiquity's own
+// fallback swapfile silently replaced the declared intent, and the
+// acceptance report truthfully flagged the drift (2026-11-22 u2404-1122
+// PXE round: spec swap 4G on sda2, fstab carried only /swap.img).
+func curtinMountPath(mount string) string {
+	if mount == "swap" {
+		return "none"
+	}
+	return mount
+}
+
 func (d *Driver) Distro() string {
 	if d.distro == "" {
 		return "ubuntu22"
@@ -824,11 +839,11 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 				"volume": partID,
 				"fstype": fstype,
 			})
-			if p.Mount != "" && p.Mount != "swap" {
+			if p.Mount != "" {
 				config = append(config, map[string]any{
 					"id":     fmt.Sprintf("mnt-%s-%d", disk.id, num),
 					"type":   "mount",
-					"path":   p.Mount,
+					"path":   curtinMountPath(p.Mount),
 					"device": fID,
 				})
 			}
@@ -886,9 +901,9 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 				config = append(config, map[string]any{
 					"id": fID, "type": "format", "volume": lvID, "fstype": lv.FS,
 				})
-				if lv.Mount != "" && lv.Mount != "swap" {
+				if lv.Mount != "" {
 					config = append(config, map[string]any{
-						"id": "mnt-" + lvID, "type": "mount", "path": lv.Mount, "device": fID,
+						"id": "mnt-" + lvID, "type": "mount", "path": curtinMountPath(lv.Mount), "device": fID,
 					})
 				}
 			}
@@ -924,9 +939,9 @@ func (d *Driver) storageConfig(in render.InstallInputs, m render.MachineView) (m
 			config = append(config, map[string]any{
 				"id": fID, "type": "format", "volume": lvID, "fstype": lv.FS,
 			})
-			if lv.Mount != "" && lv.Mount != "swap" {
+			if lv.Mount != "" {
 				config = append(config, map[string]any{
-					"id": "mnt-" + lvID, "type": "mount", "path": lv.Mount, "device": fID,
+					"id": "mnt-" + lvID, "type": "mount", "path": curtinMountPath(lv.Mount), "device": fID,
 				})
 			}
 		}

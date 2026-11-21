@@ -74,6 +74,45 @@ type PhysicalDriveEnumerator interface {
 	PhysicalDrives(ctx context.Context, addr string, cred Credentials) ([]DiskView, error)
 }
 
+// VolumeView is one logical drive the controller reports — the read model
+// of the machine-face RAID management (docs/07-bmc.md §6.7). RAIDType keeps
+// the vendor spelling ("RAID1" | "RAID10"); MemberSerials identify the
+// member physical drives by the same identity PhysicalDrives reports, so
+// the console can mark occupied drives and compute the free pool.
+type VolumeView struct {
+	Name          string   `json:"name"`
+	RAIDType      string   `json:"raid_type,omitempty"`
+	SizeBytes     int64    `json:"size_bytes,omitempty"`
+	MemberSerials []string `json:"member_serials,omitempty"`
+}
+
+// VolumeEnumerator is the optional read capability of listing the
+// controller's logical drives WITH their membership (which physical drives
+// back which volume). Membership is what turns a flat drive table into a
+// manageable topology: the create dialog's member candidates are the drives
+// no volume spans. Drivers without it (ipmi) answer BMC_UNSUPPORTED at the
+// raid endpoint.
+type VolumeEnumerator interface {
+	// Volumes lists the logical drives across the controller's volume
+	// collections. Best-effort data: implementations should prefer a partial
+	// list over an error when a single volume fails to decode.
+	Volumes(ctx context.Context, addr string, cred Credentials) ([]VolumeView, error)
+}
+
+// VolumeDeleter is the optional capability of removing one logical drive —
+// the reconfiguration half of machine-face RAID management (wrong layout,
+// topology change; the freed member drives return to the create pool).
+// Destructive like DriveEraser: everything the volume held is gone. The
+// pipeline layers the two-stage confirmation around it; the driver only
+// speaks the protocol.
+type VolumeDeleter interface {
+	// DeleteVolume removes the logical drive identified by its
+	// controller-assigned name (the identity Volumes reports — on vendors
+	// that rename volumes the requested label is not the key). Unknown
+	// names reject without touching anything.
+	DeleteVolume(ctx context.Context, addr string, cred Credentials, name string) error
+}
+
 // FirmwareComponent is one firmware inventory entry (docs/07-bmc.md §6):
 // a controller-side firmware image and its version. Id carries the
 // vendor's own identity (Redfish Id — stable across reads); Name and

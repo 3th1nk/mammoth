@@ -480,22 +480,97 @@ func (s *Server) GetMachineDrives(ctx context.Context, request gen.GetMachineDri
 	disks, _ := res.([]bmc.DiskView)
 	drives := make([]gen.DriveEntry, 0, len(disks))
 	for _, disk := range disks {
-		item := gen.DriveEntry{Name: disk.Name}
-		if disk.Serial != "" {
-			item.Serial = &disk.Serial
-		}
-		if disk.SizeBytes != 0 {
-			item.SizeBytes = &disk.SizeBytes
-		}
-		if disk.Medium != "" {
-			item.Medium = &disk.Medium
-		}
-		if disk.Protocol != "" {
-			item.Protocol = &disk.Protocol
-		}
-		drives = append(drives, item)
+		drives = append(drives, driveEntry(disk))
 	}
 	return gen.GetMachineDrives200JSONResponse(gen.DrivesView{Drives: drives}), nil
+}
+
+// raidTopology carries one synchronous controller walk's two results so the
+// BMC.Do closure can return both the volume list and the physical drive
+// pool in one round trip set.
+type raidTopology struct {
+	volumes []bmc.VolumeView
+	drives  []bmc.DiskView
+}
+
+// GetMachineRaid live-reads the controller's RAID topology (docs/07-bmc.md
+// §6.7): the logical drives it reports (with member serials) plus the
+// physical drives no volume spans. A synchronous BMC read like the
+// drives/bios endpoints — the console face cannot hold state that may be
+// stale on the BMC. Membership is what turns the flat drive table into a
+// manageable topology: the create dialog's member candidates are
+// free_drives, and volumes[].member_serials is the occupied set.
+func (s *Server) GetMachineRaid(ctx context.Context, request gen.GetMachineRaidRequestObject) (gen.GetMachineRaidResponseObject, error) {
+	cred, addr, proto, err := s.outOfBandFor(ctx, string(request.Id))
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.BMC.Do(ctx, addr, cred, proto, "raid_topology", func(ctx context.Context, d bmc.Driver) (any, error) {
+		ve, okv := d.(bmc.VolumeEnumerator)
+		pde, okd := d.(bmc.PhysicalDriveEnumerator)
+		if !okv || !okd {
+			return nil, &bmc.Error{Kind: bmc.KindUnsupported, Op: "raid_topology"}
+		}
+		volumes, verr := ve.Volumes(ctx, addr, cred)
+		if verr != nil {
+			return nil, verr
+		}
+		drives, derr := pde.PhysicalDrives(ctx, addr, cred)
+		if derr != nil {
+			return nil, derr
+		}
+		return raidTopology{volumes: volumes, drives: drives}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	topo := res.(raidTopology)
+	occupied := map[string]bool{}
+	volumes := make([]gen.RaidVolumeEntry, 0, len(topo.volumes))
+	for _, v := range topo.volumes {
+		entry := gen.RaidVolumeEntry{Name: v.Name}
+		if v.RAIDType != "" {
+			entry.RaidLevel = &v.RAIDType
+		}
+		if v.SizeBytes != 0 {
+			entry.SizeBytes = &v.SizeBytes
+		}
+		if len(v.MemberSerials) > 0 {
+			serials := v.MemberSerials
+			entry.MemberSerials = &serials
+			for _, serial := range serials {
+				occupied[serial] = true
+			}
+		}
+		volumes = append(volumes, entry)
+	}
+	free := make([]gen.DriveEntry, 0, len(topo.drives))
+	for _, disk := range topo.drives {
+		if disk.Serial != "" && occupied[disk.Serial] {
+			continue
+		}
+		free = append(free, driveEntry(disk))
+	}
+	return gen.GetMachineRaid200JSONResponse(gen.RaidView{Volumes: volumes, FreeDrives: free}), nil
+}
+
+// driveEntry maps one controller DiskView into the API's DriveEntry shape
+// (the shared view of /drives and the raid endpoint's free pool).
+func driveEntry(disk bmc.DiskView) gen.DriveEntry {
+	item := gen.DriveEntry{Name: disk.Name}
+	if disk.Serial != "" {
+		item.Serial = &disk.Serial
+	}
+	if disk.SizeBytes != 0 {
+		item.SizeBytes = &disk.SizeBytes
+	}
+	if disk.Medium != "" {
+		item.Medium = &disk.Medium
+	}
+	if disk.Protocol != "" {
+		item.Protocol = &disk.Protocol
+	}
+	return item
 }
 
 // GetMachineHealth live-reads the controller's health snapshot

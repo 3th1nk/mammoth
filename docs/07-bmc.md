@@ -235,6 +235,45 @@ mammoth 全件复用:alpine agent 内存系统(bootstrap/plan 机制)+ 虚拟介
    reset-to-default(OEM 领地),切片不做;退役档案里的 BIOS 快照 +
    固件清单就是审计者要的对照物。
 
+### 6.7 RAID 卷生命周期管理(机器面存储管理)
+
+RAID 卷是**一次性生命周期动作**:建一次,之后重复装系统都只选盘——
+与装机意图的声明式 `storage.raid[]`(configure_raid,docs/06-install-pipeline.md
+§2)两条路幂等共存:动作建过的卷,声明式提交按"成员序列号 + 级别"
+判定复用不重建;重复装机的 spec 不带 raid[] 即可,该 stage 天然 no-op。
+本节交付的是**机器面的建/删/查**(人工分步运维与脚本化编排的入口),
+声明式面继续服务同质机群批量零人工(spec 自包含)与异构机群
+`targets[].spec_patch` 脚本化:
+
+1. **能力面**:`VolumeEnumerator`(卷清单,含成员 serial 占用)与
+   `VolumeDeleter`(删卷,成员回池)两个可选接口。redfish 实装:成员
+   解析泛化自建卷幂等判定——标准 `Links.Drives` 优先,华为
+   `Oem.Huawei.Spans` 回退(iBMC 6.41 实测);删卷走标准 DELETE 卷资源
+   (同机实测可行),202 任务轮询同建卷;fake 脚本化(夹具跟踪卷→成员,
+   物理盘池排除逻辑盘);ipmi 不实现;
+2. **活读端点**:`GET /machines/{id}/raid` 同步返回卷表(名字/级别/容量/
+   成员 serials)与 `free_drives` = 物理盘活表 − 全部卷成员并集——
+   建卷对话框的成员候选,**已占用盘天然不在候选里**;控制器不暴露
+   Volumes 集合(无 RAID 卡)即 BMC_UNSUPPORTED,console 诚实空态;
+3. **两动作**:`create_raid_volume`(name 为可选 label——**控制器命名
+   权威**,华为改名 LogicDrive0,事件记录实际卷名;级别成员数规则
+   0→2+/1→2..4/5→3+/10→4+偶数在提交期即拒,同 checkRaidShape 口径)与
+   `delete_raid_volume`(按控制器实际卷名删)。**confirm 必填且无策略
+   豁免**(不同于 erase/bios:不存在要绕过确认的节奏——建卷消耗成员盘、
+   删卷销毁卷上数据,都是不可逆破坏);执行期两段式:重读活盘表,
+   serial 不在表上即整体拒(`DRIVE_SERIAL_UNKNOWN`,沿 erase 范式);
+   建卷按成员序列号+级别幂等,重跑复用已有卷;
+4. **事后库存刷新**:动作执行侧 `collect_inventory` 回写机器 hardware
+   (COALESCE 保身份字段)——逻辑盘进库存后装机选择器立即可选,无需
+   手动盘查;失败为可重试的 `INVENTORY_REFRESH_FAILED`(BMC 操作本身
+   已成功,重跑幂等);
+5. **边界**:inventory 的 volume-first 呈现(docs/05-inventory.md §2)
+   下,卷存在时逻辑盘 `protocol: raid`、`medium: unknown` 且不带
+   serial——装机选择器用 largest/smallest 容量语义选卷,type 语义
+   匹配不到;卷的 DiskView 携带 serial 是后续增强项。fake 的库存
+   呈现为物理盘+逻辑盘混合(允许"物理盘装系统 + 卷装数据"的混布
+   装机语义),真机 redfish 遵循 volume-first。
+
 
 选择逻辑(`protocol: auto`):
 

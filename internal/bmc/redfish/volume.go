@@ -212,6 +212,143 @@ func (d *Driver) settleVolumeTask(ctx context.Context, c *gofish.APIClient, op s
 	return after[len(after)-1], nil
 }
 
+// Volumes implements bmc.VolumeEnumerator: the controller's logical drives
+// with their member serials — the machine-face RAID management's read model
+// (docs/07-bmc.md §6.7). Membership resolution mirrors matchingVolume:
+// standard Redfish Links.Drives first, the Huawei Oem.Spans shape as
+// fallback. Best-effort: a volume that fails to decode or a dead drive walk
+// degrades that volume's membership to empty rather than sinking the list.
+func (d *Driver) Volumes(ctx context.Context, addr string, cred bmc.Credentials) ([]bmc.VolumeView, error) {
+	const op = "list_volumes"
+	c, err := d.connect(ctx, addr, cred)
+	if err != nil {
+		return nil, err
+	}
+	st, err := volumeStorage(c)
+	if err != nil {
+		return nil, d.classify(op, err)
+	}
+	names, err := listVolumeNames(ctx, c, st)
+	if err != nil {
+		return nil, d.classify(op, err)
+	}
+	byID := map[string]controllerDrive{} // drive resource Id → drive
+	if drives, derr := controllerDrives(ctx, c); derr == nil {
+		for _, dr := range drives {
+			byID[dr.ID] = dr
+		}
+	}
+	out := make([]bmc.VolumeView, 0, len(names))
+	for _, name := range names {
+		raw, err := getRaw(c, st.odataID+"/Volumes/"+name)
+		if err != nil {
+			continue
+		}
+		var v struct {
+			CapacityBytes int64  `json:"CapacityBytes"`
+			RAIDType      string `json:"RAIDType"`
+			Links         *struct {
+				Drives []struct {
+					ODataID string `json:"@odata.id"`
+				} `json:"Drives"`
+			} `json:"Links"`
+			Oem *struct {
+				Huawei *struct {
+					VolumeRaidLevel string `json:"VolumeRaidLevel"`
+					Spans           []struct {
+						Drives []struct {
+							ODataID string `json:"@odata.id"`
+						} `json:"Drives"`
+					} `json:"Spans"`
+				} `json:"Huawei"`
+			} `json:"Oem"`
+		}
+		if json.Unmarshal(raw, &v) != nil {
+			continue
+		}
+		level := v.RAIDType
+		if v.Oem != nil && v.Oem.Huawei != nil && v.Oem.Huawei.VolumeRaidLevel != "" {
+			level = v.Oem.Huawei.VolumeRaidLevel
+		}
+		refs := make([]string, 0, 4)
+		if v.Links != nil {
+			for _, dr := range v.Links.Drives {
+				refs = append(refs, dr.ODataID)
+			}
+		}
+		if len(refs) == 0 && v.Oem != nil && v.Oem.Huawei != nil {
+			for _, span := range v.Oem.Huawei.Spans {
+				for _, dr := range span.Drives {
+					refs = append(refs, dr.ODataID)
+				}
+			}
+		}
+		members := make([]string, 0, len(refs))
+		for _, ref := range refs {
+			id := ref[strings.LastIndex(ref, "/")+1:]
+			if cd, ok := byID[id]; ok {
+				members = append(members, cd.Serial)
+			}
+		}
+		out = append(out, bmc.VolumeView{
+			Name:          name,
+			RAIDType:      level,
+			SizeBytes:     v.CapacityBytes,
+			MemberSerials: members,
+		})
+	}
+	return out, nil
+}
+
+// DeleteVolume implements bmc.VolumeDeleter: DELETE on the volume resource
+// (standard, verified against Huawei iBMC 6.41 — docs/compat/huawei.md).
+// Creation and deletion both answer 202 with a Redfish task to poll. The
+// name is the controller-assigned identity Volumes reports — on vendors
+// that rename volumes (LogicalDriveN) it is not the requested label.
+func (d *Driver) DeleteVolume(ctx context.Context, addr string, cred bmc.Credentials, name string) error {
+	const op = "delete_volume"
+	c, err := d.connect(ctx, addr, cred)
+	if err != nil {
+		return err
+	}
+	st, err := volumeStorage(c)
+	if err != nil {
+		return d.classify(op, err)
+	}
+	names, err := listVolumeNames(ctx, c, st)
+	if err != nil {
+		return d.classify(op, err)
+	}
+	found := false
+	for _, n := range names {
+		if n == name {
+			found = true
+		}
+	}
+	if !found {
+		return &bmc.Error{Kind: bmc.KindProtocolError, Op: op,
+			Detail: fmt.Sprintf("volume %q not found on the controller", name)}
+	}
+	resp, err := c.Delete(st.odataID + "/Volumes/" + name)
+	if err != nil {
+		return d.classify(op, err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted && (resp.StatusCode < 200 || resp.StatusCode > 299) {
+		return &bmc.Error{Kind: bmc.KindProtocolError, Op: op,
+			Detail: fmt.Sprintf("volume delete: %s %s", resp.Status, bmc.FirstLine(string(raw)))}
+	}
+	var task struct {
+		Id string `json:"Id"`
+	}
+	_ = json.Unmarshal(raw, &task)
+	if task.Id != "" {
+		return pollTask(ctx, c, op, task.Id)
+	}
+	return nil
+}
+
 // ── storage/drive walking (raw JSON: the Oem fields drive the flow) ────────
 
 type storageRef struct {

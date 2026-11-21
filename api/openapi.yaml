@@ -595,6 +595,38 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
 
+  /api/v1/machines/{id}/raid:
+    get:
+      operationId: getMachineRaid
+      tags: [machines]
+      summary: Live logical-drive table of the controller with the free drive pool
+      description: |
+        Reads the controller's RAID topology synchronously — the volumes it
+        reports (with member serials) plus the physical drives no volume
+        spans (docs/07-bmc.md §6.7). The create dialog's member candidates
+        are free_drives; volumes[].member_serials is the occupied set.
+        Same out-of-band path the actions use; a controller without a
+        Volumes collection answers BMC_UNSUPPORTED.
+      parameters:
+        - $ref: '#/components/parameters/machineId'
+      responses:
+        '200':
+          description: Current RAID topology.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RaidView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '502':
+          description: BMC error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
   /api/v1/machines/{id}/acceptance:
     get:
       operationId: getMachineAcceptance
@@ -2464,6 +2496,49 @@ components:
         protocol:
           type: string
 
+    RaidVolumeEntry:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: |
+            The controller-assigned volume identity (Huawei iBMC renames to
+            LogicalDriveN regardless of the requested label) — the key
+            delete_raid_volume consumes.
+        raid_level:
+          type: string
+          description: The vendor's own spelling (RAID0 | RAID1 | RAID5 | RAID10).
+        size_bytes:
+          type: integer
+          format: int64
+        member_serials:
+          type: array
+          items:
+            type: string
+          description: |
+            Member physical drive serials (the same identity
+            GET /machines/{id}/drives reports). Empty when the controller
+            does not expose membership.
+
+    RaidView:
+      type: object
+      required: [volumes, free_drives]
+      properties:
+        volumes:
+          type: array
+          description: The logical drives the controller reports.
+          items:
+            $ref: '#/components/schemas/RaidVolumeEntry'
+        free_drives:
+          type: array
+          description: |
+            Physical drives no reported volume spans — the member
+            candidates for create_raid_volume. Drives whose membership the
+            controller fails to report are assumed free.
+          items:
+            $ref: '#/components/schemas/DriveEntry'
+
     DecommissionView:
       type: object
       description: Wrapper — the machine's latest decommission report (null when none).
@@ -2702,6 +2777,63 @@ components:
           default: false
           description: Explicit high-risk confirmation; required by the default policy.
 
+    ActionCreateRaidVolume:
+      type: object
+      description: |
+        Create one logical drive on the controller's RAID volume collection
+        (docs/07-bmc.md §6.7) — the machine-face lifecycle op: volumes are
+        created once and every later install just targets them. DESTRUCTIVE:
+        member drives are consumed (implicitly wiped). Requires the explicit
+        confirm flag. Member serials are re-read against the live drive
+        table at execution — a serial not on it rejects the whole request.
+        The returned job event records the controller-assigned volume name
+        (vendors rename: Huawei assigns LogicalDriveN); the requested name
+        is a label only. Creation is idempotent — a volume already spanning
+        exactly the requested serials at the same level is reused.
+      required: [type, level, serials, confirm]
+      properties:
+        type:
+          type: string
+          enum: [create_raid_volume]
+        name:
+          type: string
+          description: Requested volume label; the controller may rename it.
+        level:
+          type: string
+          enum: ["0", "1", "5", "10"]
+          description: "RAID level. Member-count rules: 0→2+, 1→2..4, 5→3+, 10→4+ and even."
+        serials:
+          type: array
+          minItems: 2
+          items:
+            type: string
+          description: Member physical drive serials per the controller's live table (GET /machines/{id}/drives).
+        confirm:
+          type: boolean
+          description: Explicit destructive confirmation — always required.
+
+    ActionDeleteRaidVolume:
+      type: object
+      description: |
+        Remove one logical drive from the controller (docs/07-bmc.md §6.7) —
+        the reconfiguration half of machine-face RAID management; the freed
+        member drives return to the create pool. DESTRUCTIVE: everything
+        the volume held is gone. Requires the explicit confirm flag. The
+        name is the controller-assigned identity GET /machines/{id}/raid
+        reports — on vendors that rename volumes the requested label is not
+        the key.
+      required: [type, name, confirm]
+      properties:
+        type:
+          type: string
+          enum: [delete_raid_volume]
+        name:
+          type: string
+          description: Volume name per GET /machines/{id}/raid (controller-assigned).
+        confirm:
+          type: boolean
+          description: Explicit destructive confirmation — always required.
+
     ActionSetBiosAttributes:
       type: object
       description: |
@@ -2776,6 +2908,8 @@ components:
         - $ref: '#/components/schemas/ActionEjectMedia'
         - $ref: '#/components/schemas/ActionSetBiosAttributes'
         - $ref: '#/components/schemas/ActionEraseDrives'
+        - $ref: '#/components/schemas/ActionCreateRaidVolume'
+        - $ref: '#/components/schemas/ActionDeleteRaidVolume'
         - $ref: '#/components/schemas/ActionBootRescue'
       discriminator:
         propertyName: type
@@ -2792,6 +2926,8 @@ components:
           eject_media: '#/components/schemas/ActionEjectMedia'
           set_bios_attributes: '#/components/schemas/ActionSetBiosAttributes'
           erase_drives: '#/components/schemas/ActionEraseDrives'
+          create_raid_volume: '#/components/schemas/ActionCreateRaidVolume'
+          delete_raid_volume: '#/components/schemas/ActionDeleteRaidVolume'
           boot_rescue: '#/components/schemas/ActionBootRescue'
 
     ActionDiscover:

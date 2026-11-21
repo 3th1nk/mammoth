@@ -32,6 +32,15 @@ verify_layout → configure_raid → prepare_media → boot → install_os → v
   configure_raid 只管 Redfish Volume 与软件 RAID 的表达(解析与消费规则见
   docs/04-install-spec.md §5.1.1)。
 
+**两条建卷路径,幂等共存**(docs/07-bmc.md §6.7):本 stage 是**声明式**
+面——spec 自包含、可重放,服务同质机群批量零人工(一份带 raid[] 的 spec
+批量提交)与异构机群脚本化(`targets[].spec_patch` 每台机器按活表定制
+raid 块);`create_raid_volume`/`delete_raid_volume` 单机动作是**机器面
+生命周期**管理(人工分步运维:建一次卷、重复装系统只选盘,成员按控制器
+活表 serial 精确选择且天然排除已占用盘)。动作建过的卷,声明式提交按
+"成员序列号 + 级别"判定复用不重建;重复装机的 spec 不带 raid[] 即可,
+本 stage 对其 no-op。
+
 ## 3. prepare_media(载荷准备,builder 面执行)
 
 prepare_media 的后半段按**引导策略(boot strategy)**分派——"把安装器送到机器

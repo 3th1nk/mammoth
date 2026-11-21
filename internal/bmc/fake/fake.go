@@ -354,7 +354,10 @@ func (d *Driver) CreateVolume(_ context.Context, addr string, _ bmc.Credentials,
 }
 
 // PhysicalDrives implements the bmc.PhysicalDriveEnumerator capability: the
-// fake presents its fixture hardware as the RAID member pool.
+// fake presents its fixture hardware as the RAID member pool. The logical
+// drives CreateVolume appended are excluded — real controllers never list
+// volumes in the physical drive table, and the free-drive computation (the
+// raid endpoint) would otherwise offer them as member candidates.
 func (d *Driver) PhysicalDrives(_ context.Context, addr string, _ bmc.Credentials) ([]bmc.DiskView, error) {
 	b, err := d.get(addr, "physical_drives")
 	if err != nil {
@@ -365,7 +368,83 @@ func (d *Driver) PhysicalDrives(_ context.Context, addr string, _ bmc.Credential
 	if b.Hardware == nil {
 		return nil, nil
 	}
-	return append([]bmc.DiskView(nil), b.Hardware.Disks...), nil
+	logical := map[string]bool{}
+	for _, v := range b.Volumes {
+		logical[v.Name] = true
+	}
+	out := make([]bmc.DiskView, 0, len(b.Hardware.Disks))
+	for _, disk := range b.Hardware.Disks {
+		if logical[disk.Name] {
+			continue
+		}
+		out = append(out, disk)
+	}
+	return out, nil
+}
+
+// Volumes implements the bmc.VolumeEnumerator capability: the scripted
+// volume list with the member serials the creation carried. Capacity is the
+// fake fixed logical-drive size (mirroring what CreateVolume surfaces in
+// inventory).
+func (d *Driver) Volumes(_ context.Context, addr string, _ bmc.Credentials) ([]bmc.VolumeView, error) {
+	b, err := d.get(addr, "list_volumes")
+	if err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]bmc.VolumeView, 0, len(b.Volumes))
+	for _, v := range b.Volumes {
+		size := int64(0)
+		if b.Hardware != nil {
+			for _, disk := range b.Hardware.Disks {
+				if disk.Name == v.Name {
+					size = disk.SizeBytes
+				}
+			}
+		}
+		out = append(out, bmc.VolumeView{
+			Name:          v.Name,
+			RAIDType:      v.RAIDType,
+			SizeBytes:     size,
+			MemberSerials: append([]string(nil), v.MemberSerials...),
+		})
+	}
+	return out, nil
+}
+
+// DeleteVolume implements the bmc.VolumeDeleter capability: removes the
+// scripted volume and its logical drive from the fixture, so the member
+// drives return to the free pool and inventory stops presenting the volume.
+// Unknown names reject without touching anything (the redfish driver's
+// not-found semantics).
+func (d *Driver) DeleteVolume(_ context.Context, addr string, _ bmc.Credentials, name string) error {
+	b, err := d.get(addr, "delete_volume")
+	if err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	idx := -1
+	for i, v := range b.Volumes {
+		if v.Name == name {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		return &bmc.Error{Kind: bmc.KindProtocolError, Op: "delete_volume",
+			Detail: fmt.Sprintf("volume %q not found on the controller", name)}
+	}
+	b.Volumes = append(b.Volumes[:idx], b.Volumes[idx+1:]...)
+	if b.Hardware != nil {
+		for i, disk := range b.Hardware.Disks {
+			if disk.Name == name {
+				b.Hardware.Disks = append(b.Hardware.Disks[:i], b.Hardware.Disks[i+1:]...)
+				break
+			}
+		}
+	}
+	return nil
 }
 
 // FirmwareInventory reports the scripted firmware inventory (the

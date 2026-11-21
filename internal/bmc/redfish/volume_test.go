@@ -33,6 +33,10 @@ type volumeDetail struct {
 	Level    string
 	DriveIDs []string
 	Capacity int64
+	// Standard serves the volume's membership in the standard Redfish
+	// Links.Drives shape (alongside the Huawei Oem always present) — the
+	// member-resolution precedence test.
+	Standard bool
 }
 
 type postReply struct {
@@ -118,11 +122,16 @@ func (f *volumeFixture) handler() http.Handler {
 		for _, d := range v.DriveIDs {
 			drives = append(drives, map[string]any{"@odata.id": "/redfish/v1/Chassis/1/Drives/" + d})
 		}
-		write(w, map[string]any{"Id": name, "@odata.id": "/redfish/v1/Systems/1/Storages/RAIDStorage0/Volumes/" + name, "RAIDType": "None",
+		body := map[string]any{"Id": name, "@odata.id": "/redfish/v1/Systems/1/Storages/RAIDStorage0/Volumes/" + name,
+			"RAIDType": "None", "CapacityBytes": v.Capacity,
 			"Oem": map[string]any{"Huawei": map[string]any{
 				"VolumeRaidLevel": v.Level,
 				"Spans":           []map[string]any{{"Drives": drives}},
-			}}})
+			}}}
+		if v.Standard {
+			body["Links"] = map[string]any{"Drives": drives}
+		}
+		write(w, body)
 	})
 	mux.HandleFunc("POST /redfish/v1/Systems/1/Storages/RAIDStorage0/Volumes", func(w http.ResponseWriter, req *http.Request) {
 		f.mu.Lock()
@@ -180,6 +189,31 @@ func (f *volumeFixture) handler() http.Handler {
 		defer f.mu.Unlock()
 		id := strings.TrimPrefix(req.URL.Path, "/redfish/v1/TaskService/Tasks/")
 		write(w, map[string]any{"Id": id, "TaskState": f.taskSt[id]})
+	})
+	mux.HandleFunc("DELETE /redfish/v1/Systems/1/Storages/RAIDStorage0/Volumes/", func(w http.ResponseWriter, req *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		name := strings.TrimPrefix(req.URL.Path, "/redfish/v1/Systems/1/Storages/RAIDStorage0/Volumes/")
+		if _, ok := f.volumes[name]; !ok {
+			http.NotFound(w, req)
+			return
+		}
+		delete(f.volumes, name)
+		for i, m := range f.order {
+			if strings.HasSuffix(m, "/"+name) {
+				f.order = append(f.order[:i], f.order[i+1:]...)
+				break
+			}
+		}
+		f.taskN++
+		tid := fmt.Sprint(f.taskN)
+		if f.taskSt == nil {
+			f.taskSt = map[string]string{}
+		}
+		f.taskSt[tid] = "Completed"
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"Id":"` + tid + `","TaskState":"Running"}`))
 	})
 	return mux
 }

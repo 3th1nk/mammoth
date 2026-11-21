@@ -82,6 +82,14 @@ type action struct {
 	// Confirm gates it the same two-stage way.
 	Serials []string `json:"serials,omitempty"`
 	All     bool     `json:"all,omitempty"`
+	// Name / Level carry the RAID volume lifecycle payloads (docs/07-bmc.md
+	// §6.7): Name is the requested volume label (create) or the
+	// controller-assigned identity (delete — vendors rename, Huawei assigns
+	// LogicalDriveN); Level is the create action's RAID level ("0"|"1"|"5"|
+	// "10"). Confirm gates both — create consumes the member drives,
+	// delete destroys the volume's content.
+	Name  string `json:"name,omitempty"`
+	Level string `json:"level,omitempty"`
 	// SshKeys carries the boot_rescue payload (docs/07-bmc.md §6.5):
 	// authorized_keys-format entries injected into the in-memory rescue
 	// system's root account. Empty = console-only rescue.

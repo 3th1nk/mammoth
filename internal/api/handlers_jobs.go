@@ -60,6 +60,9 @@ func (s *Server) PerformMachineAction(ctx context.Context, request gen.PerformMa
 	if err := s.validateEraseConfirm(actionRaw, aType); err != nil {
 		return nil, err
 	}
+	if err := s.validateRaidConfirm(actionRaw, aType); err != nil {
+		return nil, err
+	}
 	if aType == "discover" {
 		if err := s.validateRamdiskAction(ctx, machine, actionRaw); err != nil {
 			return nil, err
@@ -747,7 +750,7 @@ func encodeAction(body *gen.ActionRequest) (json.RawMessage, string, error) {
 	switch probe.Type {
 	case "discover", "power_on", "power_off", "soft_off", "reboot", "hard_reboot",
 		"cycle", "set_boot_device", "mount_media", "eject_media", "set_bios_attributes",
-		"erase_drives", "boot_rescue":
+		"erase_drives", "create_raid_volume", "delete_raid_volume", "boot_rescue":
 		return b, probe.Type, nil
 	default:
 		return nil, "", verr("SCHEMA_INVALID_ACTION", "unknown action type %q", probe.Type)
@@ -1005,6 +1008,75 @@ func validateInstallSpec(spec *gen.InstallSpec) error {
 func mustJSON(v any) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b
+}
+
+// validateRaidConfirm is the API gate for the RAID volume lifecycle actions
+// (docs/07-bmc.md §6.7). Both destroy data — create consumes the member
+// drives (implicit wipe), delete destroys the volume's content — so the
+// explicit confirm flag is always required, with no deployment opt-out
+// (unlike erase/bios policies: there is no operational rhythm where a
+// scripted caller wants unconfirmed volume writes). Create's shape rules
+// mirror the install-side checkRaidShape so a bad level/member count
+// rejects at submit rather than dying at the BMC.
+func (s *Server) validateRaidConfirm(actionRaw json.RawMessage, aType string) error {
+	switch aType {
+	case "create_raid_volume":
+		var a struct {
+			Level   string   `json:"level"`
+			Serials []string `json:"serials"`
+			Confirm bool     `json:"confirm"`
+		}
+		if err := json.Unmarshal(actionRaw, &a); err != nil {
+			return verr("SCHEMA_INVALID_ACTION", "action is not valid: %v", err)
+		}
+		if !a.Confirm {
+			return verr("SCHEMA_INVALID_ACTION",
+				"create_raid_volume consumes the member drives (implicit wipe) — it requires \"confirm\": true")
+		}
+		switch a.Level {
+		case "0":
+			if len(a.Serials) < 2 {
+				return verr("SCHEMA_INVALID_ACTION", "create_raid_volume: level 0 needs 2+ members (got %d)", len(a.Serials))
+			}
+		case "1":
+			if len(a.Serials) < 2 || len(a.Serials) > 4 {
+				return verr("SCHEMA_INVALID_ACTION", "create_raid_volume: level 1 needs 2..4 members (got %d)", len(a.Serials))
+			}
+		case "5":
+			if len(a.Serials) < 3 {
+				return verr("SCHEMA_INVALID_ACTION", "create_raid_volume: level 5 needs 3+ members (got %d)", len(a.Serials))
+			}
+		case "10":
+			if len(a.Serials) < 4 || len(a.Serials)%2 != 0 {
+				return verr("SCHEMA_INVALID_ACTION", "create_raid_volume: level 10 needs 4+ members and an even count (got %d)", len(a.Serials))
+			}
+		default:
+			return verr("SCHEMA_INVALID_ACTION", "create_raid_volume: unknown level %q", a.Level)
+		}
+		seen := map[string]bool{}
+		for _, serial := range a.Serials {
+			if seen[serial] {
+				return verr("SCHEMA_INVALID_ACTION", "create_raid_volume: duplicate member serial %q", serial)
+			}
+			seen[serial] = true
+		}
+	case "delete_raid_volume":
+		var a struct {
+			Name    string `json:"name"`
+			Confirm bool   `json:"confirm"`
+		}
+		if err := json.Unmarshal(actionRaw, &a); err != nil {
+			return verr("SCHEMA_INVALID_ACTION", "action is not valid: %v", err)
+		}
+		if !a.Confirm {
+			return verr("SCHEMA_INVALID_ACTION",
+				"delete_raid_volume destroys everything the volume holds — it requires \"confirm\": true")
+		}
+		if a.Name == "" {
+			return verr("SCHEMA_INVALID_ACTION", "delete_raid_volume requires the controller-assigned volume name (GET /machines/{id}/raid)")
+		}
+	}
+	return nil
 }
 
 // subject identifies the caller for audit columns (static-token era: the

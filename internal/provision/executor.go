@@ -342,6 +342,12 @@ func (e *Executor) runPowerAction(ctx context.Context, task *store.Task, job *st
 		}
 		return nil
 
+	case "create_raid_volume":
+		return e.createRaidVolume(ctx, task, addr, cred, proto, a)
+
+	case "delete_raid_volume":
+		return e.deleteRaidVolume(ctx, task, addr, cred, proto, a)
+
 	case "discover":
 		return e.runDiscover(ctx, task, job)
 
@@ -497,6 +503,112 @@ func resolveEraseTargets(live []bmc.DiskView, requested []string, all bool) ([]s
 			"drives not on the controller's live table — nothing erased: %v", missing)
 	}
 	return unique, nil
+}
+
+// ── RAID volume lifecycle actions (docs/07-bmc.md §6.7) ─────────────────────
+
+// createRaidVolume realizes one logical drive via the controller's volume
+// collection — the machine-face lifecycle op (docs/06-install-pipeline.md
+// §2): volumes are created once and every later install just targets them.
+// Two-phase like erase_drives: the live drive table is re-read first and a
+// serial not on it rejects the whole request. The controller may rename the
+// volume (Huawei assigns LogicalDriveN) — the event records the name it
+// actually carries, not the requested label. The machine's hardware view is
+// refreshed afterwards so the new logical drive is installable immediately.
+func (e *Executor) createRaidVolume(ctx context.Context, task *store.Task, addr string, cred bmc.Credentials, proto bmc.Protocol, a action) error {
+	res, err := e.BMC.Do(ctx, addr, cred, proto, "physical_drives", func(ctx context.Context, d bmc.Driver) (any, error) {
+		pde, ok := d.(bmc.PhysicalDriveEnumerator)
+		if !ok {
+			return nil, &bmc.Error{Kind: bmc.KindUnsupported, Op: "physical_drives"}
+		}
+		return pde.PhysicalDrives(ctx, addr, cred)
+	})
+	if err != nil {
+		return err
+	}
+	live := res.([]bmc.DiskView)
+	liveSerials := map[string]bool{}
+	for _, disk := range live {
+		if disk.Serial != "" {
+			liveSerials[disk.Serial] = true
+		}
+	}
+	for _, serial := range a.Serials {
+		if !liveSerials[serial] {
+			return classifiedErr("DRIVE_SERIAL_UNKNOWN", false,
+				"create_raid_volume: member serial %q is not on the controller's live drive table — nothing created", serial)
+		}
+	}
+	created, err := e.BMC.Do(ctx, addr, cred, proto, "create_volume", func(ctx context.Context, d bmc.Driver) (any, error) {
+		creator, okc := d.(bmc.VolumeCreator)
+		if !okc {
+			return nil, classifiedErr("BMC_UNSUPPORTED", false,
+				"driver %s does not support volume creation", d.Name())
+		}
+		return creator.CreateVolume(ctx, addr, cred, bmc.VolumeSpec{
+			Name: a.Name, RAIDType: "RAID" + a.Level, MemberSerials: a.Serials,
+		})
+	})
+	if err != nil {
+		return err
+	}
+	name, _ := created.(string)
+	e.Events.Append(ctx, "task", task.ID, "task.raid_volume_created", map[string]any{
+		"volume":    name,
+		"requested": a.Name,
+		"level":     "RAID" + a.Level,
+		"members":   a.Serials,
+	})
+	return e.refreshMachineHardware(ctx, task, addr, cred, proto)
+}
+
+// deleteRaidVolume removes one logical drive — the reconfiguration half of
+// machine-face RAID management; the freed member drives return to the
+// create pool. Name is the controller-assigned identity the raid endpoint
+// reports (on vendors that rename volumes the requested label is not the
+// key). The machine's hardware view is refreshed afterwards so inventory
+// stops presenting the volume.
+func (e *Executor) deleteRaidVolume(ctx context.Context, task *store.Task, addr string, cred bmc.Credentials, proto bmc.Protocol, a action) error {
+	_, err := e.BMC.Do(ctx, addr, cred, proto, "delete_volume", func(ctx context.Context, d bmc.Driver) (any, error) {
+		deleter, ok := d.(bmc.VolumeDeleter)
+		if !ok {
+			return nil, classifiedErr("BMC_UNSUPPORTED", false,
+				"driver %s does not support volume deletion", d.Name())
+		}
+		return nil, deleter.DeleteVolume(ctx, addr, cred, a.Name)
+	})
+	if err != nil {
+		return err
+	}
+	e.Events.Append(ctx, "task", task.ID, "task.raid_volume_deleted", map[string]any{
+		"volume": a.Name,
+	})
+	return e.refreshMachineHardware(ctx, task, addr, cred, proto)
+}
+
+// refreshMachineHardware re-collects the out-of-band hardware view and
+// writes it back — the raid lifecycle actions' post-op inventory step (the
+// discover flow's collect_inventory → UpdateProbeResult path, narrowed to
+// the hardware face: identity fields ride COALESCE, power state is carried
+// over from the machine's current record since that column is a plain
+// write). Failure is retryable — the BMC op itself already succeeded, and
+// the re-run is idempotent.
+func (e *Executor) refreshMachineHardware(ctx context.Context, task *store.Task, addr string, cred bmc.Credentials, proto bmc.Protocol) error {
+	m, err := e.Machines.Get(ctx, task.MachineID)
+	if err != nil {
+		return err
+	}
+	res, err := e.BMC.Do(ctx, addr, cred, proto, "collect_inventory", func(ctx context.Context, d bmc.Driver) (any, error) {
+		return d.CollectInventory(ctx, addr, cred)
+	})
+	if err != nil {
+		return classifiedErr("INVENTORY_REFRESH_FAILED", true, "post-raid inventory: %s", err.Error())
+	}
+	return e.Machines.UpdateProbeResult(ctx, task.MachineID, store.ProbeResult{
+		Hardware:   marshalJSON(res.(bmc.HardwareView)),
+		PowerState: m.PowerState,
+		State:      "ready",
+	})
 }
 
 // biosDiff computes the write set against the live table: entries whose

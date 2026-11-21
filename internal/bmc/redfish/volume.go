@@ -113,6 +113,20 @@ func (d *Driver) CreateVolume(ctx context.Context, addr string, cred bmc.Credent
 		return name, nil
 	}
 
+	// Pre-state snapshot for the settle diff: the created volume is
+	// identified by APPEARANCE (which name is new), not by name order —
+	// the controller auto-names sequentially, but LogicalDrive10 sorts
+	// before LogicalDrive2 lexicographically, and freed indices may be
+	// reused after deletion.
+	beforeNames, err := listVolumeNames(ctx, c, st)
+	if err != nil {
+		return "", d.classify(op, err)
+	}
+	before := make(map[string]bool, len(beforeNames))
+	for _, name := range beforeNames {
+		before[name] = true
+	}
+
 	volumesURL := strings.TrimSuffix(st.odataID, "/") + "/Volumes"
 	driveURLs := make([]string, 0, len(spec.MemberSerials))
 	huaweiIDs := make([]int, 0, len(spec.MemberSerials))
@@ -144,7 +158,7 @@ func (d *Driver) CreateVolume(ctx context.Context, addr string, cred bmc.Credent
 		raw, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusAccepted || (resp.StatusCode >= 200 && resp.StatusCode <= 299) {
-			return d.settleVolumeTask(ctx, c, op, string(raw), st)
+			return d.settleVolumeTask(ctx, c, op, string(raw), st, before)
 		}
 		perr = fmt.Errorf("%s: %s", resp.Status, string(raw))
 	}
@@ -160,13 +174,13 @@ func (d *Driver) CreateVolume(ctx context.Context, addr string, cred bmc.Credent
 				"Drives":          huaweiIDs,
 			}},
 		}
-		return d.postVolumeTask(ctx, c, op, volumesURL, huawei, spec.Name)
+		return d.postVolumeTask(ctx, c, op, volumesURL, huawei, spec.Name, before)
 	}
 	return "", d.classify(op, perr)
 }
 
 // postVolumeTask POSTs a vendor-shaped payload and settles the task.
-func (d *Driver) postVolumeTask(ctx context.Context, c *gofish.APIClient, op, volumesURL string, payload map[string]any, requested string) (string, error) {
+func (d *Driver) postVolumeTask(ctx context.Context, c *gofish.APIClient, op, volumesURL string, payload map[string]any, requested string, before map[string]bool) (string, error) {
 	resp, err := c.Post(volumesURL, payload)
 	if err != nil {
 		return "", d.classify(op, err)
@@ -181,12 +195,16 @@ func (d *Driver) postVolumeTask(ctx context.Context, c *gofish.APIClient, op, vo
 	if err != nil {
 		return "", d.classify(op, err)
 	}
-	return d.settleVolumeTask(ctx, c, op, string(raw), st)
+	return d.settleVolumeTask(ctx, c, op, string(raw), st, before)
 }
 
 // settleVolumeTask polls a creation task to terminal state and returns the
-// name of the volume that appeared (diff against the pre-call collection).
-func (d *Driver) settleVolumeTask(ctx context.Context, c *gofish.APIClient, op string, taskRaw string, st *storageRef) (string, error) {
+// name of the volume that appeared — identified by diff against the
+// pre-call collection, never by name order: the controller auto-names
+// sequentially, but LogicalDrive10 sorts before LogicalDrive2
+// lexicographically, and freed indices may be reused after deletion (the
+// machine-face lifecycle makes create/delete cycles routine).
+func (d *Driver) settleVolumeTask(ctx context.Context, c *gofish.APIClient, op, taskRaw string, st *storageRef, before map[string]bool) (string, error) {
 	var task struct {
 		Id        string          `json:"Id"`
 		TaskState string          `json:"TaskState"`
@@ -202,14 +220,42 @@ func (d *Driver) settleVolumeTask(ctx context.Context, c *gofish.APIClient, op s
 	if err != nil {
 		return "", d.classify(op, err)
 	}
-	if len(after) == 0 {
-		return "", &bmc.Error{Kind: bmc.KindProtocolError, Op: op,
-			Detail: "volume creation reported success but no volume is present"}
+	fresh := make([]string, 0, 1)
+	for _, name := range after {
+		if !before[name] {
+			fresh = append(fresh, name)
+		}
 	}
-	// The controller auto-names volumes; the newest one is ours (the caller
-	// diffs against its own pre-state when it needs to be certain).
-	sort.Strings(after)
-	return after[len(after)-1], nil
+	switch len(fresh) {
+	case 1:
+		return fresh[0], nil
+	case 0:
+		return "", &bmc.Error{Kind: bmc.KindProtocolError, Op: op,
+			Detail: "volume creation reported success but no new volume appeared"}
+	default:
+		// More than one appeared for one POST — unexpected, but keep the
+		// numeric-order-aware newest guess rather than failing the flow.
+		sort.Slice(fresh, func(i, j int) bool { return volumeIndex(fresh[i]) < volumeIndex(fresh[j]) })
+		return fresh[len(fresh)-1], nil
+	}
+}
+
+// volumeIndex extracts the trailing number of a controller-assigned volume
+// name (LogicalDrive12 → 12) for numeric-order comparisons; -1 when the
+// name carries no trailing number (sorts first, stable).
+func volumeIndex(name string) int {
+	i := len(name)
+	for i > 0 && name[i-1] >= '0' && name[i-1] <= '9' {
+		i--
+	}
+	if i == len(name) {
+		return -1
+	}
+	n := 0
+	for _, r := range name[i:] {
+		n = n*10 + int(r-'0')
+	}
+	return n
 }
 
 // Volumes implements bmc.VolumeEnumerator: the controller's logical drives

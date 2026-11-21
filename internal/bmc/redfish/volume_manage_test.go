@@ -2,6 +2,7 @@ package redfish
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -78,5 +79,36 @@ func TestDeleteVolume(t *testing.T) {
 
 	if err := d.DeleteVolume(ctx, addr, cred, "Ghost"); err == nil {
 		t.Fatal("unknown volume must reject")
+	}
+}
+
+// The created volume is identified by pre/post diff, not name order: with
+// LogicalDrive0..8 already on the controller, the fixture names the new
+// volume LogicalDrive10 — which sorts BEFORE LogicalDrive2, so the
+// lexicographic "sort and take last" guess hands back LogicalDrive9 (an
+// older volume) and would misbind the declarative partition target.
+func TestCreateVolumeNamesBeyondNine(t *testing.T) {
+	f := &volumeFixture{
+		volumes: map[string]volumeDetail{},
+		script:  []postReply{{status: 202}},
+	}
+	for i := 0; i < 9; i++ {
+		name := fmt.Sprintf("LogicalDrive%d", i)
+		// Level RAID0 differs from the requested RAID1 so the idempotency
+		// match deliberately misses and the create POST proceeds.
+		f.volumes[name] = volumeDetail{Level: "RAID0", DriveIDs: []string{"D0"}, Capacity: 4000}
+		f.order = append(f.order, "/redfish/v1/Systems/1/Storages/RAIDStorage0/Volumes/"+name)
+	}
+	addr := volumeTestAddr(t, f)
+	d := New(true, 10*time.Second)
+
+	name, err := d.CreateVolume(context.Background(), addr,
+		bmc.Credentials{Username: "u", Password: "p"},
+		bmc.VolumeSpec{Name: "os", RAIDType: "RAID1", MemberSerials: []string{"SER0", "SER1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "LogicalDrive10" {
+		t.Fatalf("created volume = %q, want LogicalDrive10 (the diff-appearance, not the lexicographic last LogicalDrive9)", name)
 	}
 }

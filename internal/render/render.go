@@ -957,3 +957,26 @@ func (r *Registry) Distros() []string {
 	sort.Strings(out)
 	return out
 }
+
+// FamilyCandidates returns the registered drivers whose names start with
+// the given distro name, case-insensitive — the suggestion set for a
+// family-level or misdetect name like "kylin"/"Kylin"/"rocky" (the images
+// catalog stores the detect family, the spec needs the driver: the two
+// namespaces drifted apart and "kylin" used to ride a whole render stage
+// before dying with SCHEMA_UNKNOWN_DISTRO). nil when nothing matches.
+func (r *Registry) FamilyCandidates(distro string) []string {
+	fam := strings.ToLower(distro)
+	if fam == "" {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []string
+	for k := range r.drivers {
+		if strings.HasPrefix(strings.ToLower(k), fam) {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}

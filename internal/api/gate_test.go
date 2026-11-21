@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/3th1nk/mammoth/internal/render"
@@ -99,4 +100,52 @@ func TestValidateBootStrategyAgentInstaller(t *testing.T) {
 	})
 	_ = sWinAgent
 	_ = sLinux
+}
+
+// The distro-existence gate fails at submit — not minutes later inside
+// prepare_media — and spells out the family candidates when the submitted
+// name is a catalog family rather than a driver (the 2026-11-21 kylin
+// round: "kylin" rode a whole render stage before dying with
+// SCHEMA_UNKNOWN_DISTRO; the driver is kylinv10/kylinv11).
+func TestValidateBootStrategyUnknownDistroFailsAtSubmit(t *testing.T) {
+	reg := render.NewRegistry()
+	if err := reg.Register(kickstart.New("kylinv10")); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(kickstart.New("kylinv11")); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Deps{Render: reg, NetbootEnabled: true}}
+
+	err := s.validateBootStrategy(json.RawMessage(`{"boot":{"strategy":"pxe"},"image":{"distro":"kylin"}}`))
+	if err == nil {
+		t.Fatal("family-level distro name must be rejected at submit")
+	}
+	if ve, ok := err.(*validationError); !ok || ve.Code() != "SCHEMA_UNKNOWN_DISTRO" {
+		t.Fatalf("code = %v, want SCHEMA_UNKNOWN_DISTRO", err)
+	}
+	if !strings.Contains(err.Error(), "kylinv10") || !strings.Contains(err.Error(), "kylinv11") {
+		t.Fatalf("error must carry the family candidates: %v", err)
+	}
+
+	// Strategy-independent: virtual_media submissions hit the same gate
+	// (the old gate only covered pxe, so vmedia rows died at execution).
+	err = s.validateBootStrategy(json.RawMessage(`{"boot":{"strategy":"virtual_media"},"image":{"distro":"Kylin"}}`))
+	if err == nil {
+		t.Fatal("unknown distro must be rejected for virtual_media too (case-insensitive family match)")
+	}
+
+	// The driver name itself passes the gate.
+	if err := s.validateBootStrategy(json.RawMessage(`{"boot":{"strategy":"pxe"},"image":{"distro":"kylinv10"}}`)); err != nil {
+		t.Fatalf("driver name must pass: %v", err)
+	}
+
+	// A name with no family match still fails, listing the drivers.
+	err = s.validateBootStrategy(json.RawMessage(`{"boot":{"strategy":"pxe"},"image":{"distro":"plan9"}}`))
+	if err == nil {
+		t.Fatal("unknown non-family distro must be rejected")
+	}
+	if !strings.Contains(err.Error(), "known drivers") {
+		t.Fatalf("error must list the known drivers: %v", err)
+	}
 }

@@ -1358,6 +1358,23 @@ func (s *Server) validateBootStrategy(specRaw json.RawMessage) error {
 	if err := json.Unmarshal(specRaw, &spec); err != nil {
 		return nil // structural errors surface via the schema validation path
 	}
+	// Distro-existence gate, strategy-independent: a bad distro name used to
+	// ride all the way into execution and die in prepare_media after minutes
+	// of rendering (the 2026-11-21 kylin round: catalog family name "kylin"
+	// vs driver "kylinv10"). Fail at submit; the catalog stores the detect
+	// FAMILY, so spell out the family candidates when one matches.
+	if spec.Image.Distro != "" {
+		if _, err := s.Render.For(spec.Image.Distro); err != nil {
+			if fam := s.Render.FamilyCandidates(spec.Image.Distro); len(fam) > 0 {
+				return verr("SCHEMA_UNKNOWN_DISTRO",
+					"distro %q has no install driver — family candidates: %v; known drivers: %v",
+					spec.Image.Distro, fam, s.Render.Distros())
+			}
+			return verr("SCHEMA_UNKNOWN_DISTRO",
+				"distro %q has no install driver; known drivers: %v",
+				spec.Image.Distro, s.Render.Distros())
+		}
+	}
 	if spec.Boot == nil {
 		return nil
 	}
@@ -1385,7 +1402,7 @@ func (s *Server) validateBootStrategy(specRaw json.RawMessage) error {
 	}
 	driver, err := s.Render.For(spec.Image.Distro)
 	if err != nil {
-		return nil // unknown distro surfaces at execution with SCHEMA_UNKNOWN_DISTRO
+		return verr("SCHEMA_UNKNOWN_DISTRO", "%s", err.Error()) // unreachable: gated above
 	}
 	if pxe := render.PXESupport(driver); pxe != render.SupportFull {
 		return verr("SCHEMA_UNSUPPORTED_BOOT_STRATEGY",

@@ -2763,8 +2763,11 @@ func (e *Executor) lvmUnverifiedEvent(ctx context.Context, task *store.Task, rea
 // verifyReadySettle is the pause between the in-band probe's first contact
 // and the fact collection: sshd answers long before boot services finish —
 // swap activation, late mounts — and facts read in that gap are an early
-// snapshot, not the settled system.
-const verifyReadySettle = 6 * time.Second
+// snapshot, not the settled system. 12s because 6s still caught kylin V10
+// (kernel 4.19 systemd) before swap.target on the real machine (2026-11-22
+// k10-1122 round: the report said "swap not mounted" off a system where
+// swapon showed the 4G partition live).
+const verifyReadySettle = 12 * time.Second
 
 // verifyReadyWait is the poll budget for the post-install in-band wait.
 func (e *Executor) verifyReadyWait() time.Duration {
@@ -2825,7 +2828,10 @@ func (e *Executor) waitForNewSystem(ctx context.Context, taskID, addr string, cr
 			}
 			settleCtx, cancel2 := context.WithTimeout(ctx, 30*time.Second)
 			if res2, err2 := e.Inband.Collect(settleCtx, addr, cred); err2 == nil && !res2.InstallerEnv {
+				obs.FromContext(ctx).InfoContext(ctx, "verify_ready settle re-collect ok")
 				res = res2
+			} else {
+				obs.FromContext(ctx).WarnContext(ctx, "verify_ready settle re-collect failed (keeping first read)", "err", errString(err2))
 			}
 			cancel2()
 			return res, false, nil

@@ -2611,11 +2611,41 @@ func (e *Executor) verifyReady(ctx context.Context, task *store.Task, job *store
 	}
 
 	// Success compensation: eject all media, restore boot order.
+	//
+	// The restore rides a small backoff loop of its own: settle time is the
+	// raciest the iBMC gets all round (the operator's KVM/console pages are
+	// still open) and there is NO stage retry behind this compensation —
+	// the patch-level healing alone lost a live storm (2026-11-22 rocky 9.8:
+	// three 412s over ~5s, restore abandoned with a WARN while the override
+	// happened to be already consumed). A one-shot override that was
+	// consumed by the reboot leaves nothing to restore, so a persistent
+	// failure here stays a WARN — but it must not give up inside the first
+	// storm.
 	if cred, addr, proto, ok := e.outOfBand(ctx, task); ok {
-		if _, err := e.BMC.Do(ctx, addr, cred, proto, "set_boot_device", func(ctx context.Context, d bmc.Driver) (any, error) {
-			return nil, d.SetBootDevice(ctx, addr, cred, bmc.BootDisk, false)
-		}); err != nil {
-			obs.FromContext(ctx).WarnContext(ctx, "restore boot order failed", "err", err.Error())
+		doRestore := func() error {
+			_, err := e.BMC.Do(ctx, addr, cred, proto, "set_boot_device", func(ctx context.Context, d bmc.Driver) (any, error) {
+				return nil, d.SetBootDevice(ctx, addr, cred, bmc.BootDisk, false)
+			})
+			return err
+		}
+		restoreErr := doRestore()
+		for attempt := 0; restoreErr != nil && attempt < 2; attempt++ {
+			var bmcErr *bmc.Error
+			if !errors.As(restoreErr, &bmcErr) || !bmcErr.Retryable() {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				restoreErr = ctx.Err()
+			case <-time.After(time.Duration(attempt+1) * 4 * time.Second):
+			}
+			if ctx.Err() != nil {
+				break
+			}
+			restoreErr = doRestore()
+		}
+		if restoreErr != nil {
+			obs.FromContext(ctx).WarnContext(ctx, "restore boot order failed", "err", restoreErr.Error())
 		}
 	}
 	// Machine lifecycle settle: installs never touch the state machine, so
@@ -2730,6 +2760,12 @@ func (e *Executor) lvmUnverifiedEvent(ctx context.Context, task *store.Task, rea
 	})
 }
 
+// verifyReadySettle is the pause between the in-band probe's first contact
+// and the fact collection: sshd answers long before boot services finish —
+// swap activation, late mounts — and facts read in that gap are an early
+// snapshot, not the settled system.
+const verifyReadySettle = 6 * time.Second
+
 // verifyReadyWait is the poll budget for the post-install in-band wait.
 func (e *Executor) verifyReadyWait() time.Duration {
 	if e.VerifyReadyWait > 0 {
@@ -2773,6 +2809,25 @@ func (e *Executor) waitForNewSystem(ctx context.Context, taskID, addr string, cr
 		res, err := e.Inband.Collect(probeCtx, addr, cred)
 		cancel()
 		if err == nil && !res.InstallerEnv {
+			// First contact proves the system is up, but the facts were read
+			// while boot services are still settling — swap activation and
+			// late mounts lag sshd by seconds, and the acceptance report
+			// built from this read recorded "swap not mounted" plus an empty
+			// boot cmdline off a healthy system (2026-11-22 rocky 9.8 round,
+			// verdict=fail as pure early-snapshot noise). Re-collect after a
+			// settle pause so the recorded facts describe the settled
+			// system; the first read stays the fallback when the second
+			// fails (it is still proof of liveness).
+			select {
+			case <-ctx.Done():
+				return nil, false, ctx.Err()
+			case <-time.After(verifyReadySettle):
+			}
+			settleCtx, cancel2 := context.WithTimeout(ctx, 30*time.Second)
+			if res2, err2 := e.Inband.Collect(settleCtx, addr, cred); err2 == nil && !res2.InstallerEnv {
+				res = res2
+			}
+			cancel2()
 			return res, false, nil
 		}
 		var ie *inbandssh.Error

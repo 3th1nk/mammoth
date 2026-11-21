@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakePatcher scripts the GET-ETag → PATCH rounds patchSystemBoot performs.
@@ -42,11 +43,22 @@ func (f *fakePatcher) PatchWithHeaders(url string, payload interface{}, headers 
 	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(""))}, nil
 }
 
+// shortenBootPatchBackoff swaps the retry ladder for a test-speed one and
+// restores it on cleanup — the real ladder spans ~10s (it must outlast a
+// KVM refresh storm), far too slow for a unit test.
+func shortenBootPatchBackoff(t *testing.T) {
+	t.Helper()
+	real := bootPatchBackoff
+	bootPatchBackoff = []time.Duration{time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { bootPatchBackoff = real })
+}
+
 // TestPatchSystemBoot412Retry pins the etag-race healing: a 412 (a KVM or
 // console page advancing the iBMC resource version between GET and PATCH)
-// triggers one refresh-and-retry with the NEW etag; a persisting storm
+// triggers refresh-and-retry with the NEW etag; a persisting storm
 // falls through after the bounded retries.
 func TestPatchSystemBoot412Retry(t *testing.T) {
+	shortenBootPatchBackoff(t)
 	f := &fakePatcher{
 		etagResponses: []string{`W/"v1"`, `W/"v2"`, `W/"v3"`},
 		patchStatuses: []int{412, 412, 200},
@@ -67,6 +79,29 @@ func TestPatchSystemBoot412Retry(t *testing.T) {
 		if f.seenIfMatch[i] != wm {
 			t.Errorf("PATCH %d If-Match = %q, want %q", i+1, f.seenIfMatch[i], wm)
 		}
+	}
+}
+
+// TestPatchSystemBoot412StormFallsThrough pins the bounded storm behavior:
+// 412s outliving the whole backoff ladder return the last 412 (the caller
+// sees a retryable protocol error) after exactly 1+len(ladder) PATCHes —
+// the ladder length is the storm budget (2026-11-22 rocky 9.8: 2 retries
+// lost a live KVM storm at boot-order restore).
+func TestPatchSystemBoot412StormFallsThrough(t *testing.T) {
+	shortenBootPatchBackoff(t)
+	f := &fakePatcher{
+		etagResponses: []string{`W/"v1"`},
+		patchStatuses: []int{412},
+	}
+	resp, err := patchSystemBoot(f, "/redfish/v1/Systems/1", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 412 {
+		t.Fatalf("final status = %d, want 412 (storm outlived the ladder)", resp.StatusCode)
+	}
+	if want := 1 + len(bootPatchBackoff); f.patch != want {
+		t.Fatalf("patches = %d, want %d (first + one per ladder step)", f.patch, want)
 	}
 }
 

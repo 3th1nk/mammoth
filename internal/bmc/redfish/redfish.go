@@ -430,6 +430,14 @@ type bootPatcher interface {
 	PatchWithHeaders(url string, payload interface{}, headers map[string]string) (*http.Response, error)
 }
 
+// bootPatchBackoff is the refresh-and-retry ladder for the ETag race. The
+// racer is a KVM or console page refreshing the iBMC resource on a
+// seconds cadence, so the window must span several of its refresh periods:
+// the original 300ms×2 lost a live storm — three PATCHes over ~5s all 412'd
+// while the operator's KVM stayed open through task settle (2026-11-22
+// rocky 9.8 round, boot-order restore).
+var bootPatchBackoff = []time.Duration{300 * time.Millisecond, time.Second, 3 * time.Second, 6 * time.Second}
+
 func patchSystemBoot(c bootPatcher, systemURL string, boot map[string]any) (*http.Response, error) {
 	resp, err := patchBootOnce(c, systemURL, boot)
 	if err != nil || resp.StatusCode != http.StatusPreconditionFailed {
@@ -438,11 +446,12 @@ func patchSystemBoot(c bootPatcher, systemURL string, boot map[string]any) (*htt
 	// 412 PreconditionFailed: the ETag raced a concurrent session (a KVM or
 	// console page on the same iBMC advances the resource version between
 	// our GET and PATCH — observed live during an install while the
-	// operator watched the console page). One refresh-and-retry heals it in
-	// place; a persisting session storm falls through to the stage-level
-	// retry, which covers it (the kind stays retryable).
-	for retry := 0; retry < 2; retry++ {
-		time.Sleep(300 * time.Millisecond)
+	// operator watched the console page). Refresh-and-retry heals it in
+	// place across the backoff ladder; a storm outliving the ladder falls
+	// through to the caller (the kind stays retryable, and the boot-order
+	// restore wraps its own retry loop for the settle-time window).
+	for _, d := range bootPatchBackoff {
+		time.Sleep(d)
 		resp, err = patchBootOnce(c, systemURL, boot)
 		if err != nil || resp.StatusCode != http.StatusPreconditionFailed {
 			return resp, err

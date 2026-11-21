@@ -169,12 +169,26 @@ func (r *Runner) handle(ctx context.Context, receipt queue.Receipt, log *slog.Lo
 	defer hbCancel()
 	go r.heartbeat(hbCtx, receipt, task.ID, r.ID, log)
 
+	// Execute under a cancel-bridged context: the DB cooperative-cancel flag
+	// is polled into a real context cancellation, so every ctx-aware call
+	// inside a stage (exec.CommandContext extractions, HTTP transfers, …)
+	// aborts the moment the flag lands. A stage with no interior checkpoint
+	// — the pool-tree extraction is ONE xorriso over a 15G ISO — used to run
+	// to completion after cancel/reaper settled the row, burning the disk
+	// for a task that no longer existed (2026-11-21 kylin/rocky rounds).
+	execCtx, execCancel := context.WithCancel(ctx)
+	defer execCancel()
+	go r.cancelWatcher(execCtx, task.ID, execCancel, log)
+
 	// Execute stages from the persisted index (retry = re-enter here).
 	stages := StageNames(task.FlowName)
 	var execErr error
 	for seq := task.StageIndex; seq < len(stages); seq++ {
-		if ctx.Err() != nil {
-			execErr = ctx.Err()
+		if execCtx.Err() != nil {
+			// Cancel-bridged abort IS a cooperative cancel: finish() walks
+			// the same compensate-and-settle path as a flag seen at a
+			// checkpoint.
+			execErr = ErrCanceled
 			break
 		}
 		if cancelReq, _ := r.Jobs.IsCancelRequested(ctx, task.ID); cancelReq {
@@ -184,7 +198,7 @@ func (r *Runner) handle(ctx context.Context, receipt queue.Receipt, log *slog.Lo
 		if err := r.Jobs.StartStage(ctx, task.ID, seq); err != nil {
 			log.ErrorContext(ctx, "start stage failed", "err", err.Error())
 		}
-		err := r.Exec.ExecuteStage(ctx, task, job, seq)
+		err := r.Exec.ExecuteStage(execCtx, task, job, seq)
 		if err == nil {
 			if err := r.Jobs.AdvanceStage(ctx, task.ID, seq); err != nil {
 				execErr = fmt.Errorf("advance stage: %w", err)
@@ -201,7 +215,31 @@ func (r *Runner) handle(ctx context.Context, receipt queue.Receipt, log *slog.Lo
 	}
 
 	hbCancel()
+	execCancel()
 	r.finish(ctx, receipt, task, job, execErr, log)
+}
+
+// cancelWatcher polls the DB cooperative-cancel flag into the exec context:
+// the flag lands in the jobs table, stages run arbitrarily long interior
+// work (a whole-ISO extraction is one exec), and the stage-loop checkpoints
+// only fire between stages — this bridge is what makes an in-flight stage
+// actually stop.
+func (r *Runner) cancelWatcher(ctx context.Context, taskID string, cancel context.CancelFunc, log *slog.Logger) {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if ok, _ := r.Jobs.IsCancelRequested(ctx, taskID); ok {
+			log.InfoContext(ctx, "cooperative cancel landed — aborting in-stage work",
+				obs.FieldTaskID, taskID)
+			cancel()
+			return
+		}
+	}
 }
 
 // finish classifies the outcome: success, cooperative cancel, retryable

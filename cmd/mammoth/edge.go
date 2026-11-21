@@ -418,6 +418,8 @@ func syncManifest(o edgeOptions, gate *netboot.ManifestGate) error {
 	if etag := resp.Header.Get("ETag"); etag != "" {
 		_ = os.WriteFile(etagFile, []byte(etag), 0o644)
 	}
+	armed, enroll := gate.Sizes()
+	fmt.Fprintf(os.Stderr, "edge: pool manifest synced: %d armed, %d enroll-eligible\n", armed, enroll)
 	return nil
 }
 

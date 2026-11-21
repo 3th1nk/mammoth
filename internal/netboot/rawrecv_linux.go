@@ -36,7 +36,7 @@ const rawEthPAll = 0x0003 // every ethernet frame type; the parse filters IP/UDP
 // startRawRecv opens the AF_PACKET listener and spawns its read loop.
 // Called after the UDP sockets are bound; a setup failure (missing
 // CAP_NET_RAW is the usual shape) is the caller's warning, never fatal.
-func (s *Server) startRawRecv(ctx context.Context, dhcpConn, proxyConn *net.UDPConn) error {
+func (s *Server) startRawRecv(ctx context.Context, dhcpConn, proxyConn, tftpConn *net.UDPConn) error {
 	fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW, int(htons(rawEthPAll)))
 	if err != nil {
 		return fmt.Errorf("raw recv: AF_PACKET socket: %w", err)
@@ -47,11 +47,19 @@ func (s *Server) startRawRecv(ctx context.Context, dhcpConn, proxyConn *net.UDPC
 		unix.Close(fd)
 		return fmt.Errorf("raw recv: bind: %w", err)
 	}
-	go s.serveRaw(ctx, fd, ipv4.NewPacketConn(dhcpConn), ipv4.NewPacketConn(proxyConn))
+	// The TFTP re-injection socket: an ordinary UDP socket — the kernel
+	// computes the checksum on these datagrams, which is the whole point
+	// (the raw datagram's checksum was the reason it was dropped).
+	inj, ierr := net.ListenUDP("udp4", nil)
+	if ierr != nil {
+		unix.Close(fd)
+		return fmt.Errorf("raw recv: inject socket: %w", ierr)
+	}
+	go s.serveRaw(ctx, fd, inj, ipv4.NewPacketConn(dhcpConn), ipv4.NewPacketConn(proxyConn))
 	return nil
 }
 
-func (s *Server) serveRaw(ctx context.Context, fd int, dhcpPC, proxyPC *ipv4.PacketConn) {
+func (s *Server) serveRaw(ctx context.Context, fd int, inject *net.UDPConn, dhcpPC, proxyPC *ipv4.PacketConn) {
 	defer unix.Close(fd)
 	buf := make([]byte, 1500)
 	for {
@@ -82,18 +90,16 @@ func (s *Server) serveRaw(ctx context.Context, fd int, dhcpPC, proxyPC *ipv4.Pac
 		}
 		// TFTP (69): the datagrams belong to live transfer sessions — their
 		// session sockets are bound to this host and the kernel dropped the
-		// datagrams for the broken checksum. Repair the checksum and
-		// re-inject the datagram locally: the kernel delivers it to the
-		// session socket, and the transfer resumes as if nothing happened.
-		// (Re-injection must NOT change the source address — TFTP sessions
-		// are keyed on the client's addr, and the raw frame carries it.)
+		// datagrams for the broken checksum. Re-inject the datagram through
+		// an ordinary UDP socket to the same local port: the kernel computes
+		// a valid checksum, the session socket receives it, and the transfer
+		// resumes. The transfer logic reads the opcode (ACK block) without
+		// checking the source address, so the injection source (this host)
+		// is transparent to it.
 		if dstPort == tftpPort {
-			ipPkt := frame[14:]
-			if FixChecksum(ipPkt) {
-				dst := &unix.SockaddrInet4{Port: dstPort}
-				copy(dst.Addr[:], frame[30:34]) // inner IP dst = this host
-				if serr := unix.Sendto(fd, ipPkt, 0, dst); serr != nil {
-					s.logf("tftp: raw re-inject to local session port %d: %v", dstPort, serr)
+			if inject != nil {
+				if _, werr := inject.WriteTo(payload, &net.UDPAddr{IP: net.IP(frame[30:34]).To4(), Port: dstPort}); werr != nil {
+					s.logf("tftp: raw re-inject to local session port %d: %v", dstPort, werr)
 				}
 			}
 			continue

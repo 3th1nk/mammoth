@@ -103,6 +103,15 @@ func (g *ManifestGate) Entry(_ context.Context, mac string) (*Entry, error) {
 	return nil, nil
 }
 
+// Sizes reports the loaded snapshot's armed/enroll counts — the sync
+// observability surface (a silent gate is indistinguishable from a dead
+// sync loop).
+func (g *ManifestGate) Sizes() (armed, enroll int) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return len(g.s.armed), len(g.s.enroll)
+}
+
 // EnrollEligible implements the second lease-gate check: sighted +
 // unregistered MACs from the manifest.
 func (g *ManifestGate) EnrollEligible(mac string) bool {

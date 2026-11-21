@@ -321,7 +321,7 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 	// UDP checksum (broken PXE firmwares — iBMC LOM observed) still reach
 	// AF_PACKET; those feed the same handler. Capability-missing degrades
 	// to a warning, checksum-clean clients are unaffected either way.
-	if rerr := s.startRawRecv(ctx, dhcpConn, proxyConn); rerr != nil {
+	if rerr := s.startRawRecv(ctx, dhcpConn, proxyConn, tftpConn); rerr != nil {
 		s.logf("raw receive channel unavailable (%v) — checksum-broken PXE clients will not be served", rerr)
 	}
 

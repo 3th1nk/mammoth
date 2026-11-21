@@ -12,6 +12,6 @@ import (
 	"net"
 )
 
-func (s *Server) startRawRecv(ctx context.Context, dhcpConn, proxyConn *net.UDPConn) error {
+func (s *Server) startRawRecv(ctx context.Context, dhcpConn, proxyConn, tftpConn *net.UDPConn) error {
 	return fmt.Errorf("raw recv: not available on this platform")
 }

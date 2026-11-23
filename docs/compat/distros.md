@@ -310,7 +310,7 @@ mini.iso)提供驱动支持。
 
 | 发行版 | PXE 支持级 | 说明 |
 |--------|-----------|------|
-| rocky9(5.14) / centos7 / kylinv11 | full | anaconda/dracut 内核对网络引导原生;`inst.repo=nfs:` 安装源复用 MediaBaseURI 的 NFS 导出,`inst.ks=` 走 HTTP,与 ISO 通路零差异。**rocky9 同固件实测绿(2026-11-24,2288H,job_8f522ea8ba49,六阶段全绿)**——与 kylinv10/centos8 的 RHEL8 代死结对照,内核版本边界钉死:≥5.7 内核 iPXE 交付正常,≤4.19 走 vMedia |
+| rocky9(5.14) / centos7 / kylinv11 | full | anaconda/dracut 内核对网络引导原生;`inst.repo=nfs:` 安装源复用 MediaBaseURI 的 NFS 导出,`inst.ks=` 走 HTTP,与 ISO 通路零差异。**rocky9 同固件实测绿(2026-11-24,2288H,job_797a0af706c4,六阶段全绿;固件日志实证 iPXE 经 LINUX_EFI_INITRD_MEDIA_GUID/LoadFile2 交付 initrd——≥5.7 内核可读,≤5.6 不可读)**——与 kylinv10/centos8 的 RHEL8 代死结对照,内核版本边界钉死:≥5.7 内核 iPXE 交付正常,≤4.19 走 vMedia |
 | kylinv10 | ⚠️ 固件条件(2026-11-23 实测,2288H iBMC 6.41/BIOS 8.20) | RHEL8 代内核(4.19)。该机固件的 UEFI iPXE initrd 交付死结:HTTP 取回完整 initrd 后内核 EFI stub 拿到空 ramdisk,开机数秒 panic 于 `prepare_namespace`(unknown-block(0,0));initrd 先行顺序亦无效,≥5.7 内核(ubuntu24)同链路全绿。**kylinV10 装机请走 vMedia**;驱动 `pxe_support` 的诚实标注见引擎侧待办(控制台卡片仍显示双介质,与实测不符) |
 | centos8 | ⚠️ 机制 full,真机待验证 | RHEL8 代内核(4.18)。**固件注记(2026-11-23,2288H iBMC 6.41/BIOS 8.20 真机)**:该世代的 UEFI iPXE 引导在本机型固件上存在 initrd 传递死结——iPXE 经 HTTP 取回完整 initrd 后,内核 EFI stub 拿到空 ramdisk,开机数秒即 panic 于 `prepare_namespace`(unknown-block(0,0));initrd 先于 kernel 行(社区经典顺序)亦无效,≥5.7 内核(ubuntu24)同链路全绿——疑与内核 initrd 交付协议(LoadFile2 vs boot_params)代际相关,属固件/iPXE 层缺陷,引擎侧不可修。**RHEL8 代(centos8/kylinv10 等)装机请走 vMedia**;PXE 保留给 ≥5.7 内核发行版与后续固件/iPXE 版本复验。另:该轮同时实证 shim→grub 链两处真缺陷已修(TFTP tsize-OACK 对 grub/SNP 阶段会话致死的分型、grubnet 前缀缺 `.mod` 模块文件——见 git log 2026-11-23 三提交) |
 | uniontechos | full(**真机复核 2026-09-19**,2288H 零人工闭环,~6 min:NFS 线速 vs 虚拟光驱 35 min) | 同 kickstart 家族机制(shim 链 + per-MAC cfg + `inst.repo=nfs:`);装机期静态网内核参数(ifname 钉 MAC)与虚拟介质轮共用 |

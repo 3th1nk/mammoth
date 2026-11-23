@@ -298,10 +298,30 @@ func classifyRun(err error) *Error {
 
 // ── parsing ─────────────────────────────────────────────────────────────────
 
+// lsblkSize tolerates both shapes util-linux emits under -J -b: a JSON
+// number on modern releases (>=2.33) and a quoted decimal string on older
+// ones (CentOS 8.5's 2.32.1, .74 2026-11-23 — int64 unmarshal died with
+// "cannot unmarshal string into ... size of type int64").
+type lsblkSize int64
+
+func (s *lsblkSize) UnmarshalJSON(b []byte) error {
+	t := strings.Trim(string(b), `"`)
+	if t == "" || t == "null" {
+		*s = 0
+		return nil
+	}
+	n, err := strconv.ParseInt(t, 10, 64)
+	if err != nil {
+		return fmt.Errorf("lsblk size %q: %w", t, err)
+	}
+	*s = lsblkSize(n)
+	return nil
+}
+
 type lsblkDisk struct {
 	Name       string       `json:"name"`
 	Path       string       `json:"path"`
-	Size       int64        `json:"size"`
+	Size       lsblkSize    `json:"size"`
 	Type       string       `json:"type"`
 	FSType     string       `json:"fstype"`
 	Mountpoint *string      `json:"mountpoint"`
@@ -314,7 +334,7 @@ type lsblkDisk struct {
 type lsblkChild struct {
 	Name       string       `json:"name"`
 	Path       string       `json:"path"`
-	Size       int64        `json:"size"`
+	Size       lsblkSize    `json:"size"`
 	Type       string       `json:"type"`
 	FSType     string       `json:"fstype"`
 	Mountpoint *string      `json:"mountpoint"`
@@ -364,12 +384,12 @@ func parse(out string) (*Result, error) {
 			p := LayoutPartition{
 				Number:     partitionNumber(ch.Name, d.Name),
 				StartBytes: starts[ch.Name],
-				SizeBytes:  ch.Size,
+				SizeBytes:  int64(ch.Size),
 				FSType:     firstNonEmpty(blkidFS(blkid, ch.Path), ch.FSType),
 				Label:      ch.PartLabel,
 				Mountpoint: deref(ch.Mountpoint),
 			}
-			p.EndBytes = p.StartBytes + ch.Size - 1
+			p.EndBytes = p.StartBytes + int64(ch.Size) - 1
 			if ch.Size <= 0 {
 				p.EndBytes = p.StartBytes
 			}

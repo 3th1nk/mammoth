@@ -801,6 +801,28 @@ func TestRenderGrowExplicitSizePaths(t *testing.T) {
 	})
 }
 
+// TestPXESupportDeclarations pins the network-boot support level per
+// distro: the RHEL8-generation pair (kylinV10 4.19, CentOS8 4.18) degrades
+// to partial — the 2288H-class firmware initrd delivery dead end
+// (docs/compat/distros.md PXE matrix, 2026-11-23) — while every other
+// kickstart distro stays full.
+func TestPXESupportDeclarations(t *testing.T) {
+	cases := map[string]render.SupportLevel{
+		"rocky9":      render.SupportFull,
+		"rocky10":     render.SupportFull,
+		"centos7":     render.SupportFull,
+		"centos8":     render.SupportPartial,
+		"kylinv10":    render.SupportPartial,
+		"kylinv11":    render.SupportFull,
+		"uniontechos": render.SupportFull,
+	}
+	for distro, want := range cases {
+		if got := New(distro).PXESupport(); got != want {
+			t.Errorf("%s pxe support = %q, want %q", distro, got, want)
+		}
+	}
+}
+
 // TestFirmwareSupportDeclarations pins the media firmware range per distro:
 // rocky10 dropped BIOS boot images upstream (UEFI-only, docs/compat/distros.md)
 // — the submit-time firmware gate keys off exactly this declaration.

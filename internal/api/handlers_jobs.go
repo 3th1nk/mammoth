@@ -180,7 +180,7 @@ func (s *Server) CreateJob(ctx context.Context, request gen.CreateJobRequestObje
 		if err := validateInstallSpec(body.Spec); err != nil {
 			return nil, err
 		}
-		if err := s.validateBootStrategy(specRaw); err != nil {
+		if err := s.validateBootStrategy(ctx, specRaw); err != nil {
 			return nil, err
 		}
 		// Artifact-library resolution snapshots into the spec here (and
@@ -624,7 +624,7 @@ func (s *Server) createJobRecord(ctx context.Context, in createJobRecord) (*gen.
 					Message:   verr.Error(),
 					Retryable: false,
 				}
-			} else if verr := s.validateBootStrategy(effective); verr != nil {
+			} else if verr := s.validateBootStrategy(ctx, effective); verr != nil {
 				init.State = "failed"
 				init.Error = &store.ErrorInfo{
 					Code:      appErrCode(verr),
@@ -1345,7 +1345,7 @@ func (s *Server) validateSnapshotBinding(ctx context.Context, machineID string, 
 // declare network-boot support and this deployment must run the netboot
 // service (docs/06-install-pipeline.md §3.3, §6 — 拒绝在提交时,而不是装到
 // 一半停在 PXE 提示符). Unknown strategies are rejected here too.
-func (s *Server) validateBootStrategy(specRaw json.RawMessage) error {
+func (s *Server) validateBootStrategy(ctx context.Context, specRaw json.RawMessage) error {
 	var spec struct {
 		Boot *struct {
 			Strategy  string `json:"strategy"`
@@ -1404,10 +1404,19 @@ func (s *Server) validateBootStrategy(specRaw json.RawMessage) error {
 	if err != nil {
 		return verr("SCHEMA_UNKNOWN_DISTRO", "%s", err.Error()) // unreachable: gated above
 	}
-	if pxe := render.PXESupport(driver); pxe != render.SupportFull {
+	pxe := render.PXESupport(driver)
+	if pxe == render.SupportNone {
 		return verr("SCHEMA_UNSUPPORTED_BOOT_STRATEGY",
 			"distro %s declares %q PXE support: only the RHEL-lineage and wimboot installers boot over the network",
 			spec.Image.Distro, pxe)
+	}
+	if pxe == render.SupportPartial {
+		// Partial is not a rejection: the pipeline works, but the driver
+		// carries a known delivery issue on some firmware classes (the
+		// RHEL8-generation initrd loss, docs/compat/distros.md PXE matrix).
+		// The submission proceeds — operators decide per their hardware.
+		obs.FromContext(ctx).WarnContext(ctx, "pxe support partial for distro — delivery unreliable on affected firmware classes",
+			"distro", spec.Image.Distro)
 	}
 	// boot.installer=agent is the windows apply-image pathway (the alpine
 	// agent carrier: wimlib apply + pre-baked BCD — docs/compat/distros.md

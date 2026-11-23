@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -20,11 +21,11 @@ func TestValidateBootStrategyAutoSkipsSMBGate(t *testing.T) {
 	spec := json.RawMessage(`{"boot":{"strategy":"pxe","installer":"auto"},"image":{"distro":"windows2019"}}`)
 
 	s.WindowsInstallSMBUNC = false
-	if err := s.validateBootStrategy(spec); err != nil {
+	if err := s.validateBootStrategy(context.Background(), spec); err != nil {
 		t.Fatalf("auto without the SMB export must pass the gate (prepare resolves to agent): %v", err)
 	}
 	s.WindowsInstallSMBUNC = true
-	if err := s.validateBootStrategy(spec); err != nil {
+	if err := s.validateBootStrategy(context.Background(), spec); err != nil {
 		t.Fatalf("auto with the SMB export must pass the gate: %v", err)
 	}
 }

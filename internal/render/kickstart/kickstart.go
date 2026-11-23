@@ -145,7 +145,23 @@ func (d *Driver) KeepPartitionSupport() render.SupportLevel { return render.Supp
 // inst.repo=nfs:/url: carries the packages, so no install-source work is
 // PXE-specific. BIOS boot of the rhel10-lineage (UEFI-only media) is the
 // one caveat pending real-hardware confirmation (docs/compat/distros.md).
-func (d *Driver) PXESupport() render.SupportLevel { return render.SupportFull }
+//
+// The RHEL8-generation drivers (kylinV10 4.19, CentOS8 4.18) degrade to
+// partial: on the 2288H V5 class of firmware (iBMC 6.41 / BIOS 8.20) the
+// UEFI iPXE handover loses the initrd entirely — the kernel starts with an
+// empty ramdisk and panics in prepare_namespace seconds after boot,
+// regardless of script ordering (initrd-first included), while ≥5.7
+// kernels and CD boots of the same pairs are green (.74, 2026-11-23 —
+// docs/compat/distros.md PXE matrix). The pipeline itself works; the
+// delivery is what fails on affected firmware, so partial keeps PXE
+// selectable while the console badge carries the caveat.
+func (d *Driver) PXESupport() render.SupportLevel {
+	switch d.distro {
+	case "kylinv10", "centos8":
+		return render.SupportPartial
+	}
+	return render.SupportFull
+}
 
 // NetbootCarrier: the boot files extract from the distro ISO itself (RHEL
 // images/pxeboot — the kernel pair anaconda/dracut network-boots natively).

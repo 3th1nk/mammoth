@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -22,7 +23,7 @@ func TestValidateBootStrategyWimbootShareGate(t *testing.T) {
 	s := &Server{Deps{Render: reg, NetbootEnabled: true}}
 	spec := json.RawMessage(`{"boot":{"strategy":"pxe"},"image":{"distro":"windows2019"}}`)
 
-	err := s.validateBootStrategy(spec)
+	err := s.validateBootStrategy(context.Background(), spec)
 	if err == nil {
 		t.Fatal("windows PXE without the install share must be rejected")
 	}
@@ -37,7 +38,7 @@ func TestValidateBootStrategyWimbootShareGate(t *testing.T) {
 	}
 
 	s.WindowsInstallSMBUNC = true
-	if err := s.validateBootStrategy(spec); err != nil {
+	if err := s.validateBootStrategy(context.Background(), spec); err != nil {
 		t.Fatalf("configured share must pass the gate: %v", err)
 	}
 }
@@ -51,7 +52,7 @@ func TestValidateBootStrategyNonWimbootIgnoresShareGate(t *testing.T) {
 	}
 	s := &Server{Deps{Render: reg, NetbootEnabled: true}}
 	spec := json.RawMessage(`{"boot":{"strategy":"pxe"},"image":{"distro":"rocky9"}}`)
-	if err := s.validateBootStrategy(spec); err != nil {
+	if err := s.validateBootStrategy(context.Background(), spec); err != nil {
 		t.Fatalf("rocky9 PXE must not require the windows share: %v", err)
 	}
 }
@@ -74,13 +75,13 @@ func TestValidateBootStrategyAgentInstaller(t *testing.T) {
 
 	t.Run("agent skips the SMB gate", func(t *testing.T) {
 		spec := json.RawMessage(`{"boot":{"strategy":"pxe","installer":"agent"},"image":{"distro":"windows2019"}}`)
-		if err := s.validateBootStrategy(spec); err != nil {
+		if err := s.validateBootStrategy(context.Background(), spec); err != nil {
 			t.Fatalf("agent installer rejected: %v", err)
 		}
 	})
 	t.Run("agent is windows-only", func(t *testing.T) {
 		spec := json.RawMessage(`{"boot":{"strategy":"pxe","installer":"agent"},"image":{"distro":"rocky9"}}`)
-		err := sLinux.validateBootStrategy(spec)
+		err := sLinux.validateBootStrategy(context.Background(), spec)
 		if err == nil {
 			t.Fatal("agent installer accepted for a linux distro")
 		}
@@ -90,7 +91,7 @@ func TestValidateBootStrategyAgentInstaller(t *testing.T) {
 	})
 	t.Run("unknown installer value rejects", func(t *testing.T) {
 		spec := json.RawMessage(`{"boot":{"strategy":"pxe","installer":"imaging"},"image":{"distro":"windows2019"}}`)
-		err := s.validateBootStrategy(spec)
+		err := s.validateBootStrategy(context.Background(), spec)
 		if err == nil {
 			t.Fatal("unknown installer value accepted")
 		}
@@ -117,7 +118,7 @@ func TestValidateBootStrategyUnknownDistroFailsAtSubmit(t *testing.T) {
 	}
 	s := &Server{Deps{Render: reg, NetbootEnabled: true}}
 
-	err := s.validateBootStrategy(json.RawMessage(`{"boot":{"strategy":"pxe"},"image":{"distro":"kylin"}}`))
+	err := s.validateBootStrategy(context.Background(), json.RawMessage(`{"boot":{"strategy":"pxe"},"image":{"distro":"kylin"}}`))
 	if err == nil {
 		t.Fatal("family-level distro name must be rejected at submit")
 	}
@@ -130,18 +131,18 @@ func TestValidateBootStrategyUnknownDistroFailsAtSubmit(t *testing.T) {
 
 	// Strategy-independent: virtual_media submissions hit the same gate
 	// (the old gate only covered pxe, so vmedia rows died at execution).
-	err = s.validateBootStrategy(json.RawMessage(`{"boot":{"strategy":"virtual_media"},"image":{"distro":"Kylin"}}`))
+	err = s.validateBootStrategy(context.Background(), json.RawMessage(`{"boot":{"strategy":"virtual_media"},"image":{"distro":"Kylin"}}`))
 	if err == nil {
 		t.Fatal("unknown distro must be rejected for virtual_media too (case-insensitive family match)")
 	}
 
 	// The driver name itself passes the gate.
-	if err := s.validateBootStrategy(json.RawMessage(`{"boot":{"strategy":"pxe"},"image":{"distro":"kylinv10"}}`)); err != nil {
+	if err := s.validateBootStrategy(context.Background(), json.RawMessage(`{"boot":{"strategy":"pxe"},"image":{"distro":"kylinv10"}}`)); err != nil {
 		t.Fatalf("driver name must pass: %v", err)
 	}
 
 	// A name with no family match still fails, listing the drivers.
-	err = s.validateBootStrategy(json.RawMessage(`{"boot":{"strategy":"pxe"},"image":{"distro":"plan9"}}`))
+	err = s.validateBootStrategy(context.Background(), json.RawMessage(`{"boot":{"strategy":"pxe"},"image":{"distro":"plan9"}}`))
 	if err == nil {
 		t.Fatal("unknown non-family distro must be rejected")
 	}

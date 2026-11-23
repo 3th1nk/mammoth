@@ -169,6 +169,7 @@ Boot 与装机段占址注意事项——见 [docs/operations.md](docs/operation
 | rocky 9 | kickstart | minimal / DVD ISO(重打包) | 同 ISO(抽取引导文件) | HTTP 池或 NFS ISO | ✅ 双载体 |
 | rocky 10 | kickstart | DVD ISO,UEFI-only 布局 | 同上 | 同上 | ✅ 真机闭环(2288H,UEFI-only) |
 | centos 7 | kickstart | minimal ISO | 同 ISO | 同上 | ✅ 虚拟介质 |
+| centos 8 | kickstart | DVD ISO | 同 ISO | HTTP 池或 NFS ISO | 🔧 驱动就绪(2026-11-23)——真机验证待做;RHEL8 代内核 PXE 受固件 initrd 传递问题影响(装机走虚拟介质) |
 | kylin V10 / V11 | kickstart | DVD ISO | 同 ISO | 同上 | ✅ V11 真机闭环 · ✅ V10 vMedia 真机闭环(一次 TTY2 现场解;根因已定案,驱动层修复待办) |
 | UOS | kickstart | DVD ISO | 同源 ISO | NFS ISO | ✅ 双通路 |
 | ubuntu 22.04 / 24.04 / 26.04 | autoinstall | **live-server** ISO(casper,重打包) | **live-server** ISO(squashfs 走 NFS) | 解包 ISO 树走 NFS | ✅ 双载体 |
@@ -192,7 +193,7 @@ CIDATA seed 承载首启配置,vMedia/PXE 双载体单遍流式写盘 + 读回�
 | RHEL 系 | Rocky 9.x minimal ISO | virtual_media ✅ · PXE ✅ |
 | Ubuntu 系 | Ubuntu 22.04.5 · 24.04.x · 26.04.1 live-server ISO | virtual_media ✅ · PXE ✅ |
 | Debian 系 | Debian 12 / 13 netinst ISO | virtual_media ✅ · PXE ✅ |
-| 扩展 | Rocky 10(UEFI-only)· CentOS 7(legacy)· Kylin V10/V11 · UOS | 按需 |
+| 扩展 | Rocky 10(UEFI-only)· CentOS 7(legacy)· CentOS 8 · Kylin V10/V11 · UOS | 按需 |
 | Windows 系 | Windows Server 2019 / 2022 / 2025(zh-CN,updated Oct 2026 快照已验证) | PXE(wimboot + SMB 源)✅ 真机六阶段全绿——2019/2022/2025 · virtual_media 🔧(被 iBMC 6.41 固件缺陷封死,UEFI-only,Standard Core) |
 
 每轮回归:六阶段流水线全绿 → 无人值守首启 → 装机钥匙 SSH 探测。详见

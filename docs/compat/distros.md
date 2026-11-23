@@ -26,6 +26,7 @@
 > 池树 HTTP 流(带重试)为推荐形态。
 | **Rocky 10 / RHEL 10 系** | `rocky10` | Anaconda(**UEFI-only**,上游移除 Legacy BIOS) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,机制同源) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H) |
 | **CentOS 7** | `centos7` | Anaconda 19.31(python2 世代) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H;大盘需独立 /boot,见注记) |
+| **CentOS 8**(8.x,RHEL8 代) | `centos8` | Anaconda(RHEL8 代际) | kickstart(同 `rocky9` 方言,default 分支) | **full**(同 `rocky9`,机制同源) | MAC → 接口名在 `%pre` 安装期解析 | ⏳ 代码/门禁就绪(2026-11-23),待真机验证——装机走 vMedia(见 PXE 矩阵注记) |
 | **银河麒麟 V11**(Server V11 2503) | `kylinv11` | Anaconda(现代代际) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,机制同源) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H;中文 NFS 路径全链路验证) |
 | **银河麒麟 V10**(Server V10 SP3 2403) | `kylinv10` | Anaconda(RHEL8 代际 + NM 1.18) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`) | MAC(渲染层带 NM 修复段) | ✅ vMedia 真机闭环(2026-11-21,一次 TTY2 现场解;根因已定案见下注记,驱动层根治修复待办) |
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |
@@ -310,6 +311,7 @@ mini.iso)提供驱动支持。
 | 发行版 | PXE 支持级 | 说明 |
 |--------|-----------|------|
 | rocky9 / centos7 / kylinv10 / kylinv11 | full | anaconda/dracut 内核对网络引导原生;`inst.repo=nfs:` 安装源复用 MediaBaseURI 的 NFS 导出,`inst.ks=` 走 HTTP,与 ISO 通路零差异 |
+| centos8 | ⚠️ 机制 full,真机待验证 | RHEL8 代内核(4.18)。**固件注记(2026-11-23,2288H iBMC 6.41/BIOS 8.20 真机)**:该世代的 UEFI iPXE 引导在本机型固件上存在 initrd 传递死结——iPXE 经 HTTP 取回完整 initrd 后,内核 EFI stub 拿到空 ramdisk,开机数秒即 panic 于 `prepare_namespace`(unknown-block(0,0));initrd 先于 kernel 行(社区经典顺序)亦无效,≥5.7 内核(ubuntu24)同链路全绿——疑与内核 initrd 交付协议(LoadFile2 vs boot_params)代际相关,属固件/iPXE 层缺陷,引擎侧不可修。**RHEL8 代(centos8/kylinv10 等)装机请走 vMedia**;PXE 保留给 ≥5.7 内核发行版与后续固件/iPXE 版本复验。另:该轮同时实证 shim→grub 链两处真缺陷已修(TFTP tsize-OACK 对 grub/SNP 阶段会话致死的分型、grubnet 前缀缺 `.mod` 模块文件——见 git log 2026-11-23 三提交) |
 | uniontechos | full(**真机复核 2026-09-19**,2288H 零人工闭环,~6 min:NFS 线速 vs 虚拟光驱 35 min) | 同 kickstart 家族机制(shim 链 + per-MAC cfg + `inst.repo=nfs:`);装机期静态网内核参数(ifname 钉 MAC)与虚拟介质轮共用 |
 | rocky10(UEFI-only 媒体) | full | 引导文件同为 `images/pxeboot/*`,UEFI 侧无虞;BIOS 引导上游已移除(镜像 UEFI-only),不做 BIOS PXE。驱动声明 `FirmwareUEFIOnly`,派给观测为 BIOS 固件的机器在提交期即被 `SCHEMA_FIRMWARE_MISMATCH` 拒绝(不阻塞同批其他机器) |
 | ubuntu22/24 | full(**真机闭环 2026-09-17**,2288H:22.04 零人工重装 + 24.04 重装+重启自举+SSH 钥匙直通) | casper kernel/initrd 从 ISO 提取;**NFS squashfs 源**——ISO 解包至共享池树,casper `netboot=nfs nfsroot=` 挂载 live root,不做整 ISO 进内存(4GB 级 tmpfs 写满教训);nfsopts 强制 `tcp,v3`(klibc nfsmount 默认 UDP,现代 nfsd 无 v3/UDP);`BOOTIF=01-<mac>` 按 MAC 钉设备(udev 改名致 ipconfig 打空);内核参数分号转义(GRUB 把 `;` 当命令分隔符,`ds=nocloud-net;s=` 之后参数全丢);spec 静态网络翻译为 ip= 内核参数(site-DHCP 共存环境 mammoth 不做地址权威);**qemu 实测注记**:casper NFS 语法为 `boot=nfs nfsroot=host:/path`(冒号必需);macOS nfsd(UDP-only)不可作验证宿主,真机 Linux nfsd 无此限制 |

@@ -129,6 +129,7 @@ flowchart TD
 | rocky 9 | kickstart | minimal / DVD ISO (repacked) | same ISO (boot files extracted) | HTTP pool or NFS ISO | ✅ both |
 | rocky 10 | kickstart | DVD ISO, UEFI-only layout | same | same | ✅ real closed-loop (2288H, UEFI-only) |
 | centos 7 | kickstart | minimal ISO | same ISO | same | ✅ vMedia |
+| centos 8 | kickstart | DVD ISO | same ISO | HTTP pool or NFS ISO | 🔧 driver ready (2026-11-23) — real-hardware pending; RHEL8-generation PXE blocked on affected firmware (use virtual_media) |
 | kylin V10 / V11 | kickstart | DVD ISO | same ISO | same | ✅ V11 closed-loop · ✅ V10 vMedia closed-loop (one TTY2 rescue; root cause pinned, driver fix pending) |
 | UOS | kickstart | DVD ISO | same ISO | NFS ISO | ✅ both |
 | ubuntu 22.04 / 24.04 / 26.04 | autoinstall | **live-server** ISO (casper, repacked) | **live-server** ISO (squashfs over NFS) | unpacked ISO tree over NFS | ✅ both |
@@ -157,7 +158,7 @@ the install wizard.
 | Ubuntu-like | Ubuntu 22.04.5 & 24.04.x & 26.04.1 live-server ISO | virtual_media ✅ · PXE ✅ |
 | Debian-like | Debian 12 / 13 netinst ISO | virtual_media ✅ · PXE ✅ |
 | Windows-like | Windows Server 2019 / 2022 / 2025 (zh-CN, updated Oct 2026 snapshots verified) | PXE (wimboot + SMB source) ✅ real, six stages green — 2019/2022/2025 · virtual_media 🔧 (blocked by iBMC 6.41 firmware, UEFI-only, Standard Core) |
-| Extension | Rocky 10 (UEFI-only) · CentOS 7 (legacy) · Kylin V10/V11 · UOS | per-demand |
+| Extension | Rocky 10 (UEFI-only) · CentOS 7 (legacy) · CentOS 8 · Kylin V10/V11 · UOS | per-demand |
 
 Every regression run: six-stage pipeline green → unattended first boot →
 SSH probe with the provisioned key. See

@@ -26,7 +26,7 @@
 > 池树 HTTP 流(带重试)为推荐形态。
 | **Rocky 10 / RHEL 10 系** | `rocky10` | Anaconda(**UEFI-only**,上游移除 Legacy BIOS) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,机制同源) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H) |
 | **CentOS 7** | `centos7` | Anaconda 19.31(python2 世代) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H;大盘需独立 /boot,见注记) |
-| **CentOS 8**(8.x,RHEL8 代) | `centos8` | Anaconda(RHEL8 代际) | kickstart(同 `rocky9` 方言,default 分支) | **full**(同 `rocky9`,机制同源) | MAC → 接口名在 `%pre` 安装期解析 | ⏳ 代码/门禁就绪(2026-11-23),待真机验证——装机走 vMedia(见 PXE 矩阵注记) |
+| **CentOS 8**(8.x,RHEL8 代;8.5.2111 验证) | `centos8` | Anaconda(RHEL8 代际) | kickstart(同 `rocky9` 方言,default 分支) | **full**(同 `rocky9`,机制同源) | MAC → 接口名在 `%pre` 安装期解析 | ✅ vMedia 真机闭环(2026-11-23,2288H,15 分钟六阶段全绿;验收采集含 util-linux 2.32 兼容两层修复,见 PXE 矩阵注记与 git log) |
 | **银河麒麟 V11**(Server V11 2503) | `kylinv11` | Anaconda(现代代际) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`,机制同源) | MAC → 接口名在 `%pre` 安装期解析 | ✅ 真机闭环(2288H;中文 NFS 路径全链路验证) |
 | **银河麒麟 V10**(Server V10 SP3 2403) | `kylinv10` | Anaconda(RHEL8 代际 + NM 1.18) | kickstart(同 `rocky9` 方言) | **full**(同 `rocky9`) | MAC(渲染层带 NM 修复段) | ✅ vMedia 真机闭环(2026-11-21,一次 TTY2 现场解;根因已定案见下注记,驱动层根治修复待办) |
 | Ubuntu Server 22.04 | `ubuntu22` | Subiquity | autoinstall(nocloud seed) | **partial**:`keep: disk` 可用;`keep: partitions/preserve` 提交即拒绝 | netplan `match.macaddress` 原生支持 | ✅ v0.3 |

@@ -77,17 +77,23 @@ cp "$TMP/x-grub-amd64/usr/lib/grub/x86_64-efi-signed/grubnetx64.efi.signed" "$DE
 cp "$TMP/x-shim-arm64/usr/lib/shim/shimaa64.efi.signed" "$DEST/shimaa64.efi"
 cp "$TMP/x-grub-arm64/usr/lib/grub/arm64-efi-signed/grubnetaa64.efi.signed" "$DEST/grubaa64.efi"
 
-# Module tables: extract the whole .lst set per arch into grub/<arch>-efi/.
-extract_lst() { # <deb> <src-subdir> <dest-dir>
+# grubnet prefix content: the .lst module tables AND the .mod module files,
+# per arch into grub/<arch>-efi/. The tables alone are not enough — grubnet
+# lazy-loads modules (configfile, linux, http, …) from its prefix at runtime,
+# and a prefix holding only the tables sends every module fetch to a missing
+# file: the chain stalls hunting modules and never reaches its config (the
+# 2026-11-23 .74 finding: shim+grub "succeed then go silent"; shipping the
+# .mod set revived the chain).
+extract_modules() { # <deb> <src-subdir> <dest-dir>
   local deb="$1" sub="$2" dir="$3"
   local root="$TMP/lst-$sub"
   mkdir -p "$root" "$dir"
   ar x "$deb" --output="$root" 2>/dev/null || (cd "$root" && ar x "$deb")
-  tar -xJf "$root/data.tar.xz" -C "$root" './usr/lib/grub/'"$sub"'/*.lst'
-  cp "$root"/usr/lib/grub/"$sub"/*.lst "$dir"/
+  tar -xJf "$root/data.tar.xz" -C "$root" './usr/lib/grub/'"$sub"'/*.lst' './usr/lib/grub/'"$sub"'/*.mod'
+  cp "$root"/usr/lib/grub/"$sub"/*.lst "$root"/usr/lib/grub/"$sub"/*.mod "$dir"/
 }
-extract_lst "$TMP/grubbin-amd64.deb" x86_64-efi "$DEST/grub/x86_64-efi"
-extract_lst "$TMP/grubbin-arm64.deb" arm64-efi "$DEST/grub/arm64-efi"
+extract_modules "$TMP/grubbin-amd64.deb" x86_64-efi "$DEST/grub/x86_64-efi"
+extract_modules "$TMP/grubbin-arm64.deb" arm64-efi "$DEST/grub/arm64-efi"
 
 for f in shimx64.efi grubx64.efi shimaa64.efi grubaa64.efi; do
   echo "    $f  $(sha256sum "$DEST/$f" | cut -d' ' -f1)"

@@ -47,7 +47,7 @@ type Runner interface {
 // …) — verify_ready uses it to tell the still-finishing installer apart
 // from the freshly installed system (real-hardware: the installer env has
 // its own sshd and can answer the post-install probe as a false positive).
-const Script = `lsblk -J -b -o NAME,PATH,SIZE,TYPE,FSTYPE,MOUNTPOINT,PKNAME,PARTLABEL,PARTUUID,SERIAL,PTTYPE
+const Script = `lsblk -J -b -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,PKNAME,PARTLABEL,PARTUUID,SERIAL
 echo '===BLKID==='
 blkid -o export 2>/dev/null || true
 echo '===LINK==='
@@ -626,7 +626,30 @@ func parseLSBLK(out string) ([]lsblkDisk, error) {
 	if err := json.Unmarshal([]byte(out), &v); err != nil {
 		return nil, fmt.Errorf("lsblk json: %w", err)
 	}
+	// Synthesize the /dev path when the host's lsblk is too old to emit the
+	// PATH column (util-linux < 2.33 — CentOS 8.5's 2.32.1 rejects the
+	// column outright: "unknown column: PATH", .74 2026-11-23). lsblk names
+	// are kernel names, so /dev/NAME is exact for disks and partitions
+	// alike; the blkid joins below key on this path.
+	for i := range v.Blockdevices {
+		d := &v.Blockdevices[i]
+		if d.Path == "" {
+			d.Path = "/dev/" + d.Name
+		}
+		synthChildPaths(d.Children)
+	}
 	return v.Blockdevices, nil
+}
+
+// synthChildPaths fills empty PATH entries recursively.
+func synthChildPaths(children []lsblkChild) {
+	for i := range children {
+		c := &children[i]
+		if c.Path == "" {
+			c.Path = "/dev/" + c.Name
+		}
+		synthChildPaths(c.Children)
+	}
 }
 
 // parseBlkid reads `blkid -o export` blocks:

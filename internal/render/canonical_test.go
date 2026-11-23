@@ -21,7 +21,7 @@ func canonicalRegistry(t *testing.T) *Registry {
 	t.Helper()
 	r := NewRegistry()
 	for _, name := range []string{
-		"rocky9", "rocky10", "centos7", "kylinv10", "kylinv11", "uniontechos",
+		"rocky9", "rocky10", "centos7", "centos8", "kylinv10", "kylinv11", "uniontechos",
 		"ubuntu22", "ubuntu24", "ubuntu26", "debian12", "debian13",
 		"windows2019", "alpine", "dd",
 	} {
@@ -55,6 +55,7 @@ func TestCanonicalDistro(t *testing.T) {
 		{"ubuntu", "26.04.1", "ubuntu26"},
 		{"debian", "13.7.0", "debian13"},
 		{"centos", "7.9", "centos7"},
+		{"centos", "8.10", "centos8"},
 		// case drift from hand-filled registrations resolves the same
 		{"Kylin", "v11", "kylinv11"},
 		{"Ubuntu", "22.04.5", "ubuntu22"},

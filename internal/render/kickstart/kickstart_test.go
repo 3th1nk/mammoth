@@ -809,6 +809,7 @@ func TestFirmwareSupportDeclarations(t *testing.T) {
 		"rocky9":      render.FirmwareAll,
 		"rocky10":     render.FirmwareUEFIOnly,
 		"centos7":     render.FirmwareAll,
+		"centos8":     render.FirmwareAll,
 		"kylinv10":    render.FirmwareAll,
 		"kylinv11":    render.FirmwareAll,
 		"uniontechos": render.FirmwareAll,

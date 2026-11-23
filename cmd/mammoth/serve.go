@@ -210,6 +210,7 @@ func serve(args []string) error {
 		kickstart.New("rocky9"),
 		kickstart.New("rocky10"),
 		kickstart.New("centos7"),
+		kickstart.New("centos8"),
 		kickstart.New("kylinv10"),
 		kickstart.New("kylinv11"),
 		kickstart.New("uniontechos"),

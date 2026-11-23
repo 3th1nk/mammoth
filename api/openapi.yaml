@@ -1939,6 +1939,10 @@ components:
           type: string
           description: Network boot (PXE/iPXE) support level for install
             submissions with boot.strategy=pxe (docs/06-install-pipeline.md §6).
+            `partial` marks a pipeline-capable driver with a known delivery
+            issue on some firmware classes (the RHEL8-generation initrd loss,
+            docs/compat/distros.md PXE matrix) — PXE submissions still pass
+            the submit gate; prefer virtual_media on affected hardware.
           enum: [full, partial, none]
         family:
           type: string

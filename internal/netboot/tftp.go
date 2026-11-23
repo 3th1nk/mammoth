@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"net"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -187,8 +188,20 @@ func transferTFTP(c *net.UDPConn, addr *net.UDPAddr, files fs.FS, render func(st
 	// needing it, so the classic 512 serves both (Insyde clean; the iBMC
 	// LOM's block-4 stall happens with or without the echo — its own
 	// datagram-loss issue, tracked separately).
+	//
+	// 2026-11-23 .74 finding splits the consumers by NAME: the firmware's
+	// own NBP download needs the tsize answer (Insyde allocates its NBP
+	// buffer from it — no answer ⇒ PXE-E99), but the grub/SNP phase of the
+	// same LOM never ACKs a tsize OACK AND never accepts the follow-up
+	// DATA — every post-OACK session stalls at block 1 (4×8s retries per
+	// file: the .lst tables, grub.cfg, every grub fetch — the whole
+	// shim→grub chain "succeeds then goes silent"). Bare classic DATA on an
+	// option-carrying RRQ is RFC-compliant and is the only form that phase
+	// accepts. The NBP set is a fixed handful of loader names; everything
+	// else (module tables, configs, staged trees) is a running loader
+	// reading through SNP.
 	var oackOpts []byte
-	if opts.tsize && knowsSize {
+	if opts.tsize && knowsSize && isNBPRequest(name) {
 		oackOpts = append(oackOpts, "tsize\x00"...)
 		oackOpts = append(oackOpts, strconv.FormatInt(size, 10)+"\x00"...)
 	}
@@ -217,6 +230,21 @@ func transferTFTP(c *net.UDPConn, addr *net.UDPAddr, files fs.FS, render func(st
 	if err := sendFile(c, addr, r, tftpBlockSize); err != nil {
 		log("tftp: transfer of %q to %s failed: %v", name, addr.IP, err)
 	}
+}
+
+// isNBPRequest reports whether the RRQ names one of the network boot
+// programs the firmware downloads itself (the proxyDHCP bootfile set).
+// Only those fetches ride the firmware PXE stack that needs the tsize
+// answer; everything else is a running loader (grub/iPXE) reading through
+// SNP — see the .74 note inside transferTFTP.
+func isNBPRequest(name string) bool {
+	name = strings.TrimPrefix(name, "/")
+	switch strings.ToLower(path.Base(name)) {
+	case "undionly.kpxe", "shimx64.efi", "grubx64.efi", "ipxe-amd64.efi",
+		"shimaa64.efi", "grubaa64.efi", "ipxe-arm64.efi":
+		return true
+	}
+	return false
 }
 
 // blkSizeFor resolves the transfer block size for a client that honored the

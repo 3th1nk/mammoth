@@ -22,8 +22,8 @@ func TestRenderScript(t *testing.T) {
 	want := strings.Join([]string{
 		"#!ipxe",
 		"# mammoth boot entry mac=52:54:00:12:34:56 task=tsk_1 kind=install",
-		"kernel http://192.168.77.1:8080/netboot/files/tok9/vmlinuz inst.ks=http://192.168.77.1:8080/render/tok9/ks.cfg inst.repo=nfs:192.168.77.1:/media ip=dhcp",
 		"initrd http://192.168.77.1:8080/netboot/files/tok9/initrd.img",
+		"kernel http://192.168.77.1:8080/netboot/files/tok9/vmlinuz inst.ks=http://192.168.77.1:8080/render/tok9/ks.cfg inst.repo=nfs:192.168.77.1:/media ip=dhcp",
 		"boot",
 		"",
 	}, "\n")

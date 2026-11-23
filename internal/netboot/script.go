@@ -91,14 +91,24 @@ func RenderScript(e *Entry, baseURL string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "#!ipxe\n")
 	fmt.Fprintf(&b, "# mammoth boot entry mac=%s task=%s kind=%s\n", e.MAC, e.TaskID, e.Kind)
-	fmt.Fprintf(&b, "kernel %s/netboot/files/%s/%s %s\n",
-		strings.TrimSuffix(baseURL, "/"), e.Token, e.Kernel, sanitizeIpxeArgs(e.KernelArgs))
+	// initrd lines BEFORE the kernel line: RHEL8-era kernels (4.19 kylin,
+	// CentOS8 — the .74 2288H, 2026-11-23) booting over UEFI iPXE lose the
+	// initrd when it is registered after the kernel image — the EFI stub
+	// handover runs with an empty ramdisk and the kernel dies in
+	// prepare_namespace ("unable to mount root fs on unknown-block(0,0)")
+	// seconds after boot, while the same kernel+initrd pair boots fine from
+	// CD and kernels ≥5.7 (ubuntu 24) boot the old order fine. Loading the
+	// initrd first is the classic iPXE-community ordering and is
+	// registration-order-only for iPXE (both images are fetched before
+	// `boot` runs either way).
 	fmt.Fprintf(&b, "initrd %s/netboot/files/%s/%s\n",
 		strings.TrimSuffix(baseURL, "/"), e.Token, e.Initrd)
 	if mp, ok := e.Extra["miniproot"]; ok && mp != "" {
 		fmt.Fprintf(&b, "initrd %s/netboot/files/%s/%s\n",
 			strings.TrimSuffix(baseURL, "/"), e.Token, mp)
 	}
+	fmt.Fprintf(&b, "kernel %s/netboot/files/%s/%s %s\n",
+		strings.TrimSuffix(baseURL, "/"), e.Token, e.Kernel, sanitizeIpxeArgs(e.KernelArgs))
 	b.WriteString("boot\n")
 	return b.String()
 }

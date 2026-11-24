@@ -178,6 +178,10 @@ func taskOut(t *store.Task, stages []*store.Stage) gen.Task {
 		if s.DurationMs != nil {
 			st.DurationMs = intp(int(*s.DurationMs))
 		}
+		if s.Noop {
+			v := true
+			st.Noop = &v
+		}
 		out.Stages = append(out.Stages, st)
 	}
 	return out

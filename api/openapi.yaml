@@ -3951,6 +3951,12 @@ components:
         duration_ms:
           type: integer
           nullable: true
+        noop:
+          type: boolean
+          description: >-
+            Pass-through execution (configure_raid with no hardware RAID
+            declared): the stage ran but had nothing to do — consoles render
+            it as "skipped" rather than a millisecond duration.
 
     Task:
       type: object

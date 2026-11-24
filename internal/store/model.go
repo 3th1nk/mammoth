@@ -199,7 +199,9 @@ type Task struct {
 	FinishedAt      *time.Time
 }
 
-// Stage is one persisted step of a task.
+// Stage is one persisted step of a task. Noop marks a pass-through execution
+// (configure_raid with no hardware RAID declared): the stage ran and nothing
+// was there to do — the console renders it as "skipped", not as a fast step.
 type Stage struct {
 	TaskID     string
 	Seq        int
@@ -209,6 +211,7 @@ type Stage struct {
 	StartedAt  *time.Time
 	FinishedAt *time.Time
 	DurationMs *int64
+	Noop       bool
 }
 
 // MachineTaskIDs returns the task→machine association pairs for job creation.

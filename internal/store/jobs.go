@@ -193,7 +193,7 @@ func (r *JobRepo) ListTasks(ctx context.Context, f TaskListFilter) ([]*Task, *Cu
 // Stages returns the stage rows of a task ordered by seq.
 func (r *JobRepo) Stages(ctx context.Context, taskID string) ([]*Stage, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT task_id, seq, name, state, attempt, started_at, finished_at, duration_ms
+		SELECT task_id, seq, name, state, attempt, started_at, finished_at, duration_ms, noop
 		FROM task_stages WHERE task_id = $1 ORDER BY seq`, taskID)
 	if err != nil {
 		return nil, err
@@ -205,7 +205,7 @@ func (r *JobRepo) Stages(ctx context.Context, taskID string) ([]*Stage, error) {
 		var started, finished sql.NullTime
 		var dur sql.NullInt64
 		if err := rows.Scan(&s.TaskID, &s.Seq, &s.Name, &s.State, &s.Attempt,
-			&started, &finished, &dur); err != nil {
+			&started, &finished, &dur, &s.Noop); err != nil {
 			return nil, err
 		}
 		if started.Valid {
@@ -307,6 +307,18 @@ func (r *JobRepo) StartStage(ctx context.Context, taskID string, seq int) error 
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE task_stages SET state='running', started_at = COALESCE(started_at, now()),
 		  attempt = attempt + 1
+		WHERE task_id = $1 AND seq = $2`, taskID, seq)
+	return err
+}
+
+// MarkStageNoop flags the current stage as a pass-through (configure_raid with
+// no hardware RAID declared): state advances via AdvanceStage as usual — the
+// flag only records that nothing was there to do, so the console can render
+// "skipped" instead of a millisecond duration. The spec snapshot is immutable
+// per job, so a retry re-derives the same verdict; the flag is never cleared.
+func (r *JobRepo) MarkStageNoop(ctx context.Context, taskID string, seq int) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE task_stages SET noop = true
 		WHERE task_id = $1 AND seq = $2`, taskID, seq)
 	return err
 }

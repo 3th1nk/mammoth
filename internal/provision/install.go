@@ -3113,7 +3113,12 @@ func (e *Executor) configureRaid(ctx context.Context, task *store.Task, job *sto
 		}
 	}
 	if !hardware {
-		// software-only (or no raid): nothing to do at BMC level.
+		// software-only (or no raid): nothing to do at BMC level. Persist the
+		// pass-through fact — the console renders the stage as "skipped"
+		// instead of a misleading millisecond duration.
+		if err := e.Jobs.MarkStageNoop(ctx, task.ID, seq); err != nil {
+			return err
+		}
 		return nil
 	}
 

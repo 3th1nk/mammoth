@@ -132,6 +132,14 @@ iPXE 脚本),默认关闭。启用清单:
    地址>` 内核参数把 ramfs 日志转发到 mammoth(ramfs 随安装器重启即逝,尸检
    别无它据)——**三方言 × 两载体全覆盖**(kickstart 系 inst.syslog、
    casper/subiquity 与 d-i 为 syslog=;vMedia 与 PXE 都带,2026-09-24 起)。
+   **2026-11-24 实测修订(.74/2288H)**:sink/传输/归因三层活体验证全通
+   (装机后系统 `logger -n <mammoth> -d` 一发即达、IPRegistry 归因精准),
+   但**装机期 anaconda 自身零发包**——kylinV10 vMedia / rocky9 PXE /
+   centos8 vMedia 全轮次引擎侧 `syslog_src` 行数为 0:`inst.syslog=` 依赖
+   装机环境 rsyslogd 的远程转发,该转发在 kylin SP3 与 rocky 9.8 媒体上
+   均未生效(modular anaconda 差异类)。诊断路径:装机加 `inst.sshd=1`
+   SSH 进安装器查 rsyslogd/转发配置;绕过路径:%pre 显式配
+   `*.* @<mammoth>:514` 转发。
    归因:PXE 池租约反查 → spec 声明静态地址注册表(boot 阶段注册、TTL
    =任务预算+1h、释放即 Forget)→ 都未命中只记源 IP(site-DHCP 动态地址
    属此类)。`MAMMOTH_PXE_MODE=off` 的纯 vMedia 部署以 sink-only 形态
@@ -433,6 +441,17 @@ KB-00043;Red Hat Bugzilla #1809246,连 dnsmasq 社区都确认 dnsmasq proxy
 两份 OFFER、TFTP 全部成功,grubnet 也拿不到带引导信息的 DHCP ACK,连
 grub.cfg 都不请求,直接落 GRUB 提示符。**失败签名**:TFTP 传输
 shimx64/grubx64 成功 → 静默(无 grub.cfg RRQ、无 HTTP 脚本 fetch)。
+   **2026-11-24 .74/2288H 修订(pool 直答形态实测,与 proxy 形态缺陷并
+   存的两类本地真因已定案并修复)**:同签名"静默"在本部署 pool 直答形态
+   下的真因:①kit 的 grub 模块目录缺全部 `.mod`(只有 .lst 清单)——
+   grubnet 按清单懒加载模块全部拿不到,爬完清单静默落提示符(修复:
+   fetch-secureboot-bins.sh extract_modules 补齐 269+221 个,`7927627`);
+   ②TFTP 对带 tsize 的 grub/SNP 阶段会话经典 DATA 直发后内容永不到达
+   grub 协议层(NBP/非 NBP 分型修复,`11a3a23`)。③蹦床的
+   `(http,host:port)` 设备语法在该固件永不发起连接(交互+抓包实证;
+   URL 语法+`insmod http` 候选未验)。**该固件 RHEL8 代内核(≤4.19)另受
+   iPXE LoadFile2-only initrd 交付死结(≥5.7 可读,见 distros.md PXE
+   行)——RHEL8 代装机走 vMedia**。
 
 应对(按机型固件分型,各 VLAN 部署时逐机型核):
 

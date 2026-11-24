@@ -335,7 +335,7 @@ P3:批量扇出/GPU 探针/容量轮/DPU,条件触发)。本节不另立行动�
 | 项目 | 热度/状态 | 说明与处置 |
 |------|------|------|
 | [Ventoy](https://github.com/ventoy/Ventoy) | 80.9k★ 活跃 | USB 多 ISO 启动,装机类全 GitHub 热度之王;个人装机 UX 方向标(免烧录、链式引导任意 ISO 与 builder 介质重打包同源),与机房批量范式相反,记录 |
-| [netboot.xyz](https://github.com/netbootxyz/netboot.xyz) | 12.6k★ 活跃 | iPXE 菜单聚合全发行版安装器;"菜单即入口"体验可对照零注册 pending 机器 console 面 |
+| [netboot.xyz](https://github.com/netbootxyz/netboot.xyz) | 12.6k★ 活跃 | iPXE 菜单聚合全发行版安装器;"菜单即入口"体验可对照零注册 pending 机器 console 面。定向深化对照见 §9 |
 | [Rescuezilla](https://github.com/rescuezilla/rescuezilla) | 2.8k★ 活跃 | Clonezilla GUI 化;rescue 场景消费级 UX 参照(boot_rescue 已落地) |
 | [FOG](https://github.com/FOGProject/fogproject) | 1.7k★ 活跃 | PC 克隆/镜像管理;已排除领域(范围 B),活跃度佐证排除决策 |
 | [Matchbox](https://github.com/poseidon/matchbox) | 1.4k★ 活跃 | Flatcar/CoreOS 声明式 PXE profile+ignition;与 netboot_entries 同型,对照 |
@@ -374,3 +374,95 @@ ShredOS/nwipe——擦盘启动盘行业惯例(decommission 已落地,生态位
 位空缺(RackShift 停更后,consumer 端全是 Ventoy 类 U 盘工具);③特性
 面真正的差距在验收测试的可执行半边/安全合规动作/发现自动化/AI
 bring-up 组合件/资产生态输出——均为既有件组合,成本低。
+
+## 9. netboot.xyz 对照(2026-11-24:发行版适配与引导链路定向调研)
+
+> 调研对象:[netboot.xyz](https://github.com/netbootxyz/netboot.xyz)
+> (Apache-2.0,12.6k★,iPXE 菜单聚合全发行版安装器,官网
+> [netboot.xyz](https://netboot.xyz),自托管文档
+> [docs/selfhosting](https://netboot.xyz/docs/selfhosting/))——§8.4
+> 单行定性的深化,看它"适配这么多发行版"的组织方式与引导链路有无
+> 可借鉴点。结论:生态位不重叠(菜单聚合器 vs API 引擎),适配组织
+> 方式与 mammoth 同构,值得抄的是引导链路上的几个工程细节。
+
+### 9.1 生态位:广而浅 vs 窄而深
+
+| | netboot.xyz | mammoth |
+|---|---|---|
+| 本质 | 无状态菜单聚合器:静态 iPXE 脚本放 Web,任何人 chain 来选 | API 先行装机引擎:per-MAC 动态脚本+任务状态+BMC 闭环 |
+| 引导时决策 | 人在机器前用菜单选发行版/版本 | 服务器按 MAC 查 netboot_entries 分派,机器前无菜单 |
+| 应答文件 | 无(kickstart/preseed 仅运行时 URL 输入框) | 方言驱动生成,task-token URL 注入 |
+| 内核/initrd | 上游镜像直拉,或自家 live_endpoint(squash 工件) | 内容寻址 ISO 解包池 |
+| 部署形态 | 零后端,纯静态文件 | 常驻服务(proxyDHCP/TFTP/HTTP)或 external kit |
+
+### 9.2 发行版适配机制:声明式注册表 + 构建期渲染静态菜单
+
+四层结构,运行期零模板逻辑:
+
+1. **releases 注册表**(roles/netbootxyz/defaults/main.yml):每发行版
+   一键,name/mirror/base_dir/menu/enabled/versions——版本列表由维护者
+   手填(renovate 提醒),无运行时版本发现;
+2. **endpoints.yml**(仓库根):live/netboot 工件清单(path/files/
+   os/version/flavor/arch/kernel),路径带 hash 锁版本,kernel endpoint
+   (vmlinuz+initrd)可被多桌面 flavor 的 squash 复用;工件由自建
+   流水线产出、发布到 GitHub Releases;
+3. **每发行版一个手写菜单模板**(templates/menu/*.ipxe.j2,100+):
+   按家族差异化——anaconda 系直接用上游镜像 images/pxeboot/ 拼
+   `inst.repo=`,版本循环 Jinja2 构建期展开成静态 label;debian 系走
+   上游 netboot/ 目录 + preseed/autoinstall URL 运行时输入,新 ubuntu
+   走 Subiquity(squash 内核 + url=live-server ISO);live 系
+   vmlinuz+initrd+filesystem.squashfs;工具系 memdisk/单 .efi;
+4. **Ansible 构建期渲染成静态 .ipxe** 发布到 Web(site.yml):菜单更新
+   =重发布,客户端 chain 每次拉最新脚本,引导器不用刷。
+
+**对照结论**:适配组织方式与 mammoth OSDriver 注册制数量级相当
+(Cobbler 条目"评估后不吸收"的同款判断再次成立:per-distro 参数是
+家族模板的语义开关,数据化注册面是假性降本);版本来源 mammoth 更优
+(ISO 登记自动探测 vs 手填清单);覆盖广度差距是十几年社区积累的量级
+问题,不是架构问题。
+
+### 9.3 引导链路与工程细节
+
+链路:DHCP(next-server+filename)→ TFTP 拉 undionly.kpxe /
+snponly.efi(自编译 iPXE,入口脚本编译期嵌入)→ cpuid 探架构 →
+chain boot.cfg(全局变量+每发行版 mirror 变量+架构门控+SB 检测)→
+version.ipxe 自升级检查 → 主菜单 → chain 子菜单 → kernel/initrd
+上游直拉 → md5sum 打印 → boot。
+
+值得记录的细节(标注 mammoth 对应面):
+
+| 细节 | netboot.xyz 做法 | mammoth 对应面 |
+|------|------|------|
+| 运行时覆盖层 | local-vars.ipxe 在 boot.cfg 前 chain,`isset \|\| set` 只写默认值(rhel_base_url/live_endpoint/boot_timeout) | external kit 站点定制形态(待补) |
+| 逐级验签 | imgverify 每级菜单对照 detached 签名,失败不执行;`iseq ${efi/SecureBoot} 01` 时自动降级关闭(SB 签名版 iPXE 无 imgverify 命令) | shim 链只验二进制,脚本/kernel 无验证——SB 降级先例适用 |
+| proxyDHCP | use_proxydhcp_settings 决定用 proxy 还是 root DHCP 提供的 tftp | mammoth proxyDHCP 已有,客户端变量式选择可记 |
+| 租约静态兜底 | `isset ${dhcp-server}` 不成立则把 iPXE 实际租约拼成 `ip=${ip}::${gateway}:${netmask} BOOTIF=${netX/mac}` | earlynet.go 静态注入按 NIC 清单,缺"iPXE 实际租约"一档 |
+| 架构门控 | boot.cfg 按 arch/platform 置 menu_linux/menu_live 等标志显隐;云环境自动 console=ttyS0 | 服务端已等效(boot.arch 按 DHCP opt 93 分发 NBP) |
+| 自定义菜单 | github_user→chain 用户 GitHub 仓库菜单;custom_url→任意 URL | 自定义 iPXE 逃生门候选(§8.2)同型参照 |
+
+### 9.4 可借鉴点与处置(候选,未立项)
+
+按优先级:
+
+1. **iPXE 租约静态兜底(P1 候选,edge 真机场景)**——mammoth 已有
+   earlynet.go 静态注入(按 NIC 清单)与 ip=dhcp 兜底,缺 proxyDHCP-only
+   网段(无真 DHCP,内核重新 DHCP 必失败)下"把 iPXE 已获租约渲染为
+   内核静态参数"一档;恰是 edge-pool 跨网段服务的目标场景。实现要点:
+   服务端渲染时保留 `${ip}` 等占位符交 iPXE 运行时展开。
+2. **渲染脚本验签(P2 候选,安全)**——mammoth SB 链只验二进制
+   (shim→grub),NBP 之后全 HTTP:渲染脚本与 kernel/initrd 可被同网段
+   篡改。netboot.xyz 模式可抄:运行时私钥对渲染脚本签名,NBP 侧
+   imgverify 验签(shim→grub 链用 grub hashsum);"SB 环境自动降级
+   关闭"是同类兼容问题的现成答案(2288H shim 链降级 vMedia 的变体)。
+3. **local-vars 覆盖层(P2 候选,external kit 打磨)**——kit 加可选
+   chain 的 local-vars.ipxe(站点镜像源/超时),`isset||set` 默认值
+   模式,引擎产物不动。
+4. **零注册轻量菜单(可选)**——零注册脚本补极轻菜单(agent shell/
+   本地盘/重试),§8.4"对照零注册 console 面"的展开;与 API-first
+   定位有张力,待真实诉求再动。
+5. **md5sum 打印(零成本)**——渲染脚本加一行 md5sum 内核/initrd
+   校验和,现场排障省事。
+
+**不借鉴**:引导器自升级(version.ipxe+chain 自替换——mammoth 的
+NBP 每次引导由自家 TFTP 现发,天然更优);构建期静态渲染(无后端
+产品的选择,mammoth per-MAC 动态渲染是正确的服务端形态)。

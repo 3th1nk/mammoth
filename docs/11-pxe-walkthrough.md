@@ -151,6 +151,9 @@ DHCP 不可共存(UDP 67 排他,见 operations.md §4.5 第 1 条)。
 | PXE-E99 / 卡图形 logo | NBP 拉完但跑不起来 | Secure Boot 拒签(应走 shim 链)、架构不匹配(arm64 机器发了 x64 NBP——option 93 观测可查) |
 | PXE-E99 + `NBP filesize is 0 Bytes`(固件屏) | TFTP 服务器未答 tsize | Insyde UEFI PXE(2288H 实证)按 tsize 预分配下载缓冲,无 tsize = 0 字节缓冲——engine 已修复(tsize 必答,commit 7c6e522);见 compat/huawei.md §Insyde TFTP 形态 |
 | shim/grub 的 TFTP 传输卡 block 1 → 静默落盘 | blksize 协商尺寸 DATA 被固件拒收 | Insyde/X722 族形态(不 ACK OACK 且不接受协商尺寸 DATA)——engine 已修复(DATA 恒 512,永不协商);自建 TFTP/第三方 TFTP 服务同坑 |
+| grubnet 起来后爬 .lst 清单即静默(无 .mod RRQ),无 grub.cfg 请求 | 模块懒加载全部拿不到 | kit 曾只带 `.lst` 清单无 `.mod` 模块文件——grubnet 按清单懒加载模块全部 404(已修:`fetch-secureboot-bins.sh` extract_modules 补齐 269+221 个,`7927627`;kit 再物化/引擎重启后需确认 `.mod` 仍在) |
+| shim/grub 起来后一切 `configfile`/`cat` 静默回提示符(服务端 RRQ 单次即"完成"、客户端零内容) | SNP 接收层把 DATA 丢给 ACK 层,内容永不到 grub 协议层 | X722/Insyde 族 grub 阶段形态——classic DATA 也救不了(`11a3a23` 后传输服务端侧完成、内容拾取仍不可用):**该固件 shim→grub 链不可用**,RHEL8 代装机走 vMedia(distros.md PXE 行,2026-11-24 定案) |
+| RHEL8 代内核(≤4.19)HTTP 拉完 kernel/initrd 后 `prepare_namespace` panic(unknown-block(0,0)) | iPXE 经 LoadFile2(LINUX_EFI_INITRD_MEDIA_GUID)交付 initrd,≤5.6 内核只认 boot_params | 固件 + 现代 iPXE 组合死结(≥5.7 内核同链路绿,固件屏可证)——RHEL8 代走 vMedia,或验证 pre-2020 iPXE(boot_params 交付时代)能否复活 |
 
 抓包永远是 PXE 排障的第一工具(比读 BMC/固件文档快):
 

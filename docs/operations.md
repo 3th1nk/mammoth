@@ -256,6 +256,15 @@ iPXE 脚本),默认关闭。启用清单:
 - **跨 VLAN 装机**:站点交换机对装机 VLAN 配 DHCP relay(ip helper),
   应答按 giaddr(RFC 2131)回程;TFTP/HTTP 是单播——NextServer 与
   介质/API 的地址必须从装机 VLAN 可路由。
+- **内核期租约兜底(2026-11-26)**:渲染脚本把 pipeline 发的 `ip=dhcp`
+  段展开为 iPXE 运行时分支(netboot 包 `leaseFallbackArgs`):本次开机
+  DHCP 握手成功(`isset ${dhcp-server}`,iPXE 正是靠这次握手才拉到脚本)
+  → 维持 `ip=dhcp`;内核期二次 DISCOVER 被无视或限速(PXE-class 过滤、
+  交换机 snooping 限速)→ 用 iPXE 已到手的租约拼静态参数
+  (`ip=${ip}::${gateway}:${netmask}:::none` + `nameserver=${dns}`),
+  不赌第二次握手。spec 静态/池预留(`ip=<addr>...`)不经此分支;GRUB/shim
+  链与 preseed(netcfg 自管网络)不适用;网段完全无 DHCP 时 iPXE 本身
+  拿不到脚本,官方答案仍是 POOL/edge-pool。
 
 决策树(POOL/PROXY/跨网段 relay 的完整形态)与外部 dnsmasq 部署见
 4.5.1;edge(每装机 VLAN 一个 Go 原生网段代理)见 §edge。

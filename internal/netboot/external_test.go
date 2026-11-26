@@ -99,7 +99,10 @@ func TestTrampolineContractRenderers(t *testing.T) {
 	e := &Entry{MAC: "52:54:00:12:34:56", TaskID: "t1", Kind: "install",
 		Token: "tok", Kernel: "vmlinuz", Initrd: "initrd.img", KernelArgs: "ip=dhcp"}
 	script := RenderScript(e, srv.URL)
-	if !strings.Contains(script, srv.URL+"/netboot/files/tok/vmlinuz ip=dhcp") {
+	// ip=dhcp renders as the lease-fallback branch (see leaseFallbackArgs):
+	// re-DHCP when this boot's DHCP answered, iPXE's own lease otherwise.
+	if !strings.Contains(script, srv.URL+"/netboot/files/tok/vmlinuz ${mammoth_net}") ||
+		!strings.Contains(script, "isset ${dhcp-server} && set mammoth_net ip=dhcp") {
 		t.Fatalf("script render changed: %s", script)
 	}
 	grub := RenderGRUB(e, srv.URL)

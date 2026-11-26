@@ -444,11 +444,16 @@ version.ipxe 自升级检查 → 主菜单 → chain 子菜单 → kernel/initrd
 
 按优先级:
 
-1. **iPXE 租约静态兜底(P1 候选,edge 真机场景)**——mammoth 已有
-   earlynet.go 静态注入(按 NIC 清单)与 ip=dhcp 兜底,缺 proxyDHCP-only
-   网段(无真 DHCP,内核重新 DHCP 必失败)下"把 iPXE 已获租约渲染为
-   内核静态参数"一档;恰是 edge-pool 跨网段服务的目标场景。实现要点:
-   服务端渲染时保留 `${ip}` 等占位符交 iPXE 运行时展开。
+1. **iPXE 租约静态兜底——✅ 已落地(2026-11-26)**:渲染脚本对 pipeline
+   发的 `ip=dhcp` token 自动展开为 iPXE 运行时分支(`leaseFallbackArgs`;
+   用户 extra args 携带该 token 上游即拒,pipeline-owned 判据成立,零驱动
+   改动):`isset ${dhcp-server}` 成立维持 `ip=dhcp`(零回归),否则用 iPXE
+   已到手的租约拼静态参数(`ip=${ip}::${gateway}:${netmask}:::none` +
+   DNS 可用时 `nameserver=${dns}`),netboot 装机与 enroll 零注册两路
+   渲染器均生效。触发条件较调研时的表述做了修正:纯无 DHCP 段 iPXE
+   到不了脚本(官方答案仍是 POOL/edge-pool),兜底救的是内核期二次
+   DHCP 失败(PXE-class 过滤、snooping 限速);GRUB/shim 链与 preseed
+   (netcfg 自管网络)不适用,未做。形态细节见 docs/operations.md §4.5.0。
 2. **渲染脚本验签(P2 候选,安全)**——mammoth SB 链只验二进制
    (shim→grub),NBP 之后全 HTTP:渲染脚本与 kernel/initrd 可被同网段
    篡改。netboot.xyz 模式可抄:运行时私钥对渲染脚本签名,NBP 侧

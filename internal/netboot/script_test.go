@@ -23,7 +23,9 @@ func TestRenderScript(t *testing.T) {
 		"#!ipxe",
 		"# mammoth boot entry mac=52:54:00:12:34:56 task=tsk_1 kind=install",
 		"initrd http://192.168.77.1:8080/netboot/files/tok9/initrd.img",
-		"kernel http://192.168.77.1:8080/netboot/files/tok9/vmlinuz inst.ks=http://192.168.77.1:8080/render/tok9/ks.cfg inst.repo=nfs:192.168.77.1:/media ip=dhcp",
+		`isset ${dhcp-server} && set mammoth_net ip=dhcp || set mammoth_net ip=${ip}::${gateway}:${netmask}:::none`,
+		`iseq ${dhcp-server} "" && isset ${dns} && set mammoth_net ${mammoth_net} nameserver=${dns}`,
+		"kernel http://192.168.77.1:8080/netboot/files/tok9/vmlinuz inst.ks=http://192.168.77.1:8080/render/tok9/ks.cfg inst.repo=nfs:192.168.77.1:/media ${mammoth_net}",
 		"boot",
 		"",
 	}, "\n")
@@ -36,6 +38,25 @@ func TestRenderScript(t *testing.T) {
 	e.KernelArgs = "a  \t b\nc"
 	if s := RenderScript(e, "http://h:1"); strings.Contains(s, "a b c") == false {
 		t.Errorf("args not sanitized: %q", s)
+	}
+}
+
+// The lease fallback fires only on the pipeline's bare ip=dhcp token.
+// Spec-static and pool-reserved args carry `ip=<addr>...` and must render
+// without the runtime branch, and near-miss tokens must not be rewritten.
+func TestRenderScriptLeaseFallbackBoundaries(t *testing.T) {
+	e := &Entry{
+		MAC: "52:54:00:12:34:56", TaskID: "tsk_1", Kind: "install",
+		Token: "tok9", Kernel: "vmlinuz", Initrd: "initrd.img",
+	}
+	static := "inst.ks=http://h/render/tok9/ks.cfg ip=198.51.100.50::198.51.100.1:255.255.255.0:::off"
+	e.KernelArgs = static
+	if s := RenderScript(e, "http://h:1"); strings.Contains(s, "${mammoth_net}") || strings.Contains(s, "dhcp-server") {
+		t.Errorf("static args must not gain the fallback branch: %q", s)
+	}
+	e.KernelArgs = "inst.ks=http://h/ks.cfg ip=dhcp6"
+	if s := RenderScript(e, "http://h:1"); strings.Contains(s, "${mammoth_net}") {
+		t.Errorf("near-miss token must not be rewritten: %q", s)
 	}
 }
 
@@ -99,7 +120,13 @@ func TestRenderEnrollScript(t *testing.T) {
 		!strings.Contains(s, "/netboot/enroll-file/initrd.img") {
 		t.Errorf("script must fetch from the enroll tree: %q", s)
 	}
-	if strings.Contains(s, "\n\n") || strings.Count(s, "\n") > 6 {
+	// The probe args carry ip=dhcp — it rides the lease-fallback branch, not
+	// the raw token (enroll targets the same edge segments as installs).
+	if !strings.Contains(s, "${mammoth_net}") || !strings.Contains(s, "isset ${dhcp-server}") {
+		t.Errorf("script missing lease fallback: %q", s)
+	}
+	// #!ipxe, comment, 2 preamble lines, kernel, initrd, boot.
+	if strings.Contains(s, "\n\n") || strings.Count(s, "\n") > 7 {
 		t.Errorf("script shape drifted: %q", s)
 	}
 }

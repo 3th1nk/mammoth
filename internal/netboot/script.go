@@ -13,7 +13,9 @@ import (
 // task arms its machine for PXE (docs/06-install-pipeline.md, boot strategy
 // "pxe"). Kernel/Initrd are bare file names inside the boot tree rooted at
 // netboot/files/<Token>/; KernelArgs is interpolated verbatim into the iPXE
-// kernel line (modloop= and inst.ks= style URLs are baked in upstream).
+// kernel line (modloop= and inst.ks= style URLs are baked in upstream). A
+// bare `ip=dhcp` token expands into the lease-fallback runtime branch —
+// see leaseFallbackArgs.
 type Entry struct {
 	MAC        string
 	TaskID     string
@@ -107,10 +109,51 @@ func RenderScript(e *Entry, baseURL string) string {
 		fmt.Fprintf(&b, "initrd %s/netboot/files/%s/%s\n",
 			strings.TrimSuffix(baseURL, "/"), e.Token, mp)
 	}
+	preamble, args, lease := leaseFallbackArgs(e.KernelArgs)
+	if lease {
+		b.WriteString(preamble)
+	}
 	fmt.Fprintf(&b, "kernel %s/netboot/files/%s/%s %s\n",
-		strings.TrimSuffix(baseURL, "/"), e.Token, e.Kernel, sanitizeIpxeArgs(e.KernelArgs))
+		strings.TrimSuffix(baseURL, "/"), e.Token, e.Kernel, sanitizeIpxeArgs(args))
 	b.WriteString("boot\n")
 	return b.String()
+}
+
+// leaseNetToken marks the pipeline's DHCP choice inside kernel args. User
+// extra args carrying it are rejected upstream as pipeline-owned
+// (provision/boot_kernel_args), so a hit at render time is always the
+// pipeline's own "lease via DHCP" decision — never a user declaration.
+const leaseNetToken = "ip=dhcp"
+
+// leaseFallbackPreamble defines the ${mammoth_net} runtime branch that the
+// token expands into. iPXE only ever runs this script after its own DHCP
+// completed — fetching the script over HTTP required the lease — so the
+// isset branch keeps re-DHCP as the behavior of record. The static branch
+// is kernel-phase insurance: the same server that answered iPXE may ignore
+// or rate-limit the installer kernel's second DISCOVER (PXE-class
+// filtering, switch snooping limits), and the kernel then boots with the
+// lease iPXE already proved it holds instead of gambling on re-DHCP. The
+// second line appends the lease's DNS in the static branch only: plain &&
+// chains only, because iPXE's && and || share one left-to-right precedence
+// (a || b && c parses (a||b)&&c), and an unset ${dns} would otherwise
+// render a poisonous bare `nameserver=` onto the command line.
+const leaseFallbackPreamble = `isset ${dhcp-server} && set mammoth_net ip=dhcp || set mammoth_net ip=${ip}::${gateway}:${netmask}:::none
+iseq ${dhcp-server} "" && isset ${dns} && set mammoth_net ${mammoth_net} nameserver=${dns}
+`
+
+// leaseFallbackArgs rewrites the token into ${mammoth_net} and returns the
+// preamble that defines it. Spec-static and pool-reserved args carry
+// `ip=<addr>...` and never match the bare token, so those entries render
+// byte-identical to before; wimboot entries carry no args at all.
+func leaseFallbackArgs(args string) (preamble, out string, fallback bool) {
+	fields := strings.Fields(args)
+	for i, f := range fields {
+		if f == leaseNetToken {
+			fields[i] = "${mammoth_net}"
+			return leaseFallbackPreamble, strings.Join(fields, " "), true
+		}
+	}
+	return "", args, false
 }
 
 // renderWimbootScript is the Windows carrier script: wimboot takes the
@@ -179,8 +222,12 @@ func RenderEnrollScript(e *Entry, baseURL, mac string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "#!ipxe\n")
 	fmt.Fprintf(&b, "# mammoth enroll entry mac=%s\n", mac)
+	preamble, args, lease := leaseFallbackArgs(e.KernelArgs)
+	if lease {
+		b.WriteString(preamble)
+	}
 	fmt.Fprintf(&b, "kernel %s/netboot/enroll-file/%s %s enroll_mac=%s\n",
-		strings.TrimSuffix(baseURL, "/"), e.Kernel, sanitizeIpxeArgs(e.KernelArgs), mac)
+		strings.TrimSuffix(baseURL, "/"), e.Kernel, sanitizeIpxeArgs(args), mac)
 	fmt.Fprintf(&b, "initrd %s/netboot/enroll-file/%s\n",
 		strings.TrimSuffix(baseURL, "/"), e.Initrd)
 	// miniproot (appended cpio segment): the kernel unpacks initramfs
